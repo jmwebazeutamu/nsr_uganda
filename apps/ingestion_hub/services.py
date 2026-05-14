@@ -21,17 +21,18 @@ documented TODO; it fires post-promotion when the PMT module is built.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 
 from django.db import transaction
 from django.utils import timezone
 from nsr_mis.common.fields import generate_ulid
 
-from apps.data_management.models import Household, Member
+from apps.data_management.models import Household, Member, NinStatus
 from apps.dqa.engine import evaluate_all as dqa_evaluate_all
 from apps.identity_verification.mock import NiraError, verify_nin
 from apps.reference_data.models import GeographicUnit
+from apps.security.hashing import nin_hash as compute_nin_hash
+from apps.security.hashing import nin_last4 as compute_nin_last4
 from apps.security.models import AuditEvent
 
 from .models import (
@@ -182,7 +183,8 @@ def promote_stage_record(
     # Create Members from the canonical payload's roster, if any.
     head_member = None
     for i, m in enumerate(payload.get("members", []) or [], start=1):
-        member = Member.objects.create(
+        nin = (m.get("nin") or "").strip()
+        member_kwargs = dict(
             household=hh,
             line_number=m.get("line_number", i),
             surname=m.get("surname", ""),
@@ -195,6 +197,14 @@ def promote_stage_record(
             telephone_1=m.get("telephone_1", ""),
             telephone_2=m.get("telephone_2", ""),
         )
+        if nin:
+            # NIN trio per ADR-0002 — populated via the canonical helpers so
+            # the encrypted value, hash, and display suffix stay in lockstep.
+            member_kwargs["nin_value"] = nin.encode("utf-8")
+            member_kwargs["nin_hash"] = compute_nin_hash(nin)
+            member_kwargs["nin_last4"] = compute_nin_last4(nin)
+            member_kwargs["nin_status"] = NinStatus.HAS_CARD
+        member = Member.objects.create(**member_kwargs)
         if m.get("is_head") and head_member is None:
             head_member = member
 
@@ -314,8 +324,9 @@ def _discover_stage_candidates(payload: dict) -> list[dict]:
     nin = _first_member_nin(payload)
     if not nin:
         return []
-    nin_hash = hashlib.sha256(nin.encode()).digest()
-    rows = Member.objects.filter(nin_hash=nin_hash, is_deleted=False).values_list("id", flat=True)
+    rows = Member.objects.filter(
+        nin_hash=compute_nin_hash(nin), is_deleted=False,
+    ).values_list("id", flat=True)
     return [{"member_id": rid, "score": 1.0, "reason": "tier1-nin-exact"} for rid in rows]
 
 

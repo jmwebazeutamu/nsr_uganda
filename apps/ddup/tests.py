@@ -5,7 +5,6 @@ References: SAD §4.3.6 acceptance criteria.
 
 from __future__ import annotations
 
-import hashlib
 from datetime import date
 
 import pytest
@@ -26,6 +25,7 @@ from apps.ddup.services import (
     reject_pair,
 )
 from apps.reference_data.models import GeographicUnit
+from apps.security.hashing import nin_hash
 from apps.security.models import AuditEvent
 
 # --- Fixtures ---------------------------------------------------------------
@@ -68,7 +68,9 @@ def active_model(db):
 
 
 def _hash(nin: str) -> bytes:
-    return hashlib.sha256(nin.encode()).digest()
+    # Use the canonical project hash so the DB-side rows match what
+    # apps.ingestion_hub.services._discover_stage_candidates would compute.
+    return nin_hash(nin)
 
 
 # --- Model-version dual approval -------------------------------------------

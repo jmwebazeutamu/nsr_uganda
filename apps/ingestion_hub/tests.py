@@ -16,7 +16,6 @@ Covers Sprint 0 ACs that are wired end-to-end:
 
 from __future__ import annotations
 
-import hashlib
 from datetime import date
 
 import pytest
@@ -40,6 +39,7 @@ from apps.ingestion_hub.services import (
     start_connector_run,
 )
 from apps.reference_data.models import GeographicUnit
+from apps.security.hashing import nin_hash
 from apps.security.models import AuditEvent
 
 # --- Fixtures ---------------------------------------------------------------
@@ -288,9 +288,8 @@ class TestProcessOrchestrator:
         seed_stage = _make_stage(connector, geo_codes)
         seed_hh = promote_stage_record(seed_stage, actor="seed")
         nin = "CM1234567890AB"
-        nin_hash = hashlib.sha256(nin.encode()).digest()
         Member.objects.create(household=seed_hh, line_number=99, surname="Existing",
-                              first_name="One", sex="M", nin_hash=nin_hash)
+                              first_name="One", sex="M", nin_hash=nin_hash(nin))
         payload = _payload(geo_codes)
         payload["members"][0]["nin"] = nin
         stage = _make_stage(connector, geo_codes, payload=payload)

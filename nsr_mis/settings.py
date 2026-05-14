@@ -121,3 +121,11 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "0.1.0",
     "SERVE_INCLUDE_SCHEMA": False,
 }
+
+# --- Secrets used by apps.security ----------------------------------------
+# Dev defaults are always defined so test runs (DEBUG=False) work without
+# secrets infra. A system check (apps.security.checks) errors when DEBUG=False
+# and these still match the dev defaults, so production cannot boot with
+# known-public values.
+NSR_NIN_PEPPER = env("NSR_NIN_PEPPER", default="dev-only-nin-pepper-replace-before-deploy")
+NSR_DATA_KEY = env("NSR_DATA_KEY", default="6kZf3vUYNDxBcLg3Vh-uYqOjQp4mEX0sIqAJ8u3OZk0=")

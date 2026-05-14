@@ -41,12 +41,29 @@ class ULIDField(models.CharField):
 
 
 class EncryptedBinaryField(models.BinaryField):
-    """Placeholder for a KMS-backed AES-256-GCM encrypted column.
+    """Column encrypted via apps.security.encryption (Fernet today; KMS
+    envelope-encryption swap-in for production per NSR-O-04).
 
-    Sprint 0 stub: stores raw bytes. The encryption boundary is intentionally
-    moved into a SEC-owned service (apps.security.kms) and wired in via the
-    model's save() and a custom descriptor in a follow-up. Keeping the field
-    type stable now means the column type does not churn when KMS lands.
+    Reads return plaintext bytes; writes accept plaintext bytes (or str
+    which is utf-8 encoded). On-disk the column holds Fernet ciphertext.
     """
 
-    description = "AES-256-GCM encrypted column (KMS integration pending)"
+    description = "Encrypted column (Fernet today; KMS-backed in production)"
+
+    def from_db_value(self, value, expression, connection):
+        if value is None:
+            return None
+        from apps.security.encryption import decrypt
+        return decrypt(bytes(value))
+
+    def get_prep_value(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = value.encode("utf-8")
+        if not isinstance(value, (bytes, bytearray, memoryview)):
+            raise TypeError(
+                f"EncryptedBinaryField expects bytes or str, got {type(value).__name__}"
+            )
+        from apps.security.encryption import encrypt
+        return encrypt(bytes(value))

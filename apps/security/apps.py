@@ -6,3 +6,7 @@ class SecurityConfig(AppConfig):
     name = "apps.security"
     label = "security"
     verbose_name = "Security (SEC)"
+
+    def ready(self) -> None:
+        # Register production-secret system checks.
+        from . import checks  # noqa: F401
