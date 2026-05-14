@@ -4,6 +4,7 @@ from .models import (
     Connector,
     ConnectorRun,
     DataProvisionAgreement,
+    FastTrackAuditSample,
     MappingRule,
     MappingRuleVersion,
     PromotionBatch,
@@ -118,6 +119,19 @@ class PromotionDecisionAdmin(admin.ModelAdmin):
 class PromotionBatchAdmin(admin.ModelAdmin):
     list_display = ("submitted_at", "label", "record_count",
                     "approver_a", "approver_b", "finalised_at")
+
+
+@admin.register(FastTrackAuditSample)
+class FastTrackAuditSampleAdmin(admin.ModelAdmin):
+    """NSR Unit audit queue for fast-tracked auto-promotions (AC-DIH-FT-AUTO)."""
+
+    list_display = ("sampled_at", "stage_record", "household_id", "status",
+                    "reviewed_at", "reviewed_by")
+    list_filter = ("status",)
+    search_fields = ("stage_record__id", "household_id", "reviewed_by", "notes")
+    raw_id_fields = ("stage_record",)
+    readonly_fields = ("id", "stage_record", "household_id", "sampled_at")
+    date_hierarchy = "sampled_at"
 
 
 @admin.register(Quarantine)

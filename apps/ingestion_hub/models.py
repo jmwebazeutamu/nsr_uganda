@@ -309,6 +309,41 @@ class PromotionDecision(models.Model):
         return f"{self.action} on {self.stage_record_id} by {self.actor}"
 
 
+class AuditSampleStatus(models.TextChoices):
+    PENDING = "pending"
+    ACKNOWLEDGED = "acknowledged"
+    DISPUTED = "disputed"
+
+
+class FastTrackAuditSample(models.Model):
+    """1% sample of fast-track (AC-DIH-FT-AUTO) auto-promotions, queued
+    for NSR Unit Coordinator review per SAD §4.6.4. Deterministic on the
+    stage_record id so re-runs produce the same sample set."""
+
+    id = ULIDField(primary_key=True)
+    stage_record = models.OneToOneField(
+        StageRecord, on_delete=models.PROTECT, related_name="fast_track_sample",
+    )
+    household_id = models.CharField(max_length=26)
+    sampled_at = models.DateTimeField(auto_now_add=True)
+
+    status = models.CharField(
+        max_length=24, choices=AuditSampleStatus.choices, default=AuditSampleStatus.PENDING,
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.CharField(max_length=64, blank=True)
+    notes = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = "Fast-track audit sample"
+        indexes = [
+            models.Index(fields=["status", "sampled_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"sample {self.stage_record_id} [{self.status}]"
+
+
 class Quarantine(models.Model):
     """Records that failed mapping or hit an out-of-DPA-scope situation.
     SAD §4.6.10 edge cases reference this."""

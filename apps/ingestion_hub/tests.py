@@ -332,3 +332,68 @@ class TestProcessOrchestrator:
         result = process_stage_record(stage, actor="orch")
         result.refresh_from_db()
         assert result.state == StageRecordState.PROMOTED  # unchanged
+
+
+# --- AC-DIH-FT-AUTO 1% audit sampling -------------------------------------
+
+class TestFastTrackSampling:
+    def _walkin_connector(self, connector):
+        connector.source_system.kind = SourceSystemKind.WEB
+        connector.source_system.save()
+        return connector
+
+    def test_sample_deterministic_on_stage_id(self, connector, geo_codes, dqa_blocking_name_rule):
+        from apps.ingestion_hub.models import FastTrackAuditSample
+        from apps.ingestion_hub.services import _is_sampled
+
+        c = self._walkin_connector(connector)
+
+        # Build enough stages that at least one ULID lands in the 1% bucket.
+        # The function is deterministic, so we sample 200 promoted stage ids
+        # and assert: (a) every id with _is_sampled(id)==True has a sample row;
+        # (b) every id with _is_sampled(id)==False has no sample row.
+        promoted_ids = []
+        for _ in range(200):
+            stage = _make_stage(c, geo_codes)
+            process_stage_record(stage, actor="orch")
+            stage.refresh_from_db()
+            assert stage.state == StageRecordState.PROMOTED
+            promoted_ids.append(stage.id)
+
+        for sid in promoted_ids:
+            if _is_sampled(sid):
+                assert FastTrackAuditSample.objects.filter(stage_record_id=sid).exists(), \
+                    f"expected sample for {sid}"
+            else:
+                assert not FastTrackAuditSample.objects.filter(stage_record_id=sid).exists(), \
+                    f"did not expect sample for {sid}"
+
+    def test_sample_is_idempotent_across_process_re_entry(self, connector, geo_codes,
+                                                          dqa_blocking_name_rule):
+        from apps.ingestion_hub.models import FastTrackAuditSample
+        from apps.ingestion_hub.services import _is_sampled
+
+        c = self._walkin_connector(connector)
+        # Find a stage id that will be sampled. The function is deterministic
+        # on the ULID tail; just iterate until we hit one.
+        stage = None
+        for _ in range(500):
+            candidate = _make_stage(c, geo_codes)
+            if _is_sampled(candidate.id):
+                stage = candidate
+                break
+        assert stage is not None, "could not find a stage id that hits the 1% bucket"
+
+        process_stage_record(stage, actor="orch")
+        process_stage_record(stage, actor="orch")  # second call hits the PROMOTED idempotent path
+        assert FastTrackAuditSample.objects.filter(stage_record_id=stage.id).count() == 1
+
+    def test_non_fast_track_never_samples(self, connector, geo_codes, dqa_blocking_name_rule):
+        # Default fixture is KOBO (not walk-in) -> routes to PENDING_PROMOTION,
+        # so no auto-promote and no sample, regardless of the stage id bucket.
+        from apps.ingestion_hub.models import FastTrackAuditSample
+
+        for _ in range(50):
+            stage = _make_stage(connector, geo_codes)
+            process_stage_record(stage, actor="orch")
+        assert FastTrackAuditSample.objects.count() == 0

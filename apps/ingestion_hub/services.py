@@ -21,6 +21,7 @@ documented TODO; it fires post-promotion when the PMT module is built.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 
 from django.db import transaction
@@ -40,6 +41,7 @@ from .models import (
     ConnectorRun,
     ConnectorRunStatus,
     DataProvisionAgreement,
+    FastTrackAuditSample,
     MappingRuleVersion,
     PromotionAction,
     PromotionDecision,
@@ -48,6 +50,19 @@ from .models import (
     StageRecord,
     StageRecordState,
 )
+
+# 1% of fast-track auto-promotions land in the NSR Unit audit queue
+# (AC-DIH-FT-AUTO, SAD §4.6.4). Deterministic on the stage_record id so
+# re-runs produce the same sample set.
+FAST_TRACK_SAMPLE_RATE = 100  # 1 in N
+
+
+def _is_sampled(stage_id: str) -> bool:
+    # SHA-256 of the ULID modulo N gives a stable, uniform 1-in-N bucket.
+    # Python's int(base=32) uses RFC 4648 alphabet (A-Z + 2-7) which
+    # doesn't match Crockford ULID — hash sidesteps the encoding gap.
+    digest = hashlib.sha256(stage_id.encode("ascii")).digest()
+    return int.from_bytes(digest[:4], "big") % FAST_TRACK_SAMPLE_RATE == 0
 
 log = logging.getLogger(__name__)
 
@@ -410,7 +425,17 @@ def process_stage_record(
         ])
         promote_stage_record(stage, actor=actor, action=PromotionAction.AUTO_PROMOTE,
                              reason="fast-track auto-promote (AC-DIH-FT-AUTO)")
-        return StageRecord.objects.get(pk=stage.pk)
+        promoted = StageRecord.objects.get(pk=stage.pk)
+        # 1% sample to NSR Unit audit queue. Deterministic + idempotent.
+        if _is_sampled(promoted.id):
+            FastTrackAuditSample.objects.get_or_create(
+                stage_record=promoted,
+                defaults={"household_id": promoted.promoted_household_id or ""},
+            )
+            _emit_audit("sample", "fast_track_promotion", promoted.id,
+                        actor=actor, reason="ac-dih-ft-auto 1% sample",
+                        field_changes={"household_id": promoted.promoted_household_id})
+        return promoted
 
     # 5. Default: queue for NSR Unit review.
     stage.state = StageRecordState.PENDING_PROMOTION
