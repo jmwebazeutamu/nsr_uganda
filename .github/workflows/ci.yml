@@ -96,8 +96,8 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install ".[dev]" pip-audit
-      # Audit the installed environment. --disable-pip is only valid with
-      # -r requirements.txt; the project uses pyproject.toml so we install
-      # first and let pip-audit enumerate installed packages.
-      - run: pip-audit --strict
+      - run: pip install -e ".[dev]" pip-audit
+      # Audit the installed environment. Install our own package editably
+      # and pass --skip-editable so pip-audit doesn't try to look up
+      # nsr-mis on PyPI (it's a local project, not published).
+      - run: pip-audit --strict --skip-editable
