@@ -24,7 +24,8 @@ from __future__ import annotations
 import hashlib
 import logging
 
-from django.db import transaction
+from django.db import models, transaction
+from django.db.models import F
 from django.utils import timezone
 from nsr_mis.common.fields import generate_ulid
 
@@ -32,9 +33,9 @@ from apps.data_management.models import Household, Member, NinStatus
 from apps.dqa.engine import evaluate_all as dqa_evaluate_all
 from apps.identity_verification.mock import NiraError, verify_nin
 from apps.reference_data.models import GeographicUnit
+from apps.security.audit import emit as emit_audit
 from apps.security.hashing import nin_hash as compute_nin_hash
 from apps.security.hashing import nin_last4 as compute_nin_last4
-from apps.security.models import AuditEvent
 
 from .models import (
     Connector,
@@ -73,11 +74,9 @@ class DihError(Exception):
 
 def _emit_audit(action: str, entity_type: str, entity_id: str, *, actor: str,
                 reason: str = "", field_changes: dict | None = None) -> None:
-    AuditEvent.objects.create(
-        actor_id=actor, actor_kind="system",
-        action=action, entity_type=entity_type, entity_id=entity_id,
-        reason=reason, field_changes=field_changes,
-    )
+    """Thin wrapper around the shared emitter — kept for call-site clarity."""
+    emit_audit(action, entity_type, entity_id, actor=actor, actor_kind="system",
+               reason=reason, field_changes=field_changes)
 
 
 @transaction.atomic
@@ -85,13 +84,7 @@ def start_connector_run(connector: Connector, *, actor: str = "system") -> Conne
     """Open a ConnectorRun. AC-DIH-DPA-REQUIRED: refuses if no active DPA
     covers the source system."""
     today = timezone.now().date()
-    has_dpa = DataProvisionAgreement.objects.filter(
-        source_system=connector.source_system,
-        valid_from__lte=today,
-    ).filter(
-        models_or(valid_to__isnull=True, valid_to__gte=today),
-    ).exists() if False else _has_active_dpa(connector.source_system_id, today)
-    if not has_dpa:
+    if not _has_active_dpa(connector.source_system_id, today):
         raise DihError(f"no active DPA for source {connector.source_system.code}")
 
     run = ConnectorRun.objects.create(connector=connector, status=ConnectorRunStatus.RUNNING)
@@ -101,10 +94,12 @@ def start_connector_run(connector: Connector, *, actor: str = "system") -> Conne
 
 
 def _has_active_dpa(source_system_id: str, today) -> bool:
-    qs = DataProvisionAgreement.objects.filter(
-        source_system_id=source_system_id, valid_from__lte=today,
-    )
-    return qs.filter(valid_to__isnull=True).exists() or qs.filter(valid_to__gte=today).exists()
+    return DataProvisionAgreement.objects.filter(
+        source_system_id=source_system_id,
+        valid_from__lte=today,
+    ).filter(
+        models.Q(valid_to__isnull=True) | models.Q(valid_to__gte=today),
+    ).exists()
 
 
 @transaction.atomic
@@ -114,8 +109,8 @@ def land_payload(run: ConnectorRun, payload: dict, *, source_reference: str = ""
         connector_run=run, payload=payload, source_reference=source_reference,
     )
     ConnectorRun.objects.filter(pk=run.pk).update(
-        records_received=models_f("records_received") + 1,
-        records_landed=models_f("records_landed") + 1,
+        records_received=F("records_received") + 1,
+        records_landed=F("records_landed") + 1,
     )
     return landing
 
@@ -141,7 +136,7 @@ def stage_from_landing(
         state=StageRecordState.PROVISIONAL,
     )
     ConnectorRun.objects.filter(pk=landing.connector_run_id).update(
-        records_staged=models_f("records_staged") + 1,
+        records_staged=F("records_staged") + 1,
     )
     return stage
 
@@ -176,11 +171,15 @@ def promote_stage_record(
         code = geo_payload.get(level)
         if not code:
             raise DihError(f"canonical_payload.geographic.{level} required")
-        try:
-            return GeographicUnit.objects.filter(level=level, code=code).order_by("-effective_from").first() \
-                   or GeographicUnit.objects.get(level=level, code=code)
-        except GeographicUnit.DoesNotExist as exc:
-            raise DihError(f"geographic unit {level}={code} not found") from exc
+        row = (
+            GeographicUnit.objects
+            .filter(level=level, code=code)
+            .order_by("-effective_from")
+            .first()
+        )
+        if row is None:
+            raise DihError(f"geographic unit {level}={code} not found")
+        return row
 
     hh = Household.objects.create(
         id=stage.provisional_registry_id,
@@ -237,7 +236,7 @@ def promote_stage_record(
         stage_record=stage, action=action, actor=actor, reason=reason,
     )
     ConnectorRun.objects.filter(pk=stage.connector_run_id).update(
-        records_promoted=models_f("records_promoted") + 1,
+        records_promoted=F("records_promoted") + 1,
     )
 
     _emit_audit(
@@ -276,7 +275,7 @@ def reject_stage_record(stage: StageRecord, *, actor: str, reason: str) -> Stage
         stage_record=stage, action=PromotionAction.REJECT, actor=actor, reason=reason,
     )
     ConnectorRun.objects.filter(pk=stage.connector_run_id).update(
-        records_rejected=models_f("records_rejected") + 1,
+        records_rejected=F("records_rejected") + 1,
     )
     _emit_audit("reject", "stage_record", stage.id, actor=actor, reason=reason)
     return stage
@@ -450,16 +449,3 @@ def process_stage_record(
                     "idv": idv_status,
                 })
     return stage
-
-
-# --- Helpers ---------------------------------------------------------------
-
-from django.db import models  # noqa: E402  (imported here to keep top of file clean)
-
-
-def models_f(name: str):
-    return models.F(name)
-
-
-def models_or(**kwargs):  # tiny shim for readability in start_connector_run
-    return models.Q(**kwargs)

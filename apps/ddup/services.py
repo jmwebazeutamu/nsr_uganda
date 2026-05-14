@@ -14,7 +14,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.data_management.models import Member
-from apps.security.models import AuditEvent
+from apps.security.audit import emit as emit_audit
 
 from .models import (
     DdupModelVersion,
@@ -63,15 +63,9 @@ def _pair_key(a: str, b: str) -> tuple[str, str]:
 
 def _emit_audit(action: str, entity_type: str, entity_id: str, *, actor: str, reason: str = "",
                 field_changes: dict | None = None) -> None:
-    AuditEvent.objects.create(
-        actor_id=actor,
-        actor_kind="user",
-        action=action,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        reason=reason,
-        field_changes=field_changes,
-    )
+    """Thin wrapper around the shared emitter — kept for call-site clarity."""
+    emit_audit(action, entity_type, entity_id, actor=actor, actor_kind="user",
+               reason=reason, field_changes=field_changes)
 
 
 @transaction.atomic
