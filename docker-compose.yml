@@ -1,0 +1,68 @@
+# Local development stack.
+#
+# Brings up PostgreSQL+PostGIS, Redis, and the Django app on the same network
+# so the schema (which assumes Postgres for triggers and PostGIS for GPS in a
+# future migration) can be exercised end-to-end against a real database.
+#
+# Usage:
+#   docker compose up --build
+#   docker compose run --rm web python manage.py migrate
+#   docker compose run --rm web python manage.py createsuperuser
+#
+# Not production-shaped — production deployment goes via Helm on the NITA-U
+# Kubernetes cluster (see /infrastructure/helm/, to be filled in).
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: nsr
+      POSTGRES_PASSWORD: nsr
+      POSTGRES_DB: nsr
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nsr -d nsr"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  web:
+    build: .
+    environment:
+      DATABASE_URL: postgres://nsr:nsr@db:5432/nsr
+      REDIS_URL: redis://redis:6379/0
+      DJANGO_SECRET_KEY: dev-only-replace-before-deploy
+      DEBUG: "True"
+      ALLOWED_HOSTS: localhost,127.0.0.1,web
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Override the production gunicorn CMD with the Django dev server so we
+    # get auto-reload during local work.
+    command:
+      - python
+      - manage.py
+      - runserver
+      - 0.0.0.0:8000
+    volumes:
+      - .:/app
+
+volumes:
+  pgdata:

@@ -1,0 +1,46 @@
+# Source control
+.git
+.gitignore
+.gitattributes
+
+# Local Python
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Local databases / secrets
+db.sqlite3
+db.sqlite3-journal
+.env
+.env.local
+.env.*.local
+
+# IDE / editor
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Heavy directories the runtime image does not need
+docs
+design
+tests
+infrastructure
+.claude
+
+# Build artefacts
+dist
+build

@@ -21,7 +21,33 @@ Sprint 0 — repo scaffolding in progress. See `CLAUDE.md` §"Sprint 0 deliverab
 
 ## Local development
 
-Not yet wired. Sprint 0 item 1 in progress.
+Two paths. Pick whichever fits.
+
+**Docker (recommended — closest to production):**
+
+```bash
+docker compose up --build
+docker compose run --rm web python manage.py migrate
+docker compose run --rm web python manage.py createsuperuser
+```
+
+Brings up Postgres+PostGIS, Redis, and the Django app at `http://localhost:8000`. Code is bind-mounted for auto-reload.
+
+**venv (lightweight; uses sqlite fallback):**
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+python manage.py migrate
+python manage.py runserver
+```
+
+Note: sqlite is a fallback for the dev loop only. The audit-chain trigger and PostGIS GPS columns are postgres-only and degrade to no-ops on sqlite.
+
+## Production deployment
+
+Image: built from the root `Dockerfile`. Targets Kubernetes on the NITA-U Government Data Centre. Helm chart lives under `/infrastructure/helm/` (to be filled in).
 
 ## Reference
 
