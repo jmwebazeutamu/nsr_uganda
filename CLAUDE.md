@@ -70,9 +70,14 @@ Do not introduce alternative frameworks without an ADR.
 │   ├── integration/
 │   ├── contract/               # OpenAPI contract tests
 │   └── e2e/
-├── /design
-│   ├── tokens.css              # from /docs/04 §4
-│   └── mockups/                # exported from Claude Design
+├── /design                     # design source-of-truth — see /design/README.md
+│   ├── NSR MIS Console.html    # runnable preview harness (React + Babel-standalone)
+│   ├── styles.css, app.jsx, components.jsx, tweaks-panel.jsx   # harness
+│   └── v0.1/                   # versioned design snapshot
+│       ├── tokens.css          # design tokens — from /docs/04 §4
+│       ├── components.md       # component library contract
+│       ├── acceptance.md       # screen → user story map + acceptance gates
+│       └── screens/            # JSX screens, one file per module
 └── /scripts
     ├── load_ubos_geography.py
     └── seed_dqa_rules.py

@@ -1,0 +1,179 @@
+# NSR MIS — Design Acceptance Map (v0.1)
+
+Each design mockup is anchored to one or more user stories from `/docs/03_backlog.xlsx`. When engineering builds the screen, the design and the story share the same acceptance criteria. This file is the single source of "is this design done and correct".
+
+---
+
+## Priority screens (build order)
+
+Screens are React components inside the module JSX files under `v0.1/screens/`. State variants (device, role, wizard step) are props, not separate files. The harness (`/design/NSR MIS Console.html`) routes to each by component name.
+
+| # | Screen | Anchored to | Built in | Status |
+|---|---|---|---|---|
+| 1 | Parish operator household capture (desktop) | US-088, US-112 | `screens-capture.jsx` → `<CaptureScreen device="desktop">` | built |
+| 1b | Parish operator household capture (CAPI tablet) | US-088, US-112 | `screens-capture.jsx` → `<CaptureScreen device="capi">` (renders `<CapturePadCAPI>`) | built |
+| 2 | Provisional Registry ID receipt slip | US-112 | `screens-capture.jsx` → `<ReceiptScreen>` / `<ReceiptSlipA6>` | built |
+| 2b | SMS preview | US-112 | `screens-capture.jsx` → inside `<ReceiptScreen>` | built |
+| 3 | NSR Unit DIH review queue | US-109 | `screens-dih.jsx` → `<DIHScreen>` (Review tab) | built |
+| 4 | DIH ConnectorRun dashboard | US-107 | `screens-dih.jsx` → `<DIHScreen>` (Runs tab) | built |
+| 5 | Dedup Operator side-by-side compare | US-083 | `screens-dedup.jsx` → `<DedupScreen>` | built |
+| 6 | UPD reviewer with PMT preview | US-090 | `screens-upd.jsx` → `<UPDScreen>` | built |
+| 7 | DRS Query Builder | US-097 | `screens-drs.jsx` → `<DRSScreen>` (Build step) | built |
+| 7b | DRS Field Selector | US-098 | `screens-drs.jsx` → `<FieldStep>` | built |
+| 7c | DRS Preview pane | US-098 | `screens-drs.jsx` → `<PreviewStep>` | built |
+| 7d | DRS Delivery method choice | US-099, US-100, US-101 | `screens-drs.jsx` → `<SubmitStep>` | built |
+| 8 | DPO cumulative volume console | US-103 | _not yet built_ | **TODO** |
+| 9 | Household detail (registry view) | US-005, US-090 | _not yet built_ | **TODO** |
+| 10 | Home dashboard (role-aware) | (general) | `screens-home.jsx` → `<HomeScreen role="…">` for each of `ROLES` (Parish Chief, CDO, District M&E, NSR Unit Coordinator, DPO) | built |
+
+---
+
+## Per-screen acceptance gates
+
+Each screen must satisfy the acceptance criteria of its anchored user story PLUS the design-level gates below.
+
+### 1. Parish operator household capture (US-088, US-112)
+
+| AC | Pass when |
+|---|---|
+| AC-UPD-DIFF analogue at capture | n/a (this is initial capture, no diff yet) |
+| UI-Capture-1 | Top progress stepper renders all 7 sections with completion ticks |
+| UI-Capture-2 | Left rail section navigator is keyboard-reachable; arrow keys move between sections |
+| UI-Capture-3 | Right rail helper panel shows skip-logic hints AND live DQA preview ("N warnings, M blocking failures") |
+| UI-Capture-4 | Photo capture button opens device camera (mock OK in mockup); evidence_ref appears in the form state |
+| UI-Capture-5 | GPS capture button shows lat/lng/accuracy; if accuracy > 10m the value is shown in red with "Move to an open area and retry" |
+| UI-Capture-6 | Submit for promotion is disabled until all required fields are filled and zero blocking failures |
+| UI-Capture-7 | On submit, the next screen is the receipt slip with a generated provisional Registry ID |
+| UI-Capture-CAPI-1 | CAPI variant renders one question per screen at 720px landscape |
+| UI-Capture-CAPI-2 | Bottom bar Back/Next/Save & Exit is reachable with the thumb at any device orientation |
+| UI-Capture-CAPI-3 | Offline indicator appears when navigator.onLine = false |
+
+### 2. Receipt slip (US-112)
+
+| AC | Pass when |
+|---|---|
+| AC-DIH-PROVISIONAL-ID | Provisional Registry ID printed in monospace, ULID format |
+| UI-Receipt-1 | A6 layout (105mm x 148mm) at 200dpi thermal-printer friendly |
+| UI-Receipt-2 | All 7 content blocks present in order (per Brief §11.2) |
+| UI-Receipt-3 | DPPA 2019 footer line present |
+| UI-Receipt-4 | SMS preview at exactly 160 characters or fewer |
+
+### 3. DIH review queue (US-109)
+
+| AC | Pass when |
+|---|---|
+| AC-DIH-DDUP-DISCOVERY | Column 2 populates when a candidate ≥ 0.80 exists; "No registry match found" empty state otherwise |
+| AC-DIH-FT-AUTO | Quick filter "Walk-in fast-tracked" is present |
+| UI-Review-1 | Three columns: Staged record / Registry match / Decision panel |
+| UI-Review-2 | DQA badges, IDV outcome, DDUP candidate list visible in Decision panel |
+| UI-Review-3 | Action bar (Promote, Promote-as-merge, Hold, Reject); each opens a reason modal |
+| UI-Review-4 | Bulk approve only enabled when every selected record has zero warnings and zero candidates |
+| UI-Review-5 | Audit chain side panel reachable from a button in the header |
+
+### 4. ConnectorRun dashboard (US-107)
+
+| AC | Pass when |
+|---|---|
+| UI-CR-1 | KPI strip: Active runs, Records 24h, Quarantined, Pending review |
+| UI-CR-2 | Table with the 12 columns from Brief §11.4 |
+| UI-CR-3 | Live counts poll every 5s when run status is Running |
+| UI-CR-4 | Row click opens side panel with run detail and log tail |
+
+### 5. Dedup compare (US-083)
+
+| AC | Pass when |
+|---|---|
+| AC-DDUP-NIN | Pair-metadata header shows when NIN match is the deterministic reason |
+| AC-DDUP-MERGE-COMMIT | Commit button disabled until every field has a chosen value AND note is non-empty |
+| UI-Dedup-1 | Three columns; four if three-way match |
+| UI-Dedup-2 | Per-field radios A/B/Both, with Both disabled for non-list fields and a tooltip |
+| UI-Dedup-3 | Per-field similarity score visible on hover |
+| UI-Dedup-4 | After commit, toast shows surviving ID and loser ID; PMT recompute confirmation |
+
+### 6. UPD reviewer (US-090)
+
+| AC | Pass when |
+|---|---|
+| AC-UPD-DIFF | Side-by-side before/after with every changed field highlighted (left border `--accent-update`) |
+| AC-UPD-PMT-PREVIEW | Current PMT score+band AND recomputed score+band visible for `pmt_relevant` changes |
+| AC-UPD-NO-SELF-APPROVE | Approve disabled with tooltip when current user = capturer |
+| UI-UPD-1 | "Show all fields" toggle expands unchanged fields |
+| UI-UPD-2 | Evidence chips clickable to preview attached photo or document |
+| UI-UPD-3 | SLA badge in header turns amber when ≤ 24h to breach, red when breached |
+
+### 7. DRS Query Builder + Field Selector + Preview + Delivery (US-097, US-098, US-099, US-100, US-101)
+
+| AC | Pass when |
+|---|---|
+| AC-DRS-DSA-SCOPE | Field Selector hides forbidden options; out-of-scope attempts show toast naming the DSA clause |
+| AC-DRS-PREVIEW | 10-row preview returns from server, total matched count visible |
+| AC-DRS-PREVIEW-MASK | NIN masked to last 4 chars in the preview |
+| AC-DRS-DELIVERY-EXCEL | Excel delivery option shows expected file size and TTL |
+| AC-DRS-DELIVERY-CSV | CSV delivery option labelled "encrypted 7z archive" |
+| AC-DRS-DELIVERY-API | API delivery option shows the endpoint URL pattern and OAuth scope |
+| UI-DRS-1 | Six-step indicator: Scope → Build → Field Selector → Preview → Delivery → Submit |
+| UI-DRS-2 | AND/OR group toggle in Build; depth limit 3 enforced |
+| UI-DRS-3 | Save selection as template button on Field Selector |
+
+### 8. DPO cumulative volume console (US-103)
+
+| AC | Pass when |
+|---|---|
+| AC-DRS-CUMULATIVE | Cumulative 7d / 30d / 90d shown per requester vs DSA budget |
+| UI-DPO-1 | Anomaly flag (red triangle) appears when 30d volume exceeds budget by > 10% or day-over-day acceleration > 50% |
+| UI-DPO-2 | Drill into requester shows full extract history with query hashes |
+| UI-DPO-3 | Per-requester actions: Pause, Force re-approval, Revoke active download links |
+
+### 9. Household detail (US-005, US-090)
+
+| AC | Pass when |
+|---|---|
+| UI-HH-1 | Header shows Registry ID, status chip (`Registered`), head name, village, current PMT score + band |
+| UI-HH-2 | Tabs: Overview, Roster, Health & Disability, Education, Employment, Housing & Assets, Food & Shocks, Updates History, Grievances, Programmes, Consent, Audit |
+| UI-HH-3 | No edit-in-place; edits open an UPD ChangeRequest |
+
+### 10. Home dashboard
+
+| Role | Pass when |
+|---|---|
+| Parish Chief | Captures today, drafts expiring, parish GRM L1 cases |
+| CDO | UPD review queue, GRM L2, programme referrals pending |
+| District M&E | SLA Breach dashboard, sample audits, PMT-band shift alerts |
+| NSR Unit Coordinator | DIH review queue depth, fast-track auto-promote rate, bulk batches awaiting two-person approval, DSAs expiring 30d |
+| DPO | Anomaly alerts, erasure requests, DPIA review tasks |
+
+---
+
+## Cross-cutting acceptance (applies to every screen)
+
+| Gate | Pass when |
+|---|---|
+| Tokens-only | No hex colour hardcoded outside `tokens.css` |
+| Status vocab exhausted | Every chip variant in Brief §8 appears at least once across the screens |
+| Keyboard | Every interactive element reachable by Tab; focus ring visible |
+| Contrast | Contrast ratio ≥ 4.5:1 for body, ≥ 3:1 for large text |
+| Density | Tables render in both `comfortable` and `compact` density |
+| Empty state | Every list/table/queue has a calm grey empty state with a clear next action |
+| Government tone | No hero illustrations, no celebratory animations, no marketing copy |
+| Bilingual-ready | Layouts hold at 130% string length |
+
+---
+
+## Sign-off
+
+Design pass v0.1 is accepted when:
+
+1. All priority screens 1 through 10 have a corresponding exported React component in `/design/v0.1/screens/` and render in the harness without console errors.
+2. Every per-screen gate above is met.
+3. Every cross-cutting gate is met.
+4. The NSR Unit Coordinator and the engineering lead both sign off on a 30-minute design walk-through.
+
+Signed off by:
+
+- NSR Unit Coordinator: ____________________ Date: __________
+- Engineering Lead: ____________________ Date: __________
+- Architecture Team: ____________________ Date: __________
+
+---
+
+End of acceptance.md, v0.1.
