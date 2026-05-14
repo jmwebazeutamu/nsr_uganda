@@ -97,7 +97,10 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]" pip-audit
-      # Audit the installed environment. Install our own package editably
-      # and pass --skip-editable so pip-audit doesn't try to look up
-      # nsr-mis on PyPI (it's a local project, not published).
-      - run: pip-audit --strict --skip-editable
+      # Audit the resolved dependency tree. `pip freeze --exclude-editable`
+      # drops our own (editable) nsr-mis package; pip-audit -r --strict then
+      # checks every remaining installed dist against the OSV/PyPI advisory
+      # database. Fails the build on any vulnerability or unresolvable dist.
+      - run: |
+          pip freeze --exclude-editable > /tmp/installed.txt
+          pip-audit --strict -r /tmp/installed.txt
