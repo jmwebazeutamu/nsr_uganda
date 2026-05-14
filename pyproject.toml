@@ -46,6 +46,9 @@ select = ["E", "F", "I", "B", "UP", "DJ", "N"]
 DJANGO_SETTINGS_MODULE = "nsr_mis.settings"
 python_files = ["test_*.py", "*_test.py", "tests.py"]
 addopts = "-ra --strict-markers"
+markers = [
+  "postgres: requires PostgreSQL backend (audit-chain trigger, etc.) — auto-skipped on other vendors",
+]
 
 [tool.mypy]
 python_version = "3.12"
