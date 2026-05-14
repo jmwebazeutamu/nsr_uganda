@@ -54,10 +54,21 @@ from openpyxl import load_workbook  # noqa: E402
 from apps.reference_data.models import GeographicUnit  # noqa: E402
 
 
-EXPECTED_HEADER = (
+HEADER_V1 = (
     "District_code", "District_Name", "County_code", "County_Name",
     "Subcounty_code", "Subcounty_Name", "Parish_code", "Parish_Name",
 )
+
+HEADER_V2 = (
+    "District_code", "District_Name", "Region", "Subregion",
+    "County_code", "County_Name", "Subcounty_code", "Subcounty_Name",
+    "Parish_code", "Parish_Name",
+)
+
+
+def _slug(value: str) -> str:
+    """Code suffix for the region/subregion levels which carry no UBOS code."""
+    return value.strip().upper().replace(" ", "-").replace("/", "-")
 
 
 def parse_args() -> argparse.Namespace:
@@ -73,36 +84,58 @@ def _normalise(value) -> str:
     return str(value).strip() if value is not None else ""
 
 
-def read_rows(path: str) -> list[tuple[str, ...]]:
+def read_rows(path: str):
     wb = load_workbook(path, read_only=True, data_only=True)
     ws = wb[wb.sheetnames[0]]
     it = ws.iter_rows(values_only=True)
     header = tuple(next(it))
-    if header != EXPECTED_HEADER:
-        raise SystemExit(f"unexpected header: {header}\nexpected: {EXPECTED_HEADER}")
+    if header == HEADER_V2:
+        version = "v2"
+    elif header == HEADER_V1:
+        version = "v1"
+    else:
+        raise SystemExit(
+            f"unexpected header: {header}\nexpected v1: {HEADER_V1}\nor v2: {HEADER_V2}"
+        )
     rows: list[tuple[str, ...]] = []
     for row in it:
         if row is None or all(v is None for v in row):
             continue
         rows.append(tuple(_normalise(v) for v in row))
-    return rows
+    return version, rows
 
 
-def build_unique(rows: list[tuple[str, ...]]):
+def build_unique(version: str, rows: list[tuple[str, ...]]):
     """Walk the parish-level rows and collect unique nodes per level.
 
-    Returns four dicts:
-      districts:    composite_code -> name
-      counties:     composite_code -> (name, parent_district_code)
-      subcounties:  composite_code -> (name, parent_county_code)
-      parishes:     composite_code -> (name, parent_subcounty_code)
+    Returns five dicts (regions/subregions empty for v1 input):
+      regions:      code -> name
+      subregions:   code -> (name, parent_region_code)
+      districts:    code -> (name, parent_subregion_code | None)
+      counties:     code -> (name, parent_district_code)
+      subcounties:  code -> (name, parent_county_code)
+      parishes:     code -> (name, parent_subcounty_code)
     """
-    districts: dict[str, str] = {}
+    regions: dict[str, str] = {}
+    subregions: dict[str, tuple[str, str]] = {}
+    districts: dict[str, tuple[str, str | None]] = {}
     counties: dict[str, tuple[str, str]] = {}
     subcounties: dict[str, tuple[str, str]] = {}
     parishes: dict[str, tuple[str, str]] = {}
 
-    for dc, dn, cc, cn, sc, sn, pc, pn in rows:
+    for row in rows:
+        if version == "v2":
+            dc, dn, region_name, subregion_name, cc, cn, sc, sn, pc, pn = row
+            r_code = f"R-{_slug(region_name)}" if region_name else None
+            sr_code = (
+                f"SR-{_slug(subregion_name)}-{_slug(region_name)}"
+                if subregion_name and region_name else None
+            )
+        else:
+            dc, dn, cc, cn, sc, sn, pc, pn = row
+            region_name = subregion_name = ""
+            r_code = sr_code = None
+
         if not (dc and cc and sc and pc):
             continue
         d_code = dc
@@ -110,31 +143,44 @@ def build_unique(rows: list[tuple[str, ...]]):
         s_code = f"{dc}.{cc}.{sc}"
         p_code = f"{dc}.{cc}.{sc}.{pc}"
 
-        districts.setdefault(d_code, dn.title() if dn.isupper() else dn)
+        if r_code:
+            regions.setdefault(r_code, region_name)
+        if sr_code:
+            subregions.setdefault(sr_code, (subregion_name, r_code))
+        districts.setdefault(d_code, (dn.title() if dn.isupper() else dn, sr_code))
         counties.setdefault(c_code, (cn.title() if cn.isupper() else cn, d_code))
         subcounties.setdefault(s_code, (sn.title() if sn.isupper() else sn, c_code))
         parishes.setdefault(p_code, (pn.title() if pn.isupper() else pn, s_code))
 
-    return districts, counties, subcounties, parishes
+    return regions, subregions, districts, counties, subcounties, parishes
 
 
 def load_level(level: str, mapping: dict, parent_lookup: dict[str, GeographicUnit] | None,
-               effective_from: date) -> dict[str, GeographicUnit]:
-    """Bulk-load one level. Re-runs skip existing rows (idempotent)."""
+               effective_from: date) -> tuple[dict[str, GeographicUnit], int, int]:
+    """Bulk-load one level. Idempotent: re-runs skip rows already present, but
+    *back-fix* existing rows whose parent is NULL once a parent becomes
+    available (e.g. v2 reload supplying a sub_region parent for districts
+    previously loaded by v1)."""
     existing = {
         u.code: u for u in GeographicUnit.objects.filter(
             level=level, effective_from=effective_from,
         )
     }
     creates: list[GeographicUnit] = []
+    fixed_parents = 0
     for code, payload in mapping.items():
-        if code in existing:
-            continue
         if isinstance(payload, tuple):
             name, parent_code = payload
-            parent = parent_lookup[parent_code] if parent_lookup else None
+            parent = parent_lookup.get(parent_code) if (parent_lookup and parent_code) else None
         else:
             name, parent = payload, None
+        if code in existing:
+            row = existing[code]
+            if parent and row.parent_id is None:
+                row.parent = parent
+                row.save(update_fields=["parent"])
+                fixed_parents += 1
+            continue
         creates.append(GeographicUnit(
             level=level, code=code, name=name, parent=parent, effective_from=effective_from,
         ))
@@ -142,39 +188,49 @@ def load_level(level: str, mapping: dict, parent_lookup: dict[str, GeographicUni
     if creates:
         GeographicUnit.objects.bulk_create(creates, batch_size=2000)
 
-    # Re-read so callers can resolve children's parent FKs.
-    return {
+    refreshed = {
         u.code: u for u in GeographicUnit.objects.filter(
             level=level, effective_from=effective_from,
         )
     }
+    return refreshed, len(creates), fixed_parents
 
 
 def main() -> int:
     args = parse_args()
     eff = date.fromisoformat(args.effective_from)
-    rows = read_rows(args.xlsx)
-    print(f"read {len(rows)} parish rows from {args.xlsx}")
+    version, rows = read_rows(args.xlsx)
+    print(f"read {len(rows)} parish rows ({version}) from {args.xlsx}")
 
-    districts, counties, subcounties, parishes = build_unique(rows)
-    print(f"  unique districts:   {len(districts):>6}")
-    print(f"  unique counties:    {len(counties):>6}")
-    print(f"  unique sub-counties:{len(subcounties):>6}")
-    print(f"  unique parishes:    {len(parishes):>6}")
+    regions, subregions, districts, counties, subcounties, parishes = build_unique(version, rows)
+    print(f"  unique regions:      {len(regions):>6}")
+    print(f"  unique sub-regions:  {len(subregions):>6}")
+    print(f"  unique districts:    {len(districts):>6}")
+    print(f"  unique counties:     {len(counties):>6}")
+    print(f"  unique sub-counties: {len(subcounties):>6}")
+    print(f"  unique parishes:     {len(parishes):>6}")
 
     if args.dry_run:
         print("dry-run: nothing written")
         return 0
 
     with transaction.atomic():
-        d_map = load_level("district", districts, None, eff)
-        print(f"  districts in DB at {eff}:   {len(d_map):>6}")
-        c_map = load_level("county", counties, d_map, eff)
-        print(f"  counties in DB at {eff}:    {len(c_map):>6}")
-        s_map = load_level("sub_county", subcounties, c_map, eff)
-        print(f"  sub-counties in DB at {eff}:{len(s_map):>6}")
-        p_map = load_level("parish", parishes, s_map, eff)
-        print(f"  parishes in DB at {eff}:    {len(p_map):>6}")
+        r_map,  r_new,  r_fix  = load_level("region",     regions,    None,   eff)
+        sr_map, sr_new, sr_fix = load_level("sub_region", subregions, r_map,  eff)
+        d_map,  d_new,  d_fix  = load_level("district",   districts,  sr_map, eff)
+        c_map,  c_new,  c_fix  = load_level("county",     counties,   d_map,  eff)
+        s_map,  s_new,  s_fix  = load_level("sub_county", subcounties, c_map, eff)
+        p_map,  p_new,  p_fix  = load_level("parish",     parishes,   s_map,  eff)
+
+    def _line(name, mp, new, fix):
+        print(f"  {name:14s} in DB: {len(mp):>6}  (created {new:>5}, parent-backfilled {fix:>5})")
+
+    _line("regions",     r_map,  r_new,  r_fix)
+    _line("sub-regions", sr_map, sr_new, sr_fix)
+    _line("districts",   d_map,  d_new,  d_fix)
+    _line("counties",    c_map,  c_new,  c_fix)
+    _line("sub-counties",s_map,  s_new,  s_fix)
+    _line("parishes",    p_map,  p_new,  p_fix)
 
     print(f"\nGeographicUnit total rows: {GeographicUnit.objects.count()}")
     return 0

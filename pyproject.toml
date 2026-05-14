@@ -42,7 +42,7 @@ select = ["E", "F", "I", "B", "UP", "DJ", "N"]
 
 [tool.pytest.ini_options]
 DJANGO_SETTINGS_MODULE = "nsr_mis.settings"
-python_files = ["test_*.py", "*_test.py"]
+python_files = ["test_*.py", "*_test.py", "tests.py"]
 addopts = "-ra --strict-markers"
 
 [tool.mypy]
