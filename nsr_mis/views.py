@@ -2,7 +2,6 @@
 
 from django.http import HttpResponse
 
-
 HOME_HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -27,7 +26,10 @@ HOME_HTML = """<!doctype html>
  <li><a href="/admin/">/admin/</a> &middot; <span class="desc">Django admin (login required)</span></li>
  <li><a href="/api/docs/">/api/docs/</a> &middot; <span class="desc">Swagger UI</span></li>
  <li><a href="/api/schema/">/api/schema/</a> &middot; <span class="desc">OpenAPI 3.1 JSON</span></li>
- <li><a href="/api/v1/reference-data/geographic-units/?level=region">/api/v1/reference-data/geographic-units/</a> &middot; <span class="desc">UBOS hierarchy</span></li>
+ <li>
+   <a href="/api/v1/reference-data/geographic-units/?level=region">/api/v1/reference-data/geographic-units/</a>
+   &middot; <span class="desc">UBOS hierarchy</span>
+ </li>
  <li><a href="/api/v1/data-management/households/">/api/v1/data-management/households/</a></li>
  <li><a href="/api/v1/dqa/rules/">/api/v1/dqa/rules/</a></li>
  <li><a href="/api/v1/ddup/match-pairs/">/api/v1/ddup/match-pairs/</a></li>
