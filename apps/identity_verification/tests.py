@@ -39,23 +39,36 @@ class TestVerifyApi:
     def enable_debug(self, settings):
         settings.DEBUG = True
 
-    def test_endpoint_returns_match(self, client):
-        r = client.post("/api/v1/idv/nira-mock/verify",
-                        data='{"nin": "CM1234567890AB"}',
-                        content_type="application/json")
+    @pytest.fixture
+    def auth_client(self, db, client, django_user_model):
+        user = django_user_model.objects.create_user(username="t-user", password="t-pass")
+        client.force_login(user)
+        return client
+
+    def test_endpoint_returns_match(self, auth_client):
+        r = auth_client.post("/api/v1/idv/nira-mock/verify",
+                             data='{"nin": "CM1234567890AB"}',
+                             content_type="application/json")
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "match"
 
-    def test_endpoint_service_unavailable(self, client):
-        r = client.post("/api/v1/idv/nira-mock/verify",
-                        data='{"nin": "CM1234567890SU"}',
-                        content_type="application/json")
+    def test_endpoint_service_unavailable(self, auth_client):
+        r = auth_client.post("/api/v1/idv/nira-mock/verify",
+                             data='{"nin": "CM1234567890SU"}',
+                             content_type="application/json")
         assert r.status_code == 503
 
-    def test_endpoint_disabled_outside_debug(self, client, settings):
+    def test_endpoint_disabled_outside_debug(self, auth_client, settings):
         settings.DEBUG = False
+        r = auth_client.post("/api/v1/idv/nira-mock/verify",
+                             data='{"nin": "CM1234567890AB"}',
+                             content_type="application/json")
+        assert r.status_code == 404
+
+    def test_endpoint_refuses_unauthenticated(self, db, client):
+        # Sprint 1 security gate: no auth -> 403.
         r = client.post("/api/v1/idv/nira-mock/verify",
                         data='{"nin": "CM1234567890AB"}',
                         content_type="application/json")
-        assert r.status_code == 404
+        assert r.status_code == 403
