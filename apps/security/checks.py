@@ -10,9 +10,12 @@ from __future__ import annotations
 from django.conf import settings
 from django.core.checks import Error, register
 
-DEV_PEPPER = "dev-only-nin-pepper-replace-before-deploy"
-DEV_DATA_KEY = "6kZf3vUYNDxBcLg3Vh-uYqOjQp4mEX0sIqAJ8u3OZk0="
-DEV_SECRET_KEY_PREFIX = "dev-only-"
+# These constants are intentionally the dev-default values. The check below
+# refuses to boot when production env matches them — they are markers, not
+# credentials. # nosec B105 silences bandit's hardcoded-password warning.
+DEV_PEPPER = "dev-only-nin-pepper-replace-before-deploy"  # nosec B105
+DEV_DATA_KEY = "6kZf3vUYNDxBcLg3Vh-uYqOjQp4mEX0sIqAJ8u3OZk0="  # nosec B105
+DEV_SECRET_KEY_PREFIX = "dev-only-"  # nosec B105
 
 
 @register()
