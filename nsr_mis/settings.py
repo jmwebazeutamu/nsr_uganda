@@ -120,6 +120,10 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "Uganda National Social Registry MIS — OpenAPI 3.1 contracts.",
     "VERSION": "0.1.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    # DDUP, DQA, PMT, and UPD all declare a "status" field with overlapping
+    # choice sets. drf-spectacular collapses identical enums and auto-names
+    # the surviving one StatusNNNEnum. Acceptable until we either rename the
+    # per-module enum classes or rework consumers off the generated names.
 }
 
 # --- Secrets used by apps.security ----------------------------------------

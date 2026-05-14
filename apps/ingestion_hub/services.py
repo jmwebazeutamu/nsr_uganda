@@ -249,8 +249,10 @@ def promote_stage_record(
             "mapping_rule_version_id": stage.mapping_rule_version_id,
         },
     )
-    # TODO: trigger PMT recompute via event bus once apps.pmt lands
-    #       (AC-DIH-PMT-AFTER-PROMOTION).
+    # AC-DIH-PMT-AFTER-PROMOTION — fire the registry-side recompute. Harmless
+    # when no ACTIVE PMT model exists (recompute_for_household returns None).
+    from apps.pmt.services import recompute_for_household
+    recompute_for_household(hh, triggered_by="dih_promote", actor=actor)
 
     return hh
 
