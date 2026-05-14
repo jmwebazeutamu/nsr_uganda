@@ -19,8 +19,9 @@ the rule that first needs each one. Unknown operators raise DSLError.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from .models import DqaResult, DqaRule, RuleStatus
 

@@ -34,8 +34,9 @@ include = ["nsr_mis*", "apps*"]
 
 [tool.ruff]
 target-version = "py312"
-line-length = 100
+line-length = 119
 src = ["apps", "nsr_mis"]
+extend-exclude = ["**/migrations/**"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "DJ", "N"]

@@ -11,7 +11,6 @@ References:
 from __future__ import annotations
 
 from django.db import models
-
 from nsr_mis.common.fields import ULIDField
 
 

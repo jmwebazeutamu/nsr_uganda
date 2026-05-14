@@ -26,9 +26,11 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "nsr_mis.settings")
 django.setup()
 
 from apps.ingestion_hub.models import (  # noqa: E402
-    Connector, DataProvisionAgreement, SourceSystem, SourceSystemKind,
+    Connector,
+    DataProvisionAgreement,
+    SourceSystem,
+    SourceSystemKind,
 )
-
 
 SOURCES = [
     {"code": "UBOS-BULK", "name": "UBOS mass enumeration", "kind": SourceSystemKind.UBOS,

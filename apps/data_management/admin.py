@@ -37,14 +37,31 @@ class MemberAdmin(admin.ModelAdmin):
 
     fieldsets = (
         (None, {"fields": ("id", "household", "line_number")}),
-        ("Identity", {"fields": ("surname", "first_name", "other_name", "relationship_to_head", "sex", "date_of_birth", "age_years")}),
-        ("Status", {"fields": ("marital_status", "nationality", "residency_status", "birth_certificate_status")}),
-        ("NIN", {"fields": ("nin_status", "nin_last4", "nin_value", "nin_hash"),
-                 "description": "nin_value is encrypted; nin_hash is the join key. Plaintext NIN never appears in admin."}),
-        ("Contact", {"fields": ("telephone_1", "telephone_2", "telephone_in_name_flag", "mobile_money_flag")}),
-        ("Family", {"fields": ("mother_alive_flag", "father_alive_flag", "mother_line_number", "father_line_number")}),
+        ("Identity", {"fields": (
+            "surname", "first_name", "other_name", "relationship_to_head",
+            "sex", "date_of_birth", "age_years",
+        )}),
+        ("Status", {"fields": (
+            "marital_status", "nationality", "residency_status", "birth_certificate_status",
+        )}),
+        ("NIN", {
+            "fields": ("nin_status", "nin_last4", "nin_value", "nin_hash"),
+            "description": (
+                "nin_value is encrypted; nin_hash is the join key. "
+                "Plaintext NIN never appears in admin."
+            ),
+        }),
+        ("Contact", {"fields": (
+            "telephone_1", "telephone_2", "telephone_in_name_flag", "mobile_money_flag",
+        )}),
+        ("Family", {"fields": (
+            "mother_alive_flag", "father_alive_flag",
+            "mother_line_number", "father_line_number",
+        )}),
         ("Documents", {"fields": ("identification_documents",)}),
-        ("State", {"fields": ("is_deleted", "deleted_at", "merged_into", "created_at", "updated_at")}),
+        ("State", {"fields": (
+            "is_deleted", "deleted_at", "merged_into", "created_at", "updated_at",
+        )}),
     )
 
 

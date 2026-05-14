@@ -16,12 +16,10 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
-from django.utils import timezone
 
 from apps.dqa.engine import DSLError, evaluate, evaluate_expression
 from apps.dqa.models import DqaRule, RuleStatus, Severity
 from apps.dqa.services import ApprovalError, approve, submit_for_approval
-
 
 # --- Fixtures ---------------------------------------------------------------
 

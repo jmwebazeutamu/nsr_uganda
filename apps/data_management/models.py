@@ -22,7 +22,6 @@ PointField + GIST index land in a follow-up migration once Postgres+PostGIS
 from __future__ import annotations
 
 from django.db import models
-
 from nsr_mis.common.fields import EncryptedBinaryField, ULIDField
 
 

@@ -13,7 +13,6 @@ import pytest
 from apps.data_management.models import Household, Member
 from apps.ddup.models import (
     DdupModelVersion,
-    MatchPair,
     MergeAction,
     ModelStatus,
     PairStatus,
@@ -29,14 +28,12 @@ from apps.ddup.services import (
 from apps.reference_data.models import GeographicUnit
 from apps.security.models import AuditEvent
 
-
 # --- Fixtures ---------------------------------------------------------------
 
 @pytest.fixture
 def geo(db):
     """Minimal 7-level ladder for FK satisfaction."""
     nodes = {}
-    parents = [None, "r", "sr", "d", "c", "sc", "p"]
     for level, key, parent_key in [
         ("region", "r", None), ("sub_region", "sr", "r"), ("district", "d", "sr"),
         ("county", "c", "d"), ("sub_county", "sc", "c"),
@@ -94,7 +91,8 @@ class TestModelVersionApproval:
         activate_model_version(v1, approver="bob")
         v2 = DdupModelVersion.objects.create(version=2, config={}, author="alice")
         activate_model_version(v2, approver="bob")
-        v1.refresh_from_db(); v2.refresh_from_db()
+        v1.refresh_from_db()
+        v2.refresh_from_db()
         assert v1.status == ModelStatus.RETIRED
         assert v2.status == ModelStatus.ACTIVE
 
@@ -139,8 +137,8 @@ class TestNinDiscovery:
         h = _hash("CM1234567890AB")
         Member.objects.create(household=household, line_number=1, surname="A", first_name="One",
                               sex="M", nin_hash=h)
-        m2 = Member.objects.create(household=household, line_number=2, surname="B",
-                                   first_name="Two", sex="F", nin_hash=h, is_deleted=True)
+        Member.objects.create(household=household, line_number=2, surname="B",
+                              first_name="Two", sex="F", nin_hash=h, is_deleted=True)
         created = discover_nin_pairs(actor="system")
         assert created == []
 

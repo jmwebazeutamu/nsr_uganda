@@ -18,9 +18,7 @@ References:
 from __future__ import annotations
 
 from django.db import models
-
 from nsr_mis.common.fields import ULIDField
-
 
 # --- Source systems and DPAs ----------------------------------------------
 
@@ -97,6 +95,9 @@ class Connector(models.Model):
     class Meta:
         verbose_name = "Connector"
 
+    def __str__(self) -> str:
+        return f"{self.source_system_id}/{self.name}"
+
 
 class ConnectorRunStatus(models.TextChoices):
     PENDING = "pending"
@@ -130,6 +131,9 @@ class ConnectorRun(models.Model):
             models.Index(fields=["status"]),
         ]
 
+    def __str__(self) -> str:
+        return f"run {self.id} [{self.status}]"
+
 
 # --- Mapping rules --------------------------------------------------------
 
@@ -150,6 +154,9 @@ class MappingRule(models.Model):
                                     name="mapping_rule_code_per_source"),
         ]
 
+    def __str__(self) -> str:
+        return f"{self.source_system_id}:{self.code}"
+
 
 class MappingRuleVersion(models.Model):
     id = ULIDField(primary_key=True)
@@ -164,6 +171,9 @@ class MappingRuleVersion(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["rule", "version"], name="mapping_version_unique"),
         ]
+
+    def __str__(self) -> str:
+        return f"{self.rule_id} v{self.version}"
 
 
 # --- Raw landing and staging ----------------------------------------------
@@ -187,6 +197,9 @@ class RawLanding(models.Model):
         indexes = [
             models.Index(fields=["connector_run", "received_at"]),
         ]
+
+    def __str__(self) -> str:
+        return f"landing {self.id} ({self.connector_run_id})"
 
 
 class StageRecordState(models.TextChoices):
@@ -248,6 +261,9 @@ class StageRecord(models.Model):
             models.Index(fields=["connector_run"]),
         ]
 
+    def __str__(self) -> str:
+        return f"stage {self.provisional_registry_id} [{self.state}]"
+
 
 # --- Decisions and quarantine ---------------------------------------------
 
@@ -262,6 +278,9 @@ class PromotionBatch(models.Model):
     approver_b = models.CharField(max_length=64, blank=True)
     submitted_at = models.DateTimeField(auto_now_add=True)
     finalised_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self) -> str:
+        return f"batch {self.label or self.id} ({self.record_count} records)"
 
 
 class PromotionAction(models.TextChoices):
@@ -286,6 +305,9 @@ class PromotionDecision(models.Model):
     reason = models.TextField(blank=True)
     decided_at = models.DateTimeField(auto_now_add=True)
 
+    def __str__(self) -> str:
+        return f"{self.action} on {self.stage_record_id} by {self.actor}"
+
 
 class Quarantine(models.Model):
     """Records that failed mapping or hit an out-of-DPA-scope situation.
@@ -303,3 +325,6 @@ class Quarantine(models.Model):
     payload = models.JSONField()
     created_at = models.DateTimeField(auto_now_add=True)
     escalated = models.BooleanField(default=False)
+
+    def __str__(self) -> str:
+        return f"quarantine {self.id} [{self.reason}]"

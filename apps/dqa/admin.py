@@ -1,7 +1,7 @@
 from django.contrib import admin, messages
 
 from .models import DqaResult, DqaRule
-from .services import ApprovalError, approve, reject, retire, submit_for_approval
+from .services import ApprovalError, approve, retire, submit_for_approval
 
 
 @admin.register(DqaRule)

@@ -11,7 +11,6 @@ from .models import (
 )
 from .services import DihError, promote_stage_record, reject_stage_record
 
-
 # --- Serializers -----------------------------------------------------------
 
 class SourceSystemSerializer(serializers.ModelSerializer):

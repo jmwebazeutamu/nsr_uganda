@@ -10,8 +10,6 @@ References:
 
 from __future__ import annotations
 
-from typing import Iterable
-
 from django.db import transaction
 from django.utils import timezone
 
@@ -26,7 +24,6 @@ from .models import (
     ModelStatus,
     PairStatus,
 )
-
 
 # ---------------------------------------------------------------------------
 # Model version lifecycle

@@ -48,11 +48,9 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "nsr_mis.settings")
 django.setup()
 
+from apps.reference_data.models import GeographicUnit  # noqa: E402
 from django.db import transaction  # noqa: E402
 from openpyxl import load_workbook  # noqa: E402
-
-from apps.reference_data.models import GeographicUnit  # noqa: E402
-
 
 HEADER_V1 = (
     "District_code", "District_Name", "County_code", "County_Name",

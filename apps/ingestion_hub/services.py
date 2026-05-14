@@ -26,11 +26,11 @@ import logging
 
 from django.db import transaction
 from django.utils import timezone
+from nsr_mis.common.fields import generate_ulid
 
 from apps.data_management.models import Household, Member
 from apps.reference_data.models import GeographicUnit
 from apps.security.models import AuditEvent
-from nsr_mis.common.fields import generate_ulid
 
 from .models import (
     Connector,
@@ -44,7 +44,6 @@ from .models import (
     StageRecord,
     StageRecordState,
 )
-
 
 log = logging.getLogger(__name__)
 

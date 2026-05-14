@@ -13,19 +13,16 @@ Covers Sprint 0 ACs that are wired end-to-end:
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 
-from apps.data_management.models import Household, Member
+from apps.data_management.models import Household
 from apps.ingestion_hub.models import (
     Connector,
-    ConnectorRun,
     DataProvisionAgreement,
-    PromotionAction,
     SourceSystem,
     SourceSystemKind,
-    StageRecord,
     StageRecordState,
 )
 from apps.ingestion_hub.services import (
@@ -38,7 +35,6 @@ from apps.ingestion_hub.services import (
 )
 from apps.reference_data.models import GeographicUnit
 from apps.security.models import AuditEvent
-
 
 # --- Fixtures ---------------------------------------------------------------
 

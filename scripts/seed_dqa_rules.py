@@ -31,7 +31,6 @@ django.setup()
 from apps.dqa.models import DqaRule, RuleStatus, Severity  # noqa: E402
 from apps.dqa.services import approve, submit_for_approval  # noqa: E402
 
-
 AUTHOR = "seed-author"
 APPROVER = "seed-approver"
 
@@ -39,7 +38,10 @@ APPROVER = "seed-approver"
 RULES = [
     {
         "rule_id": "AC-MANDATORY-MEMBER-NAME",
-        "description": "Member surname and first name must be present (subset of SAD AC-MANDATORY scoped to Sprint 0).",
+        "description": (
+            "Member surname and first name must be present "
+            "(subset of SAD AC-MANDATORY scoped to Sprint 0)."
+        ),
         "severity": Severity.BLOCKING,
         "applicability_filter": {"entity": "member"},
         "expression": {

@@ -7,7 +7,6 @@ from .api import (
     StageRecordViewSet,
 )
 
-
 router = DefaultRouter()
 router.register(r"source-systems", SourceSystemViewSet, basename="source-system")
 router.register(r"connectors", ConnectorViewSet, basename="connector")
