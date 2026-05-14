@@ -36,3 +36,22 @@ def check_production_secrets(app_configs, **kwargs):
             id="security.E003",
         ))
     return errors
+
+
+@register()
+def check_postgres_required_outside_dev(app_configs, **kwargs):
+    """Outside DEBUG the database must be PostgreSQL — the audit-chain
+    integrity trigger (security/0002_auditevent_chain_trigger.py) is
+    Postgres-only and silently no-ops on every other vendor, which
+    would render the SAD §8.4 hash-chain guarantee meaningless."""
+    if settings.DEBUG:
+        return []
+    vendors = {db.get("ENGINE", "").split(".")[-1] for db in settings.DATABASES.values()}
+    bad = vendors - {"postgresql", "postgis"}
+    if bad:
+        return [Error(
+            f"non-Postgres DATABASE ENGINE(s) {sorted(bad)} are forbidden when "
+            f"DEBUG=False — the audit-chain trigger requires PostgreSQL.",
+            id="security.E004",
+        )]
+    return []

@@ -41,7 +41,11 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgres://nsr:nsr@localhost:5432/nsr
-      DJANGO_SECRET_KEY: ci-only
+      DJANGO_SECRET_KEY: ci-only-secret-not-for-production
+      # apps.security.checks fails-closed against the dev defaults when
+      # DEBUG=False, so CI must supply non-default values for the trio.
+      NSR_NIN_PEPPER: ci-only-pepper-not-for-production
+      NSR_DATA_KEY: pAcD3lqJ8s1XbN_zRq2VtFGm4uYwHcKeOfTjUiZsPkA=
       DEBUG: "False"
       ALLOWED_HOSTS: localhost,127.0.0.1
     steps:
@@ -61,6 +65,11 @@ jobs:
   openapi:
     name: OpenAPI contract (drf-spectacular --validate)
     runs-on: ubuntu-latest
+    env:
+      DJANGO_SECRET_KEY: ci-only-secret-not-for-production
+      NSR_NIN_PEPPER: ci-only-pepper-not-for-production
+      NSR_DATA_KEY: pAcD3lqJ8s1XbN_zRq2VtFGm4uYwHcKeOfTjUiZsPkA=
+      DEBUG: "True"  # spectacular doesn't need a DB; DEBUG=True skips the prod checks
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
