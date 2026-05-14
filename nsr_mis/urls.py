@@ -13,4 +13,5 @@ urlpatterns = [
     path("api/v1/dqa/", include("apps.dqa.urls")),
     path("api/v1/ddup/", include("apps.ddup.urls")),
     path("api/v1/dih/", include("apps.ingestion_hub.urls")),
+    path("api/v1/idv/", include("apps.identity_verification.urls")),
 ]
