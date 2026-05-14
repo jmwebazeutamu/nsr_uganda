@@ -14,11 +14,9 @@ from __future__ import annotations
 import hashlib
 
 import pytest
-from django.db import IntegrityError, connection
-
 from apps.security.audit import emit
 from apps.security.models import AuditEvent
-
+from django.db import DatabaseError, connection
 
 pytestmark = pytest.mark.postgres
 
@@ -71,12 +69,12 @@ class TestChainHashPopulates:
 class TestAppendOnly:
     def test_update_raises(self, fresh_chain):
         ev = emit("create", "test", "id-1", actor="alice")
-        with pytest.raises(IntegrityError, match="append-only"):
+        with pytest.raises(DatabaseError, match="append-only"):
             AuditEvent.objects.filter(pk=ev.pk).update(reason="tampered")
 
     def test_delete_raises(self, fresh_chain):
         emit("create", "test", "id-1", actor="alice")
-        with pytest.raises(IntegrityError, match="append-only"):
+        with pytest.raises(DatabaseError, match="append-only"):
             AuditEvent.objects.all().delete()
 
 
