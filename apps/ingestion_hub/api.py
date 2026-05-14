@@ -9,7 +9,7 @@ from .models import (
     SourceSystem,
     StageRecord,
 )
-from .services import DihError, promote_stage_record, reject_stage_record
+from .services import DihError, process_stage_record, promote_stage_record, reject_stage_record
 
 # --- Serializers -----------------------------------------------------------
 
@@ -55,6 +55,11 @@ class PromoteRequestSerializer(serializers.Serializer):
 class RejectRequestSerializer(serializers.Serializer):
     actor = serializers.CharField(max_length=64)
     reason = serializers.CharField()
+
+
+class ProcessRequestSerializer(serializers.Serializer):
+    actor = serializers.CharField(max_length=64, default="system")
+    allow_fast_track = serializers.BooleanField(default=True)
 
 
 # --- ViewSets --------------------------------------------------------------
@@ -115,6 +120,34 @@ class StageRecordViewSet(viewsets.ReadOnlyModelViewSet):
         try:
             promote_stage_record(stage, actor=ser.validated_data["actor"],
                                  reason=ser.validated_data.get("reason", ""))
+        except DihError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        stage.refresh_from_db()
+        return Response(self.get_serializer(stage).data)
+
+    @extend_schema(
+        tags=["dih"],
+        summary="Run the staging gates and route the stage record",
+        description=(
+            "Pipeline per SAD §4.6.2: DQA -> IDV -> DDUP. Routes the stage "
+            "to QUALITY_FAILED / IDV_PENDING / DDUP_REVIEW / PENDING_PROMOTION, "
+            "or auto-promotes when AC-DIH-FT-AUTO conditions are met. "
+            "Idempotent on terminal states (PROMOTED / REJECTED / QUARANTINED)."
+        ),
+        request=ProcessRequestSerializer,
+        responses={200: StageRecordSerializer, 400: OpenApiResponse(description="precondition unmet")},
+    )
+    @action(detail=True, methods=["post"], url_path="process")
+    def process(self, request, pk=None):
+        ser = ProcessRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        stage = self.get_object()
+        try:
+            process_stage_record(
+                stage,
+                actor=ser.validated_data["actor"],
+                allow_fast_track=ser.validated_data["allow_fast_track"],
+            )
         except DihError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         stage.refresh_from_db()

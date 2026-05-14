@@ -1,27 +1,27 @@
 """DIH pipeline services.
 
-Sprint 0 surface:
+End-to-end surface:
 - start_connector_run: opens a run, refusing if no active DPA exists for
   the source (AC-DIH-DPA-REQUIRED).
 - land_payload: writes a RawLanding (append-only).
 - stage_from_landing: creates a StageRecord with a fresh provisional
   Registry ID (AC-DIH-MAPPING-VERSIONED, AC-DIH-PROVISIONAL-ID).
+- process_stage_record: runs the staging gates (DQA -> IDV -> DDUP) and
+  routes the stage to the appropriate next state. Auto-promotes clean
+  walk-ins per AC-DIH-FT-AUTO. Wires apps.dqa, apps.identity_verification,
+  and apps.ddup as the SAD §4.6 pipeline expects.
 - promote_stage_record: the atomic step that turns a StageRecord into a
-  Household (and Members, when the canonical payload carries them). The
-  provisional ID becomes the confirmed Registry ID — no re-issue, no
-  churn (AC-DIH-PROMOTE-ATOMIC). Idempotent on replay.
-- reject_stage_record: voids the provisional ID and notifies (AC-DIH-
-  REJECT-VOID).
+  Household (and Members). The provisional ID becomes the confirmed
+  Registry ID — no re-issue (AC-DIH-PROMOTE-ATOMIC). Idempotent on replay.
+- reject_stage_record: voids the provisional ID (AC-DIH-REJECT-VOID).
 
-Wiring stubs:
-- DQA / DDUP / IDV calls live behind clear hooks but are no-ops in Sprint
-  0; the orchestrator that fires them lands with item 7's API skeleton.
-- PMT recompute is a documented TODO; it fires post-promotion when the
-  PMT module is built.
+Cross-app calls are in-process Python per ADR-0001. PMT recompute is a
+documented TODO; it fires post-promotion when the PMT module is built.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 
 from django.db import transaction
@@ -29,6 +29,8 @@ from django.utils import timezone
 from nsr_mis.common.fields import generate_ulid
 
 from apps.data_management.models import Household, Member
+from apps.dqa.engine import evaluate_all as dqa_evaluate_all
+from apps.identity_verification.mock import NiraError, verify_nin
 from apps.reference_data.models import GeographicUnit
 from apps.security.models import AuditEvent
 
@@ -41,6 +43,7 @@ from .models import (
     PromotionAction,
     PromotionDecision,
     RawLanding,
+    SourceSystemKind,
     StageRecord,
     StageRecordState,
 )
@@ -251,6 +254,165 @@ def reject_stage_record(stage: StageRecord, *, actor: str, reason: str) -> Stage
         records_rejected=models_f("records_rejected") + 1,
     )
     _emit_audit("reject", "stage_record", stage.id, actor=actor, reason=reason)
+    return stage
+
+
+# ---------------------------------------------------------------------------
+# Staging gates orchestrator (SAD §4.6.2: Validate -> Verify -> Discover ->
+# Route, with the AC-DIH-FT-AUTO fast-track for clean walk-ins)
+# ---------------------------------------------------------------------------
+
+_WALKIN_KINDS = {SourceSystemKind.CAPI_WALKIN, SourceSystemKind.WEB}
+
+
+def _first_member_nin(payload: dict) -> str | None:
+    members = (payload or {}).get("members") or []
+    for m in members:
+        nin = (m or {}).get("nin")
+        if nin:
+            return nin
+    return None
+
+
+def _evaluate_dqa(payload: dict) -> dict:
+    """Run all ACTIVE DQA rules against the household-level dict and against
+    each member dict. Returns a summary keyed by severity, suitable for
+    storing in StageRecord.dqa_summary."""
+    summary: dict[str, list[dict]] = {"blocking": [], "warning": [], "info": []}
+    payload = payload or {}
+    members = payload.get("members") or []
+
+    def _record(evaluations, *, record_id: str) -> None:
+        for ev in evaluations:
+            if ev.passed:
+                continue
+            summary.setdefault(ev.rule.severity, []).append({
+                "rule_id": ev.rule.rule_id,
+                "rule_version": ev.rule.version,
+                "record_id": record_id,
+                "reason": ev.reason,
+            })
+
+    hh_payload = {k: v for k, v in payload.items() if k != "members"}
+    _record(dqa_evaluate_all(hh_payload, record_type="household", record_id="staged"),
+            record_id="staged")
+    for m in members:
+        line = str((m or {}).get("line_number", ""))
+        _record(dqa_evaluate_all(m or {}, record_type="member", record_id=f"line-{line}"),
+                record_id=f"line-{line}")
+
+    return {
+        "blocking_failures": summary["blocking"],
+        "warnings": summary["warning"],
+        "info": summary["info"],
+    }
+
+
+def _discover_stage_candidates(payload: dict) -> list[dict]:
+    """Tier 1 NIN-exact match against existing registry Members. Returns
+    [{member_id, score, reason}, ...]. Empty if no NIN supplied."""
+    nin = _first_member_nin(payload)
+    if not nin:
+        return []
+    nin_hash = hashlib.sha256(nin.encode()).digest()
+    rows = Member.objects.filter(nin_hash=nin_hash, is_deleted=False).values_list("id", flat=True)
+    return [{"member_id": rid, "score": 1.0, "reason": "tier1-nin-exact"} for rid in rows]
+
+
+@transaction.atomic
+def process_stage_record(
+    stage: StageRecord, *, actor: str = "system", allow_fast_track: bool = True,
+) -> StageRecord:
+    """Run the staging gates and route the stage to its next state.
+
+    Outcomes per SAD §4.6.2:
+    - DQA blocking -> QUALITY_FAILED
+    - IDV NIRA outage -> IDV_PENDING (retried by nightly job)
+    - IDV mismatch -> IDV_PENDING (operator must reconcile)
+    - DDUP candidate (>= 0.80) -> DDUP_REVIEW
+    - DQA warning but otherwise clean -> PENDING_PROMOTION (NSR Unit review)
+    - Fully clean + walk-in channel + (positive IDV when NIN present)
+      -> auto-promote per AC-DIH-FT-AUTO and return the PROMOTED stage.
+    - Fully clean otherwise -> PENDING_PROMOTION.
+
+    Idempotent on already-terminal states (PROMOTED / REJECTED / QUARANTINED).
+    """
+    stage = StageRecord.objects.select_for_update().get(pk=stage.pk)
+    terminal = {StageRecordState.PROMOTED, StageRecordState.REJECTED, StageRecordState.QUARANTINED}
+    if stage.state in terminal:
+        return stage
+
+    payload = stage.canonical_payload or {}
+
+    # 1. DQA — runs over household-level + each member.
+    dqa_summary = _evaluate_dqa(payload)
+    stage.dqa_summary = dqa_summary
+
+    if dqa_summary["blocking_failures"]:
+        stage.state = StageRecordState.QUALITY_FAILED
+        stage.save(update_fields=["state", "dqa_summary", "updated_at"])
+        _emit_audit("evaluate", "stage_record", stage.id, actor=actor,
+                    reason="dqa-blocking", field_changes={"dqa": dqa_summary})
+        return stage
+
+    # 2. IDV — only when a NIN is in the payload.
+    nin = _first_member_nin(payload)
+    idv_status = ""
+    if nin:
+        try:
+            idv = verify_nin(nin)
+            idv_status = idv.get("status", "unknown")
+        except NiraError:
+            idv_status = "service_unavailable"
+        stage.idv_outcome = idv_status
+        if idv_status in ("service_unavailable", "mismatch", "no_match", "bad_format"):
+            stage.state = StageRecordState.IDV_PENDING
+            stage.save(update_fields=["state", "dqa_summary", "idv_outcome", "updated_at"])
+            _emit_audit("verify", "stage_record", stage.id, actor=actor,
+                        reason=f"idv-{idv_status}",
+                        field_changes={"idv_outcome": idv_status})
+            return stage
+
+    # 3. DDUP — tier 1 NIN-exact against registry.
+    candidates = _discover_stage_candidates(payload)
+    stage.ddup_candidates = candidates
+    has_strong_candidate = any(c["score"] >= 0.80 for c in candidates)
+    if has_strong_candidate:
+        stage.state = StageRecordState.DDUP_REVIEW
+        stage.save(update_fields=[
+            "state", "dqa_summary", "idv_outcome", "ddup_candidates", "updated_at",
+        ])
+        _emit_audit("discover", "stage_record", stage.id, actor=actor,
+                    reason="ddup-candidate", field_changes={"candidates": candidates})
+        return stage
+
+    # 4. Fast-track auto-promote (AC-DIH-FT-AUTO): zero DQA warnings AND
+    #    zero blocking AND no DDUP candidate >= 0.80 AND positive IDV (where
+    #    NIN supplied) AND channel is CAPI/Web.
+    source_kind = stage.connector_run.connector.source_system.kind
+    walkin = source_kind in _WALKIN_KINDS
+    idv_ok = (not nin) or idv_status == "match"
+    if (allow_fast_track and walkin and idv_ok
+            and not dqa_summary["warnings"] and not has_strong_candidate):
+        stage.save(update_fields=[
+            "dqa_summary", "idv_outcome", "ddup_candidates", "updated_at",
+        ])
+        promote_stage_record(stage, actor=actor, action=PromotionAction.AUTO_PROMOTE,
+                             reason="fast-track auto-promote (AC-DIH-FT-AUTO)")
+        return StageRecord.objects.get(pk=stage.pk)
+
+    # 5. Default: queue for NSR Unit review.
+    stage.state = StageRecordState.PENDING_PROMOTION
+    stage.save(update_fields=[
+        "state", "dqa_summary", "idv_outcome", "ddup_candidates", "updated_at",
+    ])
+    _emit_audit("route", "stage_record", stage.id, actor=actor,
+                reason="pending-nsr-review",
+                field_changes={
+                    "dqa_warning_count": len(dqa_summary["warnings"]),
+                    "ddup_candidate_count": len(candidates),
+                    "idv": idv_status,
+                })
     return stage
 
 

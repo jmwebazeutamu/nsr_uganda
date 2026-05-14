@@ -9,15 +9,20 @@ Covers Sprint 0 ACs that are wired end-to-end:
 - AC-DIH-AUDIT: promote and reject emit AuditEvent rows
 - AC-DIH-LINEAGE: promoted Household traces back to ConnectorRun and
   SourceSystem
+- AC-DIH-DQA-IN-STAGING + AC-DIH-IDV-PRE-PROMOTION + AC-DIH-DDUP-DISCOVERY:
+  process_stage_record orchestrator routes the stage based on the gates.
+- AC-DIH-FT-AUTO: clean walk-in fast-tracks to PROMOTED.
 """
 
 from __future__ import annotations
 
+import hashlib
 from datetime import date
 
 import pytest
 
-from apps.data_management.models import Household
+from apps.data_management.models import Household, Member
+from apps.dqa.models import DqaRule, RuleStatus, Severity
 from apps.ingestion_hub.models import (
     Connector,
     DataProvisionAgreement,
@@ -28,6 +33,7 @@ from apps.ingestion_hub.models import (
 from apps.ingestion_hub.services import (
     DihError,
     land_payload,
+    process_stage_record,
     promote_stage_record,
     reject_stage_record,
     stage_from_landing,
@@ -219,3 +225,111 @@ class TestAuditTrail:
         before = AuditEvent.objects.filter(action="reject").count()
         reject_stage_record(stage, actor="reviewer-1", reason="oops")
         assert AuditEvent.objects.filter(action="reject").count() == before + 1
+
+
+# --- process_stage_record orchestrator -------------------------------------
+
+@pytest.fixture
+def dqa_blocking_name_rule(db):
+    """Active blocking DQA rule: every member must have a surname."""
+    return DqaRule.objects.create(
+        rule_id="TEST-MEMBER-SURNAME",
+        version=1, description="surname required",
+        severity=Severity.BLOCKING,
+        applicability_filter={"entity": "member"},
+        expression={"field": "surname", "op": "not_null"},
+        error_message_template="surname missing",
+        status=RuleStatus.ACTIVE,
+        author="test-author", approved_by="test-approver",
+    )
+
+
+def _make_stage(connector, geo_codes, *, payload=None):
+    run = start_connector_run(connector)
+    pl = payload or _payload(geo_codes)
+    landing = land_payload(run, pl)
+    return stage_from_landing(landing, canonical_payload=pl)
+
+
+class TestProcessOrchestrator:
+    def test_dqa_blocking_routes_to_quality_failed(self, connector, geo_codes, dqa_blocking_name_rule):
+        payload = _payload(geo_codes)
+        payload["members"][0]["surname"] = ""  # triggers the blocking rule
+        stage = _make_stage(connector, geo_codes, payload=payload)
+        process_stage_record(stage, actor="orch")
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.QUALITY_FAILED
+        assert stage.dqa_summary["blocking_failures"]
+
+    def test_idv_service_unavailable_routes_to_idv_pending(self, connector, geo_codes,
+                                                           dqa_blocking_name_rule):
+        payload = _payload(geo_codes)
+        payload["members"][0]["nin"] = "CM1234567890SU"  # mock raises NiraError
+        stage = _make_stage(connector, geo_codes, payload=payload)
+        process_stage_record(stage, actor="orch")
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.IDV_PENDING
+        assert stage.idv_outcome == "service_unavailable"
+
+    def test_idv_no_match_routes_to_idv_pending(self, connector, geo_codes, dqa_blocking_name_rule):
+        payload = _payload(geo_codes)
+        payload["members"][0]["nin"] = "CM1234567890NM"
+        stage = _make_stage(connector, geo_codes, payload=payload)
+        process_stage_record(stage, actor="orch")
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.IDV_PENDING
+        assert stage.idv_outcome == "no_match"
+
+    def test_ddup_strong_candidate_routes_to_ddup_review(self, connector, geo_codes,
+                                                        dqa_blocking_name_rule):
+        # Plant an existing Member with a known NIN hash; staged payload uses
+        # the same NIN -> tier1 NIN-exact hits. Need a Household to satisfy
+        # the FK; build one inline via promote().
+        seed_stage = _make_stage(connector, geo_codes)
+        seed_hh = promote_stage_record(seed_stage, actor="seed")
+        nin = "CM1234567890AB"
+        nin_hash = hashlib.sha256(nin.encode()).digest()
+        Member.objects.create(household=seed_hh, line_number=99, surname="Existing",
+                              first_name="One", sex="M", nin_hash=nin_hash)
+        payload = _payload(geo_codes)
+        payload["members"][0]["nin"] = nin
+        stage = _make_stage(connector, geo_codes, payload=payload)
+        process_stage_record(stage, actor="orch")
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.DDUP_REVIEW
+        assert stage.ddup_candidates
+        assert stage.ddup_candidates[0]["score"] == 1.0
+
+    def test_clean_walkin_auto_promotes(self, connector, geo_codes, dqa_blocking_name_rule):
+        # KOBO-PILOT fixture uses kind=kobo, NOT a walk-in. Swap to web.
+        connector.source_system.kind = SourceSystemKind.WEB
+        connector.source_system.save()
+        stage = _make_stage(connector, geo_codes)
+        process_stage_record(stage, actor="orch")
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.PROMOTED
+        assert stage.promoted_household_id
+
+    def test_clean_non_walkin_pends_for_review(self, connector, geo_codes, dqa_blocking_name_rule):
+        # Default fixture connector is KOBO (not walk-in) — should route to
+        # PENDING_PROMOTION, not auto-promote.
+        stage = _make_stage(connector, geo_codes)
+        process_stage_record(stage, actor="orch")
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.PENDING_PROMOTION
+
+    def test_explicit_allow_fast_track_false_pends_for_review(self, connector, geo_codes,
+                                                              dqa_blocking_name_rule):
+        connector.source_system.kind = SourceSystemKind.WEB
+        connector.source_system.save()
+        stage = _make_stage(connector, geo_codes)
+        process_stage_record(stage, actor="orch", allow_fast_track=False)
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.PENDING_PROMOTION
+
+    def test_process_is_idempotent_on_promoted(self, connector, geo_codes, dqa_blocking_name_rule):
+        stage = _make_stage(connector, geo_codes)
+        promote_stage_record(stage, actor="op")  # already PROMOTED
+        result = process_stage_record(stage, actor="orch")
+        result.refresh_from_db()
+        assert result.state == StageRecordState.PROMOTED  # unchanged
