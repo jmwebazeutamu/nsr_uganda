@@ -18,6 +18,10 @@ dependencies = [
   "gunicorn>=22.0",
   "openpyxl>=3.1",
   "cryptography>=42.0",
+  # Outbound HTTP — connectors (Kobo today; NIRA + UBOS when their
+  # APIs land) all share one client. Requests is mature + boring;
+  # an async client would force a different DRF view layer.
+  "requests>=2.32",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +32,10 @@ dev = [
   "pytest-cov>=5.0",
   "mypy>=1.10",
   "django-stubs>=5.0",
+  # Mocks outbound `requests` calls in connector tests — see
+  # apps/ingestion_hub/connectors/test_kobo.py.
+  "responses>=0.25",
+  "bandit>=1.7",
 ]
 
 [tool.setuptools.packages.find]

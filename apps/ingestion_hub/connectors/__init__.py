@@ -6,9 +6,10 @@ That lets `from apps.ingestion_hub.connectors.base import get_connector`
 work from anywhere without per-call import dance.
 """
 
-from . import nira_vital, nusaf, pdm, wfp_scope  # noqa: F401
+from . import kobo, nira_vital, nusaf, pdm, wfp_scope  # noqa: F401
 from .base import (  # noqa: F401
     CONNECTOR_REGISTRY,
+    ConnectionTestResult,
     Connector,
     get_connector,
     register_connector,
