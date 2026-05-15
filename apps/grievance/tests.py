@@ -15,6 +15,7 @@ from apps.grievance.services import (
     assign,
     close,
     escalate,
+    open_change_request_for_grievance,
     open_grievance,
     resolve,
 )
@@ -124,6 +125,101 @@ class TestClose:
         g = open_grievance(category=Category.OTHER, description="x")
         with pytest.raises(GrievanceError, match="RESOLVED"):
             close(g, actor="op")
+
+
+class TestGrmUpdLinkage:
+    """SAD §4.4: a DATA_CORRECTION grievance auto-opens a linked UPD;
+    the UPD's commit closes the grievance."""
+
+    @pytest.fixture
+    def household_with_member(self, db):
+        from datetime import date
+
+        from apps.data_management.models import Household, Member
+        from apps.reference_data.models import GeographicUnit
+        nodes = {}
+        for level, key, parent in [
+            ("region", "r", None), ("sub_region", "sr", "r"), ("district", "d", "sr"),
+            ("county", "c", "d"), ("sub_county", "sc", "c"),
+            ("parish", "p", "sc"), ("village", "v", "p"),
+        ]:
+            nodes[key] = GeographicUnit.objects.create(
+                level=level, code=f"GRM-{key.upper()}", name=key.title(),
+                parent=nodes.get(parent), effective_from=date(2026, 1, 1),
+            )
+        hh = Household.objects.create(
+            region=nodes["r"], sub_region=nodes["sr"], district=nodes["d"],
+            county=nodes["c"], sub_county=nodes["sc"], parish=nodes["p"], village=nodes["v"],
+            urban_rural="rural",
+        )
+        m = Member.objects.create(
+            household=hh, line_number=1, surname="Okot", first_name="James", sex="M",
+        )
+        return hh, m
+
+    def test_auto_open_creates_draft_change_request(self, household_with_member):
+        from apps.update_workflow.models import ChangeStatus
+        hh, m = household_with_member
+        g = open_grievance(
+            category=Category.DATA_CORRECTION,
+            description="Wrong surname",
+            household_id=hh.id, member_id=m.id,
+        )
+        cr = open_change_request_for_grievance(
+            g, requester="parish-chief-7",
+            changes={"surname": {"old": "Okot", "new": "Okello"}},
+        )
+        assert cr.status == ChangeStatus.DRAFT
+        assert cr.entity_id == m.id
+        g.refresh_from_db()
+        assert g.linked_change_request_id == cr.id
+
+    def test_refuses_non_data_correction(self, household_with_member):
+        hh, _ = household_with_member
+        g = open_grievance(
+            category=Category.OPERATOR_CONDUCT, description="x",
+            household_id=hh.id,
+        )
+        with pytest.raises(GrievanceError, match="DATA_CORRECTION"):
+            open_change_request_for_grievance(
+                g, requester="op", changes={"surname": {"old": "x", "new": "y"}},
+            )
+
+    def test_refuses_double_link(self, household_with_member):
+        hh, m = household_with_member
+        g = open_grievance(
+            category=Category.DATA_CORRECTION, description="x",
+            household_id=hh.id, member_id=m.id,
+        )
+        open_change_request_for_grievance(
+            g, requester="op",
+            changes={"surname": {"old": "Okot", "new": "Okello"}},
+        )
+        with pytest.raises(GrievanceError, match="already linked"):
+            open_change_request_for_grievance(
+                g, requester="op",
+                changes={"surname": {"old": "Okot", "new": "Okeyo"}},
+            )
+
+    def test_commit_of_linked_cr_closes_grievance(self, household_with_member):
+        from apps.update_workflow.services import (
+            commit_change_request,
+            submit_change_request,
+        )
+        hh, m = household_with_member
+        g = open_grievance(
+            category=Category.DATA_CORRECTION, description="Wrong surname",
+            household_id=hh.id, member_id=m.id,
+        )
+        cr = open_change_request_for_grievance(
+            g, requester="parish-chief-7",
+            changes={"surname": {"old": "Okot", "new": "Okello"}},
+        )
+        submit_change_request(cr)
+        commit_change_request(cr, approver="cdo-3")
+        g.refresh_from_db()
+        assert g.status == GrievanceStatus.CLOSED
+        assert g.closed_at is not None
 
 
 class TestApi:

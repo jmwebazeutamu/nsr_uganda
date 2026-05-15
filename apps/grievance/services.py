@@ -151,3 +151,59 @@ def close(grievance: Grievance, *, actor: str) -> Grievance:
     grievance.save(update_fields=["status", "closed_at", "updated_at"])
     emit_audit("update", "grievance", grievance.id, actor=actor, reason="closed")
     return grievance
+
+
+@transaction.atomic
+def open_change_request_for_grievance(
+    grievance: Grievance,
+    *,
+    requester: str,
+    changes: dict,
+    sub_category: str = "",
+):
+    """Auto-open a DRAFT ChangeRequest from a DATA_CORRECTION grievance.
+
+    Per SAD §4.4: "A grievance that resolves to a data correction opens
+    a linked UPD." The returned ChangeRequest is in DRAFT state — the
+    operator decides what fields to write. On commit, the GRM signal
+    handler in apps.grievance.signals closes the grievance.
+    """
+    from apps.update_workflow.models import (
+        ChangeRequest,
+        ChangeType,
+        EntityType,
+        SourceChannel,
+    )
+
+    if grievance.category != Category.DATA_CORRECTION:
+        raise GrievanceError(
+            "only DATA_CORRECTION grievances can auto-open a ChangeRequest"
+        )
+    if grievance.member_id:
+        entity_type = EntityType.MEMBER
+        entity_id = grievance.member_id
+    elif grievance.household_id:
+        entity_type = EntityType.HOUSEHOLD
+        entity_id = grievance.household_id
+    else:
+        raise GrievanceError("grievance must point at a household or member")
+    if grievance.linked_change_request_id:
+        raise GrievanceError(
+            f"grievance already linked to ChangeRequest {grievance.linked_change_request_id}"
+        )
+
+    cr = ChangeRequest.objects.create(
+        entity_type=entity_type, entity_id=entity_id,
+        change_type=ChangeType.CORRECTION, pmt_relevant=False,
+        changes=changes or {},
+        source_channel=SourceChannel.GRM,
+        requester=requester,
+        requester_note=f"Auto-opened from grievance {grievance.id}",
+    )
+    grievance.linked_change_request_id = cr.id
+    grievance.save(update_fields=["linked_change_request_id", "updated_at"])
+    emit_audit(
+        "create", "change_request", cr.id, actor=requester,
+        reason="grm-auto-open", field_changes={"grievance_id": grievance.id},
+    )
+    return cr
