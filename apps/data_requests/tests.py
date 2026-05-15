@@ -1252,3 +1252,145 @@ class TestPartnerDownload:
         # Manifest fingerprint logged (first 8 chars only — full hash
         # is in the row, no need to duplicate in the audit reason).
         assert "manifest=" in ev.reason
+
+
+# --- BUG-S11-002a — builder-schema endpoint + role parity -------------
+
+
+class TestBuilderSchema:
+    """Contract: /api/v1/drs/builder-schema/ returns the SAME top-level
+    keys for every role. Values differ (partner sees disabled flags
+    based on DSA; operator sees everything enabled) but the structure
+    is invariant — frontend renders one component regardless of role."""
+
+    EXPECTED_TOP_LEVEL_KEYS = {
+        "role", "dsa_reference", "fields",
+        "filter_operators", "delivery_methods",
+    }
+    EXPECTED_FIELD_KEYS = {
+        "group", "key", "sensitivity", "disabled", "disabled_reason",
+    }
+
+    @pytest.fixture
+    def operator_client(self, db, django_user_model):
+        u = django_user_model.objects.create_user(
+            username="nsr-unit-op", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        return c
+
+    @pytest.fixture
+    def partner_with_narrow_dsa(self, db):
+        partner = Partner.objects.create(code="PARTNER-N", name="Narrow Partner")
+        DataSharingAgreement.objects.create(
+            partner=partner, reference="DSA-NARROW-1",
+            status=DsaStatus.ACTIVE,
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={"fields": [
+                "household.id", "household.sub_region_code",
+                "member.first_name", "member.sex",
+            ]},
+        )
+        return partner
+
+    @pytest.fixture
+    def partner_client(self, db, partner_with_narrow_dsa, django_user_model):
+        from apps.security.models import OperatorScope, ScopeLevel
+        u = django_user_model.objects.create_user(
+            username="partner-analyst-x", password="p",
+        )
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARTNER,
+            scope_code=partner_with_narrow_dsa.code,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        return c
+
+    def test_operator_response_top_level_shape(self, operator_client):
+        r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        assert r.status_code == 200
+        assert set(r.data.keys()) == self.EXPECTED_TOP_LEVEL_KEYS
+
+    def test_partner_response_top_level_shape(self, partner_client):
+        r = partner_client.get("/api/v1/drs/requests/builder-schema/")
+        assert r.status_code == 200
+        assert set(r.data.keys()) == self.EXPECTED_TOP_LEVEL_KEYS
+
+    def test_role_parity_top_level_keys_identical(
+        self, operator_client, partner_client,
+    ):
+        """The contract — same key set on the response. Values
+        differ; structure must not. A regression here breaks the
+        unified frontend builder (BUG-S11-002b)."""
+        op_keys = set(operator_client.get("/api/v1/drs/requests/builder-schema/").data.keys())
+        p_keys = set(partner_client.get("/api/v1/drs/requests/builder-schema/").data.keys())
+        assert op_keys == p_keys
+
+    def test_role_parity_field_count_identical(
+        self, operator_client, partner_client,
+    ):
+        """The fields list has the same length and same keys for
+        both roles — the partner just sees `disabled: true` on
+        fields outside their DSA, never a missing entry."""
+        op_fields = operator_client.get("/api/v1/drs/requests/builder-schema/").data["fields"]
+        p_fields = partner_client.get("/api/v1/drs/requests/builder-schema/").data["fields"]
+        assert len(op_fields) == len(p_fields)
+        assert [f["key"] for f in op_fields] == [f["key"] for f in p_fields]
+
+    def test_each_field_has_expected_keys(self, operator_client):
+        r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        for f in r.data["fields"]:
+            assert set(f.keys()) == self.EXPECTED_FIELD_KEYS
+
+    def test_operator_sees_all_fields_enabled(self, operator_client):
+        r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        for f in r.data["fields"]:
+            assert f["disabled"] is False
+            assert f["disabled_reason"] == ""
+        assert r.data["role"] == "operator"
+        assert r.data["dsa_reference"] == ""
+
+    def test_partner_sees_dsa_disabled_flags(self, partner_client):
+        r = partner_client.get("/api/v1/drs/requests/builder-schema/")
+        assert r.data["role"] == "partner"
+        assert r.data["dsa_reference"] == "DSA-NARROW-1"
+        # Fields outside the narrow DSA show disabled with a reason.
+        by_key = {f["key"]: f for f in r.data["fields"]}
+        # In scope -> enabled.
+        assert by_key["household.id"]["disabled"] is False
+        assert by_key["member.sex"]["disabled"] is False
+        # Outside scope -> disabled with reason.
+        assert by_key["member.nin_hash"]["disabled"] is True
+        assert "DSA-NARROW-1" in by_key["member.nin_hash"]["disabled_reason"]
+        assert by_key["household.gps_lat"]["disabled"] is True
+
+    def test_partner_delivery_methods_filtered(self, partner_client):
+        r = partner_client.get("/api/v1/drs/requests/builder-schema/")
+        # All returned methods must include 'partner-analyst' in
+        # their available_to list; the operator-only ones (if any
+        # land later) shouldn't surface here.
+        for m in r.data["delivery_methods"]:
+            assert "partner-analyst" in m["available_to"]
+
+    def test_filter_operators_invariant_across_roles(
+        self, operator_client, partner_client,
+    ):
+        """Filter operators are intentionally role-agnostic — the
+        partner can compose any predicate the operator can; the
+        DSA limits FIELDS, not OPS."""
+        op = operator_client.get("/api/v1/drs/requests/builder-schema/").data["filter_operators"]
+        p = partner_client.get("/api/v1/drs/requests/builder-schema/").data["filter_operators"]
+        assert [x["op"] for x in op] == [x["op"] for x in p]
+
+    def test_audit_event_emitted_on_schema_read(
+        self, operator_client,
+    ):
+        from apps.security.models import AuditEvent
+        operator_client.get("/api/v1/drs/requests/builder-schema/")
+        ev = AuditEvent.objects.filter(
+            entity_type="drs_builder_schema", action="schema_read",
+        ).order_by("-occurred_at").first()
+        assert ev is not None
+        assert "role=" in ev.reason

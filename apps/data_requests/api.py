@@ -13,6 +13,7 @@ from apps.security.abac import PartnerScopedQuerysetMixin
 from apps.security.audit import emit as emit_audit
 from apps.security.audit_views import AuditReadMixin, _client_ip
 
+from .builder_schema import build_schema
 from .bundles import get_bundle, prepare_and_deliver
 from .models import DataRequest, DataSharingAgreement, Partner, RequestStatus
 from .services import (
@@ -247,6 +248,36 @@ class DataRequestViewSet(
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         req.refresh_from_db()
         return Response(self.get_serializer(req).data)
+
+    @extend_schema(
+        tags=["api-drs"],
+        summary="Builder schema (fields, filter operators, delivery methods)",
+        description=("Returns the catalogue the DRS query builder UI needs "
+                     "to render. Same top-level shape for every role — "
+                     "partner roles get DSA-restricted fields flagged with "
+                     "`disabled: true` + a human-readable reason rather than "
+                     "being silently omitted. Contract: the key set on the "
+                     "top-level response is invariant across all roles "
+                     "(BUG-S11-002a). Audit emits action=schema_read."),
+        responses={200: OpenApiResponse(
+            description="{role, dsa_reference, fields, filter_operators, "
+                        "delivery_methods}",
+        )},
+    )
+    @action(detail=False, methods=["get"], url_path="builder-schema")
+    def builder_schema(self, request):
+        schema = build_schema(request.user)
+        emit_audit(
+            "schema_read", "drs_builder_schema",
+            schema.get("dsa_reference") or "operator",
+            actor=getattr(request.user, "username", "") or "anonymous",
+            reason=f"role={schema['role']}",
+            ip_address=_client_ip(request),
+            user_agent=request.META.get("HTTP_USER_AGENT", ""),
+            field_changes={"fields": len(schema["fields"]),
+                           "delivery_methods": len(schema["delivery_methods"])},
+        )
+        return Response(schema)
 
     @extend_schema(
         tags=["partner-drs"],
