@@ -21,38 +21,62 @@ from django.db.models import Q
 from .models import OperatorScope, ScopeLevel
 
 
-def household_scope_q(user) -> Q:
-    """Return a Q expression filtering Household/Member rows by the
-    operator's active scopes. Same expression works for any model that
-    carries a sub_region_code column (Household and Member both do, per
-    US-S1-007)."""
+def scope_q_for_field(user, field: str = "sub_region_code") -> Q:
+    """Return a Q expression filtering rows whose <field> matches one of
+    the user's active sub_region scopes.
+
+    `field` is a Django ORM lookup path on the model being queried. For
+    Household / Member it's the default 'sub_region_code'; for Referral
+    / ProgrammeEnrolment it's 'household__sub_region_code'; for any
+    model that lacks a direct sub_region attribute the path walks the
+    relation. The caller declares the path via
+    ScopedQuerysetMixin.scope_field_path.
+
+    Fail-closed:
+    - Anonymous user -> Q(pk__in=[]) (no rows visible).
+    - Authenticated user with no active scopes -> Q(pk__in=[]).
+    - Superuser -> ~Q(pk__in=[]) (all rows visible).
+    """
     if user is None or not getattr(user, "is_authenticated", False):
         return Q(pk__in=[])
     if getattr(user, "is_superuser", False):
-        return ~Q(pk__in=[])  # vacuously True — all rows visible
+        return ~Q(pk__in=[])
     scopes = list(
         OperatorScope.objects.filter(user=user, active=True)
         .values_list("scope_level", "scope_code")
     )
     if not scopes:
-        return Q(pk__in=[])  # fail-closed
-    q = Q(pk__in=[])  # OR-of-nothing starting point
+        return Q(pk__in=[])
+    q = Q(pk__in=[])
     for level, code in scopes:
         if level == ScopeLevel.NATIONAL:
             return ~Q(pk__in=[])
         if level == ScopeLevel.SUB_REGION and code:
-            q |= Q(sub_region_code=code)
+            q |= Q(**{field: code})
         # district/parish/village/region levels are modelled but require
-        # the denormalised matching column on the row; deferred to
-        # Sprint 2.5 when the next set of denormalised codes lands.
+        # the denormalised matching column on the row; deferred to a
+        # follow-up when the next set of denormalised codes lands.
     return q
+
+
+def household_scope_q(user) -> Q:
+    """Back-compat alias for the original Household-shaped helper."""
+    return scope_q_for_field(user, "sub_region_code")
 
 
 class ScopedQuerysetMixin:
     """Apply to ViewSets serving personal data so reads are scoped to
     the operator's geography. Use AFTER AuditReadMixin in the MRO so
-    audit emit() still sees the request user."""
+    audit emit() still sees the request user.
+
+    Override `scope_field_path` per viewset when the row's sub-region
+    pointer isn't a direct column. Examples:
+        scope_field_path = "sub_region_code"             # Household, Member
+        scope_field_path = "household__sub_region_code"  # Referral, Enrolment
+    """
+
+    scope_field_path = "sub_region_code"
 
     def get_queryset(self):
         qs = super().get_queryset()
-        return qs.filter(household_scope_q(self.request.user))
+        return qs.filter(scope_q_for_field(self.request.user, self.scope_field_path))

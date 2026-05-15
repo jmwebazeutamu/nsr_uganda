@@ -118,3 +118,52 @@ class TestNationalScope:
         OperatorScope.objects.create(user=u, scope_level=ScopeLevel.NATIONAL, scope_code="")
         r = _client_for(u).get("/api/v1/data-management/households/")
         assert r.data["count"] == 2
+
+
+class TestScopeAcrossFKRelations:
+    """Verify the scope_field_path mechanism — a Referral row is scoped
+    by its household's sub_region_code, not by anything on the Referral
+    itself. Same pattern applies to ProgrammeEnrolment."""
+
+    def test_referral_visible_only_when_household_in_scope(
+        self, db, django_user_model, two_sub_regions, households_in_each,
+    ):
+        from apps.referral.models import Programme
+        from apps.referral.services import send_referral
+
+        prog = Programme.objects.create(
+            code="PDM-T", name="PDM (test)", webhook_url="https://x", webhook_secret="s",
+        )
+        # One referral per household — one in each sub-region.
+        for hh in households_in_each.values():
+            send_referral(programme=prog, household=hh, actor="op")
+
+        # User scoped to BUGANDA only.
+        u = django_user_model.objects.create_user(username="op-buganda", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/ref/referrals/")
+        assert r.status_code == 200
+        assert r.data["count"] == 1
+        ids_visible = {row["household"] for row in r.data["results"]}
+        assert ids_visible == {households_in_each["SR-BUGANDA"].id}
+
+    def test_referral_invisible_to_unscoped_user(
+        self, db, django_user_model, households_in_each,
+    ):
+        from apps.referral.models import Programme
+        from apps.referral.services import send_referral
+
+        prog = Programme.objects.create(
+            code="NUSAF-T", name="NUSAF (test)", webhook_url="https://x", webhook_secret="s",
+        )
+        for hh in households_in_each.values():
+            send_referral(programme=prog, household=hh, actor="op")
+
+        u = django_user_model.objects.create_user(username="empty-2", password="p")
+        # No OperatorScope rows -> fail-closed.
+        r = _client_for(u).get("/api/v1/ref/referrals/")
+        assert r.status_code == 200
+        assert r.data["count"] == 0

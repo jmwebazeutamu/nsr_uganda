@@ -4,6 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.data_management.models import Household
+from apps.security.abac import ScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
 from .models import Programme, ProgrammeEnrolment, Referral
@@ -86,8 +87,9 @@ class ProgrammeViewSet(viewsets.ReadOnlyModelViewSet):
     list=extend_schema(tags=["ref"], summary="List referrals"),
     retrieve=extend_schema(tags=["ref"], summary="Retrieve a referral"),
 )
-class ReferralViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
+class ReferralViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
     audit_entity_type = "referral"
+    scope_field_path = "household__sub_region_code"
     queryset = Referral.objects.all().order_by("-sent_at")
     serializer_class = ReferralSerializer
     filterset_fields = ["status", "programme"]
@@ -162,8 +164,9 @@ class ReferralViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
 @extend_schema_view(
     list=extend_schema(tags=["ref"], summary="List programme enrolments"),
 )
-class ProgrammeEnrolmentViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
+class ProgrammeEnrolmentViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
     audit_entity_type = "programme_enrolment"
+    scope_field_path = "household__sub_region_code"
     queryset = ProgrammeEnrolment.objects.all().order_by("-effective_date")
     serializer_class = EnrolmentSerializer
     filterset_fields = ["status", "programme"]
