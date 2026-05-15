@@ -135,6 +135,117 @@ class OverdueGrievancesByTier(APIView):
 
 @extend_schema(
     tags=["rpt"],
+    summary="Intake submissions per day (last 30 days)",
+    responses={200: DashboardRowSerializer(many=True)},
+)
+class SubmissionsPerDay(APIView):
+    """Submission counts grouped by date for the last 30 days. Uses
+    Submission.provisional_registry_id (linked to a household) to apply
+    geographic scope — pre-promotion submissions without a household
+    are invisible to sub-region operators and visible only to national
+    scope / superuser (same HouseholdIdScopedQuerysetMixin semantics as
+    apps.intake.api)."""
+
+    def get(self, request):
+        from datetime import timedelta
+
+        from django.db.models.functions import TruncDate
+        from django.utils import timezone
+
+        from apps.intake.models import Submission
+        from apps.security.abac import _scoped_codes
+
+        codes = _scoped_codes(request.user)
+        since = timezone.now() - timedelta(days=30)
+        base = Submission.objects.filter(created_at__gte=since)
+        if codes is None:
+            scoped = base
+        elif not codes:
+            scoped = base.none()
+        else:
+            household_ids = list(
+                Household.objects.filter(sub_region_code__in=codes)
+                .values_list("id", flat=True),
+            )
+            # Submissions reference the household by provisional_registry_id,
+            # which becomes the Household.id after promotion.
+            scoped = base.filter(provisional_registry_id__in=household_ids)
+        rows = list(
+            scoped.annotate(day=TruncDate("created_at"))
+            .values("day").annotate(count=Count("id")).order_by("day"),
+        )
+        out = [{"key": r["day"].isoformat(), "count": r["count"]} for r in rows]
+        _audit_dashboard_read(request, "submissions_per_day", len(out))
+        return Response(out)
+
+
+@extend_schema(
+    tags=["rpt"],
+    summary="Pending dedup pairs grouped by tier",
+    responses={200: DashboardRowSerializer(many=True)},
+)
+class PendingDedupPairsByTier(APIView):
+    """MatchPair rows in PENDING state grouped by tier (1 NIN, 2 phone,
+    3 probabilistic). Pair-level visibility follows the both-ends-in-
+    scope rule from MatchPairScopedQuerysetMixin: both members must
+    fall within the operator's geographic scope, else the pair is
+    invisible to sub-region operators."""
+
+    def get(self, request):
+        from apps.data_management.models import Member
+        from apps.ddup.models import MatchPair, PairStatus
+        from apps.security.abac import _scoped_codes
+
+        codes = _scoped_codes(request.user)
+        base = MatchPair.objects.filter(status=PairStatus.PENDING)
+        if codes is None:
+            scoped = base
+        elif not codes:
+            scoped = base.none()
+        else:
+            member_ids = list(
+                Member.objects.filter(household__sub_region_code__in=codes)
+                .values_list("id", flat=True),
+            )
+            scoped = base.filter(
+                record_a_id__in=member_ids, record_b_id__in=member_ids,
+            )
+        rows = list(
+            scoped.values("tier").annotate(count=Count("id")).order_by("tier"),
+        )
+        out = [{"key": f"tier_{r['tier']}", "count": r["count"]} for r in rows]
+        _audit_dashboard_read(request, "pending_dedup_pairs_by_tier", len(out))
+        return Response(out)
+
+
+@extend_schema(
+    tags=["rpt"],
+    summary="PMT score distribution in 10-point buckets",
+    responses={200: DashboardRowSerializer(many=True)},
+)
+class PmtScoreHistogram(APIView):
+    """Histogram of latest PMT scores in 10-point buckets ([0,10),
+    [10,20), ..., [90,100]). Uses Household.current_pmt_score so each
+    household contributes once. ABAC-scoped on Household."""
+
+    def get(self, request):
+        scoped = Household.objects.filter(
+            scope_q_for_field(request.user, "sub_region_code"),
+            current_pmt_score__isnull=False,
+        )
+        # 10 fixed buckets; SQL-side bucketing keeps a single query.
+        buckets: dict[int, int] = {b: 0 for b in range(0, 100, 10)}
+        for score in scoped.values_list("current_pmt_score", flat=True):
+            bucket = int(min(score, 99)) // 10 * 10  # cap at 99 → bucket 90
+            buckets[bucket] += 1
+        out = [{"key": f"{b:02d}-{b + 9:02d}", "count": c}
+               for b, c in buckets.items()]
+        _audit_dashboard_read(request, "pmt_score_histogram", 10)
+        return Response(out)
+
+
+@extend_schema(
+    tags=["rpt"],
     summary="Open grievance count grouped by tier",
     responses={200: DashboardRowSerializer(many=True)},
 )

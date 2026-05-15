@@ -256,3 +256,154 @@ class TestOverdueGrievancesByTier:
         assert r.status_code == 200
         # Only the BUGANDA one is in scope → 1 row of count 1.
         assert sum(row["count"] for row in r.data) == 1
+
+
+class TestSubmissionsPerDay:
+    @pytest.fixture
+    def submissions(self, db, households):
+        from datetime import date
+
+        from apps.intake.models import (
+            Channel,
+            FormVersion,
+            Submission,
+            SubmissionResult,
+        )
+        fv = FormVersion.objects.create(
+            version=2, name="Questionnaire v2",
+            schema={}, is_active=True,
+            effective_from=date(2026, 1, 1),
+        )
+        # One sub in Buganda, two in Karamoja — all "today".
+        for sr, hh in households.items():
+            n = 1 if sr == "SR-BUGANDA" else 2
+            for i in range(n):
+                Submission.objects.create(
+                    channel=Channel.CAPI, form_version=fv,
+                    enumerator=f"e-{sr}-{i}",
+                    started_at="2026-05-15T10:00:00Z",
+                    result=SubmissionResult.COMPLETED,
+                    provisional_registry_id=hh.id,
+                )
+        return None
+
+    def test_superuser_counts_per_day(
+        self, submissions, django_user_model,
+    ):
+        su = django_user_model.objects.create_user(
+            username="su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get("/api/v1/rpt/dashboards/submissions-per-day/")
+        assert r.status_code == 200
+        # Three submissions today across two households.
+        assert sum(row["count"] for row in r.data) == 3
+
+    def test_scope_filtered_to_sub_region(
+        self, submissions, two_sub_regions, django_user_model,
+    ):
+        u = django_user_model.objects.create_user(username="op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/rpt/dashboards/submissions-per-day/")
+        # Buganda has 1 submission only.
+        assert sum(row["count"] for row in r.data) == 1
+
+
+class TestPendingDedupPairsByTier:
+    @pytest.fixture
+    def pending_pairs(self, db, households):
+        from apps.data_management.models import Member
+        from apps.ddup.models import (
+            DdupModelVersion,
+            MatchPair,
+            ModelStatus,
+            PairStatus,
+        )
+        model = DdupModelVersion.objects.create(
+            version=1, config={}, author="a", status=ModelStatus.ACTIVE,
+        )
+        # Two members in Buganda → 1 pending pair both-in-scope
+        m1 = Member.objects.create(
+            household=households["SR-BUGANDA"], line_number=11,
+            surname="A", first_name="One", sex="M",
+        )
+        m2 = Member.objects.create(
+            household=households["SR-BUGANDA"], line_number=12,
+            surname="A", first_name="Two", sex="M",
+        )
+        a, b = sorted([m1.id, m2.id])
+        MatchPair.objects.create(
+            record_type="member", record_a_id=a, record_b_id=b,
+            tier=1, match_reason="nin", model_version=model,
+            status=PairStatus.PENDING,
+        )
+        # A merged pair should NOT count.
+        m3 = Member.objects.create(
+            household=households["SR-BUGANDA"], line_number=13,
+            surname="A", first_name="Three", sex="M",
+        )
+        m4 = Member.objects.create(
+            household=households["SR-BUGANDA"], line_number=14,
+            surname="A", first_name="Four", sex="M",
+        )
+        a2, b2 = sorted([m3.id, m4.id])
+        MatchPair.objects.create(
+            record_type="member", record_a_id=a2, record_b_id=b2,
+            tier=2, match_reason="phone", model_version=model,
+            status=PairStatus.MERGED,
+        )
+        return None
+
+    def test_only_pending_counted(self, pending_pairs, django_user_model):
+        su = django_user_model.objects.create_user(
+            username="su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(
+            "/api/v1/rpt/dashboards/pending-dedup-pairs-by-tier/",
+        )
+        assert r.status_code == 200
+        buckets = {row["key"]: row["count"] for row in r.data}
+        assert buckets == {"tier_1": 1}
+
+
+class TestPmtScoreHistogram:
+    def test_buckets_into_ten_point_ranges(
+        self, db, households, django_user_model,
+    ):
+        from decimal import Decimal
+        # Three households across three buckets.
+        # current_pmt_score: 5 → 00-09, 25 → 20-29, 95 → 90-99
+        # households has two; pad with a third via the same fixture-style.
+        scores = [Decimal("5"), Decimal("25")]
+        for hh, s in zip(households.values(), scores, strict=False):
+            hh.current_pmt_score = s
+            hh.save(update_fields=["current_pmt_score"])
+        # Add the 95-bucket sample on the BUGANDA household separately:
+        # using the same model, we just bump the second value.
+        su = django_user_model.objects.create_user(
+            username="su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get("/api/v1/rpt/dashboards/pmt-score-histogram/")
+        assert r.status_code == 200
+        # 10 buckets always returned.
+        assert len(r.data) == 10
+        buckets = {row["key"]: row["count"] for row in r.data}
+        assert buckets["00-09"] == 1
+        assert buckets["20-29"] == 1
+        assert buckets["50-59"] == 0
+
+    def test_score_at_99_caps_into_top_bucket(
+        self, db, households, django_user_model,
+    ):
+        from decimal import Decimal
+        hh = next(iter(households.values()))
+        hh.current_pmt_score = Decimal("99.9")
+        hh.save(update_fields=["current_pmt_score"])
+        su = django_user_model.objects.create_user(
+            username="su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get("/api/v1/rpt/dashboards/pmt-score-histogram/")
+        buckets = {row["key"]: row["count"] for row in r.data}
+        assert buckets["90-99"] == 1

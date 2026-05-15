@@ -5,6 +5,9 @@ from .views import (
     HouseholdsBySubRegion,
     OpenGrievancesByTier,
     OverdueGrievancesByTier,
+    PendingDedupPairsByTier,
+    PmtScoreHistogram,
+    SubmissionsPerDay,
 )
 
 urlpatterns = [
@@ -20,4 +23,13 @@ urlpatterns = [
     path("dashboards/overdue-grievances-by-tier/",
          OverdueGrievancesByTier.as_view(),
          name="rpt-overdue-grievances-by-tier"),
+    path("dashboards/submissions-per-day/",
+         SubmissionsPerDay.as_view(),
+         name="rpt-submissions-per-day"),
+    path("dashboards/pending-dedup-pairs-by-tier/",
+         PendingDedupPairsByTier.as_view(),
+         name="rpt-pending-dedup-pairs-by-tier"),
+    path("dashboards/pmt-score-histogram/",
+         PmtScoreHistogram.as_view(),
+         name="rpt-pmt-score-histogram"),
 ]
