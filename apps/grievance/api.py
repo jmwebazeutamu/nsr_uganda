@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from apps.security.abac import HouseholdIdScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
-from .models import Grievance
+from .models import Grievance, GrievanceStatus
 from .services import GrievanceError, assign, close, escalate, open_grievance, resolve
 
 
@@ -137,3 +137,27 @@ class GrievanceViewSet(
         except GrievanceError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(self.get_serializer(g).data)
+
+    @extend_schema(
+        tags=["grm"],
+        summary="List grievances past their SLA deadline",
+        description=("Returns open / in-progress / escalated grievances whose "
+                     "sla_deadline is in the past. The queryset is ABAC-scoped "
+                     "via the same HouseholdIdScopedQuerysetMixin path as the "
+                     "main list — a sub-region operator only sees overdue "
+                     "items they have authority over. Powers L2/L3/L4 "
+                     "supervision dashboards."),
+        responses={200: GrievanceSerializer(many=True)},
+    )
+    @action(detail=False, methods=["get"], url_path="overdue")
+    def overdue(self, request):
+        from django.utils import timezone
+        qs = self.filter_queryset(self.get_queryset()).filter(
+            sla_deadline__lt=timezone.now(),
+            status__in=[GrievanceStatus.OPEN, GrievanceStatus.IN_PROGRESS,
+                        GrievanceStatus.ESCALATED],
+        ).order_by("sla_deadline")
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            return self.get_paginated_response(self.get_serializer(page, many=True).data)
+        return Response(self.get_serializer(qs, many=True).data)

@@ -4,6 +4,7 @@ from .views import (
     HouseholdsByPmtBand,
     HouseholdsBySubRegion,
     OpenGrievancesByTier,
+    OverdueGrievancesByTier,
 )
 
 urlpatterns = [
@@ -16,4 +17,7 @@ urlpatterns = [
     path("dashboards/open-grievances-by-tier/",
          OpenGrievancesByTier.as_view(),
          name="rpt-open-grievances-by-tier"),
+    path("dashboards/overdue-grievances-by-tier/",
+         OverdueGrievancesByTier.as_view(),
+         name="rpt-overdue-grievances-by-tier"),
 ]

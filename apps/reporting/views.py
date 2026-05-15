@@ -96,6 +96,45 @@ class HouseholdsByPmtBand(APIView):
 
 @extend_schema(
     tags=["rpt"],
+    summary="Overdue grievance count grouped by tier",
+    responses={200: DashboardRowSerializer(many=True)},
+)
+class OverdueGrievancesByTier(APIView):
+    """Counts of open grievances past their sla_deadline, grouped by
+    tier. ABAC-scoped through the household. Used by L3/L4 supervisors
+    to surface tier-wise SLA breach pressure."""
+
+    def get(self, request):
+        from django.utils import timezone
+
+        from apps.security.abac import _scoped_codes  # local import: cycle safety
+
+        codes = _scoped_codes(request.user)
+        base = Grievance.objects.filter(
+            sla_deadline__lt=timezone.now(),
+            status__in=[GrievanceStatus.OPEN, GrievanceStatus.IN_PROGRESS,
+                        GrievanceStatus.ESCALATED],
+        )
+        if codes is None:
+            scoped = base
+        elif not codes:
+            scoped = base.none()
+        else:
+            household_ids = list(
+                Household.objects.filter(sub_region_code__in=codes)
+                .values_list("id", flat=True),
+            )
+            scoped = base.filter(household_id__in=household_ids)
+        rows = list(
+            scoped.values("tier").annotate(count=Count("id")).order_by("tier"),
+        )
+        out = [{"key": r["tier"], "count": r["count"]} for r in rows]
+        _audit_dashboard_read(request, "overdue_grievances_by_tier", len(out))
+        return Response(out)
+
+
+@extend_schema(
+    tags=["rpt"],
     summary="Open grievance count grouped by tier",
     responses={200: DashboardRowSerializer(many=True)},
 )

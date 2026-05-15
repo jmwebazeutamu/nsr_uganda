@@ -187,3 +187,72 @@ class TestOpenGrievancesByTier:
         r = _client_for(u).get("/api/v1/rpt/dashboards/open-grievances-by-tier/")
         assert r.status_code == 200
         assert sum(row["count"] for row in r.data) == 1
+
+
+class TestOverdueGrievancesByTier:
+    def test_only_overdue_open_rows_counted(
+        self, db, households, django_user_model,
+    ):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        # Two open grievances, only one past SLA.
+        late = open_grievance(category=Category.DATA_CORRECTION, description="a",
+                              household_id=households["SR-BUGANDA"].id,
+                              tier=Tier.L1_PARISH_CHIEF)
+        late.sla_deadline = timezone.now() - timedelta(hours=1)
+        late.save(update_fields=["sla_deadline"])
+        open_grievance(category=Category.DATA_CORRECTION, description="b",
+                       household_id=households["SR-BUGANDA"].id,
+                       tier=Tier.L2_CDO)  # still within SLA
+
+        # A resolved-but-past grievance must NOT show up.
+        late_resolved = open_grievance(
+            category=Category.OTHER, description="c",
+            household_id=households["SR-BUGANDA"].id,
+        )
+        late_resolved.sla_deadline = timezone.now() - timedelta(hours=5)
+        late_resolved.status = GrievanceStatus.RESOLVED
+        late_resolved.save(update_fields=["sla_deadline", "status"])
+
+        su = django_user_model.objects.create_user(
+            username="su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(
+            "/api/v1/rpt/dashboards/overdue-grievances-by-tier/",
+        )
+        assert r.status_code == 200
+        buckets = {row["key"]: row["count"] for row in r.data}
+        assert buckets == {Tier.L1_PARISH_CHIEF: 1}
+
+    def test_scope_filtered(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        late_buganda = open_grievance(
+            category=Category.DATA_CORRECTION, description="a",
+            household_id=households["SR-BUGANDA"].id,
+        )
+        late_karamoja = open_grievance(
+            category=Category.DATA_CORRECTION, description="b",
+            household_id=households["SR-KARAMOJA"].id,
+        )
+        for g in (late_buganda, late_karamoja):
+            g.sla_deadline = timezone.now() - timedelta(hours=1)
+            g.save(update_fields=["sla_deadline"])
+
+        u = django_user_model.objects.create_user(username="op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get(
+            "/api/v1/rpt/dashboards/overdue-grievances-by-tier/",
+        )
+        assert r.status_code == 200
+        # Only the BUGANDA one is in scope → 1 row of count 1.
+        assert sum(row["count"] for row in r.data) == 1

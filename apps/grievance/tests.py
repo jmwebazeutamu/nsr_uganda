@@ -244,3 +244,58 @@ class TestApi:
         assert r.status_code == 200
         assert r.data["status"] == GrievanceStatus.IN_PROGRESS
         assert Grievance.objects.get(pk=gid).assigned_to == "pc-3"
+
+
+class TestOverdueAction:
+    """SAD §4.4.7 framing — supervisors need a list of grievances past
+    their tier SLA so they can intervene or escalate. The /overdue/
+    action returns exactly those rows, ABAC-scoped through the
+    household."""
+
+    @pytest.fixture
+    def overdue_and_fresh(self, db):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.grievance.models import Tier
+
+        # 1 grievance whose SLA has already lapsed → overdue
+        overdue = open_grievance(
+            category=Category.DATA_CORRECTION, description="overdue case",
+            tier=Tier.L1_PARISH_CHIEF,
+        )
+        overdue.sla_deadline = timezone.now() - timedelta(hours=1)
+        overdue.save(update_fields=["sla_deadline"])
+
+        # 1 grievance whose SLA is still in the future → not overdue
+        fresh = open_grievance(
+            category=Category.DATA_CORRECTION, description="fresh case",
+            tier=Tier.L1_PARISH_CHIEF,
+        )
+
+        # 1 resolved grievance, even though past SLA — must NOT show up
+        resolved_past = open_grievance(
+            category=Category.OTHER, description="late but resolved",
+        )
+        resolved_past.sla_deadline = timezone.now() - timedelta(hours=2)
+        resolved_past.status = GrievanceStatus.RESOLVED
+        resolved_past.save(update_fields=["sla_deadline", "status"])
+
+        return overdue, fresh, resolved_past
+
+    def test_overdue_returns_only_open_past_due(
+        self, overdue_and_fresh, django_user_model,
+    ):
+        from rest_framework.test import APIClient
+        overdue, _, _ = overdue_and_fresh
+        u = django_user_model.objects.create_user(
+            username="supervisor", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.get("/api/v1/grm/grievances/overdue/")
+        assert r.status_code == 200
+        results = r.data["results"] if isinstance(r.data, dict) else r.data
+        ids = {row["id"] for row in results}
+        assert ids == {overdue.id}
