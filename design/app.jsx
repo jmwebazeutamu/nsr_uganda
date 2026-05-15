@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, AdminScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, AdminScreen, RegistryScreen, HouseholdScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -19,6 +19,7 @@ const NAV = [
   { id: "dedup",   label: "Duplicates",    icon: "duplicate", count: 47 },
   { id: "grm",     label: "Grievances",    icon: "message",   count: 7 },
   { section: "DATA" },
+  { id: "registry", label: "Registry",     icon: "users",     screen: true },
   { id: "drs",     label: "Data Requests", icon: "download",  count: 9 },
   { id: "partner-drs", label: "My requests", icon: "download", count: 5 },
   { id: "receipt", label: "Receipt slip",  icon: "print" },
@@ -62,6 +63,9 @@ function App() {
     if (role === "cdo"    && ["dih","drs","partner-drs"].includes(n.id)) return false;
     if (role === "nsr-unit" && n.id === "partner-drs") return false;
     if (role === "partner-analyst" && !["home","partner-drs","kit"].includes(n.id)) return false;
+    // Registry is operator-only — partners use the DRS portal to
+    // request data, not browse the registry directly.
+    if (n.id === "registry" && role === "partner-analyst") return false;
     return true;
   });
 
@@ -137,6 +141,8 @@ function App() {
         {screen === "grm"     && <GRMScreen onNavigate={navigate}/>}
         {screen === "partner-drs" && <PartnerDRSScreen/>}
         {screen === "admin"   && <AdminScreen/>}
+        {screen === "registry" && <RegistryScreen onNavigate={navigate}/>}
+        {screen === "household" && <HouseholdScreen householdId={screenPayload?.householdId}/>}
       </main>
 
       {/* Tweaks */}

@@ -28,16 +28,31 @@ class MemberSerializer(serializers.ModelSerializer):
 
 class HouseholdSerializer(serializers.ModelSerializer):
     members = MemberSerializer(many=True, read_only=True)
+    # Geo names so the React detail screen can render the address
+    # chain without N+1 lookups against /geographic-units/. Codes
+    # stay on the FK fields (region, sub_region, ...) for callers
+    # that join programmatically; names are flat strings for display.
+    region_name = serializers.CharField(source="region.name", read_only=True, default="")
+    sub_region_name = serializers.CharField(source="sub_region.name", read_only=True, default="")
+    district_name = serializers.CharField(source="district.name", read_only=True, default="")
+    county_name = serializers.CharField(source="county.name", read_only=True, default="")
+    sub_county_name = serializers.CharField(source="sub_county.name", read_only=True, default="")
+    parish_name = serializers.CharField(source="parish.name", read_only=True, default="")
+    village_name = serializers.CharField(source="village.name", read_only=True, default="")
+    current_intake_source = serializers.CharField(read_only=True)
 
     class Meta:
         model = Household
         fields = (
             "id", "head_member", "region", "sub_region", "district",
             "county", "sub_county", "parish", "village",
+            "region_name", "sub_region_name", "district_name",
+            "county_name", "sub_county_name", "parish_name", "village_name",
             "urban_rural", "enumeration_area", "household_number",
             "address_narrative",
             "gps_lat", "gps_lng", "gps_accuracy_m",
             "current_pmt_score", "current_vulnerability_band",
+            "current_intake_source",
             "is_deleted", "created_at", "updated_at", "members",
         )
 
