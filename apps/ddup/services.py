@@ -470,6 +470,73 @@ def reverse_merge_decision(
     return decision
 
 
+def auto_merge_high_confidence_pairs(
+    *, actor: str = "ddup-auto-merge",
+) -> dict[str, int]:
+    """Sweep PENDING tier-3 pairs whose composite_score >= the active
+    DdupModelVersion's auto_merge_threshold (default 0.95) and merge
+    them with no manual intervention.
+
+    Per-pair surviving_id selection: the older Member wins
+    (lexicographic ULID order ascending — ULIDs are time-sortable, so
+    this picks the earlier-registered record). chosen_field_values is
+    empty: the survivor's existing field values are preserved, only
+    the loser is soft-deleted and the pair is closed.
+
+    Each merge runs through the existing merge_member_pair() service
+    so audit chain, pre_merge_snapshot, and the 30-day reverse window
+    (S5-003) all apply identically to manual merges. Additionally
+    emits one auto_merge audit event per pair so the QA team can
+    distinguish automatic from manual merges in the audit feed.
+
+    Returns counts dict {processed, merged, skipped}. Idempotent —
+    re-runs see no PENDING tier-3 rows above threshold (they were
+    merged on the previous run) so the second run is a no-op.
+    """
+    model = get_active_model_version()
+    cfg = (model.config or {}).get("tier3") or {}
+    auto_threshold = cfg.get("auto_merge_threshold", 0.95)
+
+    qs = MatchPair.objects.filter(
+        status=PairStatus.PENDING,
+        record_type="member",
+        tier=3,
+        composite_score__gte=auto_threshold,
+    ).order_by("created_at")
+
+    processed = 0
+    merged = 0
+    skipped = 0
+    for pair in qs:
+        processed += 1
+        # ULIDs are time-sortable; pick the earlier record as survivor.
+        survivor_id = min(pair.record_a_id, pair.record_b_id)
+        try:
+            merge_member_pair(
+                pair, surviving_id=survivor_id, chosen_field_values={},
+                actor=actor,
+                note=(
+                    f"auto-merge tier-3 composite={pair.composite_score} "
+                    f">= threshold {auto_threshold}"
+                ),
+            )
+            _emit_audit(
+                action="auto_merge", entity_type="match_pair",
+                entity_id=pair.id, actor=actor,
+                reason=f"composite={pair.composite_score}",
+                field_changes={
+                    "threshold": float(auto_threshold),
+                    "surviving": survivor_id,
+                },
+            )
+            merged += 1
+        except MergeError:
+            # Race with manual reviewer or already-merged pair —
+            # skip without aborting the batch.
+            skipped += 1
+    return {"processed": processed, "merged": merged, "skipped": skipped}
+
+
 @transaction.atomic
 def reject_pair(pair: MatchPair, *, actor: str, reason: str) -> MergeDecision:
     """AC-DDUP-REJECT-LEARN: rejecting a pair records the reason and prevents

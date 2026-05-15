@@ -827,3 +827,174 @@ class TestProbabilisticDiscovery:
         )
         created = discover_probabilistic_pairs(actor="system")
         assert len(created) == 1
+
+
+# --- US-S8-002 — auto-merge high-confidence tier-3 pairs ------------------
+
+
+class TestAutoMergeHighConfidence:
+    """Tier-3 pairs above the auto_merge_threshold (default 0.95)
+    merge without manual review. Below-threshold pairs stay PENDING."""
+
+    def _make_two_high_confidence_members(self, db, geo):
+        # Two identical-looking members in different households, same
+        # village -> tier-3 composite will be very high (~1.0).
+        h1 = Household.objects.create(
+            region=geo["r"], sub_region=geo["sr"], district=geo["d"],
+            county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
+            village=geo["v"], urban_rural="rural",
+        )
+        h2 = Household.objects.create(
+            region=geo["r"], sub_region=geo["sr"], district=geo["d"],
+            county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
+            village=geo["v"], urban_rural="rural",
+        )
+        m1 = Member.objects.create(
+            household=h1, line_number=1, surname="OKELLO",
+            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+        )
+        m2 = Member.objects.create(
+            household=h2, line_number=1, surname="OKELLO",
+            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+        )
+        return m1, m2
+
+    def test_above_threshold_pair_auto_merges(self, db, geo, active_model):
+        from apps.ddup.services import (
+            auto_merge_high_confidence_pairs,
+            discover_probabilistic_pairs,
+        )
+        m1, m2 = self._make_two_high_confidence_members(db, geo)
+        discover_probabilistic_pairs(actor="system")
+        # Identical attributes -> composite ~= 1.0, above 0.95 default.
+        counts = auto_merge_high_confidence_pairs()
+        assert counts["merged"] == 1
+        # Older ULID (m1, created first) is the survivor.
+        m1.refresh_from_db()
+        m2.refresh_from_db()
+        assert m1.is_deleted is False
+        assert m2.is_deleted is True
+        assert m2.merged_into_id == m1.id
+
+    def test_below_threshold_pair_stays_pending(self, db, geo):
+        """Permissive threshold pulls in mid-similarity pairs but
+        keeps the auto-merge cutoff high — they should stay PENDING."""
+        from apps.ddup.services import (
+            activate_model_version,
+            auto_merge_high_confidence_pairs,
+            discover_probabilistic_pairs,
+        )
+        permissive = DdupModelVersion.objects.create(
+            version=3, author="archer",
+            config={"tier3": {"threshold": 0.5,
+                              "auto_merge_threshold": 0.95}},
+        )
+        activate_model_version(permissive, approver="bob")
+        h1 = Household.objects.create(
+            region=geo["r"], sub_region=geo["sr"], district=geo["d"],
+            county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
+            village=geo["v"], urban_rural="rural",
+        )
+        h2 = Household.objects.create(
+            region=geo["r"], sub_region=geo["sr"], district=geo["d"],
+            county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
+            village=geo["v"], urban_rural="rural",
+        )
+        Member.objects.create(
+            household=h1, line_number=1, surname="OKELLO",
+            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+        )
+        Member.objects.create(
+            household=h2, line_number=1, surname="OKELO",
+            first_name="JAMS", sex="M", date_of_birth=date(1985, 1, 1),
+        )
+        created = discover_probabilistic_pairs(actor="system")
+        assert len(created) == 1
+        # Composite is in [0.5, 0.95) -> stays PENDING after sweep.
+        counts = auto_merge_high_confidence_pairs()
+        assert counts == {"processed": 0, "merged": 0, "skipped": 0}
+        created[0].refresh_from_db()
+        assert created[0].status == PairStatus.PENDING
+
+    def test_emits_auto_merge_audit_event(self, db, geo, active_model):
+        from apps.ddup.services import (
+            auto_merge_high_confidence_pairs,
+            discover_probabilistic_pairs,
+        )
+        m1, m2 = self._make_two_high_confidence_members(db, geo)
+        discover_probabilistic_pairs(actor="system")
+        auto_merge_high_confidence_pairs()
+        # Two audit events for the pair now: merge (from merge_member_pair)
+        # AND auto_merge (the additional distinguishing tag).
+        actions = list(
+            AuditEvent.objects.filter(
+                entity_type="match_pair",
+            ).values_list("action", flat=True),
+        )
+        assert "auto_merge" in actions
+
+    def test_threshold_overridable_via_model_config(self, db, geo):
+        """A model-version that lowers auto_merge_threshold should
+        pull in pairs the 0.95 default would skip."""
+        from apps.ddup.services import (
+            activate_model_version,
+            auto_merge_high_confidence_pairs,
+            discover_probabilistic_pairs,
+        )
+        v = DdupModelVersion.objects.create(
+            version=4, author="archer",
+            config={"tier3": {"threshold": 0.5,
+                              "auto_merge_threshold": 0.6}},
+        )
+        activate_model_version(v, approver="bob")
+        h1 = Household.objects.create(
+            region=geo["r"], sub_region=geo["sr"], district=geo["d"],
+            county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
+            village=geo["v"], urban_rural="rural",
+        )
+        h2 = Household.objects.create(
+            region=geo["r"], sub_region=geo["sr"], district=geo["d"],
+            county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
+            village=geo["v"], urban_rural="rural",
+        )
+        Member.objects.create(
+            household=h1, line_number=1, surname="OKELLO",
+            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+        )
+        Member.objects.create(
+            household=h2, line_number=1, surname="OKELO",
+            first_name="JAMS", sex="M", date_of_birth=date(1985, 1, 1),
+        )
+        discover_probabilistic_pairs(actor="system")
+        counts = auto_merge_high_confidence_pairs()
+        # Permissive auto-threshold should pick this one up.
+        assert counts["merged"] == 1
+
+    def test_idempotent(self, db, geo, active_model):
+        from apps.ddup.services import (
+            auto_merge_high_confidence_pairs,
+            discover_probabilistic_pairs,
+        )
+        self._make_two_high_confidence_members(db, geo)
+        discover_probabilistic_pairs(actor="system")
+        first = auto_merge_high_confidence_pairs()
+        second = auto_merge_high_confidence_pairs()
+        assert first["merged"] == 1
+        # Already MERGED -> excluded from the second sweep.
+        assert second == {"processed": 0, "merged": 0, "skipped": 0}
+
+    def test_celery_task_runs(self, db, geo, active_model):
+        from apps.ddup.services import discover_probabilistic_pairs
+        from apps.ddup.tasks import auto_merge_high_confidence_pairs_task
+        self._make_two_high_confidence_members(db, geo)
+        discover_probabilistic_pairs(actor="system")
+        result = auto_merge_high_confidence_pairs_task.run()
+        assert result["merged"] == 1
+
+    def test_beat_schedule_includes_auto_merge(self):
+        from nsr_mis.celery import app
+        tasks = {entry["task"] for entry in app.conf.beat_schedule.values()}
+        assert (
+            "apps.ddup.tasks.auto_merge_high_confidence_pairs_task"
+            in tasks
+        )

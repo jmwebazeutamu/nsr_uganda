@@ -58,4 +58,11 @@ app.conf.beat_schedule = {
         # builds in real time.
         "schedule": crontab(minute="*/15"),
     },
+    "auto-merge-high-confidence-pairs": {
+        "task": "apps.ddup.tasks.auto_merge_high_confidence_pairs_task",
+        # Hourly — high-confidence tier-3 pairs are rare; we don't
+        # need real-time auto-merge, and an hour gives reviewers
+        # time to manually pre-empt anything edge-case.
+        "schedule": crontab(minute=15),
+    },
 }
