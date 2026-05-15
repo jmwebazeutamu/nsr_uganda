@@ -96,7 +96,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install bandit
-      - run: bandit -q -r apps nsr_mis -x apps/*/tests.py,apps/*/migrations
+      - run: bandit -q -r apps nsr_mis -x 'apps/*/tests.py,apps/*/test_*.py,apps/*/migrations,tests'
 
   deps:
     name: Dependency scan (pip-audit)
