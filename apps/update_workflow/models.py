@@ -96,6 +96,11 @@ class ChangeRequest(models.Model):
     # time; the actual recompute is post-commit in apps.pmt.
     pmt_preview = models.JSONField(default=dict, blank=True)
 
+    # SAD §4.4.4 1% sample policy: a deterministic fraction of auto-
+    # committed VITAL_EVENT / PROGRAMME_STATE requests are flagged here
+    # so the QA team can audit auto-commit decisions retrospectively.
+    sampled_for_audit = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

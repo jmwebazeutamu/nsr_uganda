@@ -17,7 +17,9 @@ from apps.update_workflow.models import (
     SourceChannel,
 )
 from apps.update_workflow.services import (
+    AUTO_COMMIT_CHANGE_TYPES,
     UpdError,
+    auto_commit_change_request,
     commit_change_request,
     compute_diff,
     post_change_committed,
@@ -236,3 +238,98 @@ class TestHouseholdCommit:
         versions = HouseholdVersion.objects.filter(household=household)
         assert versions.count() == 1
         assert versions.first().address_narrative == "Plot 1A"
+
+
+# --- auto-commit path ------------------------------------------------------
+
+
+class TestAutoCommit:
+    """SAD §4.4.4: VITAL_EVENT (NIRA push) and PROGRAMME_STATE (partner
+    MIS push) bypass approver review and commit at submit time. The 1%
+    sample policy flags a deterministic fraction for retro audit."""
+
+    def test_vital_event_auto_commits(self, member):
+        req = _draft(
+            member, requester="nira-system", ctype=ChangeType.VITAL_EVENT,
+            changes={"nin_status": {"old": "unknown", "new": "verified"}},
+        )
+        auto_commit_change_request(req)
+        req.refresh_from_db()
+        assert req.status == ChangeStatus.COMMITTED
+        # Auto-commit uses the routed system identifier as approver.
+        assert req.approver == "nira_auto"
+        member.refresh_from_db()
+        assert member.nin_status == "verified"
+        # Version row was written.
+        assert MemberVersion.objects.filter(member=member).exists()
+
+    def test_programme_state_auto_commits(self, member):
+        req = _draft(
+            member, requester="pdm-mis", ctype=ChangeType.PROGRAMME_STATE,
+            changes={"residency_status": {"old": "", "new": "absent"}},
+        )
+        auto_commit_change_request(req)
+        req.refresh_from_db()
+        assert req.status == ChangeStatus.COMMITTED
+        assert req.approver == "programme_auto"
+
+    def test_correction_cannot_use_auto_path(self, member):
+        req = _draft(member, ctype=ChangeType.CORRECTION)
+        with pytest.raises(UpdError, match="rejects change_type"):
+            auto_commit_change_request(req)
+
+    def test_addition_cannot_use_auto_path(self, member):
+        req = _draft(member, ctype=ChangeType.ADDITION)
+        with pytest.raises(UpdError, match="rejects change_type"):
+            auto_commit_change_request(req)
+
+    def test_must_be_draft(self, member):
+        req = _draft(member, ctype=ChangeType.VITAL_EVENT)
+        submit_change_request(req)
+        with pytest.raises(UpdError, match="DRAFT"):
+            auto_commit_change_request(req)
+
+    def test_auto_commit_emits_audit_chain(self, member):
+        req = _draft(
+            member, ctype=ChangeType.VITAL_EVENT,
+            changes={"nin_status": {"old": "unknown", "new": "verified"}},
+        )
+        auto_commit_change_request(req)
+        events = AuditEvent.objects.filter(
+            entity_type="change_request", entity_id=req.id,
+        ).values_list("action", flat=True)
+        # Both submit and commit emit; the chain is intact.
+        assert "submit" in events
+        assert "commit" in events
+
+    def test_sample_rate_1_always_flags(self, member):
+        req = _draft(
+            member, ctype=ChangeType.VITAL_EVENT,
+            changes={"nin_status": {"old": "unknown", "new": "verified"}},
+        )
+        auto_commit_change_request(req, sample_rate=1.0)
+        req.refresh_from_db()
+        assert req.sampled_for_audit is True
+
+    def test_sample_rate_0_never_flags(self, member):
+        req = _draft(
+            member, ctype=ChangeType.VITAL_EVENT,
+            changes={"nin_status": {"old": "unknown", "new": "verified"}},
+        )
+        auto_commit_change_request(req, sample_rate=0.0)
+        req.refresh_from_db()
+        assert req.sampled_for_audit is False
+
+    def test_sample_is_deterministic_per_id(self, member):
+        """Same CR id should sample the same way every time — important
+        for reproducible audits."""
+        from apps.update_workflow.services import _is_sampled
+        cr_id = "01HXYTESTCRID0123456789ABC"
+        a = _is_sampled(cr_id, 0.5)
+        b = _is_sampled(cr_id, 0.5)
+        assert a == b
+
+    def test_auto_commit_change_types_frozenset(self):
+        assert ChangeType.VITAL_EVENT in AUTO_COMMIT_CHANGE_TYPES
+        assert ChangeType.PROGRAMME_STATE in AUTO_COMMIT_CHANGE_TYPES
+        assert ChangeType.CORRECTION not in AUTO_COMMIT_CHANGE_TYPES

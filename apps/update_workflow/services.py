@@ -4,17 +4,24 @@ Lifecycle: DRAFT -> SUBMITTED -> PENDING_APPROVAL -> COMMITTED | REJECTED.
 
 The commit step (commit_change_request) applies the diff to the target
 entity in a single transaction, writes the paired HouseholdVersion /
-MemberVersion row, and emits the audit chain entry. PMT recompute fires
-via the post_change_committed signal — apps.pmt subscribes when it
-lands; today the signal has no listeners (no-op).
+MemberVersion row, and emits the audit chain entry. PMT recompute
+fires via the post_change_committed signal; apps.pmt subscribes in
+apps/pmt/signals.py.
 
 Concurrency: commit re-reads the target row under select_for_update; if
 the field's current value differs from the diff's "old" value the
 commit aborts with UpdError("concurrent edit detected").
+
+Auto-commit (SAD §4.4.4): VITAL_EVENT (NIRA-pushed death/birth) and
+PROGRAMME_STATE (partner-MIS-pushed enrol/exit) bypass approver review
+and commit at submit time. The 1% sample policy lives here too —
+auto_commit_change_request flags `sampled_for_audit=True` on a
+deterministic fraction so QA can audit auto decisions retrospectively.
 """
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import django.dispatch
@@ -24,8 +31,15 @@ from django.utils import timezone
 from apps.data_management.models import Household, HouseholdVersion, Member, MemberVersion
 from apps.security.audit import emit as emit_audit
 
-from .models import ChangeRequest, ChangeStatus, EntityType
+from .models import ChangeRequest, ChangeStatus, ChangeType, EntityType
 from .routing import route
+
+AUTO_COMMIT_CHANGE_TYPES = frozenset({
+    ChangeType.VITAL_EVENT,
+    ChangeType.PROGRAMME_STATE,
+})
+
+DEFAULT_AUTO_SAMPLE_RATE = 0.01  # 1% per SAD §4.4.4
 
 # Signal fired after a successful commit. apps.pmt will subscribe when
 # it exists; until then this is a no-op event bus.
@@ -156,6 +170,61 @@ def commit_change_request(
 
     # Fire the post-commit event. PMT subscribes when it lands.
     post_change_committed.send(sender=ChangeRequest, change_request=req, target=target)
+
+    return req
+
+
+def _is_sampled(cr_id: str, sample_rate: float) -> bool:
+    """Deterministic sampler — same CR id always samples the same way.
+
+    Hash the id, take the leading bytes mod 10_000, compare to the
+    rate × 10_000 threshold. Reproducible across runs, no RNG state.
+    """
+    if sample_rate <= 0:
+        return False
+    if sample_rate >= 1:
+        return True
+    digest = hashlib.sha256(cr_id.encode("ascii")).digest()
+    bucket = int.from_bytes(digest[:4], "big") % 10_000
+    return bucket < int(sample_rate * 10_000)
+
+
+@transaction.atomic
+def auto_commit_change_request(
+    req: ChangeRequest, *, sample_rate: float = DEFAULT_AUTO_SAMPLE_RATE,
+) -> ChangeRequest:
+    """Auto-commit a VITAL_EVENT or PROGRAMME_STATE request.
+
+    Routes through the same submit + commit pipeline so audit and
+    versioning are identical to the manual path, but uses the system
+    identifier from routing (e.g., 'nira_auto') as the approver and
+    sets `allow_self=True` to bypass the no-self-approve guard.
+
+    Refuses any change_type that isn't in AUTO_COMMIT_CHANGE_TYPES —
+    a CORRECTION must go through human review, no shortcuts.
+
+    Flags `sampled_for_audit=True` deterministically for a fraction of
+    requests so QA can review auto decisions (SAD §4.4.4 sample policy).
+    """
+    if req.change_type not in AUTO_COMMIT_CHANGE_TYPES:
+        raise UpdError(
+            f"auto_commit_change_request rejects change_type={req.change_type!r}; "
+            f"only {sorted(AUTO_COMMIT_CHANGE_TYPES)} are eligible"
+        )
+    if req.status != ChangeStatus.DRAFT:
+        raise UpdError(f"auto-commit requires DRAFT (got {req.status})")
+
+    submit_change_request(req)
+    system_role, _ = route(req.change_type, pmt_relevant=req.pmt_relevant)
+    commit_change_request(req, approver=system_role, allow_self=True)
+
+    if _is_sampled(req.id, sample_rate):
+        req.sampled_for_audit = True
+        req.save(update_fields=["sampled_for_audit", "updated_at"])
+        emit_audit(
+            "sample", "change_request", req.id, actor="auto-sampler",
+            reason=f"sample_rate={sample_rate}",
+        )
 
     return req
 
