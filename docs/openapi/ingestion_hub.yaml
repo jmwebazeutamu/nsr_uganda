@@ -1,0 +1,229 @@
+openapi: 3.1.0
+info:
+  title: NSR MIS — Data Integration Hub (DIH) API
+  version: 0.1.0
+  description: |
+    DIH ingest pipeline + source-system credentialing. Today, the credentialing
+    surface (KoboCredential CRUD, "Test connection" action) is exposed through
+    Django admin only — see ADR-0007. This spec captures the data shapes the
+    admin manipulates so future REST endpoints can adopt them verbatim.
+
+    The promotion API + RawLanding pipeline endpoints are documented in the
+    DIH §4.6 of the SAD; this file focuses on the connector-framework
+    contracts introduced in US-S8-005 and US-S11-003.
+
+servers:
+  - url: https://nsr-mis.local/api/dih/v1
+    description: Dev (admin-only surface; not yet exposed via REST)
+
+tags:
+  - name: connector-framework
+    description: Connector registry + per-kind credentialing.
+  - name: connector-runs
+    description: Audit-bearing run records (IMPORT and TEST).
+
+paths:
+  /source-systems:
+    get:
+      tags: [connector-framework]
+      summary: List registered source systems
+      operationId: listSourceSystems
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SourceSystem"
+
+  /source-systems/{id}/test-connection:
+    post:
+      tags: [connector-framework]
+      summary: Probe the upstream credentialed by this SourceSystem.
+      description: |
+        Mirror of the Django-admin "Test connection" action. Writes a
+        ConnectorRun row of run_type=TEST and emits an AuditEvent
+        (action=test_connection). Returns the ConnectionTestResult shape.
+        Idempotent — safe to call repeatedly.
+      operationId: testSourceSystemConnection
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, description: ULID }
+      responses:
+        "200":
+          description: Probe completed (status reflects ok/error in body)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConnectionTestResult"
+        "404":
+          description: Source system not found
+        "409":
+          description: Source kind has no live test_connection (NIRA/UBOS today)
+        "412":
+          description: No *Credential row exists yet for this SourceSystem
+
+  /connector-runs:
+    get:
+      tags: [connector-runs]
+      summary: List ConnectorRun rows
+      operationId: listConnectorRuns
+      parameters:
+        - name: run_type
+          in: query
+          schema: { $ref: "#/components/schemas/ConnectorRunType" }
+          description: "Filter by IMPORT (default operational view) or TEST (admin probes)"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ConnectorRun"
+
+components:
+  schemas:
+    SourceSystemKind:
+      type: string
+      description: |
+        Locked enum mirroring `ingestion_hub.models.SourceSystemKind`.
+        Kinds NOT in `SUPPORTED_KINDS` (see admin_credentials.py) appear in
+        the admin dropdown with a "(coming soon)" suffix and reject any
+        credentialing attempt.
+      enum: [ubos, capi_walkin, web, kobo, wfp_scope, odk, partner_mis]
+
+    SourceSystem:
+      type: object
+      required: [id, code, name, kind, is_active]
+      properties:
+        id:
+          type: string
+          description: ULID
+        code:
+          type: string
+          maxLength: 32
+          description: Operator-readable code, e.g. KOBO-PILOT
+        name:
+          type: string
+          maxLength: 128
+        kind:
+          $ref: "#/components/schemas/SourceSystemKind"
+        description:
+          type: string
+        is_active:
+          type: boolean
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ConnectionTestResult:
+      type: object
+      description: |
+        Shape returned by every `Connector.test_connection()` implementation.
+        Renders directly in the Django admin "Test connection" message.
+      required: [ok, latency_ms]
+      properties:
+        ok:
+          type: boolean
+        latency_ms:
+          type: integer
+          description: Wall-clock for the whole round-trip including retries
+          minimum: 0
+        server_version:
+          type: string
+          nullable: true
+          description: |
+            Best-effort upstream version (X-OpenRosa-Version header on Kobo).
+            None when the upstream doesn't expose it.
+        error:
+          type: string
+          nullable: true
+          description: |
+            Human-readable error on failure. Values used today:
+              * "server_url and token required" — short-circuit (no HTTP call)
+              * "auth_failed: token rejected by upstream"
+              * "upstream {status_code}"
+              * Free-form Requests exception message on network failure
+
+    ConnectorRunType:
+      type: string
+      description: |
+        Distinguishes audit-bearing TEST probes (admin "Test connection"
+        action) from real IMPORT runs. RPT promotion-latency dashboards
+        filter on IMPORT so test probes don't skew statistics.
+      enum: [import, test]
+
+    ConnectorRunStatus:
+      type: string
+      enum: [pending, running, succeeded, failed, quarantined]
+
+    ConnectorRun:
+      type: object
+      required: [id, connector_id, run_type, status, started_at]
+      properties:
+        id:
+          type: string
+          description: ULID
+        connector_id:
+          type: string
+          description: ULID FK to Connector
+        run_type:
+          $ref: "#/components/schemas/ConnectorRunType"
+        status:
+          $ref: "#/components/schemas/ConnectorRunStatus"
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time, nullable: true }
+        records_received: { type: integer, minimum: 0 }
+        records_landed: { type: integer, minimum: 0 }
+        records_staged: { type: integer, minimum: 0 }
+        records_promoted: { type: integer, minimum: 0 }
+        records_quarantined: { type: integer, minimum: 0 }
+        records_rejected: { type: integer, minimum: 0 }
+        note:
+          type: string
+          description: Operator-visible one-liner; for TEST runs holds the latency + error
+
+    # Per-kind credential schemas. Each new kind adds a sibling schema here
+    # and a sibling *Credential model + form in code.
+    KoboCredentialAdminWrite:
+      type: object
+      description: |
+        Shape captured by the Django admin `KoboCredentialForm`. The
+        username/password fields are TRANSIENT — used once to mint a Knox
+        token via Kobo's `/token/` endpoint, then discarded. Only the
+        encrypted token is persisted.
+      required: [server_url]
+      properties:
+        server_url:
+          type: string
+          format: uri
+          example: https://kobo.humanitarianresponse.info
+        username:
+          type: string
+          description: Required on first save; optional on edit (blank keeps existing token)
+        password:
+          type: string
+          format: password
+          description: Required on first save; never persisted
+
+    KoboCredentialAdminRead:
+      type: object
+      description: |
+        Read shape of a stored Kobo credential. The token itself is never
+        returned through any API; only the bookkeeping fields are visible.
+      required: [id, source_system_id, server_url, acquired_at]
+      properties:
+        id: { type: string, description: ULID }
+        source_system_id: { type: string, description: ULID }
+        server_url: { type: string, format: uri }
+        acquired_by_username:
+          type: string
+          description: Kobo username that minted the token (audit lineage)
+        acquired_at: { type: string, format: date-time }
+        last_test_at: { type: string, format: date-time, nullable: true }
+        last_test_ok: { type: boolean, nullable: true }
