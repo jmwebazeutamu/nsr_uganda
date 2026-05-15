@@ -1,7 +1,56 @@
 /* global React, Icon, Chip, PageHeader, AuditDrawer, Modal, ReasonModal, ActionBar, Toast */
-// NSR MIS — 11.6 UPD reviewer with PMT preview
+// NSR MIS — 11.6 UPD reviewer with PMT preview + S11-004 bulk queue
 
 const { useState: useStateUpd } = React;
+
+// Mock queue — what's PENDING_APPROVAL in the reviewer's scope.
+// In production this comes from GET /api/v1/upd/change-requests/?status=
+// pending_approval, sorted by SLA-soonest-first. Mix of change_types +
+// PMT-relevance + SLA states so the demo exercises every visual state.
+const UPD_QUEUE = [
+  { id: "UPD-2026-05-14-00237", head: "Lokol Naume", parish: "Nakiloro · Tapac",
+    type: "Roster: add member", pmt: true, slaDays: 2, slaCap: 3,
+    submitter: "Lokwang Peter", canSelfApprove: true },
+  { id: "UPD-2026-05-14-00241", head: "Akello Sarah", parish: "Lopuwapuwa · Tapac",
+    type: "Address: village move", pmt: false, slaDays: 1, slaCap: 3,
+    submitter: "Adong Florence", canSelfApprove: false },
+  { id: "UPD-2026-05-13-00208", head: "Omara John", parish: "Kakingol · Tapac",
+    type: "Roster: vital event (death)", pmt: true, slaDays: 3, slaCap: 3,
+    submitter: "Lokwang Peter", canSelfApprove: true },
+  { id: "UPD-2026-05-13-00203", head: "Apio Grace", parish: "Nakiloro · Tapac",
+    type: "Phone update", pmt: false, slaDays: 4, slaCap: 3,
+    submitter: "Otto Vincent", canSelfApprove: true },
+  { id: "UPD-2026-05-12-00191", head: "Loum Margaret", parish: "Lopuwapuwa · Tapac",
+    type: "Education: school enrolment", pmt: true, slaDays: 2, slaCap: 3,
+    submitter: "Lokwang Peter", canSelfApprove: true },
+  { id: "UPD-2026-05-12-00188", head: "Ekiru Peter", parish: "Kakingol · Tapac",
+    type: "Roster: add member", pmt: true, slaDays: 5, slaCap: 3,
+    submitter: "Adong Florence", canSelfApprove: false },
+  { id: "UPD-2026-05-12-00182", head: "Achan Beatrice", parish: "Nakiloro · Tapac",
+    type: "Identification update (NIN)", pmt: false, slaDays: 1, slaCap: 3,
+    submitter: "Otto Vincent", canSelfApprove: true },
+  { id: "UPD-2026-05-11-00170", head: "Lopeyok Mary", parish: "Lopuwapuwa · Tapac",
+    type: "Housing: roof material", pmt: true, slaDays: 3, slaCap: 3,
+    submitter: "Otto Vincent", canSelfApprove: true },
+];
+
+// Simulates POST /api/v1/upd/change-requests/bulk-<action>/. The backend
+// shape (S10-004): { acted: [ids], skipped: [{id, reason}], not_found: [ids] }
+// Rows where the current actor is the submitter get skipped under
+// AC-UPD-NO-SELF-APPROVE for the approve action; reject + escalate
+// have no self-action constraint.
+const mockBulkResponse = (rows, action) => {
+  const acted = [];
+  const skipped = [];
+  rows.forEach(r => {
+    if (action === 'approve' && !r.canSelfApprove) {
+      skipped.push({ id: r.id, reason: "AC-UPD-NO-SELF-APPROVE: cannot approve your own submission" });
+    } else {
+      acted.push(r.id);
+    }
+  });
+  return { acted, skipped, not_found: [] };
+};
 
 const UPD = {
   id: "UPD-2026-05-14-00237",
@@ -37,6 +86,44 @@ const UPDScreen = ({ changeRequestId }) => {
   const [modal, setModal] = useStateUpd(null);
   const [toast, setToast] = useStateUpd("");
   const [selfApprove] = useStateUpd(false); // disabled in UI
+
+  // Bulk-action state (US-S11-004). `selected` holds the row ids;
+  // `bulkModal` opens the reason modal with the captured action.
+  // `bulkResult` stays around long enough to render the skipped-rows
+  // breakdown below the queue after the API call returns.
+  const [selected, setSelected] = useStateUpd(() => new Set());
+  const [bulkModal, setBulkModal] = useStateUpd(null);
+  const [bulkResult, setBulkResult] = useStateUpd(null);
+
+  const toggleRow = (id) => {
+    const next = new Set(selected);
+    if (next.has(id)) { next.delete(id); } else { next.add(id); }
+    setSelected(next);
+  };
+  const toggleAll = () => {
+    if (selected.size === UPD_QUEUE.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(UPD_QUEUE.map(r => r.id)));
+    }
+  };
+  const clearSelected = () => setSelected(new Set());
+
+  const fireBulk = ({ reason, note }) => {
+    const action = bulkModal;
+    const rows = UPD_QUEUE.filter(r => selected.has(r.id));
+    const result = mockBulkResponse(rows, action);
+    setBulkResult({ ...result, action, reason, note });
+    // Drop acted rows from the selection so the toolbar collapses
+    // naturally; skipped rows stay selected so the operator can act
+    // on them differently.
+    const remaining = new Set(selected);
+    result.acted.forEach(id => remaining.delete(id));
+    setSelected(remaining);
+    setBulkModal(null);
+    const verb = action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'escalated';
+    setToast(`${result.acted.length} ${verb} · ${result.skipped.length} skipped · ${result.not_found.length} not found`);
+  };
 
   // Cross-screen handoff (US-S9-004). When the GRM workbench navigates
   // here with a linked_change_request_id, we override the mock id so
@@ -77,6 +164,126 @@ const UPDScreen = ({ changeRequestId }) => {
           <button className="btn"><Icon name="eye"/> Open household</button>
         </>}
       />
+
+      {/* Queue + bulk actions (US-S11-004) */}
+      <div className="card" style={{marginBottom:16}}>
+        <div className="card-toolbar">
+          <strong className="t-bodysm">My queue · pending approval</strong>
+          <Chip tone="data" size="sm">{UPD_QUEUE.length} rows</Chip>
+          <div style={{flex:1}}/>
+          <span className="t-cap">
+            {selected.size > 0
+              ? <><strong>{selected.size}</strong> selected · cap 200 per batch</>
+              : "Tick rows to enable bulk actions"}
+          </span>
+        </div>
+        <div style={{maxHeight:240, overflowY:'auto'}}>
+          <div style={{display:'grid', gridTemplateColumns:'32px 220px 1fr 200px 140px 100px 100px',
+                        position:'sticky', top:0, background:'var(--neutral-50)',
+                        borderBottom:'1px solid var(--neutral-200)', zIndex:1}}>
+            <div style={{padding:'8px 10px'}}>
+              <input type="checkbox"
+                checked={selected.size === UPD_QUEUE.length}
+                ref={el => { if (el) el.indeterminate = selected.size > 0 && selected.size < UPD_QUEUE.length; }}
+                onChange={toggleAll}/>
+            </div>
+            <div className="t-cap" style={{padding:'10px 12px'}}>ID</div>
+            <div className="t-cap" style={{padding:'10px 12px'}}>HEAD &middot; PARISH</div>
+            <div className="t-cap" style={{padding:'10px 12px'}}>CHANGE TYPE</div>
+            <div className="t-cap" style={{padding:'10px 12px'}}>PMT</div>
+            <div className="t-cap" style={{padding:'10px 12px'}}>SLA</div>
+            <div className="t-cap" style={{padding:'10px 12px'}}>SUBMITTER</div>
+          </div>
+          {UPD_QUEUE.map(r => {
+            const selectedRow = selected.has(r.id);
+            const breach = r.slaDays > r.slaCap;
+            return (
+              <div key={r.id}
+                onClick={() => toggleRow(r.id)}
+                style={{display:'grid', gridTemplateColumns:'32px 220px 1fr 200px 140px 100px 100px',
+                        borderBottom:'1px solid var(--neutral-200)',
+                        background: selectedRow ? 'var(--accent-update-bg)' : 'white',
+                        cursor:'pointer'}}>
+                <div style={{padding:'10px'}}>
+                  <input type="checkbox" checked={selectedRow}
+                    onChange={() => toggleRow(r.id)} onClick={(e) => e.stopPropagation()}/>
+                </div>
+                <div className="t-mono" style={{padding:'10px 12px', fontSize:12, display:'flex', alignItems:'center'}}>
+                  {r.id}
+                </div>
+                <div style={{padding:'10px 12px', fontSize:13, display:'flex', flexDirection:'column'}}>
+                  <strong>{r.head}</strong>
+                  <span className="t-bodysm muted">{r.parish}</span>
+                </div>
+                <div style={{padding:'10px 12px', fontSize:13, display:'flex', alignItems:'center'}}>
+                  {r.type}
+                </div>
+                <div style={{padding:'10px 12px', display:'flex', alignItems:'center'}}>
+                  {r.pmt ? <Chip tone="eligibility" size="sm">pmt_relevant</Chip>
+                         : <span className="t-bodysm muted">—</span>}
+                </div>
+                <div style={{padding:'10px 12px', display:'flex', alignItems:'center'}}>
+                  <Chip tone={breach ? "danger" : "data"} size="sm">
+                    {r.slaDays}d / {r.slaCap}d
+                  </Chip>
+                </div>
+                <div style={{padding:'10px 12px', fontSize:12,
+                              color: r.canSelfApprove ? 'var(--neutral-700)' : 'var(--accent-quality)',
+                              display:'flex', alignItems:'center', gap:4}}>
+                  {!r.canSelfApprove && <Icon name="shield" size={11}/>}
+                  {r.submitter.split(' ')[0]}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Bulk-action toolbar — appears whenever rows are selected */}
+        {selected.size > 0 && (
+          <div style={{display:'flex', alignItems:'center', gap:12,
+                        padding:'10px 16px', background:'var(--neutral-100)',
+                        borderTop:'1px solid var(--neutral-200)'}}>
+            <strong className="t-bodysm">{selected.size} selected</strong>
+            <span className="t-cap">Bulk actions use the same per-row guards (AC-UPD-NO-SELF-APPROVE).</span>
+            <div style={{flex:1}}/>
+            <button className="btn btn-sm" onClick={clearSelected}>Clear</button>
+            <button className="btn btn-sm btn-danger" onClick={() => setBulkModal('reject')}>
+              <Icon name="xCircle" size={12}/> Bulk reject
+            </button>
+            <button className="btn btn-sm" onClick={() => setBulkModal('escalate')}>
+              <Icon name="arrowUp" size={12}/> Bulk escalate
+            </button>
+            <button className="btn btn-sm btn-success" onClick={() => setBulkModal('approve')}>
+              <Icon name="check" size={12}/> Bulk approve
+            </button>
+          </div>
+        )}
+
+        {/* Result panel — shows the last bulk-call's skipped breakdown */}
+        {bulkResult && (
+          <div style={{padding:'10px 16px', background:'var(--neutral-50)',
+                        borderTop:'1px solid var(--neutral-200)', fontSize:13}}>
+            <div className="row gap-2" style={{marginBottom:6}}>
+              <Chip tone="data" size="sm">last bulk: {bulkResult.action}</Chip>
+              <span className="t-bodysm muted">
+                {bulkResult.acted.length} acted &middot; {bulkResult.skipped.length} skipped &middot; {bulkResult.not_found.length} not found
+              </span>
+              <div style={{flex:1}}/>
+              <button className="btn btn-sm" onClick={() => setBulkResult(null)}>Dismiss</button>
+            </div>
+            {bulkResult.skipped.length > 0 && (
+              <ul style={{margin:'4px 0 0 18px', padding:0, color:'var(--neutral-700)'}}>
+                {bulkResult.skipped.map(s => (
+                  <li key={s.id}>
+                    <span className="t-mono" style={{fontSize:12}}>{s.id}</span>
+                    {' — '}{s.reason}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Header strip */}
       <div className="card" style={{padding:'16px 20px', display:'grid', gridTemplateColumns:'1.4fr 1fr 1fr 1fr 1fr', gap:24, marginBottom:16, alignItems:'center'}}>
@@ -241,6 +448,25 @@ const UPDScreen = ({ changeRequestId }) => {
       <ReasonModal open={modal === 'escalate'} title="Escalate to District M&E" intent="primary"
         reasonOptions={["Out of scope for CDO","Disputed change","Other"]}
         recordLabel={UPD.id} onClose={() => setModal(null)} onConfirm={() => fire('escalate')}/>
+
+      {/* Bulk-action modals (US-S11-004) — same ReasonModal, recordLabel
+          reads "N rows" rather than a single CR id. The reason + note
+          fan out to every selected row's audit event. */}
+      <ReasonModal open={bulkModal === 'approve'} title={`Bulk approve · ${selected.size} rows`}
+        intent="success"
+        reasonOptions={["Evidence sufficient · field-confirmed batch","Routine cosmetic updates","Identical reason applies to all","Other (specify in note)"]}
+        recordLabel={`${selected.size} change requests`}
+        onClose={() => setBulkModal(null)} onConfirm={fireBulk}/>
+      <ReasonModal open={bulkModal === 'reject'} title={`Bulk reject · ${selected.size} rows`}
+        intent="danger"
+        reasonOptions={reasonsReject}
+        recordLabel={`${selected.size} change requests`}
+        onClose={() => setBulkModal(null)} onConfirm={fireBulk}/>
+      <ReasonModal open={bulkModal === 'escalate'} title={`Bulk escalate · ${selected.size} rows`}
+        intent="primary"
+        reasonOptions={["Out of scope for CDO","Disputed batch","SLA breach","Other"]}
+        recordLabel={`${selected.size} change requests`}
+        onClose={() => setBulkModal(null)} onConfirm={fireBulk}/>
 
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>

@@ -103,6 +103,10 @@ Each screen must satisfy the acceptance criteria of its anchored user story PLUS
 | UI-UPD-1 | "Show all fields" toggle expands unchanged fields |
 | UI-UPD-2 | Evidence chips clickable to preview attached photo or document |
 | UI-UPD-3 | SLA badge in header turns amber when ≤ 24h to breach, red when breached |
+| UI-UPD-4 (S11-004) | Queue panel at top of screen lists pending change requests in the reviewer's scope, with multi-select checkboxes and a "select all" header |
+| UI-UPD-5 (S11-004) | Selecting one or more rows reveals a bulk-action toolbar with `Bulk approve` / `Bulk reject` / `Bulk escalate` — same per-row guards apply (AC-UPD-NO-SELF-APPROVE skips submitter rows on approve) |
+| UI-UPD-6 (S11-004) | Bulk-action confirmation modal labels the operation with `N change requests`; the reason + note fan out to every acted row's audit event |
+| UI-UPD-7 (S11-004) | After a bulk call, a result panel surfaces `{acted, skipped, not_found}` from the backend — skipped rows list their per-row reason so the operator can take a different action on them |
 
 ### 7. DRS Query Builder + Field Selector + Preview + Delivery (US-097, US-098, US-099, US-100, US-101)
 
