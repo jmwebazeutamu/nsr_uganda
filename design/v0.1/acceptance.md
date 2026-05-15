@@ -25,6 +25,7 @@ Screens are React components inside the module JSX files under `v0.1/screens/`. 
 | 8 | DPO cumulative volume console | US-103 | `screens-dpo.jsx` → `<DPOScreen>` | built |
 | 9 | Household detail (registry view) | US-005, US-090 | `screens-household.jsx` → `<HouseholdScreen>` | built |
 | 10 | Home dashboard (role-aware) | (general) | `screens-home.jsx` → `<HomeScreen role="…">` for each of `ROLES` (Parish Chief, CDO, District M&E, NSR Unit Coordinator, DPO) | built |
+| 11 | GRM workbench (triage + lifecycle) | US-S2-008, US-S3-004, US-S4-005, US-S7-001 | `screens-grm.jsx` → `<GRMScreen>` | built |
 
 ---
 
@@ -141,6 +142,26 @@ Each screen must satisfy the acceptance criteria of its anchored user story PLUS
 | District M&E | SLA Breach dashboard, sample audits, PMT-band shift alerts |
 | NSR Unit Coordinator | DIH review queue depth, fast-track auto-promote rate, bulk batches awaiting two-person approval, DSAs expiring 30d |
 | DPO | Anomaly alerts, erasure requests, DPIA review tasks |
+
+### 11. GRM workbench (US-S2-008, US-S3-004, US-S4-005, US-S7-001)
+
+The first React screen — parity-or-better with the Django admin
+GRM surface from S4-005 + S6-001. Reads + writes through the
+existing `/api/v1/grm/grievances/` viewset.
+
+| AC | Pass when |
+|---|---|
+| UI-GRM-1 | Quick-filter bar with Past-SLA / Open-L1 / Escalated / Mine; counts update when a filter is active |
+| UI-GRM-2 | List columns: subject + reporter, tier (L1/L2/L3/L4 short), status chip, SLA chip, assigned-to, opened-at |
+| UI-GRM-3 | SLA chip mirrors the `format_html` badge from `apps/grievance/admin.py`: red OVERDUE when `hours_to_breach < 0`, amber `≤ 6h to breach`, green within window, neutral `—` for RESOLVED/CLOSED |
+| UI-GRM-4 | Multi-select row checkboxes; bulk Assign / Escalate / Close appear in the toolbar only when ≥ 1 row is selected |
+| UI-GRM-5 | Detail rail shows category, narrative, reporter, subject (household_id + member_id when present), assignment state |
+| UI-GRM-6 | Per-row actions exposed contextually: Assign-to-me only when unassigned; Escalate only when tier ≠ L4 and status ∉ {RESOLVED, CLOSED}; Resolve only when status ∉ {RESOLVED, CLOSED}; Close only when status == RESOLVED |
+| UI-GRM-7 | Escalate / Resolve / Close trigger `ReasonModal` with canned reasons that mirror service-layer guard messages from `apps/grievance/services.py`; reason + 6+ char note required |
+| UI-GRM-8 | DATA_CORRECTION rows expose an "Open linked UPD" action — clicking jumps to the UPD screen with the linked ChangeRequest pre-loaded (cross-screen handoff) |
+| UI-GRM-9 | Audit drawer shows the full lifecycle: opened → SLA computed → assigned → escalated (when applicable) → resolved (when applicable) |
+| UI-GRM-10 | Empty state (no rows match filter) shows a calm inbox icon with "No grievances match this filter" — no marketing copy |
+| UI-GRM-11 | Role visibility: hidden from DPO (read-only-everything, no workflow); visible to Parish Chief, CDO, District M&E, NSR Unit |
 
 ---
 

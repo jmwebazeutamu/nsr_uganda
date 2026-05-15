@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -17,6 +17,7 @@ const NAV = [
   { id: "dih",     label: "DIH review",    icon: "inbox",     count: 342 },
   { id: "upd",     label: "Updates",       icon: "edit",      count: 23 },
   { id: "dedup",   label: "Duplicates",    icon: "duplicate", count: 47 },
+  { id: "grm",     label: "Grievances",    icon: "message",   count: 7 },
   { section: "DATA" },
   { id: "drs",     label: "Data Requests", icon: "download",  count: 9 },
   { id: "receipt", label: "Receipt slip",  icon: "print" },
@@ -41,7 +42,7 @@ function App() {
   const visibleNav = NAV.filter(n => {
     if (n.section) return true;
     if (role === "parish" && ["dih","drs","dedup"].includes(n.id)) return false;
-    if (role === "dpo"    && ["capture","upd","dedup","receipt"].includes(n.id)) return false;
+    if (role === "dpo"    && ["capture","upd","dedup","grm","receipt"].includes(n.id)) return false;
     if (role === "cdo"    && ["dih","drs"].includes(n.id)) return false;
     return true;
   });
@@ -112,6 +113,7 @@ function App() {
         {screen === "dedup"   && <DedupScreen/>}
         {screen === "upd"     && <UPDScreen/>}
         {screen === "drs"     && <DRSScreen/>}
+        {screen === "grm"     && <GRMScreen/>}
       </main>
 
       {/* Tweaks */}
