@@ -379,3 +379,174 @@ class TestPartnerAbac:
         assert r.status_code == 200
         assert r.data["count"] == 1
         assert r.data["results"][0]["code"] == p_a.code
+
+
+class TestBundleRendering:
+    """S5-002 — DSA-scoped NDJSON bundle rendering. Validates the
+    fields, sub_region_codes, and max_rows contracts from
+    DSA.allowed_scopes, intersected with the request payload."""
+
+    @pytest.fixture
+    def geo_and_households(self, db):
+        from datetime import date
+
+        from apps.data_management.models import Household
+        from apps.reference_data.models import GeographicUnit
+
+        out = {}
+        # Two sub-regions, two households each — 4 total.
+        for sr_key in ("SR-BUGANDA", "SR-KARAMOJA"):
+            nodes = {}
+            parent = None
+            for level in ("region", "sub_region", "district", "county",
+                          "sub_county", "parish", "village"):
+                node = GeographicUnit.objects.create(
+                    level=level,
+                    code=(f"B-{sr_key}-{level}" if level != "sub_region"
+                          else f"B-{sr_key}"),
+                    name=f"{sr_key}-{level}", parent=parent,
+                    effective_from=date(2026, 1, 1),
+                )
+                nodes[level] = node
+                parent = node
+            out[sr_key] = []
+            for _ in range(2):
+                hh = Household.objects.create(
+                    region=nodes["region"], sub_region=nodes["sub_region"],
+                    district=nodes["district"], county=nodes["county"],
+                    sub_county=nodes["sub_county"], parish=nodes["parish"],
+                    village=nodes["village"], urban_rural="rural",
+                )
+                out[sr_key].append(hh)
+        return out
+
+    @pytest.fixture
+    def open_dsa(self, partner):
+        """DSA with no field/region restrictions — exports everything."""
+        return DataSharingAgreement.objects.create(
+            partner=partner, reference="DSA-OPEN-1",
+            status=DsaStatus.ACTIVE,
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={},
+        )
+
+    @pytest.fixture
+    def restricted_dsa(self, partner):
+        """DSA restricted to BUGANDA + a subset of fields."""
+        return DataSharingAgreement.objects.create(
+            partner=partner, reference="DSA-RESTRICTED-1",
+            status=DsaStatus.ACTIVE,
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={
+                "fields": ["household.id", "household.sub_region_code"],
+                "sub_region_codes": ["B-SR-BUGANDA"],
+                "max_rows_per_request": 50,
+            },
+        )
+
+    def test_open_dsa_renders_all_households_full_fields(
+        self, geo_and_households, open_dsa,
+    ):
+        import json
+
+        from apps.data_requests.bundles import render_bundle
+        req = DataRequest.objects.create(
+            dsa=open_dsa, requester="p1", request_payload={},
+        )
+        body, count = render_bundle(req)
+        assert count == 4
+        first = json.loads(body.splitlines()[0])
+        # Open DSA = all default fields exported.
+        assert {
+            "household.id", "household.sub_region_code",
+            "household.urban_rural", "household.current_vulnerability_band",
+            "household.current_pmt_score",
+        } == set(first.keys())
+
+    def test_restricted_dsa_clips_fields_and_geography(
+        self, geo_and_households, restricted_dsa,
+    ):
+        import json
+
+        from apps.data_requests.bundles import render_bundle
+        req = DataRequest.objects.create(
+            dsa=restricted_dsa, requester="p2", request_payload={},
+        )
+        body, count = render_bundle(req)
+        # BUGANDA has 2 households; KARAMOJA invisible.
+        assert count == 2
+        first = json.loads(body.splitlines()[0])
+        # Only the two whitelisted fields survive.
+        assert set(first.keys()) == {
+            "household.id", "household.sub_region_code",
+        }
+        # The visible row IS a BUGANDA one.
+        assert first["household.sub_region_code"] == "B-SR-BUGANDA"
+
+    def test_max_rows_uses_tighter_of_dsa_and_payload(
+        self, geo_and_households, open_dsa,
+    ):
+        from apps.data_requests.bundles import render_bundle
+        # DSA cap 3, request asks 5 → 3 wins.
+        open_dsa.allowed_scopes = {"max_rows_per_request": 3}
+        open_dsa.save(update_fields=["allowed_scopes"])
+        req = DataRequest.objects.create(
+            dsa=open_dsa, requester="p3",
+            request_payload={"max_rows": 5},
+        )
+        _, count = render_bundle(req)
+        assert count == 3
+
+        # Request cap 1, DSA cap 3 → 1 wins.
+        req2 = DataRequest.objects.create(
+            dsa=open_dsa, requester="p4",
+            request_payload={"max_rows": 1},
+        )
+        _, count2 = render_bundle(req2)
+        assert count2 == 1
+
+    def test_empty_cohort_renders_empty_bundle(self, open_dsa):
+        from apps.data_requests.bundles import render_bundle
+        req = DataRequest.objects.create(
+            dsa=open_dsa, requester="p5", request_payload={},
+        )
+        body, count = render_bundle(req)
+        assert body == b""
+        assert count == 0
+
+    def test_prepare_and_deliver_locks_hash_and_persists(
+        self, geo_and_households, open_dsa, django_user_model,
+    ):
+        from apps.data_requests.bundles import (
+            get_bundle,
+            prepare_and_deliver,
+        )
+        req = DataRequest.objects.create(
+            dsa=open_dsa, requester="p6", request_payload={},
+        )
+        submit_data_request(req)
+        approve_data_request(req, approver="dpo-x")
+        prepare_and_deliver(req, actor="render-bot")
+        req.refresh_from_db()
+        assert req.status == RequestStatus.DELIVERED
+        assert len(req.manifest_sha256) == 64
+        # Bundle retrievable by hash.
+        assert get_bundle(req.manifest_sha256) is not None
+
+    def test_render_and_deliver_via_api(
+        self, geo_and_households, open_dsa, django_user_model,
+    ):
+        u = django_user_model.objects.create_user(
+            username="ops", password="p", is_superuser=True, is_staff=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        req = DataRequest.objects.create(
+            dsa=open_dsa, requester="p7", request_payload={},
+        )
+        submit_data_request(req)
+        approve_data_request(req, approver="dpo-y")
+        r = c.post(f"/api/v1/drs/requests/{req.id}/render-and-deliver/")
+        assert r.status_code == 200
+        assert r.data["status"] == RequestStatus.DELIVERED
+        assert r.data["row_count_delivered"] == 4

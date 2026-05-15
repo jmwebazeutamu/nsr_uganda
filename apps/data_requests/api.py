@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from apps.security.abac import PartnerScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
+from .bundles import prepare_and_deliver
 from .models import DataRequest, DataSharingAgreement, Partner, RequestStatus
 from .services import (
     DrsError,
@@ -205,6 +206,29 @@ class DataRequestViewSet(
         req = self.get_object()
         try:
             expire_data_request(req, actor=request.user.username or "system")
+        except DrsError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        req.refresh_from_db()
+        return Response(self.get_serializer(req).data)
+
+    @extend_schema(
+        tags=["api-drs"], summary="Render and deliver an APPROVED request",
+        description=("Generates the export bundle (NDJSON, scoped by the DSA), "
+                     "hashes it, persists to the bundle store, and flips the "
+                     "request to DELIVERED. Combines render + deliver into a "
+                     "single call so partners and ops scripts don't have to "
+                     "compute the SHA-256 client-side."),
+        request=None,
+        responses={200: DataRequestSerializer,
+                   400: OpenApiResponse(description="bad state")},
+    )
+    @action(detail=True, methods=["post"], url_path="render-and-deliver")
+    def render_and_deliver(self, request, pk=None):
+        req = self.get_object()
+        try:
+            prepare_and_deliver(
+                req, actor=request.user.username or "render-bot",
+            )
         except DrsError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         req.refresh_from_db()
