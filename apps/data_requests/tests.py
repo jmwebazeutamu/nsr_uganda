@@ -1061,3 +1061,149 @@ class TestPartnerSelfService:
         assert r.status_code == 200
         results = r.data["results"] if isinstance(r.data, dict) else r.data
         assert results == []
+
+
+class TestPartnerDownload:
+    """S8-003 — /api/v1/drs/requests/{id}/download/ returns the
+    rendered NDJSON bundle bytes for DELIVERED requests, scoped by
+    PartnerScope and audit-logged."""
+
+    @pytest.fixture
+    def partner_with_dsa(self, db, partner):
+        from apps.data_management.models import Household
+        from apps.reference_data.models import GeographicUnit
+        nodes = {}
+        parent = None
+        for level in ("region", "sub_region", "district", "county",
+                      "sub_county", "parish", "village"):
+            n = GeographicUnit.objects.create(
+                level=level,
+                code=(f"DL-{level}" if level != "sub_region" else "DL-SR"),
+                name=level, parent=parent,
+                effective_from=date(2026, 1, 1),
+            )
+            nodes[level] = n
+            parent = n
+        Household.objects.create(
+            region=nodes["region"], sub_region=nodes["sub_region"],
+            district=nodes["district"], county=nodes["county"],
+            sub_county=nodes["sub_county"], parish=nodes["parish"],
+            village=nodes["village"], urban_rural="rural",
+        )
+        dsa = DataSharingAgreement.objects.create(
+            partner=partner, reference="DSA-DL-1",
+            status=DsaStatus.ACTIVE,
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={},
+        )
+        return dsa
+
+    def _client_for(self, user):
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c
+
+    def test_download_returns_ndjson_for_delivered(
+        self, partner_with_dsa, django_user_model,
+    ):
+        from apps.data_requests.bundles import prepare_and_deliver
+        from apps.security.models import OperatorScope, ScopeLevel
+        req = DataRequest.objects.create(
+            dsa=partner_with_dsa, requester="p", request_payload={},
+        )
+        submit_data_request(req)
+        approve_data_request(req, approver="dpo-x")
+        prepare_and_deliver(req, actor="render-bot")
+
+        u = django_user_model.objects.create_user(
+            username="partner-analyst", password="p",
+        )
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARTNER,
+            scope_code=partner_with_dsa.partner.code,
+        )
+        r = self._client_for(u).get(f"/api/v1/drs/requests/{req.id}/download/")
+        assert r.status_code == 200
+        assert r["content-type"] == "application/x-ndjson"
+        assert f"data-request-{req.id}.ndjson" in r["content-disposition"]
+        # NDJSON: each line is a JSON object.
+        assert b'"household.id"' in r.content
+
+    def test_download_404_when_not_delivered(
+        self, partner_with_dsa, django_user_model,
+    ):
+        from apps.security.models import OperatorScope, ScopeLevel
+        req = DataRequest.objects.create(
+            dsa=partner_with_dsa, requester="p2", request_payload={},
+        )
+        # DRAFT — no bundle.
+        u = django_user_model.objects.create_user(
+            username="partner-analyst-2", password="p",
+        )
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARTNER,
+            scope_code=partner_with_dsa.partner.code,
+        )
+        r = self._client_for(u).get(f"/api/v1/drs/requests/{req.id}/download/")
+        assert r.status_code == 404
+        assert "DELIVERED" in r.data["detail"]
+
+    def test_download_scoped_to_partner(
+        self, partner_with_dsa, django_user_model,
+    ):
+        """A partner-A user must NOT download a partner-B request's
+        bundle. PartnerScopedQuerysetMixin already gates the list;
+        get_object() therefore 404s on the detail route."""
+        from apps.data_requests.bundles import prepare_and_deliver
+        from apps.security.models import OperatorScope, ScopeLevel
+
+        # Take partner-A's request to DELIVERED.
+        req = DataRequest.objects.create(
+            dsa=partner_with_dsa, requester="p", request_payload={},
+        )
+        submit_data_request(req)
+        approve_data_request(req, approver="dpo-x")
+        prepare_and_deliver(req, actor="render-bot")
+
+        # A different partner.
+        p_b = Partner.objects.create(code="P-OTHER", name="Other Partner")
+        u = django_user_model.objects.create_user(
+            username="other-partner-analyst", password="p",
+        )
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARTNER, scope_code=p_b.code,
+        )
+        r = self._client_for(u).get(f"/api/v1/drs/requests/{req.id}/download/")
+        # Out of scope -> 404 (the row simply isn't in this user's queryset).
+        assert r.status_code == 404
+
+    def test_download_emits_audit_event(
+        self, partner_with_dsa, django_user_model,
+    ):
+        from apps.data_requests.bundles import prepare_and_deliver
+        from apps.security.models import AuditEvent, OperatorScope, ScopeLevel
+        req = DataRequest.objects.create(
+            dsa=partner_with_dsa, requester="p", request_payload={},
+        )
+        submit_data_request(req)
+        approve_data_request(req, approver="dpo-x")
+        prepare_and_deliver(req, actor="render-bot")
+
+        u = django_user_model.objects.create_user(
+            username="auditing-partner", password="p",
+        )
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARTNER,
+            scope_code=partner_with_dsa.partner.code,
+        )
+        self._client_for(u).get(f"/api/v1/drs/requests/{req.id}/download/")
+
+        ev = AuditEvent.objects.filter(
+            entity_type="data_request", entity_id=req.id,
+            action="download",
+        ).first()
+        assert ev is not None
+        assert ev.actor_id == "auditing-partner"
+        # Manifest fingerprint logged (first 8 chars only — full hash
+        # is in the row, no need to duplicate in the audit reason).
+        assert "manifest=" in ev.reason

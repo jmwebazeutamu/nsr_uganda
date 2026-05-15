@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+from django.http import HttpResponse
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.security.abac import PartnerScopedQuerysetMixin
-from apps.security.audit_views import AuditReadMixin
+from apps.security.audit import emit as emit_audit
+from apps.security.audit_views import AuditReadMixin, _client_ip
 
-from .bundles import prepare_and_deliver
+from .bundles import get_bundle, prepare_and_deliver
 from .models import DataRequest, DataSharingAgreement, Partner, RequestStatus
 from .services import (
     DrsError,
@@ -260,6 +262,51 @@ class DataRequestViewSet(
         return Response(
             ser_cls(qs, many=True, context={"request": request}).data,
         )
+
+    @extend_schema(
+        tags=["partner-drs"],
+        summary="Download a DELIVERED request's bundle",
+        description=("Returns the rendered NDJSON bundle bytes for a "
+                     "DELIVERED DataRequest. ABAC-scoped via the same "
+                     "PartnerScopedQuerysetMixin as /mine/. Today the "
+                     "endpoint streams bytes from the bundle store; "
+                     "when DRS-O-02 closes (MinIO + signed URLs), this "
+                     "endpoint returns a 302 redirect to the signed URL "
+                     "instead. Audit emits action=download per call."),
+        responses={
+            200: OpenApiResponse(
+                description="NDJSON bundle bytes (application/x-ndjson)",
+            ),
+            404: OpenApiResponse(description="not DELIVERED, or bundle missing"),
+        },
+    )
+    @action(detail=True, methods=["get"], url_path="download")
+    def download(self, request, pk=None):
+        req = self.get_object()
+        if req.status != RequestStatus.DELIVERED:
+            return Response(
+                {"detail": f"download requires DELIVERED (got {req.status})"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        body = get_bundle(req.manifest_sha256) if req.manifest_sha256 else None
+        if body is None:
+            return Response(
+                {"detail": "bundle bytes not found in storage"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        emit_audit(
+            "download", "data_request", req.id,
+            actor=getattr(request.user, "username", "") or "anonymous",
+            reason=f"manifest={req.manifest_sha256[:8]}",
+            ip_address=_client_ip(request),
+            user_agent=request.META.get("HTTP_USER_AGENT", ""),
+            field_changes={"row_count_delivered": req.row_count_delivered},
+        )
+        response = HttpResponse(body, content_type="application/x-ndjson")
+        response["Content-Disposition"] = (
+            f'attachment; filename="data-request-{req.id}.ndjson"'
+        )
+        return response
 
     @extend_schema(
         tags=["api-drs"], summary="Render and deliver an APPROVED request",
