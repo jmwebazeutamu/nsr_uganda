@@ -127,3 +127,172 @@ class TestNiraClientFactory:
         assert isinstance(get_nira_client(), MockNiraClient)
         settings.NIRA_PROVIDER = "live"
         assert isinstance(get_nira_client(), LiveNiraClient)
+
+
+class TestQueueAndRetry:
+    """S5-005 — queue_verification persists outages, drain_queue retries
+    on the exponential backoff schedule (60s, 300s, 3600s, 24h, FAILED)."""
+
+    def test_successful_first_call_marks_succeeded(self, db, settings):
+        from apps.identity_verification.models import AttemptStatus
+        from apps.identity_verification.queue import queue_verification
+        settings.NIRA_PROVIDER = "mock"
+        attempt = queue_verification("CM1234567890AB", requester="enum-1")
+        assert attempt.status == AttemptStatus.SUCCEEDED
+        assert attempt.attempts == 1
+        assert attempt.result_payload is not None
+        assert attempt.completed_at is not None
+
+    def test_nira_error_lands_in_queue_with_backoff(self, db, settings):
+        from apps.identity_verification.models import AttemptStatus
+        from apps.identity_verification.queue import queue_verification
+        settings.NIRA_PROVIDER = "mock"
+        attempt = queue_verification("CM1234567890SU", requester="enum-2")
+        assert attempt.status == AttemptStatus.QUEUED
+        assert attempt.attempts == 1
+        assert "service_unavailable" in attempt.last_error
+        # First-failure backoff is 60s.
+        from django.utils import timezone
+        wait = (attempt.next_retry_at - timezone.now()).total_seconds()
+        assert 55 < wait <= 60
+
+    def test_raw_nin_never_persisted(self, db, settings):
+        """The queue stores nin_hash only — the raw NIN must never land
+        in the row's columns, including last_error."""
+        from apps.identity_verification.queue import queue_verification
+        settings.NIRA_PROVIDER = "mock"
+        nin = "CM1234567890SU"
+        attempt = queue_verification(nin)
+        # Hash is present; raw is absent from every text column.
+        assert len(bytes(attempt.nin_hash)) > 0
+        assert nin not in attempt.last_error
+        assert nin not in str(attempt.result_payload or "")
+        assert nin not in attempt.requester
+
+    def test_backoff_schedule_progresses(self, db, settings):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.identity_verification.models import (
+            AttemptStatus,
+            NiraVerificationAttempt,
+        )
+        from apps.identity_verification.queue import drain_queue
+        settings.NIRA_PROVIDER = "mock"
+        # Seed a QUEUED attempt with attempts=1 already and next_retry_at in
+        # the past so drain picks it up. Use the SU suffix so retry fails.
+        from apps.security.hashing import nin_hash as _h
+        nin = "CM1234567890SU"
+        NiraVerificationAttempt.objects.create(
+            nin_hash=_h(nin), requester="x", status=AttemptStatus.QUEUED,
+            attempts=1, last_error="prev",
+            next_retry_at=timezone.now() - timedelta(seconds=10),
+        )
+        counts = drain_queue(lambda h: nin)
+        assert counts["processed"] == 1
+        assert counts["requeued"] == 1
+        # After the second failed call, next_retry_at should be ~300s away.
+        a = NiraVerificationAttempt.objects.get()
+        assert a.attempts == 2
+        wait = (a.next_retry_at - timezone.now()).total_seconds()
+        assert 295 < wait <= 300
+
+    def test_max_attempts_marks_failed(self, db, settings):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.identity_verification.models import (
+            AttemptStatus,
+            NiraVerificationAttempt,
+        )
+        from apps.identity_verification.queue import MAX_ATTEMPTS, drain_queue
+        settings.NIRA_PROVIDER = "mock"
+        from apps.security.hashing import nin_hash as _h
+        nin = "CM1234567890SU"
+        # Simulate having already burned through MAX-1 attempts.
+        NiraVerificationAttempt.objects.create(
+            nin_hash=_h(nin), requester="x", status=AttemptStatus.QUEUED,
+            attempts=MAX_ATTEMPTS - 1, last_error="prev",
+            next_retry_at=timezone.now() - timedelta(seconds=10),
+        )
+        drain_queue(lambda h: nin)
+        a = NiraVerificationAttempt.objects.get()
+        assert a.status == AttemptStatus.FAILED
+        assert a.completed_at is not None
+
+    def test_successful_retry_marks_succeeded(self, db, settings):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.identity_verification.models import (
+            AttemptStatus,
+            NiraVerificationAttempt,
+        )
+        from apps.identity_verification.queue import drain_queue
+        settings.NIRA_PROVIDER = "mock"
+        from apps.security.hashing import nin_hash as _h
+        # Seed an attempt for a NIN that will SUCCEED on retry (not SU).
+        good_nin = "CM1234567890AB"
+        NiraVerificationAttempt.objects.create(
+            nin_hash=_h(good_nin), requester="x",
+            status=AttemptStatus.QUEUED, attempts=1, last_error="transient",
+            next_retry_at=timezone.now() - timedelta(seconds=10),
+        )
+        counts = drain_queue(lambda h: good_nin)
+        assert counts["succeeded"] == 1
+        a = NiraVerificationAttempt.objects.get()
+        assert a.status == AttemptStatus.SUCCEEDED
+        assert a.result_payload["status"] == "match"
+
+    def test_unresolved_nin_marks_failed(self, db, settings):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.identity_verification.models import (
+            AttemptStatus,
+            NiraVerificationAttempt,
+        )
+        from apps.identity_verification.queue import drain_queue
+        settings.NIRA_PROVIDER = "mock"
+        NiraVerificationAttempt.objects.create(
+            nin_hash=b"\x00" * 32, requester="x",
+            status=AttemptStatus.QUEUED, attempts=1, last_error="prev",
+            next_retry_at=timezone.now() - timedelta(seconds=10),
+        )
+        # Resolver always returns None — simulates merged-loser case.
+        counts = drain_queue(lambda h: None)
+        assert counts["unresolved"] == 1
+        a = NiraVerificationAttempt.objects.get()
+        assert a.status == AttemptStatus.FAILED
+        assert "resolvable" in a.last_error
+
+    def test_drain_skips_not_yet_due(self, db, settings):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.identity_verification.models import (
+            AttemptStatus,
+            NiraVerificationAttempt,
+        )
+        from apps.identity_verification.queue import drain_queue
+        settings.NIRA_PROVIDER = "mock"
+        NiraVerificationAttempt.objects.create(
+            nin_hash=b"\x01" * 32, requester="x",
+            status=AttemptStatus.QUEUED, attempts=1, last_error="prev",
+            next_retry_at=timezone.now() + timedelta(minutes=10),
+        )
+        counts = drain_queue(lambda h: "CM1234567890AB")
+        assert counts["processed"] == 0
+
+    def test_management_command_runs(self, db, settings, capsys):
+        from django.core.management import call_command
+        settings.NIRA_PROVIDER = "mock"
+        # No rows pending — command should still run cleanly and log.
+        call_command("drain_nira_queue")
+        out = capsys.readouterr().out
+        assert "drain_nira_queue" in out
