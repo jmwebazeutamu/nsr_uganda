@@ -20,6 +20,8 @@ def emit(
     actor_kind: str = "user",
     reason: str = "",
     field_changes: dict | None = None,
+    ip_address: str | None = None,
+    user_agent: str = "",
 ) -> AuditEvent:
     return AuditEvent.objects.create(
         actor_id=actor,
@@ -29,4 +31,6 @@ def emit(
         entity_id=entity_id,
         reason=reason,
         field_changes=field_changes,
+        ip_address=ip_address,
+        user_agent=user_agent[:255] if user_agent else "",
     )

@@ -1,6 +1,8 @@
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import serializers, viewsets
 
+from apps.security.audit_views import AuditReadMixin
+
 from .models import Household, Member
 
 
@@ -43,7 +45,8 @@ class HouseholdSerializer(serializers.ModelSerializer):
     list=extend_schema(tags=["data-management"], summary="List households"),
     retrieve=extend_schema(tags=["data-management"], summary="Retrieve a household"),
 )
-class HouseholdViewSet(viewsets.ReadOnlyModelViewSet):
+class HouseholdViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
+    audit_entity_type = "household"
     queryset = Household.objects.all().order_by("-updated_at")
     serializer_class = HouseholdSerializer
 
@@ -52,6 +55,7 @@ class HouseholdViewSet(viewsets.ReadOnlyModelViewSet):
     list=extend_schema(tags=["data-management"], summary="List members"),
     retrieve=extend_schema(tags=["data-management"], summary="Retrieve a member"),
 )
-class MemberViewSet(viewsets.ReadOnlyModelViewSet):
+class MemberViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
+    audit_entity_type = "member"
     queryset = Member.objects.all().order_by("household", "line_number")
     serializer_class = MemberSerializer

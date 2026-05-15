@@ -1,6 +1,8 @@
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import serializers, viewsets
 
+from apps.security.audit_views import AuditReadMixin
+
 from .models import DdupModelVersion, MatchPair, MergeDecision
 
 
@@ -42,7 +44,8 @@ class DdupModelVersionViewSet(viewsets.ReadOnlyModelViewSet):
     list=extend_schema(tags=["ddup"], summary="List dedup match pairs"),
     retrieve=extend_schema(tags=["ddup"], summary="Retrieve a match pair"),
 )
-class MatchPairViewSet(viewsets.ReadOnlyModelViewSet):
+class MatchPairViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
+    audit_entity_type = "match_pair"
     queryset = MatchPair.objects.all().order_by("-created_at")
     serializer_class = MatchPairSerializer
     filterset_fields = ["status", "tier", "record_type"]
@@ -52,6 +55,7 @@ class MatchPairViewSet(viewsets.ReadOnlyModelViewSet):
     list=extend_schema(tags=["ddup"], summary="List merge decisions"),
     retrieve=extend_schema(tags=["ddup"], summary="Retrieve a merge decision"),
 )
-class MergeDecisionViewSet(viewsets.ReadOnlyModelViewSet):
+class MergeDecisionViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
+    audit_entity_type = "merge_decision"
     queryset = MergeDecision.objects.all().order_by("-decided_at")
     serializer_class = MergeDecisionSerializer

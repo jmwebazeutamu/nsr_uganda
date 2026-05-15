@@ -3,6 +3,8 @@ from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.security.audit_views import AuditReadMixin
+
 from .models import (
     Connector,
     ConnectorRun,
@@ -92,11 +94,12 @@ class ConnectorRunViewSet(viewsets.ReadOnlyModelViewSet):
     filterset_fields = ["status", "connector"]
 
 
-class StageRecordViewSet(viewsets.ReadOnlyModelViewSet):
+class StageRecordViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
     """Stage records carry the provisional Registry ID and the canonical
     payload. The /promote and /reject actions are the public surface for
     NSR Unit operator decisions (AC-DIH-PROMOTE-ATOMIC, AC-DIH-REJECT-VOID)."""
 
+    audit_entity_type = "stage_record"
     queryset = StageRecord.objects.all().order_by("-created_at")
     serializer_class = StageRecordSerializer
     filterset_fields = ["state"]

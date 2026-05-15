@@ -3,6 +3,8 @@ from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.security.audit_views import AuditReadMixin
+
 from .models import ChangeRequest
 from .services import (
     UpdError,
@@ -42,7 +44,8 @@ class _ActorReason(serializers.Serializer):
     retrieve=extend_schema(tags=["upd"], summary="Retrieve a change request"),
     create=extend_schema(tags=["upd"], summary="Create a draft change request"),
 )
-class ChangeRequestViewSet(viewsets.ModelViewSet):
+class ChangeRequestViewSet(AuditReadMixin, viewsets.ModelViewSet):
+    audit_entity_type = "change_request"
     queryset = ChangeRequest.objects.all().order_by("-created_at")
     serializer_class = ChangeRequestSerializer
     filterset_fields = ["status", "change_type", "pmt_relevant", "entity_type"]
