@@ -246,6 +246,82 @@ class PmtScoreHistogram(APIView):
 
 @extend_schema(
     tags=["rpt"],
+    summary="DIH promotion latency distribution per connector",
+    responses={200: DashboardRowSerializer(many=True)},
+)
+class PromotionLatencyByConnector(APIView):
+    """Distribution of (StageRecord.promoted_at − StageRecord.created_at)
+    grouped by Connector, bucketed by elapsed time. Lets ops spot
+    connectors with rising staging dwell — typically a sign that DQA
+    or DDUP is back-pressuring promotion.
+
+    Bucket cutoffs (inclusive lower bound):
+        under_1h  : 0   → < 1h
+        1_6h      : 1h  → < 6h
+        6_24h     : 6h  → < 24h
+        1_7d      : 1d  → < 7d
+        over_7d   : 7d  → +∞
+
+    ABAC: StageRecords promote to Households; we scope through the
+    promoted_household_id lookup (HouseholdIdScopedQuerysetMixin
+    semantics — sub-region operators only see promotions whose
+    resulting Household sits in their geography). Pre-promotion
+    stages are invisible to sub-region operators by definition.
+
+    Output key shape: 'CONN-CODE / bucket' — one row per
+    (connector, bucket) combination, so the chart can be a stacked
+    bar instead of a per-connector subplot.
+    """
+
+    def get(self, request):
+        from datetime import timedelta
+
+        from apps.ingestion_hub.models import StageRecord, StageRecordState
+        from apps.security.abac import _scoped_codes
+
+        codes = _scoped_codes(request.user)
+        base = (
+            StageRecord.objects
+            .filter(state=StageRecordState.PROMOTED, promoted_at__isnull=False)
+            .select_related("connector_run__connector__source_system")
+        )
+        if codes is None:
+            scoped = base
+        elif not codes:
+            scoped = base.none()
+        else:
+            household_ids = list(
+                Household.objects.filter(sub_region_code__in=codes)
+                .values_list("id", flat=True),
+            )
+            scoped = base.filter(promoted_household_id__in=household_ids)
+
+        buckets = [
+            ("under_1h", timedelta(hours=1)),
+            ("1_6h", timedelta(hours=6)),
+            ("6_24h", timedelta(hours=24)),
+            ("1_7d", timedelta(days=7)),
+            ("over_7d", None),  # sentinel: tail
+        ]
+        counts: dict[str, int] = {}
+        for sr in scoped:
+            delta = sr.promoted_at - sr.created_at
+            label = next(
+                (label for label, cutoff in buckets
+                 if cutoff is not None and delta < cutoff),
+                "over_7d",
+            )
+            code = sr.connector_run.connector.source_system.code
+            key = f"{code} / {label}"
+            counts[key] = counts.get(key, 0) + 1
+
+        out = [{"key": k, "count": v} for k, v in sorted(counts.items())]
+        _audit_dashboard_read(request, "promotion_latency_by_connector", len(out))
+        return Response(out)
+
+
+@extend_schema(
+    tags=["rpt"],
     summary="Open grievance count grouped by tier",
     responses={200: DashboardRowSerializer(many=True)},
 )

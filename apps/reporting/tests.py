@@ -407,3 +407,131 @@ class TestPmtScoreHistogram:
         r = _client_for(su).get("/api/v1/rpt/dashboards/pmt-score-histogram/")
         buckets = {row["key"]: row["count"] for row in r.data}
         assert buckets["90-99"] == 1
+
+
+class TestPromotionLatencyByConnector:
+    """S6-005 — bucketed (StageRecord.promoted_at − created_at)
+    distribution per connector."""
+
+    @pytest.fixture
+    def staged(self, db, households):
+        """Create one StageRecord per latency bucket, tied to a real
+        ConnectorRun → Connector → SourceSystem so the dashboard's
+        select_related chain resolves."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.ingestion_hub.models import (
+            Connector,
+            ConnectorRun,
+            DataProvisionAgreement,
+            SourceSystem,
+            SourceSystemKind,
+            StageRecord,
+            StageRecordState,
+        )
+        src = SourceSystem.objects.create(
+            code="PROMO-LAT", name="Test source",
+            kind=SourceSystemKind.PARTNER_MIS,
+        )
+        DataProvisionAgreement.objects.create(
+            source_system=src, reference="DPA-PL-1",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+        )
+        conn = Connector.objects.create(source_system=src, name="pl-test")
+        run = ConnectorRun.objects.create(connector=conn)
+        now = timezone.now()
+        # Build (created_at, promoted_at) so each stage falls in one bucket.
+        windows = [
+            ("under_1h", timedelta(minutes=30)),
+            ("1_6h", timedelta(hours=3)),
+            ("6_24h", timedelta(hours=12)),
+            ("1_7d", timedelta(days=3)),
+            ("over_7d", timedelta(days=10)),
+        ]
+        hh = next(iter(households.values()))
+        for label, delta in windows:
+            sr = StageRecord.objects.create(
+                provisional_registry_id=f"01PROMOLAT{label[:14]:_<14}",
+                connector_run=run, canonical_payload={},
+                state=StageRecordState.PROMOTED,
+                promoted_household_id=hh.id,
+            )
+            # Override the auto_now_add column directly so the delta is
+            # exactly what each bucket expects.
+            StageRecord.objects.filter(pk=sr.pk).update(
+                created_at=now - delta - timedelta(seconds=1),
+                promoted_at=now,
+            )
+        return src.code
+
+    def test_distribution_buckets_per_connector(
+        self, staged, django_user_model,
+    ):
+        code = staged
+        su = django_user_model.objects.create_user(
+            username="su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(
+            "/api/v1/rpt/dashboards/promotion-latency-by-connector/",
+        )
+        assert r.status_code == 200
+        keys = {row["key"]: row["count"] for row in r.data}
+        # 5 stages, one per bucket — all attributed to the same connector.
+        assert keys == {
+            f"{code} / under_1h": 1,
+            f"{code} / 1_6h": 1,
+            f"{code} / 6_24h": 1,
+            f"{code} / 1_7d": 1,
+            f"{code} / over_7d": 1,
+        }
+
+    def test_unpromoted_stages_excluded(self, db, django_user_model):
+        from apps.ingestion_hub.models import (
+            Connector,
+            ConnectorRun,
+            DataProvisionAgreement,
+            SourceSystem,
+            SourceSystemKind,
+            StageRecord,
+            StageRecordState,
+        )
+        src = SourceSystem.objects.create(
+            code="UNP", name="x", kind=SourceSystemKind.PARTNER_MIS,
+        )
+        DataProvisionAgreement.objects.create(
+            source_system=src, reference="DPA-UNP-1",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+        )
+        conn = Connector.objects.create(source_system=src, name="unp")
+        run = ConnectorRun.objects.create(connector=conn)
+        StageRecord.objects.create(
+            provisional_registry_id="01PROV1234567890NOTPROMOTE",
+            connector_run=run, canonical_payload={},
+            state=StageRecordState.PROVISIONAL,
+        )
+        su = django_user_model.objects.create_user(
+            username="su2", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(
+            "/api/v1/rpt/dashboards/promotion-latency-by-connector/",
+        )
+        assert r.data == []
+
+    def test_sub_region_operator_sees_only_in_scope_promotions(
+        self, staged, two_sub_regions, households, django_user_model,
+    ):
+        # Sub-region operator's scope covers SR-BUGANDA; the fixture
+        # planted stages whose promoted_household_id matches the first
+        # value in `households` (insertion order = BUGANDA first).
+        u = django_user_model.objects.create_user(username="op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get(
+            "/api/v1/rpt/dashboards/promotion-latency-by-connector/",
+        )
+        # All 5 stages tied to BUGANDA household -> visible to BUGANDA op.
+        assert sum(row["count"] for row in r.data) == 5
