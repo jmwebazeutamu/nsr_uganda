@@ -871,3 +871,64 @@ class TestBundleStorageSeam:
         get_bundle_storage()._reset_for_tests()
         put_bundle("seam-hash", b"seam-bytes")
         assert get_bundle("seam-hash") == b"seam-bytes"
+
+
+class TestExpiryTask:
+    """S6-004 — expire_data_requests_task wraps the same logic as the
+    S5-006 management command. Tests invoke .run() directly."""
+
+    def test_task_expires_past_due(self, draft_request):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.data_requests.tasks import expire_data_requests_task
+        submit_data_request(draft_request)
+        approve_data_request(draft_request, approver="dpo-1")
+        deliver_data_request(
+            draft_request, manifest_sha256="c" * 64, row_count=1,
+            actor="export-bot",
+        )
+        draft_request.expires_at = timezone.now() - timedelta(hours=1)
+        draft_request.save(update_fields=["expires_at"])
+
+        result = expire_data_requests_task.run()
+        assert result == {"candidates": 1, "expired": 1, "errors": 0}
+        draft_request.refresh_from_db()
+        assert draft_request.status == RequestStatus.EXPIRED
+
+    def test_task_skips_not_yet_due(self, draft_request):
+        from apps.data_requests.tasks import expire_data_requests_task
+        submit_data_request(draft_request)
+        approve_data_request(draft_request, approver="dpo-1")
+        deliver_data_request(
+            draft_request, manifest_sha256="d" * 64, row_count=2,
+            actor="export-bot",
+        )
+        # Default 30d TTL — still in the future.
+        result = expire_data_requests_task.run()
+        assert result == {"candidates": 0, "expired": 0, "errors": 0}
+        draft_request.refresh_from_db()
+        assert draft_request.status == RequestStatus.DELIVERED
+
+    def test_task_audit_actor_defaults_to_celery_beat(self, draft_request):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.data_requests.tasks import expire_data_requests_task
+        from apps.security.models import AuditEvent
+        submit_data_request(draft_request)
+        approve_data_request(draft_request, approver="dpo-1")
+        deliver_data_request(
+            draft_request, manifest_sha256="e" * 64, row_count=1,
+            actor="export-bot",
+        )
+        draft_request.expires_at = timezone.now() - timedelta(hours=1)
+        draft_request.save(update_fields=["expires_at"])
+
+        expire_data_requests_task.run()
+        ev = AuditEvent.objects.filter(
+            entity_type="data_request", action="expire",
+        ).first()
+        assert ev.actor_id == "celery-beat"

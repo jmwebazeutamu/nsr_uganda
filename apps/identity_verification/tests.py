@@ -296,3 +296,79 @@ class TestQueueAndRetry:
         call_command("drain_nira_queue")
         out = capsys.readouterr().out
         assert "drain_nira_queue" in out
+
+
+class TestCeleryTask:
+    """S6-004 — drain_nira_queue_task wraps the same drain_queue
+    logic as the management command. Tests invoke .run() directly
+    (CELERY_TASK_ALWAYS_EAGER=True in test settings) — no broker
+    needed."""
+
+    def test_task_runs_with_empty_queue(self, db, settings):
+        from apps.identity_verification.tasks import drain_nira_queue_task
+        settings.NIRA_PROVIDER = "mock"
+        result = drain_nira_queue_task.run()
+        assert result == {"processed": 0, "succeeded": 0, "requeued": 0,
+                          "failed": 0, "unresolved": 0}
+
+    def test_task_processes_due_attempt(self, db, settings):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.data_management.models import Household, Member
+        from apps.identity_verification.models import (
+            AttemptStatus,
+            NiraVerificationAttempt,
+        )
+        from apps.identity_verification.tasks import drain_nira_queue_task
+        from apps.reference_data.models import GeographicUnit
+        from apps.security.hashing import nin_hash as _h
+        settings.NIRA_PROVIDER = "mock"
+
+        # Need a Member with the nin_hash so the resolver finds it.
+        from datetime import date as _date
+        nodes = {}
+        parent = None
+        for level in ("region", "sub_region", "district", "county",
+                      "sub_county", "parish", "village"):
+            n = GeographicUnit.objects.create(
+                level=level, code=f"CEL-{level}", name=level,
+                parent=parent, effective_from=_date(2026, 1, 1),
+            )
+            nodes[level] = n
+            parent = n
+        hh = Household.objects.create(
+            region=nodes["region"], sub_region=nodes["sub_region"],
+            district=nodes["district"], county=nodes["county"],
+            sub_county=nodes["sub_county"], parish=nodes["parish"],
+            village=nodes["village"], urban_rural="rural",
+        )
+        good_nin = "CM1234567890AB"
+        Member.objects.create(
+            household=hh, line_number=1, surname="X", first_name="Y",
+            sex="M", nin_hash=_h(good_nin),
+            nin_value=good_nin.encode("ascii"),
+        )
+        NiraVerificationAttempt.objects.create(
+            nin_hash=_h(good_nin), requester="x",
+            status=AttemptStatus.QUEUED, attempts=1, last_error="prev",
+            next_retry_at=timezone.now() - timedelta(seconds=10),
+        )
+        result = drain_nira_queue_task.run()
+        assert result["succeeded"] == 1
+        a = NiraVerificationAttempt.objects.get()
+        assert a.status == AttemptStatus.SUCCEEDED
+
+
+class TestBeatSchedule:
+    """The Celery beat schedule is the source of truth for which
+    sweeps run automatically in production. A regression test catches
+    accidental renames + ensures both S5 sweeps stay scheduled."""
+
+    def test_schedule_includes_drain_and_expire(self):
+        from nsr_mis.celery import app
+        schedule = app.conf.beat_schedule
+        tasks = {entry["task"] for entry in schedule.values()}
+        assert "apps.identity_verification.tasks.drain_nira_queue_task" in tasks
+        assert "apps.data_requests.tasks.expire_data_requests_task" in tasks

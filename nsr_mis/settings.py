@@ -145,3 +145,17 @@ NIRA_PROVIDER = env("NIRA_PROVIDER", default="mock")
 # 'minio'  = MinIO client (placeholder, raises NotImplementedError until
 #            DRS-O-02 closes — see apps.data_requests.storage).
 DRS_BUNDLE_STORAGE = env("DRS_BUNDLE_STORAGE", default="memory")
+
+# --- Celery -------------------------------------------------------------
+# Beat schedule lives in nsr_mis/celery.py. CELERY_ENABLED is a soft
+# flag — when False, the worker / beat processes simply aren't started
+# in production. Task code is always importable so unit tests can call
+# .run() / .apply() without a broker.
+CELERY_ENABLED = env("CELERY_ENABLED", default=False)
+CELERY_BROKER_URL = env("CELERY_BROKER_URL",
+                         default="memory://")  # in-memory broker for dev/CI
+CELERY_RESULT_BACKEND = env("CELERY_RESULT_BACKEND", default="cache+memory://")
+CELERY_TASK_ALWAYS_EAGER = env("CELERY_TASK_ALWAYS_EAGER", default=True)
+CELERY_TASK_EAGER_PROPAGATES = True
+CELERY_TIMEZONE = "Africa/Kampala"
+CELERY_TASK_SERIALIZER = "json"
