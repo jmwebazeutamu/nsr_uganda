@@ -28,4 +28,5 @@ urlpatterns = [
     path("api/v1/pmt/", include("apps.pmt.urls")),
     path("api/v1/intake/", include("apps.intake.urls")),
     path("api/v1/grm/", include("apps.grievance.urls")),
+    path("api/v1/ref/", include("apps.referral.urls")),
 ]
