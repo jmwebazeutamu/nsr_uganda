@@ -1177,6 +1177,51 @@ class TestPartnerDownload:
         # Out of scope -> 404 (the row simply isn't in this user's queryset).
         assert r.status_code == 404
 
+    def test_download_throttled_when_rate_exceeded(
+        self, partner_with_dsa, django_user_model,
+    ):
+        """S9-003 — the bundle-download action carries a scoped
+        DownloadRateThrottle. Patch its class-level THROTTLE_RATES
+        to 2/min so the third call within the window 429s. DRF
+        caches THROTTLE_RATES on the throttle class at import time,
+        so a settings override alone doesn't propagate."""
+        from django.core.cache import cache
+
+        from apps.data_requests.api import DownloadRateThrottle
+        from apps.data_requests.bundles import prepare_and_deliver
+        from apps.security.models import OperatorScope, ScopeLevel
+
+        cache.clear()
+        original = DownloadRateThrottle.THROTTLE_RATES
+        DownloadRateThrottle.THROTTLE_RATES = {
+            **original, "drs-download": "2/min",
+        }
+        try:
+            req = DataRequest.objects.create(
+                dsa=partner_with_dsa, requester="p", request_payload={},
+            )
+            submit_data_request(req)
+            approve_data_request(req, approver="dpo-x")
+            prepare_and_deliver(req, actor="render-bot")
+
+            u = django_user_model.objects.create_user(
+                username="hammer", password="p",
+            )
+            OperatorScope.objects.create(
+                user=u, scope_level=ScopeLevel.PARTNER,
+                scope_code=partner_with_dsa.partner.code,
+            )
+            c = self._client_for(u)
+            url = f"/api/v1/drs/requests/{req.id}/download/"
+            assert c.get(url).status_code == 200  # call 1
+            assert c.get(url).status_code == 200  # call 2
+            # Third call within the same minute -> 429.
+            r = c.get(url)
+            assert r.status_code == 429
+        finally:
+            DownloadRateThrottle.THROTTLE_RATES = original
+            cache.clear()
+
     def test_download_emits_audit_event(
         self, partner_with_dsa, django_user_model,
     ):

@@ -7,6 +7,7 @@ from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 
 from apps.security.abac import PartnerScopedQuerysetMixin
 from apps.security.audit import emit as emit_audit
@@ -22,6 +23,14 @@ from .services import (
     reject_data_request,
     submit_data_request,
 )
+
+
+class DownloadRateThrottle(UserRateThrottle):
+    """Scoped throttle for the bundle-download action. Rate is set in
+    settings.REST_FRAMEWORK.DEFAULT_THROTTLE_RATES['drs-download'];
+    defaults to 10/min, env-tunable via DRS_DOWNLOAD_THROTTLE_RATE."""
+
+    scope = "drs-download"
 
 
 class PartnerSerializer(serializers.ModelSerializer):
@@ -280,7 +289,8 @@ class DataRequestViewSet(
             404: OpenApiResponse(description="not DELIVERED, or bundle missing"),
         },
     )
-    @action(detail=True, methods=["get"], url_path="download")
+    @action(detail=True, methods=["get"], url_path="download",
+            throttle_classes=[DownloadRateThrottle])
     def download(self, request, pk=None):
         req = self.get_object()
         if req.status != RequestStatus.DELIVERED:

@@ -113,6 +113,20 @@ REST_FRAMEWORK = {
     # Lists return {count, next, previous, results}.
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
+    # Throttling — only the rate scopes are declared globally; each
+    # throttled view names its scope via UserRateThrottle.scope. The
+    # bulk extract download (S8-003) is the first throttled action;
+    # add more scopes here as they're needed. Rates are
+    # environment-tunable so ops can adjust without a deploy.
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.UserRateThrottle",
+        "rest_framework.throttling.AnonRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "60/min",
+        "user": "1000/min",
+        "drs-download": env("DRS_DOWNLOAD_THROTTLE_RATE", default="10/min"),
+    },
 }
 
 SPECTACULAR_SETTINGS = {
