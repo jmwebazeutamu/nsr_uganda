@@ -238,19 +238,28 @@ def merge_member_pair(
 
     # Re-point any Household.head_member references to the loser.
     from apps.data_management.models import Household
+    repointed_household_ids = list(
+        Household.objects.filter(head_member=loser).values_list("id", flat=True),
+    )
     Household.objects.filter(head_member=loser).update(head_member=surviving)
 
     # Mark the pair merged.
     pair.status = PairStatus.MERGED
     pair.save(update_fields=["status", "updated_at"])
 
-    # Record the decision.
+    # Record the decision with a pre-merge snapshot — the snapshot is
+    # the source of truth for reverse_merge_decision() within the 30-day
+    # un-merge window (SAD §4.3.2).
     decision = MergeDecision.objects.create(
         match_pair=pair, action=MergeAction.MERGE,
         surviving_record_id=surviving.id, losing_record_id=loser.id,
         chosen_field_values=chosen_field_values, reason=note,
         decided_by=actor,
         reverse_window_until=timezone.now() + timezone.timedelta(days=30),
+        pre_merge_snapshot={
+            "surviving_overrides": {f: c["old"] for f, c in applied.items()},
+            "households_repointed_to_survivor": repointed_household_ids,
+        },
     )
 
     # AC-DDUP-AUDIT: emit audit chain entry.
@@ -267,6 +276,99 @@ def merge_member_pair(
     # TODO: PMT recompute. Triggered when apps.pmt lands.
     # TODO: notify enrolled programmes via apps.referral.
 
+    return decision
+
+
+@transaction.atomic
+def reverse_merge_decision(
+    decision: MergeDecision, *, actor: str, reason: str,
+) -> MergeDecision:
+    """SAD §4.3.2 — un-merge within the 30-day window.
+
+    Restores the loser Member (clears is_deleted / deleted_at /
+    merged_into), undoes the surviving Member's overrides using the
+    pre_merge_snapshot, restores Household.head_member references
+    that were re-pointed at merge time, flips MatchPair back to
+    PENDING, and records reversed_at/reversed_by/reversed_reason on
+    the decision. Emits AuditEvent action=unmerge.
+
+    Guards:
+    - decision.action must be MERGE (other actions have nothing to
+      reverse).
+    - timezone.now() must be <= reverse_window_until.
+    - decision must not already be reversed.
+    - reason must be non-empty (DPPA accountability — every un-merge
+      needs a defensible trail).
+    """
+    if decision.action != MergeAction.MERGE:
+        raise MergeError(
+            f"only MERGE decisions can be reversed (got {decision.action})",
+        )
+    if decision.reversed_at is not None:
+        raise MergeError(
+            f"decision {decision.id} already reversed at {decision.reversed_at}",
+        )
+    if not reason:
+        raise MergeError("reverse requires a non-empty reason")
+    now = timezone.now()
+    if decision.reverse_window_until and now > decision.reverse_window_until:
+        raise MergeError(
+            f"reverse window closed at {decision.reverse_window_until.isoformat()}",
+        )
+
+    pair = decision.match_pair
+    surviving = Member.objects.select_for_update().get(id=decision.surviving_record_id)
+    loser = Member.objects.select_for_update().get(id=decision.losing_record_id)
+
+    snapshot = decision.pre_merge_snapshot or {}
+    overrides = snapshot.get("surviving_overrides", {})
+    repointed_household_ids = snapshot.get(
+        "households_repointed_to_survivor", [],
+    )
+
+    # Restore the surviving member's fields from the pre-merge snapshot.
+    for field, old_value in overrides.items():
+        setattr(surviving, field, old_value)
+    if overrides:
+        surviving.save(update_fields=list(overrides.keys()) + ["updated_at"])
+
+    # Un-soft-delete the loser.
+    loser.is_deleted = False
+    loser.deleted_at = None
+    loser.merged_into = None
+    loser.save(update_fields=[
+        "is_deleted", "deleted_at", "merged_into", "updated_at",
+    ])
+
+    # Restore household head_member references that we re-pointed.
+    if repointed_household_ids:
+        from apps.data_management.models import Household
+        Household.objects.filter(id__in=repointed_household_ids).update(
+            head_member=loser,
+        )
+
+    # Flip the pair back to PENDING so the operator can re-decide.
+    pair.status = PairStatus.PENDING
+    pair.save(update_fields=["status", "updated_at"])
+
+    # Record the reversal on the decision row (immutable except for
+    # these three fields, per the model docstring).
+    decision.reversed_at = now
+    decision.reversed_by = actor
+    decision.reversed_reason = reason
+    decision.save(update_fields=[
+        "reversed_at", "reversed_by", "reversed_reason",
+    ])
+
+    _emit_audit(
+        action="unmerge", entity_type="match_pair", entity_id=pair.id,
+        actor=actor, reason=reason,
+        field_changes={
+            "surviving": surviving.id, "restored_loser": loser.id,
+            "decision_id": decision.id,
+            "households_restored": repointed_household_ids,
+        },
+    )
     return decision
 
 

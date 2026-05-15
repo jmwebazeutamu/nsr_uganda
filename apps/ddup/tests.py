@@ -25,6 +25,7 @@ from apps.ddup.services import (
     discover_phone_pairs,
     merge_member_pair,
     reject_pair,
+    reverse_merge_decision,
 )
 from apps.reference_data.models import GeographicUnit
 from apps.security.hashing import nin_hash
@@ -318,3 +319,147 @@ class TestPhoneDiscovery:
         tier2 = discover_phone_pairs(actor="system")
         assert len(tier1) == 1 and tier1[0].tier == 1
         assert tier2 == []  # already represented as a tier-1 pair
+
+
+# --- SAD §4.3.2 — 30-day un-merge window ----------------------------------
+
+class TestReverseMerge:
+    """Within the 30-day reverse window, a MERGE decision can be undone:
+    loser restored, surviving's fields rolled back, household head
+    pointers restored. Outside the window — locked."""
+
+    def _make_merge(self, household, active_model, *, with_overrides=False):
+        from apps.security.hashing import nin_hash as _nin_hash
+        h = _nin_hash("CM1234567890AB")
+        a = Member.objects.create(
+            household=household, line_number=1, surname="OriginalSurname",
+            first_name="James", sex="M", nin_hash=h, nin_last4="00AB",
+        )
+        b = Member.objects.create(
+            household=household, line_number=2, surname="Okot",
+            first_name="James", sex="M", nin_hash=h, nin_last4="00AB",
+        )
+        pair = discover_nin_pairs(actor="system")[0]
+        # b is the survivor; capture the surviving's pre-merge surname
+        # so the test can verify reverse restores it.
+        chosen = {"surname": "ChosenSurname"} if with_overrides else {}
+        decision = merge_member_pair(
+            pair, surviving_id=b.id, chosen_field_values=chosen,
+            actor="op-1", note="initial merge",
+        )
+        return pair, decision, a, b
+
+    def test_reverse_restores_loser(self, household, active_model):
+        pair, decision, a, b = self._make_merge(household, active_model)
+        reverse_merge_decision(
+            decision, actor="reviewer-1", reason="enumerator misidentified pair",
+        )
+        a.refresh_from_db()
+        b.refresh_from_db()
+        pair.refresh_from_db()
+        assert a.is_deleted is False
+        assert a.deleted_at is None
+        assert a.merged_into_id is None
+        # b is still active (survivor was b).
+        assert b.is_deleted is False
+        # Pair flipped back to PENDING for re-decision.
+        assert pair.status == PairStatus.PENDING
+
+    def test_reverse_restores_surviving_overrides(self, household, active_model):
+        pair, decision, a, b = self._make_merge(
+            household, active_model, with_overrides=True,
+        )
+        b.refresh_from_db()
+        assert b.surname == "ChosenSurname"
+        reverse_merge_decision(
+            decision, actor="reviewer-1", reason="wrong field choice",
+        )
+        b.refresh_from_db()
+        # The surviving member's surname is restored to its pre-merge value.
+        assert b.surname == "Okot"
+
+    def test_reverse_restores_household_head_pointer(
+        self, household, active_model,
+    ):
+        # Set household head BEFORE merge so merge re-points it.
+        from apps.security.hashing import nin_hash as _nin_hash
+        h = _nin_hash("CM1234567890AB")
+        a = Member.objects.create(
+            household=household, line_number=1, surname="X", first_name="A",
+            sex="M", nin_hash=h, nin_last4="00AB",
+        )
+        b = Member.objects.create(
+            household=household, line_number=2, surname="X", first_name="B",
+            sex="M", nin_hash=h, nin_last4="00AB",
+        )
+        household.head_member = a
+        household.save()
+        pair = discover_nin_pairs(actor="system")[0]
+        decision = merge_member_pair(
+            pair, surviving_id=b.id, chosen_field_values={},
+            actor="op-1", note="",
+        )
+        household.refresh_from_db()
+        assert household.head_member_id == b.id  # re-pointed
+
+        reverse_merge_decision(
+            decision, actor="reviewer-1", reason="head identity wrong",
+        )
+        household.refresh_from_db()
+        assert household.head_member_id == a.id  # restored
+
+    def test_reverse_records_actor_reason_timestamp(
+        self, household, active_model,
+    ):
+        _, decision, _, _ = self._make_merge(household, active_model)
+        reverse_merge_decision(
+            decision, actor="reviewer-1", reason="ambiguous identity",
+        )
+        decision.refresh_from_db()
+        assert decision.reversed_at is not None
+        assert decision.reversed_by == "reviewer-1"
+        assert "ambiguous" in decision.reversed_reason
+
+    def test_reverse_emits_unmerge_audit_event(self, household, active_model):
+        pair, decision, _, _ = self._make_merge(household, active_model)
+        reverse_merge_decision(decision, actor="rv", reason="r")
+        ev = AuditEvent.objects.filter(
+            action="unmerge", entity_type="match_pair", entity_id=pair.id,
+        ).first()
+        assert ev is not None
+        assert ev.actor_id == "rv"
+
+    def test_cannot_reverse_outside_window(self, household, active_model):
+        from datetime import timedelta
+
+        from django.utils import timezone
+        _, decision, _, _ = self._make_merge(household, active_model)
+        # Push reverse_window_until into the past.
+        decision.reverse_window_until = timezone.now() - timedelta(seconds=1)
+        decision.save(update_fields=["reverse_window_until"])
+        with pytest.raises(MergeError, match="window closed"):
+            reverse_merge_decision(decision, actor="late", reason="too late")
+
+    def test_cannot_reverse_already_reversed(self, household, active_model):
+        _, decision, _, _ = self._make_merge(household, active_model)
+        reverse_merge_decision(decision, actor="rv", reason="first")
+        with pytest.raises(MergeError, match="already reversed"):
+            reverse_merge_decision(decision, actor="rv", reason="second")
+
+    def test_reverse_requires_reason(self, household, active_model):
+        _, decision, _, _ = self._make_merge(household, active_model)
+        with pytest.raises(MergeError, match="non-empty reason"):
+            reverse_merge_decision(decision, actor="rv", reason="")
+
+    def test_cannot_reverse_a_reject_decision(self, household, active_model):
+        from apps.ddup.services import reject_pair
+        from apps.security.hashing import nin_hash as _nin_hash
+        h = _nin_hash("CM1234567890AB")
+        Member.objects.create(household=household, line_number=1, surname="X",
+                              first_name="A", sex="M", nin_hash=h)
+        Member.objects.create(household=household, line_number=2, surname="X",
+                              first_name="B", sex="M", nin_hash=h)
+        pair = discover_nin_pairs(actor="system")[0]
+        decision = reject_pair(pair, actor="op", reason="not duplicates")
+        with pytest.raises(MergeError, match="only MERGE"):
+            reverse_merge_decision(decision, actor="rv", reason="r")

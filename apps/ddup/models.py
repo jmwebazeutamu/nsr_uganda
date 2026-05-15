@@ -129,6 +129,12 @@ class MergeDecision(models.Model):
     reverse_window_until = models.DateTimeField(null=True, blank=True)
     reversed_at = models.DateTimeField(null=True, blank=True)
     reversed_by = models.CharField(max_length=64, blank=True)
+    reversed_reason = models.TextField(blank=True)
+    # Snapshot captured at merge time so reverse can restore the loser
+    # and any side-effects (head_member re-points). Shape:
+    #   {"surviving_overrides": {field: old_value, ...},
+    #    "households_repointed_to_survivor": [household_id, ...]}
+    pre_merge_snapshot = models.JSONField(default=dict, blank=True)
 
     class Meta:
         verbose_name = "Merge decision"
