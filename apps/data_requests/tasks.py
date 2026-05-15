@@ -8,8 +8,9 @@ coexist.
 
 from __future__ import annotations
 
-from celery import shared_task
 from django.utils import timezone
+
+from celery import shared_task
 
 from .models import DataRequest, RequestStatus
 from .services import DrsError, expire_data_request

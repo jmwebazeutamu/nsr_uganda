@@ -9,9 +9,8 @@ ops/runbooks can still invoke the command for one-off sweeps.
 
 from __future__ import annotations
 
-from celery import shared_task
-
 from apps.data_management.models import Member
+from celery import shared_task
 
 from .queue import drain_queue
 
