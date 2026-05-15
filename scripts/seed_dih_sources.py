@@ -50,6 +50,9 @@ SOURCES = [
     {"code": "WFP-SCOPE", "name": "WFP SCOPE beneficiary registry",
      "kind": SourceSystemKind.WFP_SCOPE,
      "connector": "wfp-scope-pull", "residence_days": 30},
+    {"code": "NIRA-REVERSE", "name": "NIRA reverse-feed (vital events)",
+     "kind": SourceSystemKind.PARTNER_MIS,
+     "connector": "nira-vital-events", "residence_days": 90},
 ]
 
 
