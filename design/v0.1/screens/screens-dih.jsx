@@ -20,10 +20,9 @@ const _getCsrfToken = () => {
 
 
 // Map an API StageRecord into the row shape the table renders. The
-// API ships a canonical_payload + a state; we synthesise the display-
-// only fields (ageH, sla) on the client side so the backend stays
-// lean. Fields the API doesn't carry yet (ddup score, dqa counts,
-// idv label) fall back to neutral placeholders.
+// API ships canonical_payload + dqa_summary + ddup_candidates + a
+// state; we synthesise the display-only fields (ageH, sla) on the
+// client side so the backend stays lean.
 const _stageToRow = (stage) => {
   const payload = stage.canonical_payload || {};
   const members = payload.members || [];
@@ -36,6 +35,23 @@ const _stageToRow = (stage) => {
     ? sourceKeys.kobo_region_name.replace(/^./, c => c.toUpperCase())
     : (geo.region || "");
   const parishLabel = geo.parish || "";
+
+  // DQA counts pulled from the staged summary written by
+  // process_stage_record. Pre-S2 stages may have an empty dict.
+  const dqaSummary = stage.dqa_summary || {};
+  const dqa = {
+    b: (dqaSummary.blocking_failures || []).length,
+    w: (dqaSummary.warnings || []).length,
+    i: (dqaSummary.info || []).length,
+  };
+  // DDUP — top candidate score (the queue's most actionable signal)
+  // and the full list for the detail-rail compare. Pre-DDUP stages
+  // have an empty list.
+  const ddupCandidates = stage.ddup_candidates || [];
+  const ddup = ddupCandidates.length
+    ? Math.max(...ddupCandidates.map(c => c.score || 0))
+    : null;
+  const idvLabel = (stage.idv_outcome || "").trim() || "—";
 
   // Age-since-created in compact "Xh Ym" or "Xm" form.
   const createdMs = Date.parse(stage.created_at);
@@ -61,15 +77,17 @@ const _stageToRow = (stage) => {
     parish: parishLabel,
     source: isKobo ? "Kobo" : "Walk-in",
     channel: isKobo ? "Kobo" : "CAPI",
-    ddup: null,
-    dqa: { b: 0, w: 0, i: 0 },
-    idv: "—",
+    ddup,
+    dqa,
+    idv: idvLabel,
     ageH,
     sla,
     status: (stage.state || "pending").replace(/_/g, " "),
     // Lineage so the detail rail can pull it out without re-fetching.
     _payload: payload,
     _stage: stage,
+    _dqaSummary: dqaSummary,
+    _ddupCandidates: ddupCandidates,
   };
 };
 
@@ -85,10 +103,20 @@ const MOCK_DIH_ROWS = [
   { id: "01HY0AMNT8P2N6FB7K6FZRWS92", head: "Acheng Rose",      hh: 3, region: "Acholi",      parish: "Aywee · Gulu",      source: "Walk-in", channel: "CAPI", ddup: null, dqa: { b: 0, w: 0, i: 0 }, idv: "Matched", ageH: "21h 03m", sla: "crit", status: "Pending" },
 ];
 
+// Quick-filter definitions. Each carries a `predicate(row)` so the
+// count + the row filtering use the same logic. Counts get computed
+// live in DIHScreen against the rows actually in the queue (the
+// hardcoded numbers from the original mock were misleading once we
+// wired live data in S11-013).
 const QUICK_FILTERS = [
-  { id: "sla24", label: "Walk-in 24h SLA at risk", icon: "clock", tone: "quality", count: 14 },
-  { id: "ddup", label: "Has DDUP match ≥ 0.90", icon: "duplicate", tone: "danger", count: 6 },
-  { id: "bulk", label: "Bulk awaiting batch approval", icon: "inbox", tone: "update", count: 4 },
+  { id: "sla24",  label: "SLA at risk (warn or breached)",   icon: "clock",     tone: "quality",
+    predicate: r => r.sla === "warn" || r.sla === "crit" },
+  { id: "ddup",   label: "Has DDUP match ≥ 0.90",            icon: "duplicate", tone: "danger",
+    predicate: r => r.ddup != null && r.ddup >= 0.90 },
+  { id: "blocking", label: "DQA blocking failures",          icon: "alert",     tone: "danger",
+    predicate: r => (r.dqa?.b || 0) > 0 },
+  { id: "clean",  label: "Clean (no DQA / DDUP issues)",     icon: "checkCircle", tone: "eligibility",
+    predicate: r => (r.dqa?.b || 0) === 0 && (r.dqa?.w || 0) === 0 && r.ddup == null },
 ];
 
 const DIHScreen = () => {
@@ -134,7 +162,28 @@ const DIHScreen = () => {
     return () => { cancelled = true; };
   }, []);
 
-  const current = useMemoDIH(() => rows.find(r => r.id === selectedRow), [rows, selectedRow]);
+  // Filtered view of rows for the table. Quick filters narrow by the
+  // predicate defined in QUICK_FILTERS; null = show everything.
+  const visibleRows = useMemoDIH(() => {
+    if (!quickFilter) return rows;
+    const f = QUICK_FILTERS.find(q => q.id === quickFilter);
+    return f ? rows.filter(f.predicate) : rows;
+  }, [rows, quickFilter]);
+
+  // Counts per quick filter, computed against the FULL row set so the
+  // numbers match the chip labels regardless of which one is active.
+  const filterCounts = useMemoDIH(() => {
+    const out = {};
+    for (const f of QUICK_FILTERS) {
+      out[f.id] = rows.filter(f.predicate).length;
+    }
+    return out;
+  }, [rows]);
+
+  const current = useMemoDIH(
+    () => visibleRows.find(r => r.id === selectedRow) || rows.find(r => r.id === selectedRow),
+    [visibleRows, rows, selectedRow],
+  );
 
   // Detail rail sits BELOW the queue table (not beside it) — clicking
   // a row scrolls it into view so operators don't have to hunt for it.
@@ -265,6 +314,7 @@ const DIHScreen = () => {
           </div>
           {QUICK_FILTERS.map(f => (
             <button key={f.id} onClick={() => setQuickFilter(quickFilter === f.id ? null : f.id)}
+              title={filterCounts[f.id] === 0 ? "No rows match this filter" : ""}
               style={{
                 display:'inline-flex', alignItems:'center', gap:6,
                 padding:'6px 10px', borderRadius:16, fontSize:12.5, fontWeight:500,
@@ -272,9 +322,10 @@ const DIHScreen = () => {
                 background: quickFilter === f.id ? `var(--accent-${f.tone}-bg)` : 'var(--neutral-0)',
                 color: quickFilter === f.id ? `var(--accent-${f.tone})` : 'var(--neutral-700)',
                 cursor:'pointer',
+                opacity: filterCounts[f.id] === 0 ? 0.55 : 1,
               }}>
               <Icon name={f.icon} size={13}/>{f.label}
-              <span style={{padding:'1px 6px', borderRadius:10, background:'var(--neutral-100)', color:'var(--neutral-700)', fontSize:11}}>{f.count}</span>
+              <span style={{padding:'1px 6px', borderRadius:10, background:'var(--neutral-100)', color:'var(--neutral-700)', fontSize:11}}>{filterCounts[f.id]}</span>
             </button>
           ))}
 
@@ -328,7 +379,12 @@ const DIHScreen = () => {
               </tr>
             </thead>
             <tbody>
-              {rows.map(r => (
+              {visibleRows.length === 0 && quickFilter && (
+                <tr><td colSpan={9} style={{padding:24, textAlign:'center', color:'var(--neutral-500)', fontSize:13}}>
+                  No rows match this filter. <button className="link" onClick={() => setQuickFilter(null)}>clear filter</button>
+                </td></tr>
+              )}
+              {visibleRows.map(r => (
                 <tr key={r.id} className={r.id === selectedRow ? "selected" : ""} onClick={() => setSelectedRow(r.id)} style={{cursor:'pointer'}}>
                   <td onClick={(e) => { e.stopPropagation(); toggleSel(r.id); }}>
                     <input type="checkbox" checked={selection.has(r.id)} readOnly disabled={r.dqa.b > 0 || r.ddup !== null}/>
@@ -491,43 +547,102 @@ const DIHScreen = () => {
           </div>
         </div>
 
-        {/* Column 2: Registry match candidate */}
-        <div className="card" style={{borderTop:'3px solid var(--accent-danger)'}}>
-          <div className="card-header" style={{padding:'14px 20px'}}>
-            <div>
-              <div className="t-cap" style={{color:'var(--accent-danger)'}}><Icon name="duplicate" size={11}/> DDUP CANDIDATE · COMPOSITE 0.83</div>
-              <h3 className="t-h3" style={{margin:'2px 0 0'}}>Akello Grace <span className="t-cap" style={{marginLeft:8}}>weak queue</span></h3>
-              <div className="t-cap">01HXP2KR3N8M2QF · Registered 8 Nov 2025 · same parish</div>
+        {/* Column 2: DDUP candidates (or empty-state if clean) */}
+        {(() => {
+          const cands = current._ddupCandidates || [];
+          const isLive = Boolean(current._payload);
+          // Live mode: render whatever ddup_candidates the staging
+          // pipeline recorded. Mock mode: keep the original visual
+          // CompareTable for design preview.
+          if (isLive) {
+            if (cands.length === 0) {
+              return (
+                <div className="card" style={{borderTop:'3px solid var(--accent-eligibility)'}}>
+                  <div className="card-header" style={{padding:'14px 20px'}}>
+                    <div>
+                      <div className="t-cap" style={{color:'var(--accent-eligibility)'}}><Icon name="checkCircle" size={11}/> NO DDUP CANDIDATES</div>
+                      <h3 className="t-h3" style={{margin:'2px 0 0'}}>Clean — no duplicates detected</h3>
+                      <div className="t-cap">Safe to promote without manual merge review.</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+            const top = cands[0];
+            const topScore = (top.score || 0).toFixed(2);
+            return (
+              <div className="card" style={{borderTop:'3px solid var(--accent-danger)'}}>
+                <div className="card-header" style={{padding:'14px 20px'}}>
+                  <div>
+                    <div className="t-cap" style={{color:'var(--accent-danger)'}}>
+                      <Icon name="duplicate" size={11}/> DDUP CANDIDATE{cands.length > 1 ? `S (${cands.length})` : ""} · TOP {topScore}
+                    </div>
+                    <h3 className="t-h3" style={{margin:'2px 0 0', fontFamily:'monospace', fontSize:13}}>{top.member_id || "—"}</h3>
+                    <div className="t-cap">{top.reason || ""}</div>
+                  </div>
+                  <Chip tone="danger">{topScore}</Chip>
+                </div>
+                <div style={{padding:16}}>
+                  {cands.length === 1 && (
+                    <div className="t-bodysm muted">One candidate above the discovery threshold.</div>
+                  )}
+                  {cands.length > 1 && (
+                    <table className="tbl" style={{fontSize:12}}>
+                      <thead><tr><th>Member ID</th><th>Score</th><th>Reason</th></tr></thead>
+                      <tbody>
+                        {cands.map((c, i) => (
+                          <tr key={i}>
+                            <td className="t-mono">{c.member_id}</td>
+                            <td>{(c.score || 0).toFixed(2)}</td>
+                            <td>{c.reason}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div className="card" style={{borderTop:'3px solid var(--accent-danger)'}}>
+              <div className="card-header" style={{padding:'14px 20px'}}>
+                <div>
+                  <div className="t-cap" style={{color:'var(--accent-danger)'}}><Icon name="duplicate" size={11}/> DDUP CANDIDATE · COMPOSITE 0.83</div>
+                  <h3 className="t-h3" style={{margin:'2px 0 0'}}>Akello Grace <span className="t-cap" style={{marginLeft:8}}>weak queue</span></h3>
+                  <div className="t-cap">01HXP2KR3N8M2QF · Registered 8 Nov 2025 · same parish</div>
+                </div>
+                <Chip tone="danger">0.83</Chip>
+              </div>
+              <div style={{padding:16}}>
+                <CompareTable
+                  left={[
+                    ["Provisional ID", "01HXZ9MR…RWS33", null, "mono"],
+                    ["Head name", "Akello Grace", 1.00, null],
+                    ["NIN", "CM89241023ABCD", 1.00, "mono"],
+                    ["Phone", "+256 781 552119", 0.45, "mono"],
+                    ["DoB", "12 Mar 1991", 1.00, null],
+                    ["Parish", "Pageya · Bobi · Gulu", 1.00, null],
+                    ["GPS distance", "—", null, null],
+                    ["HH size", "5", 0.80, null],
+                    ["PMT band", "Poorest 40%", 1.00, null],
+                  ]}
+                  right={[
+                    ["Registry ID", "01HXP2KR3N8M2QF", null, "mono"],
+                    ["Head name", "Akello Grace", null, null],
+                    ["NIN", "CM89241023ABCD", null, "mono"],
+                    ["Phone", "+256 700 110492", null, "mono"],
+                    ["DoB", "12 Mar 1991", null, null],
+                    ["Parish", "Pageya · Bobi · Gulu", null, null],
+                    ["GPS distance", "2.4 km", null, null],
+                    ["HH size", "4 → 5 (added in 2025)", null, null],
+                    ["PMT band", "Poorest 40%", null, null],
+                  ]}
+                />
+              </div>
             </div>
-            <Chip tone="danger">0.83</Chip>
-          </div>
-          <div style={{padding:16}}>
-            <CompareTable
-              left={[
-                ["Provisional ID", "01HXZ9MR…RWS33", null, "mono"],
-                ["Head name", "Akello Grace", 1.00, null],
-                ["NIN", "CM89241023ABCD", 1.00, "mono"],
-                ["Phone", "+256 781 552119", 0.45, "mono"],
-                ["DoB", "12 Mar 1991", 1.00, null],
-                ["Parish", "Pageya · Bobi · Gulu", 1.00, null],
-                ["GPS distance", "—", null, null],
-                ["HH size", "5", 0.80, null],
-                ["PMT band", "Poorest 40%", 1.00, null],
-              ]}
-              right={[
-                ["Registry ID", "01HXP2KR3N8M2QF", null, "mono"],
-                ["Head name", "Akello Grace", null, null],
-                ["NIN", "CM89241023ABCD", null, "mono"],
-                ["Phone", "+256 700 110492", null, "mono"],
-                ["DoB", "12 Mar 1991", null, null],
-                ["Parish", "Pageya · Bobi · Gulu", null, null],
-                ["GPS distance", "2.4 km", null, null],
-                ["HH size", "4 → 5 (added in 2025)", null, null],
-                ["PMT band", "Poorest 40%", null, null],
-              ]}
-            />
-          </div>
-        </div>
+          );
+        })()}
 
         {/* Column 3: Decision panel */}
         <div className="col gap-3">
@@ -536,40 +651,125 @@ const DIHScreen = () => {
               <h3 className="t-h3" style={{margin:0}}>Decision panel</h3>
             </div>
             <div style={{padding:16}}>
-              {/* DQA */}
-              <div>
-                <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>DQA OUTCOMES</div>
-                <div className="row-wrap" style={{marginBottom:8}}>
-                  <Chip tone="quality">2 warnings</Chip>
-                  <Chip tone="system">0 info</Chip>
-                  <Chip tone="data">0 blocking</Chip>
-                </div>
-                <div className="t-bodysm muted">AC-DQA-PHONE-LENGTH, AC-DQA-AGE-HEAD raised. Acknowledge to clear.</div>
-              </div>
-
-              <div className="divider"/>
-
-              {/* IDV */}
-              <div>
-                <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>IDV (NIRA)</div>
-                <Chip tone="identity"><Icon name="check" size={11}/> Matched · 0.97</Chip>
-                <div className="t-bodysm muted mt-2">NIN CM89241023ABCD reconciled · sex/age aligned · AC-IDV-MATCH passed.</div>
-              </div>
-
-              <div className="divider"/>
-
-              {/* DDUP */}
-              <div>
-                <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>DDUP CANDIDATES</div>
-                <div className="row gap-2" style={{padding:'8px 10px', background:'var(--accent-danger-bg)', borderRadius:4, border:'1px solid rgba(169,50,38,0.15)', marginBottom:6}}>
-                  <Chip size="sm" tone="danger">0.83</Chip>
-                  <div className="flex-1">
-                    <div className="t-bodysm" style={{fontWeight:500}}>01HXP2KR3N8M2QF · Akello Grace</div>
-                    <div className="t-cap">phone differs · HH size +1</div>
+              {/* DQA — live counts + rule list from dqa_summary; mock fallback. */}
+              {(() => {
+                const summary = current._dqaSummary;
+                if (summary) {
+                  const blocking = summary.blocking_failures || [];
+                  const warnings = summary.warnings || [];
+                  const info = summary.info || [];
+                  const ruleLines = [...blocking, ...warnings].slice(0, 3)
+                    .map(r => r.rule_id).filter(Boolean).join(", ");
+                  return (
+                    <div>
+                      <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>DQA OUTCOMES</div>
+                      <div className="row-wrap" style={{marginBottom:8}}>
+                        <Chip tone="data">{blocking.length} blocking</Chip>
+                        <Chip tone="quality">{warnings.length} warnings</Chip>
+                        <Chip tone="system">{info.length} info</Chip>
+                      </div>
+                      <div className="t-bodysm muted">
+                        {(blocking.length + warnings.length) === 0
+                          ? "Clean — all rules passed."
+                          : `Raised: ${ruleLines || "(see audit chain)"}.`}
+                      </div>
+                    </div>
+                  );
+                }
+                return (
+                  <div>
+                    <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>DQA OUTCOMES</div>
+                    <div className="row-wrap" style={{marginBottom:8}}>
+                      <Chip tone="quality">2 warnings</Chip>
+                      <Chip tone="system">0 info</Chip>
+                      <Chip tone="data">0 blocking</Chip>
+                    </div>
+                    <div className="t-bodysm muted">AC-DQA-PHONE-LENGTH, AC-DQA-AGE-HEAD raised. Acknowledge to clear.</div>
                   </div>
-                </div>
-                <div className="t-bodysm muted">Below 0.90 — consider <strong>Promote-as-merge</strong> only after manual review.</div>
-              </div>
+                );
+              })()}
+
+              <div className="divider"/>
+
+              {/* IDV — live label from stage.idv_outcome; mock fallback. */}
+              {(() => {
+                const idvLive = current._stage?.idv_outcome;
+                if (current._payload) {
+                  const tone = idvLive === "matched" ? "identity"
+                    : idvLive === "mismatch" ? "danger"
+                    : "data";
+                  const icon = idvLive === "matched" ? "check" : "info";
+                  return (
+                    <div>
+                      <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>IDV (NIRA)</div>
+                      <Chip tone={tone}><Icon name={icon} size={11}/> {idvLive || "not run"}</Chip>
+                      <div className="t-bodysm muted mt-2">
+                        {idvLive === "matched"
+                          ? "NIN reconciled with NIRA."
+                          : idvLive === "mismatch"
+                          ? "NIN found but demographics didn't align — reconcile before promote."
+                          : idvLive === "pending"
+                          ? "NIRA queue retry pending."
+                          : "No NIN provided or IDV not yet run."}
+                      </div>
+                    </div>
+                  );
+                }
+                return (
+                  <div>
+                    <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>IDV (NIRA)</div>
+                    <Chip tone="identity"><Icon name="check" size={11}/> Matched · 0.97</Chip>
+                    <div className="t-bodysm muted mt-2">NIN CM89241023ABCD reconciled · sex/age aligned · AC-IDV-MATCH passed.</div>
+                  </div>
+                );
+              })()}
+
+              <div className="divider"/>
+
+              {/* DDUP — live candidate list; mock fallback. */}
+              {(() => {
+                const cands = current._ddupCandidates;
+                if (current._payload) {
+                  if (!cands || cands.length === 0) {
+                    return (
+                      <div>
+                        <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>DDUP CANDIDATES</div>
+                        <Chip tone="eligibility"><Icon name="checkCircle" size={11}/> none</Chip>
+                        <div className="t-bodysm muted mt-2">No duplicates detected — safe to promote.</div>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div>
+                      <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>DDUP CANDIDATES</div>
+                      {cands.slice(0, 3).map((c, i) => (
+                        <div key={i} className="row gap-2"
+                          style={{padding:'8px 10px', background:'var(--accent-danger-bg)', borderRadius:4, border:'1px solid rgba(169,50,38,0.15)', marginBottom:6}}>
+                          <Chip size="sm" tone="danger">{(c.score || 0).toFixed(2)}</Chip>
+                          <div className="flex-1">
+                            <div className="t-bodysm" style={{fontWeight:500, fontFamily:'monospace', fontSize:12}}>{c.member_id}</div>
+                            <div className="t-cap">{c.reason}</div>
+                          </div>
+                        </div>
+                      ))}
+                      <div className="t-bodysm muted">Manual merge review before promote.</div>
+                    </div>
+                  );
+                }
+                return (
+                  <div>
+                    <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>DDUP CANDIDATES</div>
+                    <div className="row gap-2" style={{padding:'8px 10px', background:'var(--accent-danger-bg)', borderRadius:4, border:'1px solid rgba(169,50,38,0.15)', marginBottom:6}}>
+                      <Chip size="sm" tone="danger">0.83</Chip>
+                      <div className="flex-1">
+                        <div className="t-bodysm" style={{fontWeight:500}}>01HXP2KR3N8M2QF · Akello Grace</div>
+                        <div className="t-cap">phone differs · HH size +1</div>
+                      </div>
+                    </div>
+                    <div className="t-bodysm muted">Below 0.90 — consider <strong>Promote-as-merge</strong> only after manual review.</div>
+                  </div>
+                );
+              })()}
 
               <div className="divider"/>
 
