@@ -535,3 +535,90 @@ class TestPromotionLatencyByConnector:
         )
         # All 5 stages tied to BUGANDA household -> visible to BUGANDA op.
         assert sum(row["count"] for row in r.data) == 5
+
+
+class TestCsvExports:
+    """S7-005 — every RPT dashboard supports ?export=csv. Same scope
+    semantics + same audit emission as JSON; only the rendering
+    differs."""
+
+    def test_json_default(self, db, households, django_user_model):
+        su = django_user_model.objects.create_user(
+            username="su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get("/api/v1/rpt/dashboards/households-by-sub-region/")
+        assert r.status_code == 200
+        assert r["content-type"].startswith("application/json")
+        # JSON shape: list of {key, count} dicts.
+        assert isinstance(r.data, list)
+
+    def test_csv_format_query_param(self, db, households, django_user_model):
+        su = django_user_model.objects.create_user(
+            username="su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(
+            "/api/v1/rpt/dashboards/households-by-sub-region/?export=csv",
+        )
+        assert r.status_code == 200
+        assert r["content-type"] == "text/csv"
+        body = r.content.decode("utf-8").strip()
+        # First line is header; following lines are key,count pairs.
+        lines = body.splitlines()
+        assert lines[0] == "key,count"
+        assert len(lines) == 3  # header + 2 sub-regions
+        # Each non-header line has exactly two CSV fields.
+        for line in lines[1:]:
+            assert "," in line
+
+    def test_csv_filename_in_content_disposition(
+        self, db, households, django_user_model,
+    ):
+        su = django_user_model.objects.create_user(
+            username="su2", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(
+            "/api/v1/rpt/dashboards/households-by-pmt-band/?export=csv",
+        )
+        assert "filename=" in r["content-disposition"]
+        assert "households-by-pmt-band.csv" in r["content-disposition"]
+
+    def test_csv_emits_audit_event(
+        self, db, households, django_user_model,
+    ):
+        """CSV path should emit the SAME audit event as JSON — switching
+        format must not let a partner exfil silently."""
+        from apps.security.models import AuditEvent
+        su = django_user_model.objects.create_user(
+            username="su3", password="p", is_superuser=True,
+        )
+        _client_for(su).get(
+            "/api/v1/rpt/dashboards/households-by-sub-region/?export=csv",
+        )
+        ev = AuditEvent.objects.filter(
+            entity_type="rpt_dashboard",
+            entity_id="households_by_sub_region",
+            actor_id="su3",
+        ).first()
+        assert ev is not None
+        assert ev.action == "dashboard_read"
+
+    def test_csv_respects_abac_scope(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        """Sub-region operator's CSV must contain only their bucket
+        — the scope filter applies BEFORE rendering, same as JSON."""
+        u = django_user_model.objects.create_user(username="op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get(
+            "/api/v1/rpt/dashboards/households-by-sub-region/?export=csv",
+        )
+        body = r.content.decode("utf-8").strip()
+        lines = body.splitlines()
+        assert lines[0] == "key,count"
+        assert len(lines) == 2  # header + 1 row
+        # The Karamoja code is NOT in any data row.
+        karamoja_code = two_sub_regions["SR-KARAMOJA"]["sr"].code
+        assert karamoja_code not in body

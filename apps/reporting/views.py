@@ -14,7 +14,11 @@ not rows, so there's no detail/retrieve route to model.
 
 from __future__ import annotations
 
+import csv
+import io
+
 from django.db.models import Count
+from django.http import HttpResponse
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers
 from rest_framework.response import Response
@@ -42,6 +46,33 @@ def _audit_dashboard_read(request, code: str, bucket_count: int) -> None:
     )
 
 
+def _render(request, rows: list[dict], filename: str):
+    """Render a list of {key, count} dicts as either JSON (default)
+    or CSV (when ?export=csv). Audit emission and scope filtering
+    are caller responsibilities — this helper is purely about
+    representation.
+
+    Returns a DRF Response (JSON path) or a plain HttpResponse
+    (CSV path). Both are valid APIView return values.
+
+    NB: We use ?export=csv rather than the more obvious ?format=csv
+    because DRF reserves the latter as the content-negotiation hook
+    and 404s on unknown values without a custom renderer registered.
+    """
+    if request.query_params.get("export", "").lower() != "csv":
+        return Response(rows)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(("key", "count"))
+    for row in rows:
+        writer.writerow((row["key"], row["count"]))
+    response = HttpResponse(buf.getvalue(), content_type="text/csv")
+    response["Content-Disposition"] = (
+        f'attachment; filename="{filename}.csv"'
+    )
+    return response
+
+
 @extend_schema(
     tags=["rpt"],
     summary="Household count grouped by sub-region",
@@ -64,7 +95,7 @@ class HouseholdsBySubRegion(APIView):
         out = [{"key": r["sub_region_code"] or "(unset)", "count": r["count"]}
                for r in rows]
         _audit_dashboard_read(request, "households_by_sub_region", len(out))
-        return Response(out)
+        return _render(request, out, "households-by-sub-region")
 
 
 @extend_schema(
@@ -91,7 +122,7 @@ class HouseholdsByPmtBand(APIView):
             for r in rows
         ]
         _audit_dashboard_read(request, "households_by_pmt_band", len(out))
-        return Response(out)
+        return _render(request, out, "households-by-pmt-band")
 
 
 @extend_schema(
@@ -130,7 +161,7 @@ class OverdueGrievancesByTier(APIView):
         )
         out = [{"key": r["tier"], "count": r["count"]} for r in rows]
         _audit_dashboard_read(request, "overdue_grievances_by_tier", len(out))
-        return Response(out)
+        return _render(request, out, "overdue-grievances-by-tier")
 
 
 @extend_schema(
@@ -176,7 +207,7 @@ class SubmissionsPerDay(APIView):
         )
         out = [{"key": r["day"].isoformat(), "count": r["count"]} for r in rows]
         _audit_dashboard_read(request, "submissions_per_day", len(out))
-        return Response(out)
+        return _render(request, out, "submissions-per-day")
 
 
 @extend_schema(
@@ -215,7 +246,7 @@ class PendingDedupPairsByTier(APIView):
         )
         out = [{"key": f"tier_{r['tier']}", "count": r["count"]} for r in rows]
         _audit_dashboard_read(request, "pending_dedup_pairs_by_tier", len(out))
-        return Response(out)
+        return _render(request, out, "pending-dedup-pairs-by-tier")
 
 
 @extend_schema(
@@ -241,7 +272,7 @@ class PmtScoreHistogram(APIView):
         out = [{"key": f"{b:02d}-{b + 9:02d}", "count": c}
                for b, c in buckets.items()]
         _audit_dashboard_read(request, "pmt_score_histogram", 10)
-        return Response(out)
+        return _render(request, out, "pmt-score-histogram")
 
 
 @extend_schema(
@@ -317,7 +348,7 @@ class PromotionLatencyByConnector(APIView):
 
         out = [{"key": k, "count": v} for k, v in sorted(counts.items())]
         _audit_dashboard_read(request, "promotion_latency_by_connector", len(out))
-        return Response(out)
+        return _render(request, out, "promotion-latency-by-connector")
 
 
 @extend_schema(
@@ -353,4 +384,4 @@ class OpenGrievancesByTier(APIView):
         )
         out = [{"key": r["tier"], "count": r["count"]} for r in rows]
         _audit_dashboard_read(request, "open_grievances_by_tier", len(out))
-        return Response(out)
+        return _render(request, out, "open-grievances-by-tier")
