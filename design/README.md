@@ -29,11 +29,32 @@ This folder holds the design source-of-truth for the NSR MIS operator console an
 
 ## How to view the preview
 
+Serve `/design` over a local HTTP server, then open the harness in a browser. **Opening the HTML file directly does NOT work** — modern browsers (Chrome, Safari with default settings, Firefox) block the `<script src="*.jsx">` fetches under the `file://` protocol because Babel-standalone needs to load them via XHR.
+
+From a terminal:
+
 ```
-open "/Users/johnsonmwebaze/nsr_sris_dev/design/nsr-mis-console.html"
+cd /Users/johnsonmwebaze/nsr_sris_dev/design
+python3 -m http.server 8765
 ```
 
-Or, equivalently, serve `/design` over any static HTTP server and open `nsr-mis-console.html`. The harness loads `v0.1/tokens.css` first (defining the CSS variables), then `styles.css`, then the JSX files via Babel-standalone.
+Then in your browser visit:
+
+```
+http://localhost:8765/nsr-mis-console.html
+```
+
+Leave the terminal window open while you preview; `Ctrl+C` to stop the server. If port `8765` is in use, pick another (`8000`, `9000`, etc.).
+
+**One-shot shell alias** (drop this in `~/.zshrc` so it's one command next time):
+
+```sh
+alias nsr-preview='cd /Users/johnsonmwebaze/nsr_sris_dev/design && python3 -m http.server 8765'
+```
+
+Then `nsr-preview` from any new terminal, and open `http://localhost:8765/nsr-mis-console.html`.
+
+The harness loads `v0.1/tokens.css` first (defining the CSS variables), then `styles.css`, then the JSX files via Babel-standalone.
 
 The tweaks panel (bottom-right, dev-only) toggles device (desktop / CAPI tablet), role (Parish Chief, CDO, District M&E, NSR Unit Coordinator, DPO), and density (comfortable / compact). Use it to satisfy the cross-cutting acceptance gates in one session.
 
@@ -51,7 +72,7 @@ The tweaks panel (bottom-right, dev-only) toggles device (desktop / CAPI tablet)
 4. Export the screen via `Object.assign(window, { <ComponentName> })` so the harness can route to it.
 5. Use only `var(--…)` references for colour, font, type, and spacing — never hard-code a hex, px, or font family outside `tokens.css`.
 6. Wire it into `app.jsx` routing and into the tweaks panel where state variants exist.
-7. Open `nsr-mis-console.html` at 1366 wide and run the per-screen acceptance gates in `v0.1/acceptance.md`.
+7. Run the local server (`nsr-preview`) and open `http://localhost:8765/nsr-mis-console.html` at 1366 wide; run the per-screen acceptance gates in `v0.1/acceptance.md`.
 8. Commit with message `[US-XXX] design(<screen>): add <ComponentName>`.
 
 ## How to revise an existing screen
