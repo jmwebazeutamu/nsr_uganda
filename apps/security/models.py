@@ -1,16 +1,17 @@
 """SEC models.
 
-Sprint 0 scope: AuditEvent only. The role catalogue, ABAC scope, and
-session-recording infrastructure land in later stories. AuditEvent is the
-foundation of the integrity story — every personal-data read/write writes one.
+- AuditEvent — append-only audit chain (Sprint 0).
+- OperatorScope — ABAC geographic visibility per user (Sprint 2).
 
 References:
+- SAD §8.2 (ABAC scope per parish/sub-county/district/region)
 - SAD §8.4 audit and observability (hash-chained, append-only, 10y retention)
 - ADR-0002 (AuditEvent.id is ULID — externally referenced for compliance)
 """
 
 from __future__ import annotations
 
+from django.conf import settings
 from django.db import models
 from nsr_mis.common.fields import ULIDField
 
@@ -62,3 +63,55 @@ class AuditEvent(models.Model):
 
     def __str__(self) -> str:
         return f"{self.action} {self.entity_type}:{self.entity_id} @ {self.occurred_at}"
+
+
+class ScopeLevel(models.TextChoices):
+    NATIONAL = "national"
+    REGION = "region"
+    SUB_REGION = "sub_region"
+    DISTRICT = "district"
+    SUB_COUNTY = "sub_county"
+    PARISH = "parish"
+    VILLAGE = "village"
+
+
+class OperatorScope(models.Model):
+    """ABAC geographic scope per SAD §8.2.
+
+    An operator can carry multiple scopes (e.g., two parishes). Sprint 2
+    enforces visibility at the sub_region level using the partition key
+    introduced by ADR-0005. Finer-grained scopes (district / parish /
+    village) are modelled here so the Sprint 2.5 enforcement story
+    can land without a schema change.
+
+    `scope_code` is matched against the GeographicUnit.code at the same
+    level — e.g. scope_level="sub_region" + scope_code="SR-BUGANDA-SOUTH-CENTRAL"
+    grants visibility to every Household whose sub_region_code == that
+    value. scope_level="national" is the wildcard for NSR Unit Coordinator
+    and DPO roles.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="scopes",
+    )
+    scope_level = models.CharField(max_length=16, choices=ScopeLevel.choices)
+    scope_code = models.CharField(max_length=64, blank=True)  # empty for 'national'
+    active = models.BooleanField(default=True)
+    granted_at = models.DateTimeField(auto_now_add=True)
+    granted_by = models.CharField(max_length=64, blank=True)
+    note = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = "Operator scope"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "scope_level", "scope_code"],
+                name="operator_scope_unique_per_user_level",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["user", "active"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.user_id}/{self.scope_level}={self.scope_code or '*'}"

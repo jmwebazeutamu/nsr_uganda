@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import AuditEvent
+from .models import AuditEvent, OperatorScope
 
 
 @admin.register(AuditEvent)
@@ -37,3 +37,16 @@ class AuditEventAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+@admin.register(OperatorScope)
+class OperatorScopeAdmin(admin.ModelAdmin):
+    """ABAC geographic scope per SAD §8.2. Grant by selecting the user
+    and the (level, code) pair that matches the GeographicUnit they
+    cover. `national` is the wildcard for NSR Unit Coordinator / DPO."""
+
+    list_display = ("user", "scope_level", "scope_code", "active", "granted_at", "granted_by")
+    list_filter = ("scope_level", "active")
+    search_fields = ("user__username", "scope_code", "granted_by")
+    readonly_fields = ("granted_at",)
+    raw_id_fields = ("user",)

@@ -14,7 +14,11 @@ from apps.security.models import AuditEvent
 
 @pytest.fixture
 def auth_client(db, django_user_model):
-    user = django_user_model.objects.create_user(username="reader", password="r-pass")
+    # Superuser bypasses the ABAC scope filter from US-S2-003 so these
+    # tests focus on the audit emission contract.
+    user = django_user_model.objects.create_user(
+        username="reader", password="r-pass", is_superuser=True, is_staff=True,
+    )
     c = APIClient()
     c.force_authenticate(user=user)
     return c, user
