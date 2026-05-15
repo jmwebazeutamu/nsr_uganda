@@ -606,6 +606,82 @@ class TestReverseMergeAdmin:
 # --- US-S7-003 — tier 3 probabilistic discovery ---------------------------
 
 
+class TestMatchPairAdminScoresTable:
+    """S9-001 — admin readonly display renders per_field_scores as a
+    small coloured table. Mirrors the corridor signal: green ≥0.9,
+    amber 0.5-0.9, red <0.5."""
+
+    def _make_tier3_pair_with_scores(self, household, active_model, scores):
+        from apps.ddup.models import MatchPair, PairStatus
+        m1 = Member.objects.create(household=household, line_number=1,
+                                    surname="OKELLO", first_name="X", sex="M")
+        m2 = Member.objects.create(household=household, line_number=2,
+                                    surname="OKELLO", first_name="Y", sex="M")
+        a, b = sorted([m1.id, m2.id])
+        return MatchPair.objects.create(
+            record_type="member", record_a_id=a, record_b_id=b,
+            tier=3, match_reason="probabilistic",
+            model_version=active_model,
+            composite_score="0.920",
+            per_field_scores=scores,
+            status=PairStatus.PENDING,
+        )
+
+    def test_scores_table_renders_each_field(self, household, active_model):
+        from apps.ddup.admin import MatchPairAdmin
+        pair = self._make_tier3_pair_with_scores(
+            household, active_model,
+            {"surname": 1.0, "first_name": 0.94,
+             "date_of_birth": 1.0, "sex": 1.0, "village": 1.0},
+        )
+        from apps.ddup.models import MatchPair
+        a = MatchPairAdmin(MatchPair, admin_site=None)
+        html = str(a.scores_table(pair))
+        # Each field shows on its own row.
+        for field in ("surname", "first_name", "date_of_birth", "sex", "village"):
+            assert field in html
+        # Scores formatted to 3 dp.
+        assert "1.000" in html
+        assert "0.940" in html
+
+    def test_high_score_uses_green_colour(self, household, active_model):
+        from apps.ddup.admin import MatchPairAdmin
+        pair = self._make_tier3_pair_with_scores(
+            household, active_model, {"surname": 0.95},
+        )
+        from apps.ddup.models import MatchPair
+        html = str(MatchPairAdmin(MatchPair, admin_site=None).scores_table(pair))
+        # Green hex from _score_colour.
+        assert "#198754" in html
+
+    def test_mid_score_uses_amber_colour(self, household, active_model):
+        from apps.ddup.admin import MatchPairAdmin
+        pair = self._make_tier3_pair_with_scores(
+            household, active_model, {"first_name": 0.75},
+        )
+        from apps.ddup.models import MatchPair
+        html = str(MatchPairAdmin(MatchPair, admin_site=None).scores_table(pair))
+        assert "#b87410" in html
+
+    def test_low_score_uses_red_colour(self, household, active_model):
+        from apps.ddup.admin import MatchPairAdmin
+        pair = self._make_tier3_pair_with_scores(
+            household, active_model, {"date_of_birth": 0.0},
+        )
+        from apps.ddup.models import MatchPair
+        html = str(MatchPairAdmin(MatchPair, admin_site=None).scores_table(pair))
+        assert "#a93226" in html
+
+    def test_empty_scores_renders_placeholder(self, household, active_model):
+        from apps.ddup.admin import MatchPairAdmin
+        pair = self._make_tier3_pair_with_scores(
+            household, active_model, {},
+        )
+        from apps.ddup.models import MatchPair
+        html = str(MatchPairAdmin(MatchPair, admin_site=None).scores_table(pair))
+        assert "no per-field scores recorded" in html
+
+
 class TestSimilarityPrimitives:
     """Self-contained similarity functions in apps.ddup.similarity.
     These are the building blocks composite_score combines into a
