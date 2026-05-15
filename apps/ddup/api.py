@@ -11,10 +11,21 @@ from .services import MergeError, reverse_merge_decision
 
 
 class DdupModelVersionSerializer(serializers.ModelSerializer):
+    # Feedback counters computed live from MergeDecision joins
+    # (US-S10-002). Read-only — there's no setter on the model side.
+    auto_merge_count = serializers.IntegerField(read_only=True)
+    manual_merge_count = serializers.IntegerField(read_only=True)
+    auto_reverse_count = serializers.IntegerField(read_only=True)
+    manual_reverse_count = serializers.IntegerField(read_only=True)
+    auto_reverse_rate = serializers.FloatField(read_only=True, allow_null=True)
+
     class Meta:
         model = DdupModelVersion
         fields = ("id", "version", "description", "config", "status",
-                  "author", "approved_by", "approved_at", "effective_from")
+                  "author", "approved_by", "approved_at", "effective_from",
+                  "auto_merge_count", "manual_merge_count",
+                  "auto_reverse_count", "manual_reverse_count",
+                  "auto_reverse_rate")
 
 
 class MatchPairSerializer(serializers.ModelSerializer):

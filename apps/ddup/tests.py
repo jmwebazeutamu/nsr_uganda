@@ -13,6 +13,7 @@ from apps.data_management.models import Household, Member
 from apps.ddup.models import (
     DdupModelVersion,
     MergeAction,
+    MergeDecision,
     ModelStatus,
     PairStatus,
 )
@@ -604,6 +605,150 @@ class TestReverseMergeAdmin:
 
 
 # --- US-S7-003 — tier 3 probabilistic discovery ---------------------------
+
+
+class TestModelVersionFeedbackCounters:
+    """S10-002 — DdupModelVersion exposes live counters for the
+    auto/manual merge × reverse cross-tab. An auto-merged pair that
+    gets reversed is the strongest signal the threshold was wrong."""
+
+    def _build_pair_for_merge(self, household, active_model, h):
+        m1 = Member.objects.create(
+            household=household, line_number=1, surname="X",
+            first_name="A", sex="M", nin_hash=h,
+        )
+        # Second member needs to exist in the DB so discover_nin_pairs
+        # picks them up as a pair; the variable is for clarity only.
+        Member.objects.create(
+            household=household, line_number=2, surname="X",
+            first_name="B", sex="M", nin_hash=h,
+        )
+        from apps.ddup.services import discover_nin_pairs, merge_member_pair
+        pair = discover_nin_pairs(actor="system")[0]
+        return merge_member_pair(
+            pair, surviving_id=m1.id, chosen_field_values={},
+            actor="op", note="manual decision",
+        ), pair
+
+    def test_zero_state(self, db, active_model):
+        assert active_model.auto_merge_count == 0
+        assert active_model.manual_merge_count == 0
+        assert active_model.auto_reverse_count == 0
+        assert active_model.auto_reverse_rate is None  # 0/0 -> None
+
+    def test_manual_merge_counted_as_manual(self, household, active_model):
+        h = _hash("CM1234567890AB")
+        self._build_pair_for_merge(household, active_model, h)
+        active_model.refresh_from_db()
+        assert active_model.manual_merge_count == 1
+        assert active_model.auto_merge_count == 0
+
+    def test_auto_merge_marker_picked_up(self, household, active_model):
+        """A MergeDecision whose reason starts with the auto-merge
+        marker counts as auto, not manual. The counter logic is what
+        we test here; the full sweep behaviour is in
+        TestAutoMergeHighConfidence above."""
+        from apps.ddup.models import MergeAction
+        from apps.ddup.services import discover_nin_pairs
+        h = _hash("CM1234567890AB")
+        m1 = Member.objects.create(
+            household=household, line_number=1, surname="X",
+            first_name="A", sex="M", nin_hash=h,
+        )
+        m2 = Member.objects.create(
+            household=household, line_number=2, surname="X",
+            first_name="B", sex="M", nin_hash=h,
+        )
+        pair = discover_nin_pairs(actor="system")[0]
+        MergeDecision.objects.create(
+            match_pair=pair, action=MergeAction.MERGE,
+            surviving_record_id=m1.id, losing_record_id=m2.id,
+            reason="auto-merge tier-3 composite=0.98 >= threshold 0.95",
+            decided_by="ddup-auto-merge",
+        )
+        active_model.refresh_from_db()
+        assert active_model.auto_merge_count == 1
+        assert active_model.manual_merge_count == 0
+        assert active_model.auto_reverse_rate == 0.0  # no reverses yet
+
+    def test_reverse_count_separates_auto_and_manual(self, household, active_model):
+        """Reverse a manual merge — auto_reverse_count stays 0,
+        manual_reverse_count goes to 1."""
+        from apps.ddup.services import reverse_merge_decision
+        h = _hash("CM1234567890AB")
+        decision, _pair = self._build_pair_for_merge(household, active_model, h)
+        reverse_merge_decision(decision, actor="reviewer", reason="wrong match")
+        active_model.refresh_from_db()
+        assert active_model.manual_reverse_count == 1
+        assert active_model.auto_reverse_count == 0
+
+    def test_counters_exposed_in_api(self, db, active_model, django_user_model):
+        from rest_framework.test import APIClient
+        u = django_user_model.objects.create_user(
+            username="su", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.get(f"/api/v1/ddup/model-versions/{active_model.id}/")
+        assert r.status_code == 200
+        for key in ("auto_merge_count", "manual_merge_count",
+                    "auto_reverse_count", "manual_reverse_count",
+                    "auto_reverse_rate"):
+            assert key in r.data, f"{key} missing from serializer output"
+        # Empty state -> rate is null in JSON (None in Python).
+        assert r.data["auto_reverse_rate"] is None
+
+    def test_auto_reverse_rate_computed(self, household, active_model):
+        """Plant two auto-merge decisions, mark one reversed —
+        rate = 0.5. We write the MergeDecisions directly so the test
+        focuses on the counter logic, not the merge pipeline."""
+        from django.utils import timezone
+
+        from apps.ddup.models import MatchPair, MergeAction
+
+        h1 = _hash("CM1111111111AB")
+        h2 = _hash("CM2222222222AB")
+        # Pair 1: two members on h1.
+        m1a = Member.objects.create(household=household, line_number=1,
+                                     surname="A", first_name="X1", sex="M",
+                                     nin_hash=h1)
+        m1b = Member.objects.create(household=household, line_number=2,
+                                     surname="A", first_name="X2", sex="M",
+                                     nin_hash=h1)
+        # Pair 2: two members on h2.
+        m2a = Member.objects.create(household=household, line_number=3,
+                                     surname="B", first_name="Y1", sex="M",
+                                     nin_hash=h2)
+        m2b = Member.objects.create(household=household, line_number=4,
+                                     surname="B", first_name="Y2", sex="M",
+                                     nin_hash=h2)
+        pair1 = MatchPair.objects.create(
+            record_type="member",
+            record_a_id=min(m1a.id, m1b.id), record_b_id=max(m1a.id, m1b.id),
+            tier=1, match_reason="nin", model_version=active_model,
+        )
+        pair2 = MatchPair.objects.create(
+            record_type="member",
+            record_a_id=min(m2a.id, m2b.id), record_b_id=max(m2a.id, m2b.id),
+            tier=1, match_reason="nin", model_version=active_model,
+        )
+        MergeDecision.objects.create(
+            match_pair=pair1, action=MergeAction.MERGE,
+            surviving_record_id=m1a.id, losing_record_id=m1b.id,
+            reason="auto-merge tier-3 composite=0.98",
+            decided_by="bot",
+            reversed_at=timezone.now(), reversed_by="reviewer",
+        )
+        MergeDecision.objects.create(
+            match_pair=pair2, action=MergeAction.MERGE,
+            surviving_record_id=m2a.id, losing_record_id=m2b.id,
+            reason="auto-merge tier-3 composite=0.97",
+            decided_by="bot",
+        )
+        active_model.refresh_from_db()
+        assert active_model.auto_merge_count == 2
+        assert active_model.auto_reverse_count == 1
+        assert active_model.auto_reverse_rate == 0.5
 
 
 class TestMatchPairAdminScoresTable:

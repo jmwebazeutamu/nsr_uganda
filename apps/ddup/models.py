@@ -62,6 +62,60 @@ class DdupModelVersion(models.Model):
     def __str__(self) -> str:
         return f"DdupModelVersion v{self.version} [{self.status}]"
 
+    # --- Computed feedback counters (US-S10-002) -----------------------
+    # The strongest signal that the auto-merge confidence threshold for
+    # this model_version was wrong is auto-merges that got reversed.
+    # We compute these live (no denormalised counter columns) so the
+    # numbers never drift from the audit reality.
+    #
+    # An auto-merge is identified by MergeDecision.reason — the
+    # auto_merge_high_confidence_pairs service sets it to a string
+    # starting with "auto-merge tier-3 composite=...". Manual merges
+    # don't share that prefix.
+
+    AUTO_MERGE_REASON_PREFIX = "auto-merge tier-3"
+
+    @property
+    def _merge_decisions(self):
+        return MergeDecision.objects.filter(
+            match_pair__model_version=self, action=MergeAction.MERGE,
+        )
+
+    @property
+    def auto_merge_count(self) -> int:
+        return self._merge_decisions.filter(
+            reason__startswith=self.AUTO_MERGE_REASON_PREFIX,
+        ).count()
+
+    @property
+    def manual_merge_count(self) -> int:
+        return self._merge_decisions.exclude(
+            reason__startswith=self.AUTO_MERGE_REASON_PREFIX,
+        ).count()
+
+    @property
+    def auto_reverse_count(self) -> int:
+        return self._merge_decisions.filter(
+            reason__startswith=self.AUTO_MERGE_REASON_PREFIX,
+            reversed_at__isnull=False,
+        ).count()
+
+    @property
+    def manual_reverse_count(self) -> int:
+        return self._merge_decisions.exclude(
+            reason__startswith=self.AUTO_MERGE_REASON_PREFIX,
+        ).filter(reversed_at__isnull=False).count()
+
+    @property
+    def auto_reverse_rate(self) -> float | None:
+        """Fraction of auto-merges that got reversed. None if no
+        auto-merges have happened yet (avoids 0/0 nonsense in the
+        admin / API)."""
+        denom = self.auto_merge_count
+        if denom == 0:
+            return None
+        return self.auto_reverse_count / denom
+
 
 class MatchPair(models.Model):
     """A pair of records suspected of being duplicates.

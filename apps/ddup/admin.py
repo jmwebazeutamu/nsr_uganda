@@ -13,10 +13,54 @@ def _score_colour(v: float) -> str:
 
 @admin.register(DdupModelVersion)
 class DdupModelVersionAdmin(admin.ModelAdmin):
-    list_display = ("version", "status", "author", "approved_by", "effective_from", "updated_at")
+    list_display = ("version", "status", "author", "approved_by",
+                    "effective_from", "merge_summary", "updated_at")
     list_filter = ("status",)
-    readonly_fields = ("id", "created_at", "updated_at", "approved_at")
+    readonly_fields = (
+        "id", "created_at", "updated_at", "approved_at",
+        "auto_merge_count", "manual_merge_count",
+        "auto_reverse_count", "manual_reverse_count",
+        "auto_reverse_rate_display",
+    )
     search_fields = ("description", "author", "approved_by")
+    fieldsets = (
+        (None, {"fields": ("id", "version", "description", "status",
+                            "author", "approved_by", "approved_at",
+                            "effective_from")}),
+        ("Configuration", {"fields": ("config",)}),
+        ("Feedback (US-S10-002)", {
+            "description": (
+                "Computed live from MergeDecision joins. A rising "
+                "auto-reverse rate means the auto-merge threshold is "
+                "too low for this model version — operators tune "
+                "config['tier3']['auto_merge_threshold'] upward."
+            ),
+            "fields": ("auto_merge_count", "manual_merge_count",
+                        "auto_reverse_count", "manual_reverse_count",
+                        "auto_reverse_rate_display"),
+        }),
+        ("Timestamps", {"fields": ("created_at", "updated_at")}),
+    )
+
+    @admin.display(description="Merges (auto / manual)")
+    def merge_summary(self, obj: DdupModelVersion) -> str:
+        """Compact list_display column — auto/manual counts + reverse
+        rate if any auto-merges have happened."""
+        a = obj.auto_merge_count
+        m = obj.manual_merge_count
+        rate = obj.auto_reverse_rate
+        if rate is not None:
+            return f"{a} auto ({rate:.1%} reversed) / {m} manual"
+        return f"{a} auto / {m} manual"
+
+    @admin.display(description="Auto-reverse rate")
+    def auto_reverse_rate_display(self, obj: DdupModelVersion) -> str:
+        """Human-readable variant for the form view — leans on the
+        DPO calibration story rather than the raw decimal."""
+        rate = obj.auto_reverse_rate
+        if rate is None:
+            return "(no auto-merges yet for this version)"
+        return f"{rate:.1%} ({obj.auto_reverse_count} of {obj.auto_merge_count})"
 
 
 @admin.register(MatchPair)
