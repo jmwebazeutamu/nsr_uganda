@@ -44,6 +44,9 @@ SOURCES = [
     {"code": "PDM-MIS", "name": "Parish Development Model MIS",
      "kind": SourceSystemKind.PARTNER_MIS,
      "connector": "pdm-mis-pull", "residence_days": 30},
+    {"code": "NUSAF-MIS", "name": "Northern Uganda Social Action Fund MIS",
+     "kind": SourceSystemKind.PARTNER_MIS,
+     "connector": "nusaf-mis-pull", "residence_days": 30},
 ]
 
 
