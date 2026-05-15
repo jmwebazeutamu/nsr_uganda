@@ -110,6 +110,23 @@ const STATUS_FILTERS = [
   { id: "delivered", label: "Delivered",        count: PDRS_REQUESTS.filter(r => r.status === "delivered").length },
 ];
 
+// SHA-256 over a Blob using the browser's Web Crypto API. Returns a
+// lowercase-hex 64-char string matching what apps.data_requests.bundle
+// writes to manifest.sha256 (S6-002 / S8-003). Async because crypto
+// .subtle.digest streams the file in 256KB chunks rather than loading
+// the whole NDJSON into memory at once.
+//
+// FileReader -> ArrayBuffer -> SubtleCrypto.digest -> hex. ~2 MB/s
+// in a 2026 browser; a 50,000-row bundle (typical partner DSA cap)
+// hashes in well under a second.
+const sha256Hex = async (blob) => {
+  const buf = await blob.arrayBuffer();
+  const digest = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(digest))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
+};
+
 const PartnerDRSScreen = () => {
   // mode: "list" (the S9-005 view) or "build" (the S10-003 builder)
   const [mode, setMode] = useStatePDrs("list");
@@ -117,6 +134,48 @@ const PartnerDRSScreen = () => {
   const [selectedRow, setSelectedRow] = useStatePDrs(PDRS_REQUESTS[0].id);
   const [auditOpen, setAuditOpen] = useStatePDrs(false);
   const [toast, setToast] = useStatePDrs("");
+
+  // Per-request integrity-verify state (US-S11-006). Map of
+  // request_id -> { state: "idle"|"hashing"|"match"|"mismatch"|"error",
+  //                  computed: "...64hex...", error?: "..." }.
+  // Kept in component state rather than mutating PDRS_REQUESTS so the
+  // mock data block stays the canonical "what the API returned."
+  const [verify, setVerify] = useStatePDrs({});
+  const fileInputRef = React.useRef(null);
+  const [pendingVerifyId, setPendingVerifyId] = useStatePDrs(null);
+
+  const startVerify = (requestId) => {
+    setPendingVerifyId(requestId);
+    // Reset any prior result so the operator sees the picker land on
+    // a fresh state when re-running a verification.
+    setVerify(v => ({ ...v, [requestId]: { state: "idle" } }));
+    fileInputRef.current?.click();
+  };
+
+  const onFileChosen = async (e) => {
+    const file = e.target.files?.[0];
+    const requestId = pendingVerifyId;
+    // Clear the input value so picking the same file twice still
+    // fires onChange (browsers suppress duplicate change events).
+    e.target.value = "";
+    if (!file || !requestId) return;
+    const req = PDRS_REQUESTS.find(r => r.id === requestId);
+    if (!req) return;
+    setVerify(v => ({ ...v, [requestId]: { state: "hashing" } }));
+    try {
+      const computed = await sha256Hex(file);
+      const match = computed === req.manifest_sha256;
+      setVerify(v => ({
+        ...v,
+        [requestId]: { state: match ? "match" : "mismatch", computed },
+      }));
+    } catch (err) {
+      setVerify(v => ({
+        ...v,
+        [requestId]: { state: "error", error: String(err) },
+      }));
+    }
+  };
 
   const onBuilderSubmit = (payload) => {
     // Real wiring: POST /api/v1/drs/requests/ with payload, then
@@ -162,6 +221,16 @@ const PartnerDRSScreen = () => {
 
   return (
     <div className="page" style={{paddingBottom:0, position:'relative'}}>
+      {/* Hidden file picker driven by the "Verify integrity" button.
+          Lives at the root so it stays mounted across selectedRow
+          changes — the picker's value gets cleared on each open
+          (see onFileChosen) so re-picking the same file still fires. */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".ndjson,.jsonl,.json,application/x-ndjson,application/json"
+        style={{display:"none"}}
+        onChange={onFileChosen}/>
       <PageHeader
         eyebrow="PARTNER DRS PORTAL · US-S9-005"
         title={<>My data requests <Chip>{rows.length}</Chip></>}
@@ -343,6 +412,73 @@ const PartnerDRSScreen = () => {
                       <span className="muted">Expires:</span>{" "}
                       <span>{current.expires_at}</span>
                     </div>
+
+                    {/* US-S11-006 — verify integrity. Operator picks
+                        the local NDJSON file; we recompute SHA-256
+                        in-browser and compare to the manifest hash. */}
+                    {(() => {
+                      const v = verify[current.id] || { state: "idle" };
+                      return (
+                        <div style={{marginTop:14, padding:10,
+                                      background:"var(--neutral-50)",
+                                      borderRadius:6,
+                                      border:"1px solid var(--neutral-200)"}}>
+                          <div className="row" style={{justifyContent:"space-between", alignItems:"center"}}>
+                            <span className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)"}}>
+                              <Icon name="shield" size={11}/> VERIFY INTEGRITY
+                            </span>
+                            <button
+                              className="btn btn-sm"
+                              disabled={v.state === "hashing"}
+                              onClick={() => startVerify(current.id)}>
+                              {v.state === "hashing"
+                                ? <><Icon name="clock" size={12}/> Hashing…</>
+                                : v.state === "idle"
+                                  ? <><Icon name="file" size={12}/> Pick downloaded file</>
+                                  : <><Icon name="refresh" size={12}/> Re-verify</>}
+                            </button>
+                          </div>
+                          <div className="t-bodysm muted mt-1" style={{fontSize:12}}>
+                            Recomputes SHA-256 from the file you downloaded and
+                            compares to the manifest above. Nothing leaves your
+                            browser.
+                          </div>
+                          {v.state === "match" && (
+                            <div className="row gap-2 mt-2"
+                              style={{padding:"6px 10px", borderRadius:4,
+                                       background:"var(--accent-eligibility-bg)",
+                                       color:"var(--accent-eligibility)",
+                                       fontSize:13, fontWeight:600,
+                                       alignItems:"center"}}>
+                              <Icon name="check" size={14}/> Hash matches — bundle integrity OK.
+                            </div>
+                          )}
+                          {v.state === "mismatch" && (
+                            <div className="col gap-1 mt-2"
+                              style={{padding:"6px 10px", borderRadius:4,
+                                       background:"var(--accent-danger-bg)",
+                                       color:"var(--accent-danger)",
+                                       fontSize:13}}>
+                              <div className="row gap-2" style={{fontWeight:600, alignItems:"center"}}>
+                                <Icon name="xCircle" size={14}/> HASH MISMATCH — DO NOT use this bundle.
+                              </div>
+                              <div className="t-bodysm" style={{fontSize:11, wordBreak:"break-all", color:"var(--neutral-800)"}}>
+                                Computed: <span className="t-mono">{v.computed}</span>
+                              </div>
+                              <div className="t-bodysm" style={{fontSize:11, color:"var(--neutral-700)"}}>
+                                Report this to the NSR Unit DPO at once — the file
+                                may have been altered after delivery.
+                              </div>
+                            </div>
+                          )}
+                          {v.state === "error" && (
+                            <div className="t-bodysm mt-2" style={{color:"var(--accent-danger)"}}>
+                              Couldn't hash the file: {v.error}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </>
                 )}
               </div>

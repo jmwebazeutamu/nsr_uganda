@@ -165,6 +165,7 @@ and `PARTNER_DPO` per ADR-0006.
 | UI-PDRS-4 | Detail rail shows DSA reference, fields requested (each as a chip — programme-toned for `member.*`, otherwise neutral), geography chips when scoped, row cap |
 | UI-PDRS-5 | Rejected rows surface the decision_reason in a red-tinted callout — partners can see WHY without contacting the NSR Unit |
 | UI-PDRS-6 | Delivered rows show: row count, full 64-char manifest SHA-256 (monospace, wraps cleanly), expiry date. Partners verify integrity by re-hashing the downloaded NDJSON |
+| UI-PDRS-10 (S11-006) | A "Verify integrity" panel under the bundle SHA-256 lets partners pick the downloaded file; SHA-256 is recomputed in-browser via Web Crypto and compared to the manifest. Match shows a green confirmation; mismatch shows a red callout with the computed hash and a "report to DPO" instruction. Nothing leaves the browser. |
 | UI-PDRS-7 | "About this portal" hint card explains: scope, 10/min download rate limit (S9-003), 30d bundle TTL (S5-002), audit on every read/download |
 | UI-PDRS-8 | Empty state (no rows match filter) shows the calm inbox icon — no marketing copy |
 | UI-PDRS-9 | Role visibility: hidden from all operator roles (Parish Chief, CDO, NSR Unit, DPO); visible to PARTNER_ANALYST + PARTNER_DPO; partner role sees ONLY this screen + Home in the side nav |
