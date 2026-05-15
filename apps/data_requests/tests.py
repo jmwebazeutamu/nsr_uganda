@@ -932,3 +932,132 @@ class TestExpiryTask:
             entity_type="data_request", action="expire",
         ).first()
         assert ev.actor_id == "celery-beat"
+
+
+class TestPartnerSelfService:
+    """S7-004 — GET /api/v1/drs/requests/mine/ uses the same
+    PartnerScopedQuerysetMixin filter as the main list, but renders
+    with a slim partner-facing serializer (no admin fields)."""
+
+    @pytest.fixture
+    def two_partners_with_requests(self, db):
+        p_a = Partner.objects.create(code="P-A", name="Partner A")
+        p_b = Partner.objects.create(code="P-B", name="Partner B")
+        d_a = DataSharingAgreement.objects.create(
+            partner=p_a, reference="DSA-MINE-A",
+            status=DsaStatus.ACTIVE,
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={},
+        )
+        d_b = DataSharingAgreement.objects.create(
+            partner=p_b, reference="DSA-MINE-B",
+            status=DsaStatus.ACTIVE,
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={},
+        )
+        r_a = DataRequest.objects.create(
+            dsa=d_a, requester="a-analyst", request_payload={},
+        )
+        r_b = DataRequest.objects.create(
+            dsa=d_b, requester="b-analyst", request_payload={},
+        )
+        return p_a, p_b, r_a, r_b
+
+    def test_partner_sees_only_own_requests(
+        self, two_partners_with_requests, django_user_model,
+    ):
+        from apps.security.models import OperatorScope, ScopeLevel
+        p_a, _, r_a, _ = two_partners_with_requests
+        u = django_user_model.objects.create_user(
+            username="a-analyst", password="p",
+        )
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARTNER, scope_code=p_a.code,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.get("/api/v1/drs/requests/mine/")
+        assert r.status_code == 200
+        results = r.data["results"] if isinstance(r.data, dict) else r.data
+        assert len(results) == 1
+        assert results[0]["id"] == r_a.id
+
+    def test_serializer_omits_admin_fields(
+        self, two_partners_with_requests, django_user_model,
+    ):
+        from apps.security.models import OperatorScope, ScopeLevel
+        p_a, _, _, _ = two_partners_with_requests
+        u = django_user_model.objects.create_user(
+            username="a-analyst-2", password="p",
+        )
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARTNER, scope_code=p_a.code,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.get("/api/v1/drs/requests/mine/")
+        row = (r.data["results"] if isinstance(r.data, dict) else r.data)[0]
+        # Slim shape: keys explicitly include dsa_reference + download_url,
+        # explicitly EXCLUDE admin/internal fields.
+        assert set(row.keys()) == {
+            "id", "dsa_reference", "status", "submitted_at",
+            "delivered_at", "expires_at", "manifest_sha256",
+            "row_count_delivered", "download_url",
+        }
+        assert "decision_reason" not in row
+        assert "approver" not in row
+        assert "requester" not in row
+        assert "request_payload" not in row
+
+    def test_download_url_null_when_not_delivered(
+        self, two_partners_with_requests, django_user_model,
+    ):
+        from apps.security.models import OperatorScope, ScopeLevel
+        p_a, _, _, _ = two_partners_with_requests
+        u = django_user_model.objects.create_user(
+            username="a-analyst-3", password="p",
+        )
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARTNER, scope_code=p_a.code,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.get("/api/v1/drs/requests/mine/")
+        row = (r.data["results"] if isinstance(r.data, dict) else r.data)[0]
+        # DRAFT request -> no download URL.
+        assert row["download_url"] is None
+
+    def test_download_url_set_when_delivered(
+        self, two_partners_with_requests, django_user_model,
+    ):
+        from apps.security.models import OperatorScope, ScopeLevel
+        p_a, _, r_a, _ = two_partners_with_requests
+        # Move r_a through the lifecycle to DELIVERED.
+        submit_data_request(r_a)
+        approve_data_request(r_a, approver="dpo-x")
+        deliver_data_request(
+            r_a, manifest_sha256="f" * 64, row_count=3, actor="export",
+        )
+        u = django_user_model.objects.create_user(
+            username="a-analyst-4", password="p",
+        )
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARTNER, scope_code=p_a.code,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.get("/api/v1/drs/requests/mine/")
+        row = (r.data["results"] if isinstance(r.data, dict) else r.data)[0]
+        assert row["status"] == RequestStatus.DELIVERED
+        assert row["download_url"] == f"/api/v1/drs/requests/{r_a.id}/download/"
+
+    def test_unaffiliated_user_sees_empty(
+        self, two_partners_with_requests, django_user_model,
+    ):
+        u = django_user_model.objects.create_user(username="ghost", password="p")
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.get("/api/v1/drs/requests/mine/")
+        assert r.status_code == 200
+        results = r.data["results"] if isinstance(r.data, dict) else r.data
+        assert results == []

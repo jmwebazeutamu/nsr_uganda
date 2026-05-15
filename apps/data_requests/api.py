@@ -58,6 +58,32 @@ class DataRequestSerializer(serializers.ModelSerializer):
         )
 
 
+class MyDataRequestSerializer(serializers.ModelSerializer):
+    """Slim partner-facing projection of DataRequest.
+
+    Excludes admin-only fields (decision_reason, approver, requester
+    of OTHER users — partner sees only their own). Adds a download_url
+    placeholder that points at the future signed-URL endpoint."""
+
+    dsa_reference = serializers.CharField(source="dsa.reference", read_only=True)
+    download_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DataRequest
+        fields = ("id", "dsa_reference", "status", "submitted_at",
+                  "delivered_at", "expires_at", "manifest_sha256",
+                  "row_count_delivered", "download_url")
+        read_only_fields = fields
+
+    def get_download_url(self, obj):
+        # Signed-URL endpoint lands when DRS-O-02 closes (MinIO wiring,
+        # US-S6-003). Today we return a placeholder path; the partner
+        # UI shows a disabled "download" button when this is null.
+        if obj.status != RequestStatus.DELIVERED or not obj.manifest_sha256:
+            return None
+        return f"/api/v1/drs/requests/{obj.id}/download/"
+
+
 class _Approver(serializers.Serializer):
     approver = serializers.CharField(max_length=64)
     reason = serializers.CharField(required=False, allow_blank=True)
@@ -210,6 +236,30 @@ class DataRequestViewSet(
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         req.refresh_from_db()
         return Response(self.get_serializer(req).data)
+
+    @extend_schema(
+        tags=["partner-drs"],
+        summary="My data requests (partner self-service)",
+        description=("Returns the requesting user's own DataRequests "
+                     "with a slim partner-facing projection. ABAC "
+                     "filter already applies via PartnerScopedQuerysetMixin "
+                     "— this endpoint just renders the same scoped "
+                     "queryset with a narrower serializer (no admin "
+                     "fields, no other partners' requesters)."),
+        responses={200: MyDataRequestSerializer(many=True)},
+    )
+    @action(detail=False, methods=["get"], url_path="mine")
+    def mine(self, request):
+        qs = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(qs)
+        ser_cls = MyDataRequestSerializer
+        if page is not None:
+            return self.get_paginated_response(
+                ser_cls(page, many=True, context={"request": request}).data,
+            )
+        return Response(
+            ser_cls(qs, many=True, context={"request": request}).data,
+        )
 
     @extend_schema(
         tags=["api-drs"], summary="Render and deliver an APPROVED request",
