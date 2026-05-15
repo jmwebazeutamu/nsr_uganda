@@ -277,6 +277,49 @@ class PmtScoreHistogram(APIView):
 
 @extend_schema(
     tags=["rpt"],
+    summary="Open grievance count grouped by category",
+    responses={200: DashboardRowSerializer(many=True)},
+)
+class GrievancesByCategory(APIView):
+    """Counts of non-closed grievances grouped by Category. Lets ops
+    see which case types dominate — DATA_CORRECTION volume hints at
+    enumeration quality issues; OPERATOR_CONDUCT clusters trigger
+    targeted retraining.
+
+    Scope-before-aggregate via the household reference, same as
+    OpenGrievancesByTier (S3-004). Orphan grievances (no
+    household_id) are visible only to NATIONAL / superuser since
+    sub-region operators have no in-IN-subquery match for them.
+    """
+
+    def get(self, request):
+        from apps.grievance.models import Grievance, GrievanceStatus
+        from apps.security.abac import _scoped_codes
+
+        codes = _scoped_codes(request.user)
+        base = Grievance.objects.exclude(
+            status__in=[GrievanceStatus.RESOLVED, GrievanceStatus.CLOSED],
+        )
+        if codes is None:
+            scoped = base
+        elif not codes:
+            scoped = base.none()
+        else:
+            household_ids = list(
+                Household.objects.filter(sub_region_code__in=codes)
+                .values_list("id", flat=True),
+            )
+            scoped = base.filter(household_id__in=household_ids)
+        rows = list(
+            scoped.values("category").annotate(count=Count("id")).order_by("category"),
+        )
+        out = [{"key": r["category"], "count": r["count"]} for r in rows]
+        _audit_dashboard_read(request, "grievances_by_category", len(out))
+        return _render(request, out, "grievances-by-category")
+
+
+@extend_schema(
+    tags=["rpt"],
     summary="Weekly household registrations (last 12 weeks)",
     responses={200: DashboardRowSerializer(many=True)},
 )

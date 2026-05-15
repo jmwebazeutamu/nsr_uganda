@@ -624,6 +624,63 @@ class TestCsvExports:
         assert karamoja_code not in body
 
 
+class TestGrievancesByCategory:
+    """S9-002 — counts of non-closed grievances grouped by Category.
+    RESOLVED + CLOSED rows excluded; same scope semantics as
+    OpenGrievancesByTier."""
+
+    def test_groups_by_category(self, db, households, django_user_model):
+        open_grievance(category=Category.DATA_CORRECTION, description="a",
+                       household_id=households["SR-BUGANDA"].id)
+        open_grievance(category=Category.DATA_CORRECTION, description="b",
+                       household_id=households["SR-BUGANDA"].id)
+        open_grievance(category=Category.EXCLUSION_ERROR, description="c",
+                       household_id=households["SR-KARAMOJA"].id)
+        # Closed grievance should NOT appear.
+        g = open_grievance(category=Category.OPERATOR_CONDUCT, description="x",
+                          household_id=households["SR-BUGANDA"].id)
+        g.status = GrievanceStatus.CLOSED
+        g.save(update_fields=["status"])
+
+        su = django_user_model.objects.create_user(
+            username="su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get("/api/v1/rpt/dashboards/grievances-by-category/")
+        assert r.status_code == 200
+        buckets = {row["key"]: row["count"] for row in r.data}
+        assert buckets == {
+            Category.DATA_CORRECTION: 2,
+            Category.EXCLUSION_ERROR: 1,
+        }
+
+    def test_scope_filtered(self, db, households, two_sub_regions, django_user_model):
+        open_grievance(category=Category.DATA_CORRECTION, description="a",
+                       household_id=households["SR-BUGANDA"].id)
+        open_grievance(category=Category.DATA_CORRECTION, description="b",
+                       household_id=households["SR-KARAMOJA"].id)
+        u = django_user_model.objects.create_user(username="op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/rpt/dashboards/grievances-by-category/")
+        # Only the BUGANDA case in scope.
+        assert sum(row["count"] for row in r.data) == 1
+
+    def test_csv_export_inherited(self, db, households, django_user_model):
+        open_grievance(category=Category.DATA_CORRECTION, description="a",
+                       household_id=households["SR-BUGANDA"].id)
+        su = django_user_model.objects.create_user(
+            username="su2", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(
+            "/api/v1/rpt/dashboards/grievances-by-category/?export=csv",
+        )
+        assert r.status_code == 200
+        assert r["content-type"] == "text/csv"
+        assert "grievances-by-category.csv" in r["content-disposition"]
+
+
 class TestWeeklyHouseholdRegistrations:
     """S8-004 — first trend-over-time dashboard. Counts of
     Household.created_at grouped by ISO week for the last 12 weeks."""

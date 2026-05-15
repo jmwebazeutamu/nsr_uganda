@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    GrievancesByCategory,
     HouseholdsByPmtBand,
     HouseholdsBySubRegion,
     OpenGrievancesByTier,
@@ -40,4 +41,7 @@ urlpatterns = [
     path("dashboards/weekly-household-registrations/",
          WeeklyHouseholdRegistrations.as_view(),
          name="rpt-weekly-household-registrations"),
+    path("dashboards/grievances-by-category/",
+         GrievancesByCategory.as_view(),
+         name="rpt-grievances-by-category"),
 ]
