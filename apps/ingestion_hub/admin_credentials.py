@@ -29,7 +29,7 @@ import logging
 from django import forms
 from django.contrib import admin, messages
 from django.urls import reverse
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 from requests.exceptions import RequestException
 
 from .connection_test import (
@@ -207,6 +207,172 @@ class SourceSystemForm(forms.ModelForm):
         kind_field.choices = labelled
 
 
+# Max submissions to land per "Pull" click — keeps the admin request
+# short enough that an operator doesn't stare at a spinner for a Kobo
+# form with 50,000 historical responses. Background-scheduled pulls
+# (the future Celery beat task) won't apply this cap.
+PULL_BATCH_CAP = 50
+
+
+@admin.action(description="List Kobo forms (read-only)")
+def list_kobo_forms_action(modeladmin, request, queryset):
+    """Diagnostic: enumerate the assets each selected Kobo SourceSystem
+    can see under its stored token. No DB writes other than the
+    standard AuditEvent on read."""
+    from apps.security.audit import emit as emit_audit
+
+    from .connection_test import credentials_for
+    from .connectors.base import get_connector
+
+    for source in queryset:
+        if source.kind != SourceSystemKind.KOBO:
+            messages.warning(request, f"{source.code}: not a Kobo source — skipped")
+            continue
+        connector = get_connector(source.code)
+        if connector is None or connector.list_forms is None:
+            messages.warning(request, f"{source.code}: no live connector registered")
+            continue
+        try:
+            creds = credentials_for(source)
+        except CredentialMissingError as exc:
+            messages.error(request, f"{source.code}: {exc}")
+            continue
+        try:
+            forms = connector.list_forms(creds)
+        except Exception as exc:  # noqa: BLE001 — surface upstream failures
+            messages.error(request, f"{source.code}: list_forms failed: {exc}")
+            continue
+        emit_audit(
+            "list_forms", "source_system", source.id,
+            actor=request.user.username or "admin", actor_kind="user",
+            reason=f"{len(forms)} assets visible",
+        )
+        if not forms:
+            messages.info(request, f"{source.code}: token sees 0 assets")
+            continue
+        # Compact rendering — operators just need to see "what's there"
+        # to pick a form_id for the pull action.
+        rendered = format_html_join(
+            "<br>", "&middot; <code>{}</code> {} — {} {}",
+            (
+                (f["uid"], f["name"] or "(no name)", f["asset_type"],
+                 "[deployed]" if f["deployed"] else "[draft]")
+                for f in forms
+            ),
+        )
+        messages.success(
+            request,
+            format_html(
+                "{}: {} asset(s) visible:<br>{}",
+                source.code, len(forms), rendered,
+            ),
+        )
+
+
+@admin.action(description=f"Pull Kobo submissions to RawLanding (first deployed form, ≤{PULL_BATCH_CAP})")
+def pull_kobo_submissions_action(modeladmin, request, queryset):
+    """Opens an IMPORT ConnectorRun, picks the first deployed form for
+    each Kobo source, and lands up to PULL_BATCH_CAP submissions as
+    RawLanding rows. Canonicalisation + promotion are NOT triggered —
+    that requires the Kobo-to-NSR mapper which is a separate ticket.
+
+    Operators eyeball the result in
+    /admin/ingestion_hub/rawlanding/?connector_run__connector__source_system__code=KOBO-PILOT
+    """
+    from django.utils import timezone
+
+    from .connection_test import credentials_for
+    from .connectors.base import get_connector
+    from .models import Connector as ConnectorModel
+    from .models import ConnectorRunStatus
+    from .services import DihError, land_payload, start_connector_run
+
+    actor = request.user.username or "admin"
+    for source in queryset:
+        if source.kind != SourceSystemKind.KOBO:
+            messages.warning(request, f"{source.code}: not a Kobo source — skipped")
+            continue
+        connector_impl = get_connector(source.code)
+        if connector_impl is None or connector_impl.pull_submissions is None:
+            messages.warning(request, f"{source.code}: no live connector registered")
+            continue
+        try:
+            creds = credentials_for(source)
+        except CredentialMissingError as exc:
+            messages.error(request, f"{source.code}: {exc}")
+            continue
+
+        # Resolve the form to pull: first deployed asset wins.
+        try:
+            forms = [f for f in connector_impl.list_forms(creds) if f["deployed"]]
+        except Exception as exc:  # noqa: BLE001
+            messages.error(request, f"{source.code}: list_forms failed: {exc}")
+            continue
+        if not forms:
+            messages.warning(
+                request, f"{source.code}: no deployed forms — nothing to pull",
+            )
+            continue
+        form = forms[0]
+
+        # Resolve a Connector row to anchor the run. The test_connection
+        # action lazily materialised one under name="test-connection" —
+        # reuse it if present, else create a sibling. The
+        # start_connector_run() service enforces AC-DIH-DPA-REQUIRED.
+        connector_row, _ = ConnectorModel.objects.get_or_create(
+            source_system=source, name=f"kobo-{form['uid']}",
+            defaults={"config": {"kobo_form_uid": form["uid"]}},
+        )
+        try:
+            run = start_connector_run(connector_row, actor=actor)
+        except DihError as exc:
+            messages.error(request, f"{source.code}: {exc}")
+            continue
+
+        landed = 0
+        try:
+            for raw in connector_impl.pull_submissions(creds, form_id=form["uid"]):
+                if landed >= PULL_BATCH_CAP:
+                    break
+                source_ref = str(raw.get("_id") or raw.get("_uuid") or "")
+                land_payload(run, raw, source_reference=source_ref)
+                landed += 1
+        except Exception as exc:  # noqa: BLE001
+            run.status = ConnectorRunStatus.FAILED
+            run.finished_at = timezone.now()
+            run.note = f"pull failed after {landed} row(s): {exc}"
+            run.save(update_fields=("status", "finished_at", "note"))
+            messages.error(
+                request, f"{source.code}: pull failed after {landed} row(s): {exc}",
+            )
+            continue
+
+        run.status = ConnectorRunStatus.SUCCEEDED
+        run.finished_at = timezone.now()
+        run.note = (
+            f"pulled {landed} row(s) from form {form['uid']} ({form['name']})"
+            + (f"; cap {PULL_BATCH_CAP} hit" if landed >= PULL_BATCH_CAP else "")
+        )
+        run.save(update_fields=("status", "finished_at", "note"))
+
+        run_url = reverse(
+            "admin:ingestion_hub_connectorrun_change", args=[run.id],
+        )
+        landings_url = (
+            "/admin/ingestion_hub/rawlanding/"
+            f"?connector_run__id__exact={run.id}"
+        )
+        messages.success(
+            request,
+            format_html(
+                "{}: landed {} row(s) from <code>{}</code>. "
+                "<a href='{}'>view run</a> &middot; "
+                "<a href='{}'>view landings</a>",
+                source.code, landed, form["uid"], run_url, landings_url,
+            ),
+        )
+
+
 @admin.action(description="Test connection (live probe)")
 def test_connection_action(modeladmin, request, queryset):
     """Fires `run_test_connection` once per selected SourceSystem.
@@ -266,7 +432,11 @@ def _install_source_system_admin() -> None:
         )
         list_filter = ("kind", "is_active")
         search_fields = ("code", "name")
-        actions = (test_connection_action,)
+        actions = (
+            test_connection_action,
+            list_kobo_forms_action,
+            pull_kobo_submissions_action,
+        )
 
         def get_inline_instances(self, request, obj=None):
             """Show the credential inline that matches the saved kind.
