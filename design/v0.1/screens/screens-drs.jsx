@@ -55,7 +55,20 @@ const PREVIEW_ROWS = [
   { rid: "01HXP02CN4QFB7K6FZRWS00148", hh: "HH-7411-002-0211", parish: "Tapac",    subreg: "Karamoja",  size: 6, sex: "F", age: "40-49", band: "Poorest 20%", roof: "Iron sheets", phone: "+256 ••• ••1188" },
 ];
 
-const DRSScreen = () => {
+// Unified DRS query-builder wizard. Same component for both
+// roles per BUG-S11-002b — operator (no `role` prop / "operator")
+// gets the full catalogue; partner gets the same surface with
+// DSA-disabled fields flagged in-place (no missing controls). The
+// real disabled state comes from /api/v1/drs/requests/builder-
+// schema/ (BUG-S11-002a) when fetch wiring lands; today the mock
+// FIELDS already carries the disabled flags so the harness is
+// representative.
+//
+// `onExit` is set when called from a host screen that owns its
+// own back-navigation (e.g., the partner portal's list ↔ builder
+// toggle in PartnerDRSScreen).
+const DRSScreen = ({ role = "operator", onExit } = {}) => {
+  const isPartner = role === "partner";
   const [step, setStep] = useStateDRS("build");
   const [selectedFields, setSel] = useStateDRS(new Set(["registry_id","subregion","district","parish","household_size","pmt_band","roof_material"]));
   const [submitOpen, setSubmitOpen] = useStateDRS(false);
@@ -75,12 +88,18 @@ const DRSScreen = () => {
   return (
     <div className="page" style={{paddingBottom:0}}>
       <PageHeader
-        eyebrow="DATA REQUESTS · US-097, US-098"
-        title="DRS query builder"
-        sub={<>Requester: OPM Data Office · Active DSA <span className="t-mono">DSA-OPM-PDM-2026</span> · valid 01 Jan 2026 — 31 Dec 2026</>}
+        eyebrow={isPartner
+          ? "PARTNER DRS · NEW REQUEST · BUG-S11-002b"
+          : "DATA REQUESTS · US-097, US-098"}
+        title={isPartner ? "Build data request" : "DRS query builder"}
+        sub={isPartner
+          ? <>Requester: you · Active DSA <span className="t-mono">DSA-PDM-2026-01</span> · valid through 31 Dec 2026</>
+          : <>Requester: OPM Data Office · Active DSA <span className="t-mono">DSA-OPM-PDM-2026</span> · valid 01 Jan 2026 — 31 Dec 2026</>}
         right={<>
           <button className="btn"><Icon name="save" size={14}/> Save as template</button>
-          <button className="btn btn-ghost"><Icon name="x" size={14}/> Discard</button>
+          <button className="btn btn-ghost" onClick={onExit}>
+            <Icon name="x" size={14}/> {onExit ? "Cancel" : "Discard"}
+          </button>
         </>}
       />
 

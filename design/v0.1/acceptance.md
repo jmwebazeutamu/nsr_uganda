@@ -166,14 +166,12 @@ and `PARTNER_DPO` per ADR-0006.
 | UI-PDRS-9 | Role visibility: hidden from all operator roles (Parish Chief, CDO, NSR Unit, DPO); visible to PARTNER_ANALYST + PARTNER_DPO; partner role sees ONLY this screen + Home in the side nav |
 | UI-PDRS-10 | Audit drawer shows the lifecycle: submitted → approved/rejected → rendered+delivered |
 | UI-PDRS-11 | Tokens-only — no hex colours hardcoded outside tokens.css |
-| UI-PDRS-BUILDER-1 | "New request" button switches to a builder mode within the same screen (no router change); back/cancel returns to the list |
-| UI-PDRS-BUILDER-2 | Fields panel grouped by prefix (household.* / member.*); each row is a checkbox with the dotted-key field name in monospace; "Select all" + "Clear" affordances |
-| UI-PDRS-BUILDER-3 | Geography panel uses chip-buttons sourced from DSA.allowed_scopes.sub_region_codes; empty selection explained as "uses all DSA-scoped regions" (matches validate_against_dsa semantics — absent key = no constraint) |
-| UI-PDRS-BUILDER-4 | Row cap input bounded by DSA.allowed_scopes.max_rows_per_request; live validation warning when exceeded |
-| UI-PDRS-BUILDER-5 | Right rail shows the exact JSON request_payload that will POST — same shape as validate_against_dsa expects (apps/data_requests/services.py); reduces round-trip when partners ask for fields outside scope |
-| UI-PDRS-BUILDER-6 | Validation checklist: green/red bullets for "at least one field selected", "row cap within DSA limit"; amber note when `member.*` fields are requested (reminds partner those will be scrutinised) |
-| UI-PDRS-BUILDER-7 | "Submit for approval" button disabled until all required validations pass |
-| UI-PDRS-BUILDER-8 | "Next steps" card explains the lifecycle (submit → reviewer → manifest + TTL → download) so the partner knows what to expect |
+| UI-PDRS-BUILDER-1 | "New request" button switches to builder mode within the same screen (no router change); the builder is the SAME `<DRSScreen>` component operators use, with `role="partner"` (BUG-S11-002b unified builder) |
+| UI-PDRS-BUILDER-2 | Builder header eyebrow reads "PARTNER DRS · NEW REQUEST" when entered from the partner portal; title "Build data request" matches the bug-report's expected language |
+| UI-PDRS-BUILDER-3 | All 6 wizard steps (Scope / Build / Field Selector / Preview / Delivery / Submit) render for both roles; only field DISABLED state and DSA reference text differ — structure invariant |
+| UI-PDRS-BUILDER-4 | Disabled fields show the DSA clause reason in-place (no missing controls), matching the backend builder-schema endpoint's `disabled_reason` payload (BUG-S11-002a) |
+| UI-PDRS-BUILDER-5 | "Cancel" in the header returns to the list view (the `onExit` callback from the partner portal); operator-side route shows "Discard" instead since there's no host-screen back-target |
+| UI-PDRS-BUILDER-6 | The reduced field-checklist-only RequestBuilder shipped in S10-003 is removed — both surfaces now consume the same wizard, matching the bug's "render one unified query builder" acceptance criterion |
 
 ### 13. System admin (US-S10-002, US-S10-005, US-S11-001)
 
