@@ -430,6 +430,113 @@ class TestKoboPullActions:
         assert RawLanding.objects.count() == PULL_BATCH_CAP
 
     @responses.activate
+    def test_pull_action_auto_processes_well_formed_payload(
+        self, kobo_with_dpa, staff_user,
+    ):
+        """US-S11-014: with a payload that canonicalises cleanly, the
+        pull action lands AND stages the row in one click. Result:
+        RawLanding + StageRecord exist; the run.note records the
+        outcome breakdown."""
+        from apps.ingestion_hub.admin_credentials import pull_kobo_submissions_action
+        from apps.ingestion_hub.connectors.test_kobo import SAMPLE_KOBO_PAYLOAD
+        from apps.ingestion_hub.models import (
+            ConnectorRun,
+            RawLanding,
+            SourceSystem,
+            StageRecord,
+        )
+        # Geo seed: the SAMPLE_KOBO_PAYLOAD points at Western/Kigezi/
+        # District 412 etc.; the staging path doesn't need GeographicUnit
+        # rows to exist (only promotion does), so this test stops at
+        # the stage step.
+        responses.add(
+            responses.GET, f"{KOBO_URL}/api/v2/assets.json",
+            json={"results": [
+                {"uid": "FORM-OK", "name": "Pilot", "asset_type": "survey",
+                 "deployment__active": True},
+            ]}, status=200,
+        )
+        responses.add(
+            responses.GET, f"{KOBO_URL}/api/v2/assets/FORM-OK/data.json",
+            json={"results": [SAMPLE_KOBO_PAYLOAD], "next": None},
+            status=200,
+        )
+        qs = SourceSystem.objects.filter(pk=kobo_with_dpa.pk)
+        req = self._request(staff_user)
+        pull_kobo_submissions_action(None, req, qs)
+
+        assert RawLanding.objects.count() == 1
+        # Auto-process should have created a StageRecord.
+        assert StageRecord.objects.count() == 1
+        run = ConnectorRun.objects.first()
+        assert "staged=1" in run.note
+
+    @responses.activate
+    def test_pull_action_quarantines_malformed_payload(
+        self, kobo_with_dpa, staff_user,
+    ):
+        """A payload missing required geo fields raises KeyError in
+        kobo_to_canonical → the row gets RawLanding (lineage preserved)
+        but no StageRecord."""
+        from apps.ingestion_hub.admin_credentials import pull_kobo_submissions_action
+        from apps.ingestion_hub.models import RawLanding, SourceSystem, StageRecord
+        responses.add(
+            responses.GET, f"{KOBO_URL}/api/v2/assets.json",
+            json={"results": [
+                {"uid": "FORM-BAD", "name": "Broken", "asset_type": "survey",
+                 "deployment__active": True},
+            ]}, status=200,
+        )
+        # Payload with no geographic fields at all → canonicalize KeyError.
+        responses.add(
+            responses.GET, f"{KOBO_URL}/api/v2/assets/FORM-BAD/data.json",
+            json={"results": [{"_id": 1, "household_members": [{}]}],
+                  "next": None},
+            status=200,
+        )
+        qs = SourceSystem.objects.filter(pk=kobo_with_dpa.pk)
+        req = self._request(staff_user)
+        pull_kobo_submissions_action(None, req, qs)
+        assert RawLanding.objects.count() == 1
+        assert StageRecord.objects.count() == 0
+
+    @responses.activate
+    def test_process_pending_action_processes_unstaged_landings(
+        self, kobo_with_dpa, staff_user,
+    ):
+        """When landings already exist without StageRecords (e.g.,
+        from a pre-S11-014 pull or a future Celery beat task),
+        process_pending_landings_action drives them through the pipeline."""
+        from apps.ingestion_hub.admin_credentials import process_pending_landings_action
+        from apps.ingestion_hub.connectors.test_kobo import SAMPLE_KOBO_PAYLOAD
+        from apps.ingestion_hub.models import (
+            Connector as ConnectorModel,
+        )
+        from apps.ingestion_hub.models import (
+            ConnectorRun,
+            ConnectorRunStatus,
+            RawLanding,
+            SourceSystem,
+            StageRecord,
+        )
+        # Materialise a RawLanding manually to simulate a prior pull.
+        connector_row = ConnectorModel.objects.create(
+            source_system=kobo_with_dpa, name="kobo-FORM-A",
+        )
+        run = ConnectorRun.objects.create(
+            connector=connector_row, status=ConnectorRunStatus.SUCCEEDED,
+        )
+        RawLanding.objects.create(
+            connector_run=run, payload=SAMPLE_KOBO_PAYLOAD, source_reference="1",
+        )
+        assert StageRecord.objects.count() == 0
+
+        qs = SourceSystem.objects.filter(pk=kobo_with_dpa.pk)
+        req = self._request(staff_user)
+        process_pending_landings_action(None, req, qs)
+        assert StageRecord.objects.count() == 1
+
+    @responses.activate
     def test_pull_action_fails_run_on_upstream_error(
         self, kobo_with_dpa, staff_user,
     ):

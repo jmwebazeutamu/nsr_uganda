@@ -269,15 +269,54 @@ def list_kobo_forms_action(modeladmin, request, queryset):
         )
 
 
-@admin.action(description=f"Pull Kobo submissions to RawLanding (first deployed form, ≤{PULL_BATCH_CAP})")
-def pull_kobo_submissions_action(modeladmin, request, queryset):
-    """Opens an IMPORT ConnectorRun, picks the first deployed form for
-    each Kobo source, and lands up to PULL_BATCH_CAP submissions as
-    RawLanding rows. Canonicalisation + promotion are NOT triggered —
-    that requires the Kobo-to-NSR mapper which is a separate ticket.
+def _process_one_landing(landing, connector_impl, *, actor: str) -> tuple[str, str]:
+    """Drive one RawLanding through canonicalize -> stage -> process.
 
-    Operators eyeball the result in
-    /admin/ingestion_hub/rawlanding/?connector_run__connector__source_system__code=KOBO-PILOT
+    Returns a (outcome, detail) tuple:
+      ('staged', '<stage_state>')  — landed in pending_promotion /
+                                      ddup_review / quality_failed etc.
+      ('quarantined', '<reason>') — canonicalize raised KeyError or
+                                     ValueError (malformed payload).
+      ('error', '<exception>')   — anything else; the run-level handler
+                                    decides whether to abort the batch.
+
+    Stays out of the calling transaction by NOT wrapping with
+    @transaction.atomic — each landing succeeds or fails on its own,
+    matching the GRM S4-005 / UPD S5-001 per-row-skip pattern.
+    """
+    from .services import process_stage_record, stage_from_landing
+
+    if connector_impl.canonicalize is None:
+        return ("error", "connector has no canonicalize method wired")
+    try:
+        canonical = connector_impl.canonicalize(landing.payload)
+    except (KeyError, ValueError) as exc:
+        # AC-DIH-QUARANTINE: malformed payloads route to Quarantine
+        # rather than blocking the batch. The reason captures the
+        # missing/invalid field for the operator to triage.
+        return ("quarantined", str(exc))
+    stage = stage_from_landing(landing, canonical_payload=canonical)
+    process_stage_record(stage, actor=actor)
+    stage.refresh_from_db()
+    return ("staged", stage.state)
+
+
+@admin.action(description=f"Pull Kobo submissions + auto-process (first deployed form, ≤{PULL_BATCH_CAP})")
+def pull_kobo_submissions_action(modeladmin, request, queryset):
+    """End-to-end pull + processing. For each Kobo SourceSystem:
+
+    1. Opens an IMPORT ConnectorRun.
+    2. Picks the first deployed form.
+    3. Pulls up to PULL_BATCH_CAP submissions.
+    4. For each pulled row: lands it as RawLanding, then immediately
+       runs canonicalize → stage_from_landing → process_stage_record.
+       The row ends up in the DIH queue (pending_promotion / ddup_
+       review / quality_failed / idv_pending) or in Quarantine if
+       canonicalize raised KeyError/ValueError.
+
+    Operators eyeball the queue at /console/ (DIH screen) or
+    /admin/ingestion_hub/stagerecord/ — promotion is a separate
+    decision step per AC-DIH-PROMOTE-ATOMIC.
     """
     from django.utils import timezone
 
@@ -330,13 +369,22 @@ def pull_kobo_submissions_action(modeladmin, request, queryset):
             continue
 
         landed = 0
+        # Per-outcome tallies for the operator message + the run note.
+        outcomes: dict[str, int] = {"staged": 0, "quarantined": 0, "error": 0}
+        stage_states: dict[str, int] = {}
         try:
             for raw in connector_impl.pull_submissions(creds, form_id=form["uid"]):
                 if landed >= PULL_BATCH_CAP:
                     break
                 source_ref = str(raw.get("_id") or raw.get("_uuid") or "")
-                land_payload(run, raw, source_reference=source_ref)
+                landing = land_payload(run, raw, source_reference=source_ref)
                 landed += 1
+                outcome, detail = _process_one_landing(
+                    landing, connector_impl, actor=actor,
+                )
+                outcomes[outcome] = outcomes.get(outcome, 0) + 1
+                if outcome == "staged":
+                    stage_states[detail] = stage_states.get(detail, 0) + 1
         except Exception as exc:  # noqa: BLE001
             run.status = ConnectorRunStatus.FAILED
             run.finished_at = timezone.now()
@@ -347,10 +395,19 @@ def pull_kobo_submissions_action(modeladmin, request, queryset):
             )
             continue
 
+        # Compact summary for the note + the operator message: states
+        # like "pending_promotion=3, ddup_review=1" tell ops where the
+        # batch ended up at a glance.
+        state_summary = (
+            "; ".join(f"{s}={n}" for s, n in sorted(stage_states.items()))
+            or "(none staged)"
+        )
         run.status = ConnectorRunStatus.SUCCEEDED
         run.finished_at = timezone.now()
         run.note = (
-            f"pulled {landed} row(s) from form {form['uid']} ({form['name']})"
+            f"pulled {landed} row(s) from form {form['uid']} ({form['name']}); "
+            f"staged={outcomes['staged']}, quarantined={outcomes['quarantined']}, "
+            f"errors={outcomes['error']}; {state_summary}"
             + (f"; cap {PULL_BATCH_CAP} hit" if landed >= PULL_BATCH_CAP else "")
         )
         run.save(update_fields=("status", "finished_at", "note"))
@@ -358,17 +415,89 @@ def pull_kobo_submissions_action(modeladmin, request, queryset):
         run_url = reverse(
             "admin:ingestion_hub_connectorrun_change", args=[run.id],
         )
-        landings_url = (
-            "/admin/ingestion_hub/rawlanding/"
+        stages_url = (
+            "/admin/ingestion_hub/stagerecord/"
             f"?connector_run__id__exact={run.id}"
         )
         messages.success(
             request,
             format_html(
-                "{}: landed {} row(s) from <code>{}</code>. "
-                "<a href='{}'>view run</a> &middot; "
-                "<a href='{}'>view landings</a>",
-                source.code, landed, form["uid"], run_url, landings_url,
+                "{}: pulled {} &middot; staged {} (quarantined {}, errors {}). "
+                "{} &middot; <a href='{}'>view run</a> &middot; "
+                "<a href='{}'>view staged rows</a> &middot; "
+                "<a href='/console/'>open DIH queue</a>",
+                source.code, landed,
+                outcomes["staged"], outcomes["quarantined"], outcomes["error"],
+                state_summary, run_url, stages_url,
+            ),
+        )
+
+
+@admin.action(description="Process pending Kobo landings (canonicalize + stage + DQA/IDV/DDUP)")
+def process_pending_landings_action(modeladmin, request, queryset):
+    """For each Kobo SourceSystem, find RawLanding rows that don't yet
+    have a StageRecord and drive them through the canonicalize →
+    stage → process pipeline. Useful when landings exist from a prior
+    pull that ran before US-S11-014 (or from a future Celery beat
+    task that lands payloads without auto-processing).
+
+    Reports per-source counts of staged / quarantined / errored rows;
+    per-row failures don't abort the batch."""
+    from .connection_test import credentials_for
+    from .connectors.base import get_connector
+    from .models import RawLanding
+
+    actor = request.user.username or "admin"
+    for source in queryset:
+        if source.kind != SourceSystemKind.KOBO:
+            messages.warning(request, f"{source.code}: not a Kobo source — skipped")
+            continue
+        connector_impl = get_connector(source.code)
+        if connector_impl is None or connector_impl.canonicalize is None:
+            messages.warning(
+                request,
+                f"{source.code}: no canonicalize method — wire one before processing",
+            )
+            continue
+        try:
+            credentials_for(source)  # not used; validates a creds row exists
+        except CredentialMissingError as exc:
+            messages.warning(request, f"{source.code}: {exc} — landings need credentials to canonicalize")
+            continue
+
+        # RawLandings without a StageRecord. The reverse relation
+        # from RawLanding to StageRecord uses related_name='stage_record'.
+        pending = RawLanding.objects.filter(
+            connector_run__connector__source_system=source,
+            stage_record__isnull=True,
+        )
+        if not pending.exists():
+            messages.info(request, f"{source.code}: no pending landings to process")
+            continue
+
+        outcomes: dict[str, int] = {"staged": 0, "quarantined": 0, "error": 0}
+        stage_states: dict[str, int] = {}
+        for landing in pending:
+            outcome, detail = _process_one_landing(
+                landing, connector_impl, actor=actor,
+            )
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+            if outcome == "staged":
+                stage_states[detail] = stage_states.get(detail, 0) + 1
+
+        state_summary = (
+            "; ".join(f"{s}={n}" for s, n in sorted(stage_states.items()))
+            or "(none staged)"
+        )
+        messages.success(
+            request,
+            format_html(
+                "{}: processed {} pending landing(s) &middot; "
+                "staged {} (quarantined {}, errors {}). {} &middot; "
+                "<a href='/console/'>open DIH queue</a>",
+                source.code, sum(outcomes.values()),
+                outcomes["staged"], outcomes["quarantined"], outcomes["error"],
+                state_summary,
             ),
         )
 
@@ -436,6 +565,7 @@ def _install_source_system_admin() -> None:
             test_connection_action,
             list_kobo_forms_action,
             pull_kobo_submissions_action,
+            process_pending_landings_action,
         )
 
         def get_inline_instances(self, request, obj=None):
