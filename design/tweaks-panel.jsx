@@ -184,7 +184,13 @@ function useTweaks(defaults) {
 // flips off in lockstep; the host echoes __deactivate_edit_mode back which
 // is what actually hides the panel.
 function TweaksPanel({ title = 'Tweaks', noDeckControls = false, children }) {
-  const [open, setOpen] = React.useState(false);
+  // Default-open when running standalone (no parent frame) — otherwise
+  // wait for the host frame to post __activate_edit_mode. The check is
+  // safe inside an iframe too: window === window.parent is true only
+  // for the top-level window. This lets the harness be useful without
+  // installing the deck-stage host.
+  const isStandalone = typeof window !== 'undefined' && window === window.parent;
+  const [open, setOpen] = React.useState(isStandalone);
   const dragRef = React.useRef(null);
   // Auto-inject a rail toggle when a <deck-stage> is on the page. The
   // toggle drives the deck's per-viewer _railVisible via window message;
