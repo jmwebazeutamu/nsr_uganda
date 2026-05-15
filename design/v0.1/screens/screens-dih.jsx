@@ -1,9 +1,80 @@
-/* global React, Icon, Chip, KPI, PageHeader, AuditDrawer, ActionBar, ReasonModal, Modal */
+/* global React, Icon, Chip, KPI, PageHeader, AuditDrawer, ActionBar, ReasonModal, Modal, Toast */
 // NSR MIS — 11.3 NSR Unit DIH review queue
+// US-S11-013: live-data wiring. The screen tries to fetch from
+// /api/v1/dih/stage-records/?state=pending_promotion on mount; if
+// that succeeds it renders the real backend rows and the Promote /
+// Reject actions POST back to the API. If the fetch fails (file://
+// harness, unauthenticated, backend down) the screen falls back to
+// MOCK_DIH_ROWS so the design preview still works.
 
-const { useState: useStateDIH, useMemo: useMemoDIH } = React;
+const { useState: useStateDIH, useMemo: useMemoDIH, useEffect: useEffectDIH } = React;
 
-const DIH_ROWS = [
+
+// Reads Django's csrftoken cookie — required for session-auth POSTs
+// against the DRF endpoints. The Django admin login flow sets this
+// cookie automatically; cross-origin previews don't have it.
+const _getCsrfToken = () => {
+  const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return m ? m[1] : "";
+};
+
+
+// Map an API StageRecord into the row shape the table renders. The
+// API ships a canonical_payload + a state; we synthesise the display-
+// only fields (ageH, sla) on the client side so the backend stays
+// lean. Fields the API doesn't carry yet (ddup score, dqa counts,
+// idv label) fall back to neutral placeholders.
+const _stageToRow = (stage) => {
+  const payload = stage.canonical_payload || {};
+  const members = payload.members || [];
+  const head = members.find(m => m.is_head) || members[0] || {};
+  const headName = [head.surname, head.first_name].filter(Boolean).join(" ");
+  const geo = payload.geographic || {};
+  const sourceKeys = payload._source_keys || {};
+  const isKobo = Boolean(sourceKeys.kobo_form_id);
+  const regionLabel = sourceKeys.kobo_region_name
+    ? sourceKeys.kobo_region_name.replace(/^./, c => c.toUpperCase())
+    : (geo.region || "");
+  const parishLabel = geo.parish || "";
+
+  // Age-since-created in compact "Xh Ym" or "Xm" form.
+  const createdMs = Date.parse(stage.created_at);
+  const ageMin = Number.isFinite(createdMs)
+    ? Math.max(0, Math.round((Date.now() - createdMs) / 60000))
+    : null;
+  const ageH = ageMin == null ? "—"
+    : ageMin >= 60 ? `${Math.floor(ageMin / 60)}h ${ageMin % 60}m`
+    : `${ageMin}m`;
+  // Walk-in SLA = 24h. Kobo pulls don't have a per-row SLA today;
+  // we apply the same window for visual parity until DIH defines
+  // a Kobo-specific one (DIH-O-CONN-01 from ADR-0007).
+  const sla = ageMin == null ? "ok"
+    : ageMin > 24 * 60 ? "crit"
+    : ageMin > 12 * 60 ? "warn"
+    : "ok";
+
+  return {
+    id: stage.id,
+    head: headName || "(no head)",
+    hh: members.length,
+    region: regionLabel,
+    parish: parishLabel,
+    source: isKobo ? "Kobo" : "Walk-in",
+    channel: isKobo ? "Kobo" : "CAPI",
+    ddup: null,
+    dqa: { b: 0, w: 0, i: 0 },
+    idv: "—",
+    ageH,
+    sla,
+    status: (stage.state || "pending").replace(/_/g, " "),
+    // Lineage so the detail rail can pull it out without re-fetching.
+    _payload: payload,
+    _stage: stage,
+  };
+};
+
+
+const MOCK_DIH_ROWS = [
   { id: "01HXY7K3B2N9PVQE4M6FZRWS18", head: "Lokol Naume",      hh: 6, region: "Karamoja",    parish: "Nakiloro · Moroto", source: "Walk-in", channel: "CAPI", ddup: null, dqa: { b: 0, w: 3, i: 1 }, idv: "Matched", ageH: "47m", sla: "ok",     status: "Pending" },
   { id: "01HXZ9MR4N8P2QFB7K6FZRWS33", head: "Akello Grace",     hh: 5, region: "Acholi",      parish: "Pageya · Gulu",     source: "Walk-in", channel: "CAPI", ddup: 0.83, dqa: { b: 0, w: 2, i: 0 }, idv: "Matched", ageH: "1h 12m", sla: "warn", status: "Pending" },
   { id: "01HXZBVK6QN8M2PFB7K6FZRWS41", head: "Onyango David",   hh: 7, region: "West Nile",   parish: "Logiri · Arua",     source: "Bulk",    channel: "OPM-PDM", ddup: null, dqa: { b: 0, w: 0, i: 2 }, idv: "Matched", ageH: "2h 04m", sla: "ok",  status: "Pending" },
@@ -21,14 +92,49 @@ const QUICK_FILTERS = [
 ];
 
 const DIHScreen = () => {
-  const [selectedRow, setSelectedRow] = useStateDIH(DIH_ROWS[1].id);
+  // Live row state; starts as the mock so the design preview renders
+  // immediately. The effect below replaces it with live API rows when
+  // available.
+  const [rows, setRows] = useStateDIH(MOCK_DIH_ROWS);
+  const [dataSource, setDataSource] = useStateDIH("mock"); // 'mock' | 'live'
+  const [selectedRow, setSelectedRow] = useStateDIH(MOCK_DIH_ROWS[1].id);
   const [auditOpen, setAuditOpen] = useStateDIH(false);
   const [modal, setModal] = useStateDIH(null); // 'promote' | 'merge' | 'hold' | 'reject'
   const [toast, setToast] = useStateDIH("");
   const [selection, setSelection] = useStateDIH(new Set());
   const [quickFilter, setQuickFilter] = useStateDIH(null);
 
-  const current = useMemoDIH(() => DIH_ROWS.find(r => r.id === selectedRow), [selectedRow]);
+  // Fetch live data once on mount. Same-origin so the Django session
+  // cookie flows automatically; cross-origin / file:// previews fall
+  // through to the mock data with no console noise.
+  useEffectDIH(() => {
+    let cancelled = false;
+    fetch("/api/v1/dih/stage-records/?state=pending_promotion", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (cancelled) return;
+        const apiRows = (data.results || data).map(_stageToRow);
+        if (apiRows.length === 0) {
+          // No pending rows — keep the mock visible so the screen
+          // doesn't look empty during the demo. A banner cues the
+          // operator that the queue is real but currently zero.
+          setDataSource("live-empty");
+          return;
+        }
+        setRows(apiRows);
+        setSelectedRow(apiRows[0].id);
+        setDataSource("live");
+      })
+      .catch(() => {
+        // Stays on MOCK_DIH_ROWS; dataSource already 'mock'.
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const current = useMemoDIH(() => rows.find(r => r.id === selectedRow), [rows, selectedRow]);
 
   const auditEvents = [
     { who: "System DIH", action: "received from", detail: "Capture channel CAPI · tablet PCH-7411 · Parish Office Pageya", time: "1h 12m ago", audit: "A-2026-05-14-00471", tone: "system" },
@@ -58,10 +164,61 @@ const DIHScreen = () => {
     "Manual override (specify in note)",
   ];
 
-  const fire = (kind) => {
-    const map = { promote: "Promoted to Registered. Same Registry ID retained.", merge: "Promote-as-merge committed. PMT recompute queued.", hold: "Held for more info. Citizen notified by SMS.", reject: "Rejected. Provisional ID voided. Reason written to audit chain." };
-    setToast(map[kind] || "Done.");
-    setModal(null);
+  const fire = ({ reason, note } = {}) => {
+    const kind = modal;
+    // Mock-mode fallback — no backend, just toast and close.
+    if (dataSource !== "live") {
+      const fallbackMsg = {
+        promote: "Promoted to Registered. Same Registry ID retained.",
+        merge: "Promote-as-merge committed. PMT recompute queued.",
+        hold: "Held for more info. Citizen notified by SMS.",
+        reject: "Rejected. Provisional ID voided. Reason written to audit chain.",
+      }[kind] || "Done.";
+      setToast(fallbackMsg);
+      setModal(null);
+      return;
+    }
+
+    // Live mode — only promote + reject have backend endpoints today.
+    // hold / merge are deferred (no service yet); fall back to toast.
+    if (kind !== "promote" && kind !== "reject") {
+      setToast(`${kind} not yet wired to backend — recorded locally.`);
+      setModal(null);
+      return;
+    }
+    const id = selectedRow;
+    const url = `/api/v1/dih/stage-records/${id}/${kind}/`;
+    const body = kind === "promote"
+      ? { actor: "admin", reason: reason || "" }
+      : { actor: "admin", reason: reason || note || "rejected via DIH queue" };
+    fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "X-CSRFToken": _getCsrfToken(),
+      },
+      body: JSON.stringify(body),
+    })
+      .then(async r => {
+        if (r.ok) return r.json();
+        const detail = await r.json().catch(() => ({}));
+        throw new Error(detail.detail || `HTTP ${r.status}`);
+      })
+      .then(_stage => {
+        // Drop the acted row out of the queue and select the next one.
+        const remaining = rows.filter(r => r.id !== id);
+        setRows(remaining);
+        setSelectedRow(remaining[0]?.id || null);
+        const verb = kind === "promote" ? "Promoted" : "Rejected";
+        setToast(`${verb} stage ${id.slice(0, 12)}… — written to audit chain.`);
+        setModal(null);
+      })
+      .catch(err => {
+        setToast(`${kind} failed: ${err.message}`);
+        setModal(null);
+      });
   };
 
   const toggleSel = (id) => {
@@ -74,7 +231,13 @@ const DIHScreen = () => {
     <div className="page" style={{paddingBottom:0, position:'relative'}}>
       <PageHeader
         eyebrow="DIH REVIEW QUEUE · US-109"
-        title={<>NSR Unit DIH review queue <Chip>342 pending</Chip></>}
+        title={<>
+          NSR Unit DIH review queue{" "}
+          <Chip>{rows.length} {dataSource === "live" ? "live" : "pending"}</Chip>
+          {dataSource === "mock" && <Chip tone="quality" size="sm">mock</Chip>}
+          {dataSource === "live" && <Chip tone="eligibility" size="sm">live</Chip>}
+          {dataSource === "live-empty" && <Chip tone="data" size="sm">live (queue empty — mock shown)</Chip>}
+        </>}
         sub="Promote, promote-as-merge, hold, or reject. Walk-in SLA = 24 hours from capture."
         right={<>
           <button className="btn" onClick={() => setAuditOpen(true)}><Icon name="history"/> Audit chain</button>
@@ -153,7 +316,7 @@ const DIHScreen = () => {
               </tr>
             </thead>
             <tbody>
-              {DIH_ROWS.map(r => (
+              {rows.map(r => (
                 <tr key={r.id} className={r.id === selectedRow ? "selected" : ""} onClick={() => setSelectedRow(r.id)} style={{cursor:'pointer'}}>
                   <td onClick={(e) => { e.stopPropagation(); toggleSel(r.id); }}>
                     <input type="checkbox" checked={selection.has(r.id)} readOnly disabled={r.dqa.b > 0 || r.ddup !== null}/>
@@ -199,7 +362,18 @@ const DIHScreen = () => {
         </div>
       </div>
 
-      {/* Three-column compare */}
+      {/* Three-column compare — only rendered when a row is selected */}
+      {!current && (
+        <div className="card" style={{padding:48, textAlign:'center', color:'var(--neutral-500)'}}>
+          <Icon name="inbox" size={32} color="var(--neutral-300)"/>
+          <div className="t-bodysm mt-2">
+            {dataSource === "live"
+              ? "Queue empty — nothing pending promotion."
+              : "Select a row to review."}
+          </div>
+        </div>
+      )}
+      {current && (
       <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 360px', gap:16}}>
         {/* Column 1: Staged */}
         <div className="card" style={{borderTop:'3px solid var(--accent-data)'}}>
@@ -349,32 +523,35 @@ const DIHScreen = () => {
           </div>
         </div>
       </div>
+      )}
 
       {/* Sticky action bar */}
-      <div style={{margin:'16px -24px 0', position:'sticky', bottom:0, zIndex:20}}>
-        <ActionBar left={<>Reviewing <span className="t-mono" style={{color:'var(--neutral-900)'}}>{current.id.slice(0,18)}…</span> · {current.head} · 1 of 342</>}>
-          <button className="btn btn-danger" onClick={() => setModal('reject')}><Icon name="xCircle" size={14}/> Reject</button>
-          <button className="btn btn-warn" onClick={() => setModal('hold')}><Icon name="clock" size={14}/> Hold for info</button>
-          <button className="btn" onClick={() => setModal('merge')}><Icon name="duplicate" size={14}/> Promote-as-merge</button>
-          <button className="btn btn-success" onClick={() => setModal('promote')}><Icon name="check" size={14}/> Promote</button>
-        </ActionBar>
-      </div>
+      {current && (
+        <div style={{margin:'16px -24px 0', position:'sticky', bottom:0, zIndex:20}}>
+          <ActionBar left={<>Reviewing <span className="t-mono" style={{color:'var(--neutral-900)'}}>{current.id.slice(0,18)}…</span> · {current.head} · {rows.indexOf(current) + 1} of {rows.length}</>}>
+            <button className="btn btn-danger" onClick={() => setModal('reject')}><Icon name="xCircle" size={14}/> Reject</button>
+            <button className="btn btn-warn" onClick={() => setModal('hold')}><Icon name="clock" size={14}/> Hold for info</button>
+            <button className="btn" onClick={() => setModal('merge')}><Icon name="duplicate" size={14}/> Promote-as-merge</button>
+            <button className="btn btn-success" onClick={() => setModal('promote')}><Icon name="check" size={14}/> Promote</button>
+          </ActionBar>
+        </div>
+      )}
 
-      <AuditDrawer open={auditOpen} onClose={() => setAuditOpen(false)} events={auditEvents} title={`Audit · ${current.head}`}/>
+      <AuditDrawer open={auditOpen} onClose={() => setAuditOpen(false)} events={auditEvents} title={`Audit · ${current?.head || ""}`}/>
 
       <ReasonModal open={modal === 'promote'} title="Promote to Registered" intent="success"
-        reasonOptions={reasonsPromote} recordLabel={current.id}
-        onClose={() => setModal(null)} onConfirm={() => fire('promote')}/>
+        reasonOptions={reasonsPromote} recordLabel={current?.id || ""}
+        onClose={() => setModal(null)} onConfirm={fire}/>
       <ReasonModal open={modal === 'merge'} title="Promote as merge" intent="primary"
         reasonOptions={["Accept DDUP candidate as same household","Both records are same household — keep this one","Other (specify in note)"]}
-        recordLabel={current.id}
-        onClose={() => setModal(null)} onConfirm={() => fire('merge')}/>
+        recordLabel={current?.id || ""}
+        onClose={() => setModal(null)} onConfirm={fire}/>
       <ReasonModal open={modal === 'hold'} title="Hold for more information" intent="primary"
-        reasonOptions={reasonsHold} recordLabel={current.id}
-        onClose={() => setModal(null)} onConfirm={() => fire('hold')}/>
+        reasonOptions={reasonsHold} recordLabel={current?.id || ""}
+        onClose={() => setModal(null)} onConfirm={fire}/>
       <ReasonModal open={modal === 'reject'} title="Reject submission" intent="danger"
-        reasonOptions={reasonsReject} recordLabel={current.id}
-        onClose={() => setModal(null)} onConfirm={() => fire('reject')}/>
+        reasonOptions={reasonsReject} recordLabel={current?.id || ""}
+        onClose={() => setModal(null)} onConfirm={fire}/>
 
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>

@@ -3,7 +3,7 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.permissions import AllowAny
 
-from .views import home
+from .views import console, home
 
 # OpenAPI schema + Swagger UI stay browsable without login (developer
 # convenience). Every other DRF endpoint requires IsAuthenticated per
@@ -14,6 +14,11 @@ swagger_view = SpectacularSwaggerView.as_view(url_name="schema", permission_clas
 urlpatterns = [
     path("", home, name="home"),
     path("admin/", admin.site.urls),
+    # React design harness served same-origin so fetch() inherits the
+    # Django session cookie (US-S11-013). Dev-only — production serves
+    # the built React app through nginx with its own auth gateway.
+    path("console/", console, name="console-home"),
+    path("console/<path:path>", console, name="console-asset"),
     path("api/schema/", schema_view, name="schema"),
     path("api/docs/", swagger_view, name="swagger-ui"),
     # Per-module routers — one OpenAPI tag per module.

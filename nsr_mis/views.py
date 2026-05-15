@@ -1,6 +1,32 @@
-"""Tiny landing view at /."""
+"""Tiny landing view at / plus a same-origin shim that serves the
+React design harness from /console/ so it can hit /api/v1/... with
+the existing Django session cookie (no CORS dance required)."""
 
-from django.http import HttpResponse
+from pathlib import Path
+
+from django.http import FileResponse, Http404, HttpResponse
+
+DESIGN_DIR = Path(__file__).resolve().parent.parent / "design"
+
+
+def console(_request, path: str = "nsr-mis-console.html"):
+    """Serve files out of /design/ under /console/{path}. Dev-only
+    convenience for US-S11-013 — the same files the static HTTP
+    server on :8765 serves, but same-origin with the Django runserver
+    so fetch() can carry the session cookie."""
+    # Defence against ".." traversal — the resolved path must still
+    # live under DESIGN_DIR.
+    target = (DESIGN_DIR / path).resolve()
+    try:
+        target.relative_to(DESIGN_DIR)
+    except ValueError as exc:
+        raise Http404("path outside design root") from exc
+    if not target.is_file():
+        raise Http404(f"design asset not found: {path}")
+    # Babel + JSX use text/javascript via the type='text/babel'
+    # script tag; serving as the right MIME type avoids browser
+    # warnings.
+    return FileResponse(open(target, "rb"))  # noqa: SIM115
 
 HOME_HTML = """<!doctype html>
 <html lang="en">
