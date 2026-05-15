@@ -108,6 +108,16 @@ const __TWEAKS_STYLE = `
     border-radius:6px;cursor:default;padding:4px 6px;line-height:1.2;
     overflow-wrap:anywhere}
 
+  .twk-fab{position:fixed;right:16px;bottom:16px;z-index:2147483646;
+    appearance:none;border:.5px solid rgba(255,255,255,.6);border-radius:999px;
+    padding:6px 12px;font:600 11.5px/1.4 ui-sans-serif,system-ui,sans-serif;
+    color:#29261b;background:rgba(250,249,247,.78);
+    -webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);
+    box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 6px 20px rgba(0,0,0,.18);
+    cursor:default;letter-spacing:.01em;display:inline-flex;align-items:center;gap:6px}
+  .twk-fab:hover{background:rgba(250,249,247,.92)}
+  .twk-fab-dot{width:6px;height:6px;border-radius:50%;background:#34c759}
+
   .twk-toggle{position:relative;width:32px;height:18px;border:0;border-radius:999px;
     background:rgba(0,0,0,.15);transition:background .15s;cursor:default;padding:0}
   .twk-toggle[data-on="1"]{background:#34c759}
@@ -292,7 +302,25 @@ function TweaksPanel({ title = 'Tweaks', noDeckControls = false, children }) {
     window.addEventListener('mouseup', up);
   };
 
-  if (!open) return null;
+  // When closed, render a small "Tweaks" pill in the same corner so
+  // the user can reopen the panel without a page reload. The pill is
+  // styled to match the panel header (glass background + a green
+  // status dot) so it reads as part of the same affordance. The deck-
+  // stage host can still drive open via postMessage; this just adds
+  // a manual click path for standalone use.
+  if (!open) {
+    return (
+      <>
+        <style>{__TWEAKS_STYLE}</style>
+        <button className="twk-fab" data-noncommentable=""
+                onClick={() => setOpen(true)}
+                aria-label="Show tweaks">
+          <span className="twk-fab-dot" aria-hidden="true"/>
+          Tweaks
+        </button>
+      </>
+    );
+  }
   return (
     <>
       <style>{__TWEAKS_STYLE}</style>
