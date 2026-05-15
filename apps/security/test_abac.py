@@ -382,6 +382,90 @@ class TestChangeRequestEntityTypeUnion:
         assert r.data["count"] == 0
 
 
+class TestMatchPairBothEndsInScope:
+    """MatchPair visibility requires BOTH members to fall within the
+    operator's scope. A single-end rule would leak the opposing member's
+    ID (and existence) into a workbench the operator has no authority
+    over — see MatchPairScopedQuerysetMixin docstring."""
+
+    @pytest.fixture
+    def members_in_each(self, db, households_in_each):
+        from apps.data_management.models import Member
+        out = {}
+        for sr_key, hh in households_in_each.items():
+            out[sr_key] = Member.objects.create(
+                household=hh, line_number=1,
+                surname=f"Surname-{sr_key}", first_name="A", sex="M",
+            )
+        return out
+
+    @pytest.fixture
+    def ddup_model(self, db):
+        from apps.ddup.models import DdupModelVersion, ModelStatus
+        return DdupModelVersion.objects.create(
+            version=1, config={}, author="a", status=ModelStatus.ACTIVE,
+        )
+
+    @pytest.fixture
+    def cross_region_pair(self, ddup_model, members_in_each):
+        from apps.ddup.models import MatchPair
+        a, b = sorted(
+            [members_in_each["SR-BUGANDA"].id, members_in_each["SR-KARAMOJA"].id]
+        )
+        return MatchPair.objects.create(
+            record_type="member", record_a_id=a, record_b_id=b,
+            tier=1, match_reason="nin", model_version=ddup_model,
+        )
+
+    def test_cross_region_pair_invisible_to_sub_region_operator(
+        self, cross_region_pair, django_user_model, two_sub_regions,
+    ):
+        u = django_user_model.objects.create_user(username="ddup-buganda", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/ddup/match-pairs/")
+        assert r.status_code == 200
+        # Only one end of the pair is in Buganda — the other end's
+        # member ID belongs to Karamoja. Both-ends rule = 0 rows.
+        assert r.data["count"] == 0
+
+    def test_same_region_pair_visible_to_sub_region_operator(
+        self, db, ddup_model, two_sub_regions, households_in_each,
+        django_user_model,
+    ):
+        from apps.data_management.models import Member
+        from apps.ddup.models import MatchPair
+
+        hh = households_in_each["SR-BUGANDA"]
+        m1 = Member.objects.create(household=hh, line_number=2, surname="X",
+                                   first_name="One", sex="M")
+        m2 = Member.objects.create(household=hh, line_number=3, surname="X",
+                                   first_name="Two", sex="M")
+        a, b = sorted([m1.id, m2.id])
+        MatchPair.objects.create(
+            record_type="member", record_a_id=a, record_b_id=b,
+            tier=1, match_reason="nin", model_version=ddup_model,
+        )
+
+        u = django_user_model.objects.create_user(username="ddup-buganda-2", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/ddup/match-pairs/")
+        assert r.data["count"] == 1
+
+    def test_cross_region_pair_visible_to_national(
+        self, cross_region_pair, django_user_model,
+    ):
+        u = django_user_model.objects.create_user(username="ddup-nsr", password="p")
+        OperatorScope.objects.create(user=u, scope_level=ScopeLevel.NATIONAL, scope_code="")
+        r = _client_for(u).get("/api/v1/ddup/match-pairs/")
+        assert r.data["count"] == 1
+
+
 class TestPmtResultFkScope:
     def test_pmt_result_scoped_via_household_fk(
         self, db, django_user_model, two_sub_regions, households_in_each,

@@ -160,13 +160,18 @@ def open_change_request_for_grievance(
     requester: str,
     changes: dict,
     sub_category: str = "",
+    auto_submit: bool = False,
 ):
-    """Auto-open a DRAFT ChangeRequest from a DATA_CORRECTION grievance.
+    """Auto-open a ChangeRequest from a DATA_CORRECTION grievance.
 
     Per SAD §4.4: "A grievance that resolves to a data correction opens
-    a linked UPD." The returned ChangeRequest is in DRAFT state — the
-    operator decides what fields to write. On commit, the GRM signal
-    handler in apps.grievance.signals closes the grievance.
+    a linked UPD." Returns the new ChangeRequest. When `auto_submit` is
+    True (default False), the CR transitions DRAFT -> PENDING_APPROVAL
+    in the same call — useful when the resolver already knows the field
+    changes and there's nothing more to capture before approver review.
+
+    On the linked CR's commit, the GRM signal handler in
+    apps.grievance.signals closes the grievance.
     """
     from apps.update_workflow.models import (
         ChangeRequest,
@@ -174,6 +179,7 @@ def open_change_request_for_grievance(
         EntityType,
         SourceChannel,
     )
+    from apps.update_workflow.services import submit_change_request
 
     if grievance.category != Category.DATA_CORRECTION:
         raise GrievanceError(
@@ -206,4 +212,8 @@ def open_change_request_for_grievance(
         "create", "change_request", cr.id, actor=requester,
         reason="grm-auto-open", field_changes={"grievance_id": grievance.id},
     )
+
+    if auto_submit:
+        submit_change_request(cr)
+        cr.refresh_from_db()
     return cr

@@ -1,6 +1,7 @@
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import serializers, viewsets
 
+from apps.security.abac import MatchPairScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
 from .models import DdupModelVersion, MatchPair, MergeDecision
@@ -44,7 +45,9 @@ class DdupModelVersionViewSet(viewsets.ReadOnlyModelViewSet):
     list=extend_schema(tags=["ddup"], summary="List dedup match pairs"),
     retrieve=extend_schema(tags=["ddup"], summary="Retrieve a match pair"),
 )
-class MatchPairViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
+class MatchPairViewSet(
+    AuditReadMixin, MatchPairScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet,
+):
     audit_entity_type = "match_pair"
     queryset = MatchPair.objects.all().order_by("-created_at")
     serializer_class = MatchPairSerializer

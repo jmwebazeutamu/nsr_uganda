@@ -138,6 +138,32 @@ class HouseholdIdScopedQuerysetMixin(ScopedQuerysetMixin):
         return Q(**{f"{self.scope_field_path}__in": household_ids})
 
 
+class MatchPairScopedQuerysetMixin(ScopedQuerysetMixin):
+    """ABAC variant for MatchPair (DDUP).
+
+    A pair is visible only when BOTH members fall within the operator's
+    geographic scope. Single-end scoping would leak the opposing member's
+    ID (and its existence) to an operator who has no authority over that
+    geography — the dedup workbench reveals enough identifying detail
+    that a one-sided rule would amount to a covert read of the other
+    side. National / superuser short-circuits remain.
+    """
+
+    def _scope_q(self) -> Q:
+        codes = _scoped_codes(self.request.user)
+        if codes is None:
+            return ~Q(pk__in=[])  # wildcard
+        if not codes:
+            return Q(pk__in=[])
+
+        from apps.data_management.models import Member
+        member_ids = list(
+            Member.objects.filter(household__sub_region_code__in=codes)
+            .values_list("id", flat=True)
+        )
+        return Q(record_a_id__in=member_ids) & Q(record_b_id__in=member_ids)
+
+
 class ChangeRequestScopedQuerysetMixin(ScopedQuerysetMixin):
     """ABAC variant for ChangeRequest. The row carries (entity_type,
     entity_id) where entity_type ∈ {household, member}. We resolve the
