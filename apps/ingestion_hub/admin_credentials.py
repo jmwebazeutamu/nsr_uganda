@@ -55,24 +55,44 @@ SUPPORTED_KINDS = {SourceSystemKind.KOBO}
 
 class KoboCredentialForm(forms.ModelForm):
     """The admin presents this whenever a KOBO SourceSystem is being
-    saved. Username + password are required ONLY on first save (when
-    no token exists yet); on subsequent edits they're optional — leave
-    them blank to keep the existing token, fill them to mint a new
-    one. The password field uses widget=PasswordInput so it never
-    round-trips back to the browser."""
+    saved. Two authentication paths:
+
+    1. **Username + password** — the form exchanges them for a Knox
+       token at save-time via `acquire_token()`. Password lives only
+       in the request handler's stack frame and is discarded after.
+    2. **Pre-minted API token** — operator pastes a token they
+       generated from the Kobo web UI's "Account Settings → Security
+       → API token" page. This is the only path that works for
+       accounts with MFA enabled (Kobo's `/token/` password exchange
+       returns 401 for MFA accounts).
+
+    First-save validation requires EITHER path. Edit allows leaving
+    all three blank to keep the existing token, OR providing fresh
+    credentials/token to replace it.
+    """
 
     username = forms.CharField(
         required=False,
         widget=forms.TextInput(attrs={"autocomplete": "off"}),
-        help_text="Kobo username. Required on first save; leave blank to "
-                  "keep the existing token.",
+        help_text="Kobo username. Required on first save (with password) "
+                  "UNLESS providing a pre-minted token below.",
     )
     password = forms.CharField(
         required=False,
         widget=forms.PasswordInput(
             render_value=False, attrs={"autocomplete": "new-password"},
         ),
-        help_text="Kobo password. Used ONCE to mint a token; never stored.",
+        help_text="Kobo password. Used ONCE to mint a token; never stored. "
+                  "Leave blank if using a pre-minted token.",
+    )
+    api_token = forms.CharField(
+        required=False,
+        widget=forms.PasswordInput(
+            render_value=False, attrs={"autocomplete": "off"},
+        ),
+        help_text="Pre-minted API token from Kobo Account Settings → "
+                  "Security. Use this path when the account has MFA "
+                  "enabled (the password exchange doesn't support MFA).",
     )
 
     class Meta:
@@ -80,15 +100,25 @@ class KoboCredentialForm(forms.ModelForm):
         fields = ("server_url",)
 
     def clean(self):
-        """If there's no existing credential, username+password are
-        required to mint the first token. ULIDField sets pk via a
-        default on instantiation so we check `_state.adding` instead."""
+        """First save requires EITHER username+password OR a pre-minted
+        api_token. Edits may leave all three blank to keep the existing
+        token. Both username+password AND api_token at once is
+        contradictory — surface that explicitly rather than picking one
+        path silently."""
         cleaned = super().clean()
         is_creating = self.instance._state.adding
-        if is_creating and not (cleaned.get("username") and cleaned.get("password")):
+        has_user_pw = bool(cleaned.get("username") and cleaned.get("password"))
+        has_token = bool(cleaned.get("api_token"))
+
+        if has_user_pw and has_token:
             raise forms.ValidationError(
-                "Username and password are required on first save — used to "
-                "mint the Knox token. The password is discarded after.",
+                "Provide EITHER username+password OR a pre-minted API "
+                "token — not both.",
+            )
+        if is_creating and not (has_user_pw or has_token):
+            raise forms.ValidationError(
+                "On first save, provide either username + password "
+                "(token will be minted) or a pre-minted API token.",
             )
         return cleaned
 
@@ -96,7 +126,17 @@ class KoboCredentialForm(forms.ModelForm):
         instance: KoboCredential = super().save(commit=False)
         username = self.cleaned_data.get("username")
         password = self.cleaned_data.get("password")
-        if username and password:
+        api_token = self.cleaned_data.get("api_token")
+        if api_token:
+            # Pre-minted path: trust the token verbatim. The "Test
+            # connection" action will confirm it works against the
+            # upstream before the operator relies on it.
+            instance.token_encrypted = api_token.strip()
+            # No upstream username to record; mark the lineage so the
+            # audit reader knows the credential didn't transit our
+            # acquire_token path.
+            instance.acquired_by_username = "(pre-minted)"
+        elif username and password:
             # Exchange now, before commit, so that a credential failure
             # surfaces as a form error rather than a half-saved row.
             try:

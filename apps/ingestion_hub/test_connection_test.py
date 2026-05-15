@@ -191,7 +191,11 @@ class TestKoboCredentialForm:
         )
         assert not form.is_valid()
         assert "__all__" in form.errors
-        assert "required on first save" in str(form.errors["__all__"])
+        # New error wording covers BOTH the password-exchange and the
+        # pre-minted token path (US-S11-009).
+        msg = str(form.errors["__all__"])
+        assert "username + password" in msg
+        assert "pre-minted" in msg
 
     @responses.activate
     def test_edit_with_blank_password_keeps_existing_token(
@@ -225,6 +229,66 @@ class TestKoboCredentialForm:
         assert form.is_valid()
         with pytest.raises(forms.ValidationError):
             form.save()
+
+    # --- Pre-minted token path (MFA-friendly fallback) -----------------
+
+    def test_pre_minted_token_skips_acquire_token(self, kobo_source):
+        """A pre-minted token bypasses the /token/ exchange. The form
+        accepts it verbatim and stores it encrypted; acquired_by_
+        username records the (pre-minted) lineage."""
+        form = KoboCredentialForm(
+            data={
+                "server_url": KOBO_URL,
+                "username": "", "password": "",
+                "api_token": "preminted-abc123",
+            },
+            instance=KoboCredential(source_system=kobo_source),
+        )
+        assert form.is_valid(), form.errors
+        cred = form.save()
+        cred.refresh_from_db()
+        assert bytes(cred.token_encrypted) == b"preminted-abc123"
+        assert cred.acquired_by_username == "(pre-minted)"
+
+    def test_pre_minted_token_strips_whitespace(self, kobo_source):
+        """Copy-paste from the Kobo web UI often grabs trailing
+        whitespace; strip() prevents a silent off-by-one bug at probe
+        time."""
+        form = KoboCredentialForm(
+            data={
+                "server_url": KOBO_URL,
+                "api_token": "  preminted-xyz789\n",
+            },
+            instance=KoboCredential(source_system=kobo_source),
+        )
+        assert form.is_valid()
+        cred = form.save()
+        cred.refresh_from_db()
+        assert bytes(cred.token_encrypted) == b"preminted-xyz789"
+
+    def test_both_paths_at_once_rejects(self, kobo_source):
+        """Providing username+password AND api_token is contradictory —
+        the form must surface that rather than silently picking one."""
+        form = KoboCredentialForm(
+            data={
+                "server_url": KOBO_URL,
+                "username": "u", "password": "p",
+                "api_token": "preminted-abc",
+            },
+            instance=KoboCredential(source_system=kobo_source),
+        )
+        assert not form.is_valid()
+        assert "EITHER" in str(form.errors["__all__"])
+
+    def test_first_save_rejects_when_no_auth_path_provided(self, kobo_source):
+        """No username+password AND no token — still rejected on first
+        save (regression for the original validation)."""
+        form = KoboCredentialForm(
+            data={"server_url": KOBO_URL},
+            instance=KoboCredential(source_system=kobo_source),
+        )
+        assert not form.is_valid()
+        assert "__all__" in form.errors
 
 
 # --------------------------------------------------------------------
