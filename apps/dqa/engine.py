@@ -69,24 +69,43 @@ def _op_regex(field_value, pattern):
     return re.fullmatch(pattern, str(field_value)) is not None
 
 
+def _numeric_pair(a, b):
+    """Coerce both sides to float when one is a numeric string. Returns
+    (a, b) on success or (None, None) when coercion is impossible.
+
+    DIH staging payloads come from external sources (Kobo, partner MIS)
+    that frequently emit decimals as strings; the engine must not type-
+    error on those — the rule should evaluate normally."""
+    if a is None:
+        return None, None
+    try:
+        return float(a), float(b)
+    except (TypeError, ValueError):
+        return None, None
+
+
 @_op("gt")
 def _op_gt(field_value, value):
-    return field_value is not None and field_value > value
+    a, b = _numeric_pair(field_value, value)
+    return a is not None and a > b
 
 
 @_op("lt")
 def _op_lt(field_value, value):
-    return field_value is not None and field_value < value
+    a, b = _numeric_pair(field_value, value)
+    return a is not None and a < b
 
 
 @_op("ge")
 def _op_ge(field_value, value):
-    return field_value is not None and field_value >= value
+    a, b = _numeric_pair(field_value, value)
+    return a is not None and a >= b
 
 
 @_op("le")
 def _op_le(field_value, value):
-    return field_value is not None and field_value <= value
+    a, b = _numeric_pair(field_value, value)
+    return a is not None and a <= b
 
 
 @_op("in")
