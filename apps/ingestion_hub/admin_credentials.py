@@ -402,12 +402,28 @@ def pull_kobo_submissions_action(modeladmin, request, queryset):
             "; ".join(f"{s}={n}" for s, n in sorted(stage_states.items()))
             or "(none staged)"
         )
+
+        # US-S11-016: auto-backfill any GeographicUnit rows the freshly
+        # staged records need. Without this, the next promote step
+        # would throw "geographic unit {level}={code} not found" for
+        # every district / parish that hasn't been loaded yet. Scoped
+        # to this run's stages so we don't re-scan the whole DB.
+        from .geo_backfill import backfill_missing_geo_from_stages
+        from .models import StageRecord
+        run_stages = StageRecord.objects.filter(connector_run=run)
+        geo_result = backfill_missing_geo_from_stages(run_stages)
+        geo_note = (
+            f"geo backfill: +{geo_result.total_created} GeographicUnit row(s)"
+            if geo_result.total_created
+            else "geo backfill: 0 new rows"
+        )
+
         run.status = ConnectorRunStatus.SUCCEEDED
         run.finished_at = timezone.now()
         run.note = (
             f"pulled {landed} row(s) from form {form['uid']} ({form['name']}); "
             f"staged={outcomes['staged']}, quarantined={outcomes['quarantined']}, "
-            f"errors={outcomes['error']}; {state_summary}"
+            f"errors={outcomes['error']}; {state_summary}; {geo_note}"
             + (f"; cap {PULL_BATCH_CAP} hit" if landed >= PULL_BATCH_CAP else "")
         )
         run.save(update_fields=("status", "finished_at", "note"))
@@ -422,13 +438,13 @@ def pull_kobo_submissions_action(modeladmin, request, queryset):
         messages.success(
             request,
             format_html(
-                "{}: pulled {} &middot; staged {} (quarantined {}, errors {}). "
-                "{} &middot; <a href='{}'>view run</a> &middot; "
+                "{}: pulled {} &middot; staged {} (quarantined {}, errors {}) &middot; "
+                "{} &middot; {}. <a href='{}'>view run</a> &middot; "
                 "<a href='{}'>view staged rows</a> &middot; "
                 "<a href='/console/'>open DIH queue</a>",
                 source.code, landed,
                 outcomes["staged"], outcomes["quarantined"], outcomes["error"],
-                state_summary, run_url, stages_url,
+                state_summary, geo_note, run_url, stages_url,
             ),
         )
 
@@ -477,6 +493,7 @@ def process_pending_landings_action(modeladmin, request, queryset):
 
         outcomes: dict[str, int] = {"staged": 0, "quarantined": 0, "error": 0}
         stage_states: dict[str, int] = {}
+        new_stage_ids: list[str] = []
         for landing in pending:
             outcome, detail = _process_one_landing(
                 landing, connector_impl, actor=actor,
@@ -484,6 +501,27 @@ def process_pending_landings_action(modeladmin, request, queryset):
             outcomes[outcome] = outcomes.get(outcome, 0) + 1
             if outcome == "staged":
                 stage_states[detail] = stage_states.get(detail, 0) + 1
+                # Track the freshly-created stage id so the geo
+                # backfill below only scans rows we just created.
+                landing.refresh_from_db()
+                if hasattr(landing, "stage_record") and landing.stage_record:
+                    new_stage_ids.append(landing.stage_record.id)
+
+        # US-S11-016: same auto-backfill as the pull action — fixes
+        # any GeographicUnit gaps before the operator hits Promote.
+        from .geo_backfill import backfill_missing_geo_from_stages
+        from .models import StageRecord
+        if new_stage_ids:
+            geo_result = backfill_missing_geo_from_stages(
+                StageRecord.objects.filter(id__in=new_stage_ids),
+            )
+            geo_note = (
+                f"geo backfill: +{geo_result.total_created} row(s)"
+                if geo_result.total_created
+                else "geo backfill: 0 new rows"
+            )
+        else:
+            geo_note = "geo backfill: skipped (nothing staged)"
 
         state_summary = (
             "; ".join(f"{s}={n}" for s, n in sorted(stage_states.items()))
@@ -493,11 +531,11 @@ def process_pending_landings_action(modeladmin, request, queryset):
             request,
             format_html(
                 "{}: processed {} pending landing(s) &middot; "
-                "staged {} (quarantined {}, errors {}). {} &middot; "
+                "staged {} (quarantined {}, errors {}). {} &middot; {} &middot; "
                 "<a href='/console/'>open DIH queue</a>",
                 source.code, sum(outcomes.values()),
                 outcomes["staged"], outcomes["quarantined"], outcomes["error"],
-                state_summary,
+                state_summary, geo_note,
             ),
         )
 
