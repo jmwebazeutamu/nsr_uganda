@@ -1219,3 +1219,101 @@ class TestAutoMergeHighConfidence:
             "apps.ddup.tasks.auto_merge_high_confidence_pairs_task"
             in tasks
         )
+
+
+# --- US-S11-005 — threshold calibration ----------------------------------
+
+
+class TestThresholdCalibration:
+    """`clone_with_threshold_delta` must (a) mint a new DRAFT row with
+    the updated config, (b) preserve the rest of the source config,
+    (c) clamp to [0.50, 1.00], and (d) emit an audit event."""
+
+    def _make_v1(self, *, threshold=0.95):
+        return DdupModelVersion.objects.create(
+            version=1,
+            config={"tier3": {"auto_merge_threshold": threshold,
+                              "weights": {"surname": 0.30, "first_name": 0.30}}},
+            author="alice",
+        )
+
+    def test_nudge_up_creates_new_draft(self, db):
+        from apps.ddup.services import clone_with_threshold_delta
+        v1 = self._make_v1(threshold=0.85)
+        draft = clone_with_threshold_delta(
+            v1, delta=0.05, actor="dpo-bot", reason="ceiling breach",
+        )
+        assert draft.version == 2
+        assert draft.status == ModelStatus.DRAFT
+        assert draft.config["tier3"]["auto_merge_threshold"] == pytest.approx(0.90)
+        # Other config fields preserved.
+        assert draft.config["tier3"]["weights"]["surname"] == 0.30
+
+    def test_nudge_down_creates_new_draft(self, db):
+        from apps.ddup.services import clone_with_threshold_delta
+        v1 = self._make_v1(threshold=0.95)
+        draft = clone_with_threshold_delta(
+            v1, delta=-0.05, actor="dpo-bot", reason="backlog",
+        )
+        assert draft.config["tier3"]["auto_merge_threshold"] == pytest.approx(0.90)
+
+    def test_clamp_at_ceiling(self, db):
+        from apps.ddup.services import clone_with_threshold_delta
+        v1 = self._make_v1(threshold=1.00)
+        with pytest.raises(DdupApprovalError, match="boundary"):
+            clone_with_threshold_delta(
+                v1, delta=0.05, actor="dpo-bot", reason="x",
+            )
+
+    def test_clamp_at_floor(self, db):
+        from apps.ddup.services import clone_with_threshold_delta
+        v1 = self._make_v1(threshold=0.50)
+        with pytest.raises(DdupApprovalError, match="boundary"):
+            clone_with_threshold_delta(
+                v1, delta=-0.05, actor="dpo-bot", reason="x",
+            )
+
+    def test_emits_calibrate_audit_event(self, db):
+        from apps.ddup.services import clone_with_threshold_delta
+        v1 = self._make_v1(threshold=0.85)
+        clone_with_threshold_delta(
+            v1, delta=0.05, actor="dpo-bot", reason="ceiling breach",
+        )
+        events = AuditEvent.objects.filter(action="calibrate")
+        assert events.count() == 1
+        e = events.first()
+        assert e.entity_type == "ddup_model_version"
+        # field_changes records the before/after threshold.
+        changes = e.field_changes
+        assert changes["auto_merge_threshold_before"] == 0.85
+        assert changes["auto_merge_threshold_after"] == pytest.approx(0.90)
+
+    def test_new_draft_requires_separate_activation(self, db):
+        """The drafted clone is NOT auto-activated — AC-DDUP-MODEL-
+        VERSION dual-approval still applies."""
+        from apps.ddup.services import clone_with_threshold_delta
+        v1 = self._make_v1(threshold=0.85)
+        activate_model_version(v1, approver="bob")
+        v1.refresh_from_db()
+        draft = clone_with_threshold_delta(
+            v1, delta=0.05, actor="dpo-bot", reason="x",
+        )
+        # v1 still active; draft is DRAFT.
+        v1.refresh_from_db()
+        assert v1.status == ModelStatus.ACTIVE
+        assert draft.status == ModelStatus.DRAFT
+
+    def test_version_number_increments_from_max(self, db):
+        from apps.ddup.services import clone_with_threshold_delta
+        DdupModelVersion.objects.create(
+            version=1, config={"tier3": {"auto_merge_threshold": 0.85}},
+            author="alice",
+        )
+        v5 = DdupModelVersion.objects.create(
+            version=5, config={"tier3": {"auto_merge_threshold": 0.85}},
+            author="alice",
+        )
+        draft = clone_with_threshold_delta(
+            v5, delta=0.05, actor="dpo-bot", reason="x",
+        )
+        assert draft.version == 6

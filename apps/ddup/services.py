@@ -53,6 +53,89 @@ def get_active_model_version() -> DdupModelVersion:
     return DdupModelVersion.objects.get(status=ModelStatus.ACTIVE)
 
 
+# Policy ceiling for the auto-reverse rate. When a model version
+# crosses this, the admin merge_summary surfaces a "TUNE UP" hint and
+# the threshold-tuning actions become operationally relevant. The
+# 5% value comes from the DPIA Sprint 8 follow-up — every reverse is
+# a personal-data event for two households (audit cost), so we want
+# the false-merge rate well under the SAD §11.5.4 NFR.
+AUTO_REVERSE_RATE_CEILING = 0.05
+
+# Calibration step size for the threshold-tuning admin actions.
+# Small enough that operators can converge gradually; bigger steps
+# are still possible by editing the JSON directly.
+THRESHOLD_NUDGE_STEP = 0.05
+
+# Bounds — anything outside this range is operationally meaningless
+# (1.0 means "auto-merge nothing"; below 0.5 means "auto-merge
+# almost-anything"). The admin actions clamp into this corridor.
+THRESHOLD_FLOOR = 0.50
+THRESHOLD_CEILING = 1.00
+
+# Policy-default auto_merge_threshold — what the Sprint 8 ADR-ish
+# calibration landed on. Used as the "Set safe default" action's
+# target. Stored as a string here so JSON round-trip stays exact.
+SAFE_DEFAULT_THRESHOLD = 0.95
+
+
+@transaction.atomic
+def clone_with_threshold_delta(
+    source: DdupModelVersion, *, delta: float, actor: str, reason: str,
+) -> DdupModelVersion:
+    """Calibration action (US-S11-005): copy `source` into a new
+    DRAFT DdupModelVersion with `config['tier3']['auto_merge_
+    threshold']` adjusted by `delta`. The new version still requires
+    dual approval (via `activate_model_version`) before it goes live
+    — this function only creates the draft.
+
+    Why a new version instead of mutating the existing one?
+    Per AC-DDUP-MODEL-VERSION every config change is auditable and
+    reversible: the DPO + DDUP lead must approve before any new
+    threshold reaches Member rows. Mutating in place would silently
+    re-define what "auto-merge" means for already-decided merges
+    against this version. New version = clean audit boundary.
+    """
+    current_config = source.config or {}
+    tier3 = dict(current_config.get("tier3") or {})
+    current_threshold = float(tier3.get("auto_merge_threshold", SAFE_DEFAULT_THRESHOLD))
+    new_threshold = max(THRESHOLD_FLOOR, min(THRESHOLD_CEILING, current_threshold + delta))
+    if new_threshold == current_threshold:
+        raise DdupApprovalError(
+            f"threshold already at clamp boundary ({current_threshold:.2f}); "
+            f"cannot move by {delta:+.2f}",
+        )
+
+    tier3["auto_merge_threshold"] = new_threshold
+    new_config = {**current_config, "tier3": tier3}
+
+    next_version = (
+        DdupModelVersion.objects.order_by("-version").values_list("version", flat=True).first() or 0
+    ) + 1
+    draft = DdupModelVersion.objects.create(
+        version=next_version,
+        description=(
+            f"Calibration {delta:+.2f} of v{source.version}. "
+            f"auto_merge_threshold: {current_threshold:.2f} -> {new_threshold:.2f}. "
+            f"Reason: {reason}"
+        ),
+        config=new_config,
+        status=ModelStatus.DRAFT,
+        author=actor,
+    )
+    _emit_audit(
+        "calibrate", "ddup_model_version", draft.id, actor=actor,
+        reason=reason,
+        field_changes={
+            "from_version": source.version,
+            "to_version": next_version,
+            "auto_merge_threshold_before": current_threshold,
+            "auto_merge_threshold_after": new_threshold,
+            "delta": delta,
+        },
+    )
+    return draft
+
+
 # ---------------------------------------------------------------------------
 # Tier 1 NIN matcher
 
