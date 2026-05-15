@@ -1,4 +1,10 @@
-"""PMT engine + service tests."""
+"""PMT engine + service tests.
+
+(File picked for the sub_region_code invariant test because PMT tests
+already construct full Household + Member fixtures and the assertion is
+adjacent to data-model concerns. The check itself belongs to
+data_management; consider moving when data_management/tests.py exists.)
+"""
 
 from __future__ import annotations
 

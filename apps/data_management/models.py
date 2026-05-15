@@ -111,6 +111,11 @@ class Household(models.Model):
     is_deleted = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True)
 
+    # Denormalised partition key per ADR-0005. Mirrors sub_region.code; auto-
+    # populated in save(). Indexed so it can serve admin filters today, then
+    # become the LIST partition key during the Sprint 2 cut-over.
+    sub_region_code = models.CharField(max_length=32, blank=True, db_index=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -121,10 +126,19 @@ class Household(models.Model):
             models.Index(fields=["village"]),
             models.Index(fields=["parish"]),
             models.Index(fields=["is_deleted", "updated_at"]),
+            # Pre-partition shape: post cut-over, this index is rewritten by
+            # the partition routing per ADR-0005.
+            models.Index(fields=["sub_region_code", "id"]),
         ]
 
     def __str__(self) -> str:
         return f"Household {self.id}"
+
+    def save(self, *args, **kwargs):
+        # Keep sub_region_code in lockstep with sub_region.code (ADR-0005).
+        if self.sub_region_id and not self.sub_region_code:
+            self.sub_region_code = self.sub_region.code
+        super().save(*args, **kwargs)
 
 
 class Member(models.Model):
@@ -179,6 +193,9 @@ class Member(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Denormalised partition key inherited from the household (ADR-0005).
+    sub_region_code = models.CharField(max_length=32, blank=True, db_index=True)
+
     class Meta:
         verbose_name = "Member"
         verbose_name_plural = "Members"
@@ -190,10 +207,17 @@ class Member(models.Model):
             models.Index(fields=["nin_hash"]),
             models.Index(fields=["telephone_1"]),
             models.Index(fields=["surname", "first_name"]),
+            models.Index(fields=["sub_region_code", "id"]),
         ]
 
     def __str__(self) -> str:
         return f"{self.surname} {self.first_name} ({self.id})"
+
+    def save(self, *args, **kwargs):
+        # Inherit the partition key from the parent household (ADR-0005).
+        if self.household_id and not self.sub_region_code:
+            self.sub_region_code = self.household.sub_region_code
+        super().save(*args, **kwargs)
 
 
 # --- Versioning -------------------------------------------------------------
