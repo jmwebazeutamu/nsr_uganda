@@ -73,6 +73,9 @@ class ScopeLevel(models.TextChoices):
     SUB_COUNTY = "sub_county"
     PARISH = "parish"
     VILLAGE = "village"
+    # Non-geographic — a partner-affiliated user who sees DataRequests
+    # under DSAs belonging to their Partner (scope_code = Partner.code).
+    PARTNER = "partner"
 
 
 class OperatorScope(models.Model):

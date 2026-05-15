@@ -252,7 +252,7 @@ class TestApi:
         assert r.status_code == 200
         assert r.data["row_count_delivered"] == 17
 
-    def test_scope_violation_returns_400(self, db, django_user_model, active_dsa):
+    def test_scope_violation_returns_400_on_submit(self, db, django_user_model, active_dsa):
         u = django_user_model.objects.create_user(
             username="partner-y", password="p", is_superuser=True, is_staff=True,
         )
@@ -266,3 +266,116 @@ class TestApi:
         r = c.post(f"/api/v1/drs/requests/{req_id}/submit/")
         assert r.status_code == 400
         assert "nin_hash" in r.data["detail"]
+
+
+class TestPartnerAbac:
+    """Partner-affiliated users see only DataRequests under DSAs
+    belonging to their Partner. NSR Unit (national) and superusers see
+    all. Mirrors the geographic ABAC story for personal-data viewsets
+    but uses org-affiliation as the visibility lens."""
+
+    @pytest.fixture
+    def two_partners(self, db):
+        p_a = Partner.objects.create(code="PARTNER-A", name="Partner A")
+        p_b = Partner.objects.create(code="PARTNER-B", name="Partner B")
+        return p_a, p_b
+
+    @pytest.fixture
+    def dsas(self, two_partners):
+        p_a, p_b = two_partners
+        d_a = DataSharingAgreement.objects.create(
+            partner=p_a, reference="DSA-A-1", status=DsaStatus.ACTIVE,
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={},
+        )
+        d_b = DataSharingAgreement.objects.create(
+            partner=p_b, reference="DSA-B-1", status=DsaStatus.ACTIVE,
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={},
+        )
+        return d_a, d_b
+
+    @pytest.fixture
+    def requests_in_each(self, dsas):
+        d_a, d_b = dsas
+        r_a = DataRequest.objects.create(dsa=d_a, requester="a", request_payload={})
+        r_b = DataRequest.objects.create(dsa=d_b, requester="b", request_payload={})
+        return r_a, r_b
+
+    def _client_for(self, user):
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c
+
+    def test_superuser_sees_both_partners_requests(
+        self, db, django_user_model, requests_in_each,
+    ):
+        u = django_user_model.objects.create_user(
+            username="su", password="p", is_superuser=True,
+        )
+        r = self._client_for(u).get("/api/v1/drs/requests/")
+        assert r.status_code == 200
+        assert r.data["count"] == 2
+
+    def test_unaffiliated_user_sees_zero(
+        self, db, django_user_model, requests_in_each,
+    ):
+        u = django_user_model.objects.create_user(username="ghost", password="p")
+        r = self._client_for(u).get("/api/v1/drs/requests/")
+        assert r.status_code == 200
+        assert r.data["count"] == 0
+
+    def test_partner_a_user_sees_only_partner_a_requests(
+        self, db, django_user_model, two_partners, requests_in_each,
+    ):
+        from apps.security.models import OperatorScope, ScopeLevel
+        p_a, _ = two_partners
+        r_a, _ = requests_in_each
+        u = django_user_model.objects.create_user(username="partner-a-op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARTNER, scope_code=p_a.code,
+        )
+        r = self._client_for(u).get("/api/v1/drs/requests/")
+        assert r.status_code == 200
+        assert r.data["count"] == 1
+        assert r.data["results"][0]["id"] == r_a.id
+
+    def test_national_scope_sees_both_partners_requests(
+        self, db, django_user_model, requests_in_each,
+    ):
+        from apps.security.models import OperatorScope, ScopeLevel
+        u = django_user_model.objects.create_user(username="dpo", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.NATIONAL, scope_code="",
+        )
+        r = self._client_for(u).get("/api/v1/drs/requests/")
+        assert r.data["count"] == 2
+
+    def test_partner_scope_also_filters_dsas(
+        self, db, django_user_model, two_partners, dsas,
+    ):
+        from apps.security.models import OperatorScope, ScopeLevel
+        p_a, _ = two_partners
+        d_a, _ = dsas
+        u = django_user_model.objects.create_user(username="partner-a-dpo", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARTNER, scope_code=p_a.code,
+        )
+        r = self._client_for(u).get("/api/v1/drs/agreements/")
+        assert r.status_code == 200
+        assert r.data["count"] == 1
+        assert r.data["results"][0]["id"] == d_a.id
+
+    def test_partner_scope_also_filters_partners_list(
+        self, db, django_user_model, two_partners,
+    ):
+        from apps.security.models import OperatorScope, ScopeLevel
+        p_a, _ = two_partners
+        u = django_user_model.objects.create_user(username="partner-a-staff", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARTNER, scope_code=p_a.code,
+        )
+        r = self._client_for(u).get("/api/v1/drs/partners/")
+        assert r.status_code == 200
+        assert r.data["count"] == 1
+        assert r.data["results"][0]["code"] == p_a.code

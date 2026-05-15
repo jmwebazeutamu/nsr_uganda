@@ -138,6 +138,58 @@ class HouseholdIdScopedQuerysetMixin(ScopedQuerysetMixin):
         return Q(**{f"{self.scope_field_path}__in": household_ids})
 
 
+def _scoped_partner_codes(user) -> list[str] | None:
+    """Partner-scope counterpart to _scoped_codes.
+
+    Same sentinel convention: None means wildcard (superuser or
+    national scope), [] means fail-closed, otherwise the list of
+    Partner.code values the operator is affiliated with.
+    """
+    if user is None or not getattr(user, "is_authenticated", False):
+        return []
+    if getattr(user, "is_superuser", False):
+        return None
+    scopes = list(
+        OperatorScope.objects.filter(user=user, active=True)
+        .values_list("scope_level", "scope_code")
+    )
+    if not scopes:
+        return []
+    if any(level == ScopeLevel.NATIONAL for level, _ in scopes):
+        return None
+    return [c for level, c in scopes if level == ScopeLevel.PARTNER and c]
+
+
+class PartnerScopedQuerysetMixin(ScopedQuerysetMixin):
+    """ABAC variant for API-DRS rows. Partner-affiliated users see only
+    rows tied to their Partner; NSR Unit (national) and superusers see
+    all. Geographic scope is ignored — partner visibility is
+    org-affiliation, not geography.
+
+    `partner_id_field` is the lookup path from the model to Partner.pk:
+        DataRequest   -> 'dsa__partner_id'      (default)
+        DataSharingAgreement -> 'partner_id'
+        Partner       -> 'id'
+
+    Layer AFTER AuditReadMixin in MRO so audit emit() still sees the
+    request user before scope filtering.
+    """
+
+    partner_id_field: str = "dsa__partner_id"
+
+    def _scope_q(self) -> Q:
+        codes = _scoped_partner_codes(self.request.user)
+        if codes is None:
+            return ~Q(pk__in=[])  # wildcard
+        if not codes:
+            return Q(pk__in=[])
+        from apps.data_requests.models import Partner
+        partner_ids = list(
+            Partner.objects.filter(code__in=codes).values_list("id", flat=True),
+        )
+        return Q(**{f"{self.partner_id_field}__in": partner_ids})
+
+
 class MatchPairScopedQuerysetMixin(ScopedQuerysetMixin):
     """ABAC variant for MatchPair (DDUP).
 

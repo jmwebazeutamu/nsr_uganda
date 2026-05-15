@@ -7,6 +7,7 @@ from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.security.abac import PartnerScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
 from .models import DataRequest, DataSharingAgreement, Partner, RequestStatus
@@ -71,8 +72,11 @@ class _Deliver(serializers.Serializer):
     list=extend_schema(tags=["api-drs"], summary="List partners"),
     retrieve=extend_schema(tags=["api-drs"], summary="Retrieve a partner"),
 )
-class PartnerViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
+class PartnerViewSet(
+    AuditReadMixin, PartnerScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet,
+):
     audit_entity_type = "partner"
+    partner_id_field = "id"
     queryset = Partner.objects.all().order_by("code")
     serializer_class = PartnerSerializer
     filterset_fields = ["status"]
@@ -82,8 +86,11 @@ class PartnerViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
     list=extend_schema(tags=["api-drs"], summary="List data-sharing agreements"),
     retrieve=extend_schema(tags=["api-drs"], summary="Retrieve a DSA"),
 )
-class DsaViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
+class DsaViewSet(
+    AuditReadMixin, PartnerScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet,
+):
     audit_entity_type = "dsa"
+    partner_id_field = "partner_id"
     queryset = DataSharingAgreement.objects.all().order_by("-valid_from")
     serializer_class = DsaSerializer
     filterset_fields = ["status", "partner"]
@@ -94,7 +101,9 @@ class DsaViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
     retrieve=extend_schema(tags=["api-drs"], summary="Retrieve a data request"),
     create=extend_schema(tags=["api-drs"], summary="Open a new DRAFT data request"),
 )
-class DataRequestViewSet(AuditReadMixin, viewsets.ModelViewSet):
+class DataRequestViewSet(
+    AuditReadMixin, PartnerScopedQuerysetMixin, viewsets.ModelViewSet,
+):
     audit_entity_type = "data_request"
     queryset = DataRequest.objects.all().order_by("-created_at")
     serializer_class = DataRequestSerializer
