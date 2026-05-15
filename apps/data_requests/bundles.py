@@ -33,7 +33,7 @@ import hashlib
 import json
 from typing import Any
 
-from apps.data_management.models import Household
+from apps.data_management.models import Household, Member
 
 from .models import DataRequest
 
@@ -45,14 +45,33 @@ BUNDLE_STORE: dict[str, bytes] = {}
 
 # Default exportable Household fields, dotted-keyed. The full set is
 # what an unrestricted DSA gets; allowed_scopes.fields trims this.
-# NIN columns (nin_hash, nin_last4) are deliberately NOT on Household
-# — they live on Member and require a separate, narrower DSA grant.
 _HOUSEHOLD_DEFAULT_FIELDS = (
     "household.id",
     "household.sub_region_code",
     "household.urban_rural",
     "household.current_vulnerability_band",
     "household.current_pmt_score",
+)
+
+# Default exportable Member fields. NIN columns (nin_hash, nin_last4)
+# are SENSITIVE — included in the default set so an unrestricted DSA
+# gets them, but a partner-facing DSA will normally not whitelist
+# member.* fields at all, and most member.* DSAs will exclude the NIN
+# columns explicitly. Either way the DSA scope is the gate.
+_MEMBER_DEFAULT_FIELDS = (
+    "member.id",
+    "member.line_number",
+    "member.surname",
+    "member.first_name",
+    "member.other_name",
+    "member.sex",
+    "member.date_of_birth",
+    "member.age_years",
+    "member.relationship_to_head",
+    "member.telephone_1",
+    "member.telephone_2",
+    "member.nin_hash",
+    "member.nin_last4",
 )
 
 
@@ -71,6 +90,44 @@ def _household_to_row(hh: Household, allowed_fields: list[str] | None) -> dict:
     if allowed_fields is None:
         return row
     return {k: v for k, v in row.items() if k in allowed_fields}
+
+
+def _member_to_dict(m: Member, allowed_fields: list[str] | None) -> dict:
+    """Project a live Member to its dotted-key dict, then filter to
+    the allowed member.* subset. None means 'unrestricted' defaults.
+
+    nin_hash is bytes on the model; we surface it as a hex string for
+    JSON portability. Soft-deleted members are excluded upstream
+    (render_bundle filters is_deleted=False)."""
+    row: dict[str, Any] = {
+        "member.id": m.id,
+        "member.line_number": m.line_number,
+        "member.surname": m.surname or "",
+        "member.first_name": m.first_name or "",
+        "member.other_name": m.other_name or "",
+        "member.sex": m.sex or "",
+        "member.date_of_birth": (
+            m.date_of_birth.isoformat() if m.date_of_birth else None
+        ),
+        "member.age_years": m.age_years,
+        "member.relationship_to_head": m.relationship_to_head or "",
+        "member.telephone_1": m.telephone_1 or "",
+        "member.telephone_2": m.telephone_2 or "",
+        "member.nin_hash": (bytes(m.nin_hash).hex() if m.nin_hash else ""),
+        "member.nin_last4": m.nin_last4 or "",
+    }
+    if allowed_fields is None:
+        return row
+    return {k: v for k, v in row.items() if k in allowed_fields}
+
+
+def _includes_member_fields(allowed_fields: list[str] | None) -> bool:
+    """True if the DSA either grants member.* explicitly or is
+    unrestricted (allowed_fields is None). Unrestricted DSAs get
+    members embedded by default — that's what 'unrestricted' means."""
+    if allowed_fields is None:
+        return True
+    return any(f.startswith("member.") for f in allowed_fields)
 
 
 def render_bundle(req: DataRequest) -> tuple[bytes, int]:
@@ -102,7 +159,25 @@ def render_bundle(req: DataRequest) -> tuple[bytes, int]:
     if caps:
         qs = qs[:min(caps)]
 
-    rows = [_household_to_row(hh, allowed_fields) for hh in qs]
+    embed_members = _includes_member_fields(allowed_fields)
+    member_allowed = (
+        [f for f in allowed_fields if f.startswith("member.")]
+        if allowed_fields is not None else None
+    )
+
+    rows: list[dict] = []
+    for hh in qs:
+        row = _household_to_row(hh, allowed_fields)
+        if embed_members:
+            members = (
+                Member.objects.filter(household=hh, is_deleted=False)
+                .order_by("line_number")
+            )
+            row["members"] = [
+                _member_to_dict(m, member_allowed) for m in members
+            ]
+        rows.append(row)
+
     body = b"\n".join(
         json.dumps(r, sort_keys=True, default=str).encode("utf-8")
         for r in rows

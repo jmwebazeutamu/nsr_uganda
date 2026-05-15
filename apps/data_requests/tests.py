@@ -456,12 +456,15 @@ class TestBundleRendering:
         body, count = render_bundle(req)
         assert count == 4
         first = json.loads(body.splitlines()[0])
-        # Open DSA = all default fields exported.
+        # Open DSA = all default Household fields exported, plus the
+        # members array (S6-002: open DSA embeds members by default).
         assert {
             "household.id", "household.sub_region_code",
             "household.urban_rural", "household.current_vulnerability_band",
-            "household.current_pmt_score",
+            "household.current_pmt_score", "members",
         } == set(first.keys())
+        # Empty households have an empty members list.
+        assert first["members"] == []
 
     def test_restricted_dsa_clips_fields_and_geography(
         self, geo_and_households, restricted_dsa,
@@ -624,3 +627,177 @@ class TestExpirySweep:
         ).first()
         assert ev is not None
         assert ev.actor_id == "nightly-cron"
+
+
+class TestBundleMembersEmbedding:
+    """S6-002 — members array is included in each household row when
+    the DSA either grants member.* explicitly or is unrestricted.
+    Field-level filtering still applies to each member's columns;
+    soft-deleted members are excluded."""
+
+    @pytest.fixture
+    def hh_with_members(self, db, partner):
+        from datetime import date
+
+        from apps.data_management.models import Household, Member
+        from apps.reference_data.models import GeographicUnit
+        nodes = {}
+        parent = None
+        for level in ("region", "sub_region", "district", "county",
+                      "sub_county", "parish", "village"):
+            node = GeographicUnit.objects.create(
+                level=level,
+                code=(f"M-{level}" if level != "sub_region" else "M-SR"),
+                name=f"M-{level}", parent=parent,
+                effective_from=date(2026, 1, 1),
+            )
+            nodes[level] = node
+            parent = node
+        hh = Household.objects.create(
+            region=nodes["region"], sub_region=nodes["sub_region"],
+            district=nodes["district"], county=nodes["county"],
+            sub_county=nodes["sub_county"], parish=nodes["parish"],
+            village=nodes["village"], urban_rural="rural",
+        )
+        Member.objects.create(
+            household=hh, line_number=1, surname="Okello",
+            first_name="James", sex="M", nin_last4="00AB",
+        )
+        Member.objects.create(
+            household=hh, line_number=2, surname="Okello",
+            first_name="Mary", sex="F",
+        )
+        # Soft-deleted member — must NOT appear in the bundle.
+        Member.objects.create(
+            household=hh, line_number=3, surname="Okello",
+            first_name="Deleted", sex="M",
+            is_deleted=True,
+        )
+        return hh
+
+    def test_open_dsa_embeds_live_members(self, hh_with_members, partner):
+        import json
+
+        from apps.data_requests.bundles import render_bundle
+        dsa = DataSharingAgreement.objects.create(
+            partner=partner, reference="DSA-MEM-OPEN",
+            status=DsaStatus.ACTIVE,
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={},
+        )
+        req = DataRequest.objects.create(
+            dsa=dsa, requester="p", request_payload={},
+        )
+        body, _ = render_bundle(req)
+        row = json.loads(body.splitlines()[0])
+        members = row["members"]
+        # Two live, one soft-deleted -> 2 in the export.
+        assert len(members) == 2
+        # Ordered by line_number.
+        assert members[0]["member.line_number"] == 1
+        assert members[1]["member.line_number"] == 2
+        # Default member fields are present.
+        assert members[0]["member.first_name"] == "James"
+        assert members[0]["member.nin_last4"] == "00AB"
+
+    def test_explicit_member_grant_filters_member_fields(
+        self, hh_with_members, partner,
+    ):
+        import json
+
+        from apps.data_requests.bundles import render_bundle
+        dsa = DataSharingAgreement.objects.create(
+            partner=partner, reference="DSA-MEM-NARROW",
+            status=DsaStatus.ACTIVE,
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={
+                "fields": [
+                    "household.id",
+                    "member.line_number", "member.first_name", "member.sex",
+                ],
+            },
+        )
+        req = DataRequest.objects.create(
+            dsa=dsa, requester="p2", request_payload={},
+        )
+        body, _ = render_bundle(req)
+        row = json.loads(body.splitlines()[0])
+        assert set(row.keys()) == {"household.id", "members"}
+        # Each member row carries ONLY the whitelisted member fields.
+        m0 = row["members"][0]
+        assert set(m0.keys()) == {
+            "member.line_number", "member.first_name", "member.sex",
+        }
+        # NIN columns NOT present — they were not whitelisted.
+        assert "member.nin_hash" not in m0
+        assert "member.nin_last4" not in m0
+
+    def test_household_only_dsa_excludes_members_key(
+        self, hh_with_members, partner,
+    ):
+        """A DSA whose `fields` lists only household.* keys must NOT
+        embed the members array at all — the partner has no scope on
+        any member.* column, so the array would leak."""
+        import json
+
+        from apps.data_requests.bundles import render_bundle
+        dsa = DataSharingAgreement.objects.create(
+            partner=partner, reference="DSA-NO-MEM",
+            status=DsaStatus.ACTIVE,
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={"fields": ["household.id"]},
+        )
+        req = DataRequest.objects.create(
+            dsa=dsa, requester="p3", request_payload={},
+        )
+        body, _ = render_bundle(req)
+        row = json.loads(body.splitlines()[0])
+        assert "members" not in row
+
+    def test_nin_hash_grant_renders_hex(self, hh_with_members, partner):
+        """When the DSA explicitly grants member.nin_hash, the binary
+        column surfaces as a hex string so the bundle stays JSON-safe."""
+        import json
+
+        from apps.data_management.models import Member
+        from apps.data_requests.bundles import render_bundle
+        from apps.security.hashing import nin_hash as _nh
+        # Plant a NIN hash on the first member.
+        m = Member.objects.filter(household=hh_with_members,
+                                  line_number=1).first()
+        m.nin_hash = _nh("CM1234567890AB")
+        m.save(update_fields=["nin_hash"])
+
+        dsa = DataSharingAgreement.objects.create(
+            partner=partner, reference="DSA-NIN",
+            status=DsaStatus.ACTIVE,
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={
+                "fields": ["household.id", "member.nin_hash"],
+            },
+        )
+        req = DataRequest.objects.create(
+            dsa=dsa, requester="p4", request_payload={},
+        )
+        body, _ = render_bundle(req)
+        row = json.loads(body.splitlines()[0])
+        m0 = row["members"][0]
+        # Hash exported as 64-char hex (SHA-256), not raw bytes.
+        assert len(m0["member.nin_hash"]) == 64
+        assert all(c in "0123456789abcdef" for c in m0["member.nin_hash"])
+
+    def test_dsa_scope_validation_rejects_unknown_member_field(self, partner):
+        """A request asking for member.* fields the DSA hasn't granted
+        must be rejected at submit, not silently dropped."""
+        dsa = DataSharingAgreement.objects.create(
+            partner=partner, reference="DSA-FIELD-GUARD",
+            status=DsaStatus.ACTIVE,
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={"fields": ["household.id"]},
+        )
+        req = DataRequest.objects.create(
+            dsa=dsa, requester="p5",
+            request_payload={"fields": ["household.id", "member.nin_hash"]},
+        )
+        with pytest.raises(DrsError, match="outside DSA scope"):
+            submit_data_request(req)
