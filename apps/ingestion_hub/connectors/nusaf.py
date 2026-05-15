@@ -18,6 +18,8 @@ that the mapper normalises:
 
 from __future__ import annotations
 
+from .base import register_connector
+
 _HEAD_ROLES = frozenset({
     "head", "household head", "hh head", "won pacu", "wonpacu",
 })
@@ -83,3 +85,15 @@ def _nusaf_member_to_canonical(m: dict, line_number: int) -> dict:
         "telephone_2": m.get("telephone_2", ""),
         "nin": nin,
     }
+
+
+class _NusafConnector:
+    code = "NUSAF-MIS"
+
+    def canonicalize(self, raw: dict) -> dict:
+        return nusaf_to_canonical(raw)
+
+    process = None
+
+
+register_connector(_NusafConnector())

@@ -41,6 +41,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .base import register_connector
+
 
 def nira_vital_to_canonical(raw: dict) -> dict:
     """Normalise a NIRA vital-event payload to a canonical dict.
@@ -128,3 +130,16 @@ def process_nira_vital_event(raw: dict, *, actor: str = "nira-reverse-feed") -> 
         ),
     )
     return auto_commit_change_request(cr)
+
+
+class _NiraVitalConnector:
+    code = "NIRA-REVERSE"
+
+    def canonicalize(self, raw: dict) -> dict:
+        return nira_vital_to_canonical(raw)
+
+    def process(self, raw: dict, *, actor: str = "nira-reverse-feed") -> Any:
+        return process_nira_vital_event(raw, actor=actor)
+
+
+register_connector(_NiraVitalConnector())

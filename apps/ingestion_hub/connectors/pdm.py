@@ -26,6 +26,8 @@ PDM-specific quirks handled here:
 
 from __future__ import annotations
 
+from .base import register_connector
+
 
 def pdm_to_canonical(raw: dict) -> dict:
     """Convert a PDM raw payload to the canonical NSR shape.
@@ -80,3 +82,15 @@ def _pdm_member_to_canonical(m: dict, line_number: int) -> dict:
         "telephone_2": m.get("telephone_2", ""),
         "nin": nin,
     }
+
+
+class _PdmConnector:
+    code = "PDM-MIS"
+
+    def canonicalize(self, raw: dict) -> dict:
+        return pdm_to_canonical(raw)
+
+    process = None  # PDM uses the generic DIH run path (land → stage → promote)
+
+
+register_connector(_PdmConnector())

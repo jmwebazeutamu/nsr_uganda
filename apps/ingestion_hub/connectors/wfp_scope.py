@@ -27,6 +27,8 @@ SCOPE-specific quirks handled here:
 
 from __future__ import annotations
 
+from .base import register_connector
+
 _ACTIVE_STATES = frozenset({"active"})
 
 _HEAD_ROLES = frozenset({
@@ -113,3 +115,15 @@ def _scope_member_to_canonical(m: dict, line_number: int) -> dict:
     if m.get("name_local"):
         out["_local_name"] = m["name_local"]
     return out
+
+
+class _WfpScopeConnector:
+    code = "WFP-SCOPE"
+
+    def canonicalize(self, raw: dict) -> dict:
+        return wfp_scope_to_canonical(raw)
+
+    process = None
+
+
+register_connector(_WfpScopeConnector())
