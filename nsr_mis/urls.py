@@ -30,4 +30,5 @@ urlpatterns = [
     path("api/v1/grm/", include("apps.grievance.urls")),
     path("api/v1/ref/", include("apps.referral.urls")),
     path("api/v1/rpt/", include("apps.reporting.urls")),
+    path("api/v1/drs/", include("apps.data_requests.urls")),
 ]
