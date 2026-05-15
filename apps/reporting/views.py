@@ -277,6 +277,48 @@ class PmtScoreHistogram(APIView):
 
 @extend_schema(
     tags=["rpt"],
+    summary="Weekly household registrations (last 12 weeks)",
+    responses={200: DashboardRowSerializer(many=True)},
+)
+class WeeklyHouseholdRegistrations(APIView):
+    """Counts of Household.created_at grouped by ISO week for the
+    last 12 weeks. The first trend-over-time dashboard — gives ops
+    a registration-throughput picture they can spot drops in.
+
+    Scope filter on Household.sub_region_code (S2-003 pattern); CSV
+    export inherited from the _render helper. Week keys are
+    'YYYY-Www' (ISO format) so they sort lexicographically and
+    chart libraries don't have to special-case them.
+    """
+
+    def get(self, request):
+        from datetime import timedelta
+
+        from django.db.models.functions import TruncWeek
+        from django.utils import timezone
+
+        cutoff = timezone.now() - timedelta(weeks=12)
+        scoped = Household.objects.filter(
+            scope_q_for_field(request.user, "sub_region_code"),
+            created_at__gte=cutoff,
+        )
+        rows = list(
+            scoped.annotate(week=TruncWeek("created_at"))
+            .values("week").annotate(count=Count("id")).order_by("week"),
+        )
+        out = [
+            {
+                "key": f"{r['week'].isocalendar()[0]}-W{r['week'].isocalendar()[1]:02d}",
+                "count": r["count"],
+            }
+            for r in rows
+        ]
+        _audit_dashboard_read(request, "weekly_household_registrations", len(out))
+        return _render(request, out, "weekly-household-registrations")
+
+
+@extend_schema(
+    tags=["rpt"],
     summary="DIH promotion latency distribution per connector",
     responses={200: DashboardRowSerializer(many=True)},
 )

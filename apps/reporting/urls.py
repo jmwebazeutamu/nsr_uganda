@@ -9,6 +9,7 @@ from .views import (
     PmtScoreHistogram,
     PromotionLatencyByConnector,
     SubmissionsPerDay,
+    WeeklyHouseholdRegistrations,
 )
 
 urlpatterns = [
@@ -36,4 +37,7 @@ urlpatterns = [
     path("dashboards/promotion-latency-by-connector/",
          PromotionLatencyByConnector.as_view(),
          name="rpt-promotion-latency-by-connector"),
+    path("dashboards/weekly-household-registrations/",
+         WeeklyHouseholdRegistrations.as_view(),
+         name="rpt-weekly-household-registrations"),
 ]

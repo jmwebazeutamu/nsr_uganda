@@ -622,3 +622,69 @@ class TestCsvExports:
         # The Karamoja code is NOT in any data row.
         karamoja_code = two_sub_regions["SR-KARAMOJA"]["sr"].code
         assert karamoja_code not in body
+
+
+class TestWeeklyHouseholdRegistrations:
+    """S8-004 — first trend-over-time dashboard. Counts of
+    Household.created_at grouped by ISO week for the last 12 weeks."""
+
+    def test_renders_iso_week_keys(self, db, households, django_user_model):
+        su = django_user_model.objects.create_user(
+            username="su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(
+            "/api/v1/rpt/dashboards/weekly-household-registrations/",
+        )
+        assert r.status_code == 200
+        # The two test households were just created -> one bucket today's
+        # week, count=2.
+        assert len(r.data) >= 1
+        # Key is 'YYYY-Www' (ISO week format) — lexicographically sortable.
+        key = r.data[0]["key"]
+        assert "-W" in key
+        assert key[:4].isdigit()  # year
+        assert sum(row["count"] for row in r.data) == 2
+
+    def test_scope_filtered_before_aggregation(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        u = django_user_model.objects.create_user(username="op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get(
+            "/api/v1/rpt/dashboards/weekly-household-registrations/",
+        )
+        assert r.status_code == 200
+        # Only the BUGANDA household visible -> one row, count=1.
+        assert sum(row["count"] for row in r.data) == 1
+
+    def test_csv_export_works(self, db, households, django_user_model):
+        """Inherited from the _render helper — every dashboard gets
+        CSV for free."""
+        su = django_user_model.objects.create_user(
+            username="su2", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(
+            "/api/v1/rpt/dashboards/weekly-household-registrations/"
+            "?export=csv",
+        )
+        assert r.status_code == 200
+        assert r["content-type"] == "text/csv"
+        assert "weekly-household-registrations.csv" in r["content-disposition"]
+
+    def test_audit_event_emitted(self, db, households, django_user_model):
+        from apps.security.models import AuditEvent
+        su = django_user_model.objects.create_user(
+            username="su3", password="p", is_superuser=True,
+        )
+        _client_for(su).get(
+            "/api/v1/rpt/dashboards/weekly-household-registrations/",
+        )
+        ev = AuditEvent.objects.filter(
+            entity_type="rpt_dashboard",
+            entity_id="weekly_household_registrations",
+        ).first()
+        assert ev is not None
+        assert ev.action == "dashboard_read"
