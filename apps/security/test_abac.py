@@ -17,7 +17,7 @@ def two_sub_regions(db):
     """Build two parallel 7-level ladders so we have two distinct
     sub_region_codes to test scoping against."""
     out = {}
-    for region_key, sr_key in [("R-CENTRAL", "SR-BUGANDA"), ("R-NORTHERN", "SR-KARAMOJA")]:
+    for _region_key, sr_key in [("R-CENTRAL", "SR-BUGANDA"), ("R-NORTHERN", "SR-KARAMOJA")]:
         nodes = {}
         for level, key, parent in [
             ("region", "r", None), ("sub_region", "sr", "r"), ("district", "d", "sr"),
