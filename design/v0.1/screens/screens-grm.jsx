@@ -62,7 +62,7 @@ const QUICK_FILTERS_GRM = [
   { id: "mine",      label: "Assigned to me",            icon: "user",       tone: "programme", predicate: r => r.assigned_to !== "" && r.status !== "closed" },
 ];
 
-const GRMScreen = () => {
+const GRMScreen = ({ onNavigate }) => {
   const [selectedRow, setSelectedRow] = useStateGrm(GRM_ROWS[1].id);
   const [selection, setSelection] = useStateGrm(new Set());
   const [quickFilter, setQuickFilter] = useStateGrm(null);
@@ -342,7 +342,14 @@ const GRMScreen = () => {
                     </button>
                   )}
                   {current.category === "data_correction" && current.status !== "closed" && (
-                    <button className="btn">
+                    <button className="btn" onClick={() => onNavigate?.(
+                      "upd",
+                      // The real linked_change_request_id comes from
+                      // Grievance.linked_change_request_id; the mock
+                      // doesn't carry it so we generate a stable
+                      // pseudo-id from the grievance id.
+                      { changeRequestId: `01HXYUPD${current.id.slice(-16)}` },
+                    )}>
                       <Icon name="edit" size={13}/> Open linked UPD
                     </button>
                   )}

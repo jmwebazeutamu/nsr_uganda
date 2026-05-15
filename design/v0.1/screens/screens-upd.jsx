@@ -31,12 +31,20 @@ const UPD = {
   ],
 };
 
-const UPDScreen = () => {
+const UPDScreen = ({ changeRequestId }) => {
   const [showAll, setShowAll] = useStateUpd(false);
   const [auditOpen, setAuditOpen] = useStateUpd(false);
   const [modal, setModal] = useStateUpd(null);
   const [toast, setToast] = useStateUpd("");
   const [selfApprove] = useStateUpd(false); // disabled in UI
+
+  // Cross-screen handoff (US-S9-004). When the GRM workbench navigates
+  // here with a linked_change_request_id, we override the mock id so
+  // the operator sees they landed on the right CR. Backend wiring is
+  // unchanged — Grievance.linked_change_request_id (S2-008) is what
+  // the real fetch will resolve.
+  const effectiveId = changeRequestId || UPD.id;
+  const fromGrm = Boolean(changeRequestId);
 
   const visible = showAll ? UPD.diff : UPD.diff.filter(d => !d.unchanged);
   const grouped = visible.reduce((acc, r) => {
@@ -58,9 +66,12 @@ const UPDScreen = () => {
   return (
     <div className="page" style={{paddingBottom:0, position:'relative'}}>
       <PageHeader
-        eyebrow="UPDATES · US-090"
-        title={<>Change request <span className="t-mono" style={{fontSize:14, marginLeft:8, color:'var(--neutral-500)'}}>{UPD.id}</span></>}
-        sub={<>Household <span className="t-mono">{UPD.household.slice(0,18)}…</span> · {UPD.head} · {UPD.parish}</>}
+        eyebrow={fromGrm ? "UPDATES · US-090 · OPENED FROM GRM" : "UPDATES · US-090"}
+        title={<>Change request <span className="t-mono" style={{fontSize:14, marginLeft:8, color:'var(--neutral-500)'}}>{effectiveId}</span></>}
+        sub={<>
+          {fromGrm && <Chip tone="data" size="sm" style={{marginRight:8}}>linked from grievance</Chip>}
+          Household <span className="t-mono">{UPD.household.slice(0,18)}…</span> · {UPD.head} · {UPD.parish}
+        </>}
         right={<>
           <button className="btn" onClick={() => setAuditOpen(true)}><Icon name="history"/> Audit chain</button>
           <button className="btn"><Icon name="eye"/> Open household</button>

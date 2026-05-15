@@ -27,6 +27,16 @@ function App() {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [screen, setScreen] = useStateApp("home");
   const [device, setDevice] = useStateApp("desktop");
+  // Cross-screen handoff payload — set by `navigate(screen, payload)`,
+  // consumed by the destination screen on mount, cleared when the
+  // user navigates away. Lets GRM → UPD pass a changeRequestId
+  // without inventing a real URL router for the mockup harness.
+  const [screenPayload, setScreenPayload] = useStateApp(null);
+
+  const navigate = (nextScreen, payload = null) => {
+    setScreen(nextScreen);
+    setScreenPayload(payload);
+  };
 
   // sync tweaks → DOM attrs
   useEffectApp(() => {
@@ -83,7 +93,7 @@ function App() {
           }
           const active = n.id === screen;
           return (
-            <button key={n.id} className={`nav-item ${active ? 'active' : ''}`} onClick={() => setScreen(n.id)}>
+            <button key={n.id} className={`nav-item ${active ? 'active' : ''}`} onClick={() => navigate(n.id)}>
               <Icon name={n.icon} size={18}/>
               <span className="nav-label">{n.label}</span>
               {n.count !== undefined && <span className="nav-count">{n.count}</span>}
@@ -105,15 +115,15 @@ function App() {
 
       {/* Main */}
       <main className="main">
-        {screen === "home"    && <HomeScreen role={role} onNavigate={setScreen}/>}
+        {screen === "home"    && <HomeScreen role={role} onNavigate={navigate}/>}
         {screen === "kit"     && <KitScreen/>}
         {screen === "capture" && <CaptureScreen device={device} onChangeDevice={setDevice}/>}
         {screen === "receipt" && <ReceiptScreen/>}
         {screen === "dih"     && <DIHScreen/>}
         {screen === "dedup"   && <DedupScreen/>}
-        {screen === "upd"     && <UPDScreen/>}
+        {screen === "upd"     && <UPDScreen changeRequestId={screenPayload?.changeRequestId}/>}
         {screen === "drs"     && <DRSScreen/>}
-        {screen === "grm"     && <GRMScreen/>}
+        {screen === "grm"     && <GRMScreen onNavigate={navigate}/>}
       </main>
 
       {/* Tweaks */}

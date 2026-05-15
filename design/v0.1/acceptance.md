@@ -158,7 +158,7 @@ existing `/api/v1/grm/grievances/` viewset.
 | UI-GRM-5 | Detail rail shows category, narrative, reporter, subject (household_id + member_id when present), assignment state |
 | UI-GRM-6 | Per-row actions exposed contextually: Assign-to-me only when unassigned; Escalate only when tier ≠ L4 and status ∉ {RESOLVED, CLOSED}; Resolve only when status ∉ {RESOLVED, CLOSED}; Close only when status == RESOLVED |
 | UI-GRM-7 | Escalate / Resolve / Close trigger `ReasonModal` with canned reasons that mirror service-layer guard messages from `apps/grievance/services.py`; reason + 6+ char note required |
-| UI-GRM-8 | DATA_CORRECTION rows expose an "Open linked UPD" action — clicking jumps to the UPD screen with the linked ChangeRequest pre-loaded (cross-screen handoff) |
+| UI-GRM-8 | DATA_CORRECTION rows expose an "Open linked UPD" action — clicking jumps to the UPD screen with the linked ChangeRequest pre-loaded; the UPD page header shows "OPENED FROM GRM" eyebrow + a "linked from grievance" chip so the reviewer knows the context (cross-screen handoff, wired in S9-004) |
 | UI-GRM-9 | Audit drawer shows the full lifecycle: opened → SLA computed → assigned → escalated (when applicable) → resolved (when applicable) |
 | UI-GRM-10 | Empty state (no rows match filter) shows a calm inbox icon with "No grievances match this filter" — no marketing copy |
 | UI-GRM-11 | Role visibility: hidden from DPO (read-only-everything, no workflow); visible to Parish Chief, CDO, District M&E, NSR Unit |
