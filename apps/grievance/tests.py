@@ -299,3 +299,88 @@ class TestOverdueAction:
         results = r.data["results"] if isinstance(r.data, dict) else r.data
         ids = {row["id"] for row in results}
         assert ids == {overdue.id}
+
+
+class TestAdminWorkbench:
+    """Supervisors should be able to triage from /admin/grievance/.
+    The admin layer is a thin wrapper around services so the audit
+    chain, signal wiring, and state guards are identical to the REST
+    surface."""
+
+    @pytest.fixture
+    def staff_user(self, db, django_user_model):
+        return django_user_model.objects.create_user(
+            username="supervisor", password="p",
+            is_staff=True, is_superuser=True,
+        )
+
+    @pytest.fixture
+    def admin_client(self, staff_user):
+        from django.test import Client
+        c = Client()
+        c.force_login(staff_user)
+        return c
+
+    def test_changelist_renders(self, admin_client, db):
+        open_grievance(
+            category=Category.DATA_CORRECTION, description="x",
+            household_id="01HXY7K3B2N9PVQE4M6FZRWS18",
+        )
+        r = admin_client.get("/admin/grievance/grievance/")
+        assert r.status_code == 200
+        assert b"01HXY7K3B2N9PVQE4M6FZRWS18" in r.content
+
+    def test_sla_badge_shows_overdue_when_past_deadline(self, db):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.grievance.admin import GrievanceAdmin
+        g = open_grievance(category=Category.OTHER, description="x")
+        g.sla_deadline = timezone.now() - timedelta(hours=1)
+        g.save(update_fields=["sla_deadline"])
+        admin_instance = GrievanceAdmin(Grievance, admin_site=None)
+        badge = admin_instance.sla_badge(g)
+        assert "OVERDUE" in badge
+
+    def test_sla_badge_neutral_when_closed(self, db):
+        from apps.grievance.admin import GrievanceAdmin
+        g = open_grievance(category=Category.OTHER, description="x")
+        resolve(g, actor="op", narrative="ok")
+        close(g, actor="op")
+        admin_instance = GrievanceAdmin(Grievance, admin_site=None)
+        badge = admin_instance.sla_badge(g)
+        assert "OVERDUE" not in badge
+        assert "—" in badge
+
+    def test_bulk_escalate_action(self, admin_client, db):
+        # Two open grievances at L1, both should escalate to L2.
+        from apps.grievance.models import Tier
+        g1 = open_grievance(category=Category.OTHER, description="x",
+                            tier=Tier.L1_PARISH_CHIEF)
+        g2 = open_grievance(category=Category.OTHER, description="y",
+                            tier=Tier.L1_PARISH_CHIEF)
+        r = admin_client.post("/admin/grievance/grievance/", data={
+            "action": "admin_escalate",
+            "_selected_action": [g1.id, g2.id],
+        })
+        assert r.status_code in (200, 302)
+        for g in (g1, g2):
+            g.refresh_from_db()
+            assert g.tier == Tier.L2_CDO
+            assert g.status == GrievanceStatus.ESCALATED
+
+    def test_bulk_close_skips_non_resolved(self, admin_client, db):
+        # One RESOLVED + one OPEN; only the RESOLVED should close.
+        g_resolved = open_grievance(category=Category.OTHER, description="x")
+        resolve(g_resolved, actor="op", narrative="ok")
+        g_open = open_grievance(category=Category.OTHER, description="y")
+        r = admin_client.post("/admin/grievance/grievance/", data={
+            "action": "admin_close",
+            "_selected_action": [g_resolved.id, g_open.id],
+        })
+        assert r.status_code in (200, 302)
+        g_resolved.refresh_from_db()
+        g_open.refresh_from_db()
+        assert g_resolved.status == GrievanceStatus.CLOSED
+        assert g_open.status == GrievanceStatus.OPEN
