@@ -16,7 +16,6 @@ from .models import (
     PromotionDecision,
     Quarantine,
     RawLanding,
-    SourceSystem,
     StageRecord,
 )
 
@@ -26,11 +25,10 @@ from .models import (
 STUCK_RUN_THRESHOLD = timedelta(hours=6)
 
 
-@admin.register(SourceSystem)
-class SourceSystemAdmin(admin.ModelAdmin):
-    list_display = ("code", "name", "kind", "is_active", "updated_at")
-    list_filter = ("kind", "is_active")
-    search_fields = ("code", "name")
+# SourceSystem registration lives in admin_credentials so the
+# credential subforms + 'Test connection' action are wired alongside
+# the model registration. Importing the module triggers the registration.
+from . import admin_credentials  # noqa: F401, E402
 
 
 @admin.register(DataProvisionAgreement)

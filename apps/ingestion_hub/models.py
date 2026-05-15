@@ -18,7 +18,7 @@ References:
 from __future__ import annotations
 
 from django.db import models
-from nsr_mis.common.fields import ULIDField
+from nsr_mis.common.fields import EncryptedBinaryField, ULIDField
 
 # --- Source systems and DPAs ----------------------------------------------
 
@@ -107,9 +107,23 @@ class ConnectorRunStatus(models.TextChoices):
     QUARANTINED = "quarantined"
 
 
+class ConnectorRunType(models.TextChoices):
+    """A real import run vs. a one-shot "Test connection" probe from
+    the Admin UI. Both write ConnectorRun rows for auditability
+    (US-S11-003), but the dashboard's promotion-latency aggregates
+    in S6-005 only consider type=IMPORT so test runs don't skew the
+    statistics. See ADR-0007."""
+    IMPORT = "import"
+    TEST = "test"
+
+
 class ConnectorRun(models.Model):
     id = ULIDField(primary_key=True)
     connector = models.ForeignKey(Connector, on_delete=models.PROTECT, related_name="runs")
+    run_type = models.CharField(
+        max_length=8, choices=ConnectorRunType.choices,
+        default=ConnectorRunType.IMPORT,
+    )
     started_at = models.DateTimeField(auto_now_add=True)
     finished_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=16, choices=ConnectorRunStatus.choices,
@@ -129,10 +143,52 @@ class ConnectorRun(models.Model):
         indexes = [
             models.Index(fields=["connector", "started_at"]),
             models.Index(fields=["status"]),
+            models.Index(fields=["run_type", "started_at"]),
         ]
 
     def __str__(self) -> str:
-        return f"run {self.id} [{self.status}]"
+        return f"run {self.id} [{self.run_type}/{self.status}]"
+
+
+class KoboCredential(models.Model):
+    """Token-auth credential for a Kobo SourceSystem.
+
+    `token_encrypted` holds the Kobo Knox token (acquired from the
+    upstream `/token/` endpoint at credential-save time) encrypted at
+    rest via the same Fernet scheme used for Member.nin_value. The
+    plaintext username + password the admin enters is NEVER persisted
+    — it lives only in the request handler's local scope while the
+    token exchange happens.
+
+    See ADR-0007 for the connector plug-in pattern this model
+    instantiates (NIRA + UBOS will get sibling *Credential models).
+    """
+
+    id = ULIDField(primary_key=True)
+    source_system = models.OneToOneField(
+        SourceSystem, on_delete=models.CASCADE, related_name="kobo_credential",
+    )
+    server_url = models.URLField(
+        max_length=255,
+        help_text="Kobo instance base URL, e.g. https://kobo.humanitarianresponse.info",
+    )
+    token_encrypted = EncryptedBinaryField()
+    # The Kobo username that minted this token — recorded for audit
+    # lineage so the operations team can see which staff identity is
+    # accessing the upstream API. Not used to re-authenticate.
+    acquired_by_username = models.CharField(max_length=128, blank=True)
+    acquired_at = models.DateTimeField(auto_now_add=True)
+    last_test_at = models.DateTimeField(null=True, blank=True)
+    last_test_ok = models.BooleanField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Kobo credential"
+
+    def __str__(self) -> str:
+        return f"kobo cred for {self.source_system_id}"
 
 
 # --- Mapping rules --------------------------------------------------------
