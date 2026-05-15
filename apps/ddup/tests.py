@@ -16,11 +16,13 @@ from apps.ddup.models import (
     ModelStatus,
     PairStatus,
 )
+from apps.ddup.phone import to_e164
 from apps.ddup.services import (
     DdupApprovalError,
     MergeError,
     activate_model_version,
     discover_nin_pairs,
+    discover_phone_pairs,
     merge_member_pair,
     reject_pair,
 )
@@ -250,3 +252,69 @@ class TestReject:
         pair = discover_nin_pairs(actor="system")[0]
         with pytest.raises(MergeError, match="reason"):
             reject_pair(pair, actor="op-1", reason="")
+
+
+# --- Tier 2 phone normalisation + discovery (US-S2-007) --------------------
+
+class TestPhoneNormalisation:
+    @pytest.mark.parametrize("raw,expected", [
+        ("+256700000001", "+256700000001"),
+        ("0700000001",    "+256700000001"),
+        ("256700000001",  "+256700000001"),
+        ("+256 700 000 001", "+256700000001"),
+        ("0700-000-001",  "+256700000001"),
+    ])
+    def test_accepts_valid_forms(self, raw, expected):
+        assert to_e164(raw) == expected
+
+    @pytest.mark.parametrize("raw", [
+        "", None,
+        "+1 555 555 5555",        # non-UG
+        "0500000001",             # 5 isn't an accepted Ugandan prefix
+        "07000000",               # too short
+        "07000000012",            # too long
+        "abc",                    # non-numeric
+    ])
+    def test_rejects_invalid(self, raw):
+        assert to_e164(raw) is None
+
+
+class TestPhoneDiscovery:
+    def test_two_members_with_same_phone_create_tier2_pair(self, household, active_model):
+        Member.objects.create(household=household, line_number=1, surname="A", first_name="One",
+                              sex="M", telephone_1="+256700000001")
+        Member.objects.create(household=household, line_number=2, surname="B", first_name="Two",
+                              sex="F", telephone_1="0700000001")  # equivalent normalised
+        created = discover_phone_pairs(actor="system")
+        assert len(created) == 1
+        assert created[0].tier == 2
+        assert created[0].match_reason == "phone"
+
+    def test_unparseable_phone_excluded(self, household, active_model):
+        Member.objects.create(household=household, line_number=1, surname="A", first_name="One",
+                              sex="M", telephone_1="abc")
+        Member.objects.create(household=household, line_number=2, surname="B", first_name="Two",
+                              sex="F", telephone_1="abc")
+        assert discover_phone_pairs(actor="system") == []
+
+    def test_idempotent(self, household, active_model):
+        Member.objects.create(household=household, line_number=1, surname="A", first_name="One",
+                              sex="M", telephone_1="+256700000001")
+        Member.objects.create(household=household, line_number=2, surname="B", first_name="Two",
+                              sex="F", telephone_1="+256700000001")
+        first = discover_phone_pairs(actor="system")
+        second = discover_phone_pairs(actor="system")
+        assert len(first) == 1 and second == []
+
+    def test_tier1_pair_not_redisco_as_tier2(self, household, active_model):
+        # Same NIN AND same phone → tier 1 wins; the (a,b) uniqueness
+        # constraint blocks a second tier-2 row for the same pair.
+        h = _hash("CM1234567890AB")
+        Member.objects.create(household=household, line_number=1, surname="A", first_name="One",
+                              sex="M", nin_hash=h, telephone_1="+256700000001")
+        Member.objects.create(household=household, line_number=2, surname="B", first_name="Two",
+                              sex="F", nin_hash=h, telephone_1="+256700000001")
+        tier1 = discover_nin_pairs(actor="system")
+        tier2 = discover_phone_pairs(actor="system")
+        assert len(tier1) == 1 and tier1[0].tier == 1
+        assert tier2 == []  # already represented as a tier-1 pair

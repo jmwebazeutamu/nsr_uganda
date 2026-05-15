@@ -24,6 +24,7 @@ from .models import (
     ModelStatus,
     PairStatus,
 )
+from .phone import to_e164
 
 # ---------------------------------------------------------------------------
 # Model version lifecycle
@@ -68,6 +69,33 @@ def _emit_audit(action: str, entity_type: str, entity_id: str, *, actor: str, re
                reason=reason, field_changes=field_changes)
 
 
+def _record_pair(
+    *, record_a_id: str, record_b_id: str, tier: int, match_reason: str,
+    model: DdupModelVersion, actor: str,
+) -> MatchPair | None:
+    """Insert a PENDING pair if (record_type=member, a, b) doesn't already
+    exist. Returns the new MatchPair, or None when the pair was already
+    present (idempotent re-discovery)."""
+    a, b = _pair_key(record_a_id, record_b_id)
+    pair, was_created = MatchPair.objects.get_or_create(
+        record_type="member",
+        record_a_id=a, record_b_id=b,
+        defaults=dict(
+            tier=tier, match_reason=match_reason,
+            composite_score=None, per_field_scores=None,
+            model_version=model, status=PairStatus.PENDING,
+        ),
+    )
+    if was_created:
+        _emit_audit(
+            action="create", entity_type="match_pair", entity_id=pair.id,
+            actor=actor, reason=f"tier{tier}-{match_reason}-discovery",
+            field_changes={"a": a, "b": b, "tier": tier, "reason": match_reason},
+        )
+        return pair
+    return None
+
+
 @transaction.atomic
 def discover_nin_pairs(*, actor: str = "system") -> list[MatchPair]:
     """Find every set of Member rows sharing nin_hash and create pending pairs.
@@ -97,23 +125,52 @@ def discover_nin_pairs(*, actor: str = "system") -> list[MatchPair]:
         ids = sorted(ids)
         for i in range(len(ids)):
             for j in range(i + 1, len(ids)):
-                a, b = _pair_key(ids[i], ids[j])
-                pair, was_created = MatchPair.objects.get_or_create(
-                    record_type="member",
-                    record_a_id=a, record_b_id=b,
-                    defaults=dict(
-                        tier=1, match_reason="nin",
-                        composite_score=None, per_field_scores=None,
-                        model_version=model, status=PairStatus.PENDING,
-                    ),
+                pair = _record_pair(
+                    record_a_id=ids[i], record_b_id=ids[j],
+                    tier=1, match_reason="nin", model=model, actor=actor,
                 )
-                if was_created:
+                if pair:
                     created.append(pair)
-                    _emit_audit(
-                        action="create", entity_type="match_pair", entity_id=pair.id,
-                        actor=actor, reason="tier1-nin-discovery",
-                        field_changes={"a": a, "b": b, "tier": 1, "reason": "nin"},
-                    )
+    return created
+
+
+@transaction.atomic
+def discover_phone_pairs(*, actor: str = "system") -> list[MatchPair]:
+    """Tier 2: exact match on Member.telephone_1 normalised to E.164.
+
+    Per SAD §4.3.1 tier 2 and §11.1 MVP scope. Tier 1 (NIN) takes
+    precedence — pairs already discovered there are preserved by the
+    (record_type, a, b) uniqueness constraint and not re-queued.
+
+    Returns newly-created MatchPair rows.
+    """
+    model = get_active_model_version()
+    by_phone: dict[str, list[str]] = {}
+    qs = (
+        Member.objects
+        .filter(is_deleted=False)
+        .exclude(telephone_1="")
+        .values_list("id", "telephone_1")
+    )
+    for member_id, phone in qs:
+        e164 = to_e164(phone)
+        if not e164:
+            continue
+        by_phone.setdefault(e164, []).append(member_id)
+
+    created: list[MatchPair] = []
+    for ids in by_phone.values():
+        if len(ids) < 2:
+            continue
+        ids = sorted(ids)
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                pair = _record_pair(
+                    record_a_id=ids[i], record_b_id=ids[j],
+                    tier=2, match_reason="phone", model=model, actor=actor,
+                )
+                if pair:
+                    created.append(pair)
     return created
 
 
