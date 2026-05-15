@@ -58,8 +58,10 @@ class TestRegistry:
         assert callable(c.test_connection)
         assert callable(c.list_forms)
         assert callable(c.pull_submissions)
-        # Canonicalisation comes in a later story.
-        assert c.canonicalize is None
+        # canonicalize wired in US-S11-011; process stays None
+        # (Kobo uses the generic DIH run path, not a side-effecting
+        # driver like NIRA reverse-feed).
+        assert callable(c.canonicalize)
         assert c.process is None
 
 
@@ -259,3 +261,169 @@ class TestAcquireToken:
         )
         with pytest.raises(RequestException, match="no token field"):
             acquire_token(TEST_URL, "user", "secret")
+
+
+# --- US-S11-011 — canonical mapper -------------------------------------
+
+
+# A realistic Kobo submission shaped like the NSR socio-economic
+# questionnaire v2 (March 2026). Kept lean — only the fields the
+# canonical mapper touches — but uses the exact field-code names so
+# the mapper's structural assumptions get exercised.
+SAMPLE_KOBO_PAYLOAD = {
+    "_id": 753454740,
+    "_uuid": "seed-00010",
+    "_xform_id_string": "aRpVGbQLmPbVo3e4XUjSGe",
+    "_submission_time": "2026-05-15T15:37:47",
+    "_submitted_by": "tester_a",
+    "a0_region": "western",
+    "a1_subregion": "kigezi",
+    "a2_district_city": "412",
+    "a3_county_municipality": "412_02",
+    "a4_subcounty_division_tc": "412_02_05",
+    "a5_parish_ward": "412_02_05_01",
+    "a6_lc1_village_cell": "Akello Village",
+    "a7_rural_urban": "1",
+    "a8_enumeration_area": "EA-767",
+    "a9_household_number": "HH-00010",
+    "a11_12_gps": "-0.237755 31.087186 0 9",
+    "b3_address": "KABWOMA, NYAKAGYEME",
+    "household_members": [
+        {
+            "household_members/member_index": "1",
+            "household_members/c1_full_name": "Nakalema Daniel",
+            "household_members/c2_relationship": "01",
+            "household_members/c4_sex": "1",
+            "household_members/c5_date_of_birth": "1966-10-16",
+            "household_members/c6_age_years": "60",
+            "household_members/c8_nin_status": "2",
+            "household_members/c11_residency_status": "01",
+        },
+        {
+            "household_members/member_index": "2",
+            "household_members/c1_full_name": "Tumusiime Joseph",
+            "household_members/c2_relationship": "05",
+            "household_members/c4_sex": "1",
+            "household_members/c5_date_of_birth": "1997-02-04",
+            "household_members/c6_age_years": "29",
+            "household_members/c8_nin_status": "1",
+            "household_members/c9_nin": "CM738402535720",
+            "household_members/c17_has_phone": "1",
+            "household_members/c18_telephone_1": "0398272759",
+            "household_members/c11_residency_status": "02",
+        },
+        {
+            "household_members/member_index": "3",
+            "household_members/c1_full_name": "Achen Brian",
+            "household_members/c2_relationship": "10",
+            "household_members/c4_sex": "1",
+            "household_members/c6_age_years": "7",
+            "household_members/c8_nin_status": "3",
+        },
+    ],
+}
+
+
+class TestKoboCanonicalMapper:
+    def test_canonicalize_wired_on_connector(self):
+        """KoboConnector.canonicalize must point at kobo_to_canonical;
+        the US-S8-005 framework dispatch goes through this attribute."""
+        from apps.ingestion_hub.connectors.base import get_connector
+        c = get_connector("KOBO-PILOT")
+        assert c.canonicalize is not None
+        # Smoke test the dispatch — same module-level function.
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        assert c.canonicalize is kobo_to_canonical
+
+    def test_geographic_codes_pass_through(self):
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        out = kobo_to_canonical(SAMPLE_KOBO_PAYLOAD)
+        assert out["geographic"] == {
+            "region": "western",
+            "sub_region": "kigezi",
+            "district": "412",
+            "county": "412_02",
+            "sub_county": "412_02_05",
+            "parish": "412_02_05_01",
+            "village": "Akello Village",
+        }
+
+    def test_urban_rural_code_maps_to_label(self):
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        out = kobo_to_canonical(SAMPLE_KOBO_PAYLOAD)
+        assert out["urban_rural"] == "rural"  # a7_rural_urban = "1"
+
+        urban = {**SAMPLE_KOBO_PAYLOAD, "a7_rural_urban": "2"}
+        assert kobo_to_canonical(urban)["urban_rural"] == "urban"
+
+    def test_gps_string_parses_lat_lng_accuracy(self):
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        out = kobo_to_canonical(SAMPLE_KOBO_PAYLOAD)
+        assert out["gps_lat"] == pytest.approx(-0.237755)
+        assert out["gps_lng"] == pytest.approx(31.087186)
+        assert out["gps_accuracy_m"] == pytest.approx(9.0)
+
+    def test_gps_missing_yields_none(self):
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        without_gps = {k: v for k, v in SAMPLE_KOBO_PAYLOAD.items() if k != "a11_12_gps"}
+        out = kobo_to_canonical(without_gps)
+        assert out["gps_lat"] is None and out["gps_lng"] is None
+
+    def test_household_head_detection_uses_relationship_code(self):
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        out = kobo_to_canonical(SAMPLE_KOBO_PAYLOAD)
+        heads = [m for m in out["members"] if m["is_head"]]
+        assert len(heads) == 1
+        assert heads[0]["surname"] == "Nakalema"
+        assert heads[0]["first_name"] == "Daniel"
+
+    def test_member_name_split_surname_first(self):
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        out = kobo_to_canonical(SAMPLE_KOBO_PAYLOAD)
+        names = [(m["surname"], m["first_name"]) for m in out["members"]]
+        assert names == [
+            ("Nakalema", "Daniel"),
+            ("Tumusiime", "Joseph"),
+            ("Achen", "Brian"),
+        ]
+
+    def test_sex_code_maps_to_m_or_f(self):
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        out = kobo_to_canonical(SAMPLE_KOBO_PAYLOAD)
+        assert all(m["sex"] == "M" for m in out["members"])
+
+    def test_nin_populated_only_when_status_indicates_card(self):
+        """c8_nin_status='1' (has card) → nin field populated.
+        '2' (applied) or '3' (not applied) → nin stays blank even if
+        c9_nin happens to be present."""
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        out = kobo_to_canonical(SAMPLE_KOBO_PAYLOAD)
+        ninify = {m["line_number"]: m["nin"] for m in out["members"]}
+        assert ninify == {1: "", 2: "CM738402535720", 3: ""}
+
+    def test_age_years_coerced_to_int(self):
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        out = kobo_to_canonical(SAMPLE_KOBO_PAYLOAD)
+        ages = [m["age_years"] for m in out["members"]]
+        assert ages == [60, 29, 7]
+
+    def test_source_keys_capture_lineage(self):
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        out = kobo_to_canonical(SAMPLE_KOBO_PAYLOAD)
+        sk = out["_source_keys"]
+        assert sk["kobo_submission_id"] == "753454740"
+        assert sk["kobo_uuid"] == "seed-00010"
+        assert sk["kobo_form_id"] == "aRpVGbQLmPbVo3e4XUjSGe"
+        assert sk["kobo_household_number"] == "HH-00010"
+
+    def test_missing_geography_raises_keyerror(self):
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        broken = {k: v for k, v in SAMPLE_KOBO_PAYLOAD.items() if k != "a2_district_city"}
+        with pytest.raises(KeyError, match="a2_district_city"):
+            kobo_to_canonical(broken)
+
+    def test_empty_roster_raises_keyerror(self):
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        rosterless = {**SAMPLE_KOBO_PAYLOAD, "household_members": []}
+        with pytest.raises(KeyError, match="household_members"):
+            kobo_to_canonical(rosterless)

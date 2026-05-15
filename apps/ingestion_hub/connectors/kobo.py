@@ -104,6 +104,195 @@ def _new_session() -> requests.Session:
     return s
 
 
+# --- Canonical mapper (US-S11-011) -------------------------------------
+#
+# Maps the NSR socio-economic questionnaire v2 (March 2026) — the
+# field block that ships in the Kobo form `a1-a15` (geography +
+# interview meta), `b1-b5` (head + contact), `c1-c22` (member
+# demographics + NIN), `d1-d8` (disability), `e1-e5` (education),
+# `f1-f10` (employment), `g1-g16` (dwelling + assets), `h1-h6`
+# (agriculture), `i1-i17` (food security), `k01` (shocks), `l*`
+# (coping) — onto the canonical shape the DIH staging pipeline
+# expects. See ADR-0007 for the connector plug-in pattern.
+#
+# Required NSR fields (geographic 7-level codes, member roster with
+# names + sex) are mapped strictly. Optional fields (NIN, GPS,
+# disability/education/employment metadata) are best-effort — when
+# absent in the Kobo payload we leave the canonical key out rather
+# than fabricating a default. Downstream DQA rules (AC-MANDATORY,
+# AC-NIN-FORMAT) catch missing required values per SAD §4.2.
+#
+# Strict failures (missing geo block, empty roster) raise KeyError so
+# the caller (stage_from_landing) routes the row to Quarantine
+# per AC-DIH-QUARANTINE.
+
+# Kobo field code → NSR canonical sex value. The form uses UBOS's
+# 1=male / 2=female convention; the NSR Member.sex column convention
+# (see the four shipped connectors) is "M"/"F".
+_KOBO_SEX_TO_CANONICAL = {"1": "M", "2": "F"}
+
+
+def _split_full_name(full: str) -> tuple[str, str]:
+    """Best-effort surname/first_name split from a single
+    full-name string. Ugandan convention on official forms is
+    surname first, given names after — so we take the first
+    whitespace-separated token as surname and the rest as
+    first_name. The split is conservative: if the string is empty
+    or one token, surname gets the whole thing and first_name is
+    blank. Operators correct edge cases via UPD after promotion."""
+    parts = (full or "").strip().split(None, 1)
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], parts[1]
+
+
+def _parse_kobo_gps(gps: str | None) -> tuple[float | None, float | None, float | None]:
+    """ODK/Kobo geopoint serialisation: 'lat lng altitude accuracy',
+    space-separated, with empty / 0 / 9 sentinels for unknown
+    altitude+accuracy. Returns (lat, lng, accuracy_m) — altitude is
+    ignored since NSR doesn't capture it."""
+    if not gps:
+        return None, None, None
+    parts = gps.strip().split()
+    if len(parts) < 2:
+        return None, None, None
+    try:
+        lat = float(parts[0])
+        lng = float(parts[1])
+    except ValueError:
+        return None, None, None
+    accuracy = None
+    if len(parts) >= 4:
+        try:
+            accuracy = float(parts[3])
+        except ValueError:
+            accuracy = None
+    return lat, lng, accuracy
+
+
+def _kobo_member_to_canonical(raw: dict, line_number: int) -> dict:
+    """Convert one row from `household_members[]` to the canonical
+    member shape. Kobo namespaces every field as
+    `household_members/c1_full_name` etc., so we strip the prefix
+    before consulting the dict."""
+    m = {k.removeprefix("household_members/"): v for k, v in raw.items()}
+    full = m.get("c1_full_name", "")
+    surname, first_name = _split_full_name(full)
+    # The first member with c2_relationship='01' is the head by the
+    # form convention. The caller (kobo_to_canonical) passes
+    # line_number; the head_member resolution happens in
+    # promote_stage_record via the is_head flag.
+    is_head = (m.get("c2_relationship") or "").strip() == "01"
+    canonical: dict = {
+        "line_number": int(m.get("member_index") or line_number),
+        "is_head": is_head,
+        "surname": surname,
+        "first_name": first_name,
+        "other_name": "",
+        "sex": _KOBO_SEX_TO_CANONICAL.get(str(m.get("c4_sex") or "").strip(), ""),
+        "date_of_birth": m.get("c5_date_of_birth") or None,
+        "age_years": _to_int(m.get("c6_age_years")),
+        "relationship_to_head": "" if is_head else (m.get("c2_relationship") or ""),
+        "telephone_1": (m.get("c18_telephone_1") or "").strip(),
+        "telephone_2": "",
+        # NIN trio — only fill nin when the form says the member has a
+        # card (c8_nin_status='1'); otherwise the c9_nin field is
+        # typically absent. The canonical helper in promote_stage_record
+        # will hash/encrypt; we just pass the raw string here.
+        "nin": (m.get("c9_nin") or "").strip().upper()
+                if (m.get("c8_nin_status") or "").strip() == "1" else "",
+        # Lineage so the audit chain can trace any field back to the
+        # original Kobo question code.
+        "_source_keys": {
+            "kobo_member_index": m.get("member_index", ""),
+            "c8_nin_status": m.get("c8_nin_status", ""),
+            "c11_residency_status": m.get("c11_residency_status", ""),
+        },
+    }
+    return canonical
+
+
+def _to_int(value) -> int | None:
+    """Coerce Kobo's string-encoded ints. Returns None when the value
+    is blank, missing, or non-numeric — leave numeric defaulting to
+    the downstream DQA layer rather than fabricating zeros."""
+    if value is None or value == "":
+        return None
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def kobo_to_canonical(raw: dict) -> dict:
+    """Convert a Kobo Toolbox submission (NSR socio-economic
+    questionnaire v2) to the canonical NSR shape consumed by
+    stage_from_landing.
+
+    Required:
+        a0_region, a1_subregion, a2_district_city,
+        a3_county_municipality, a4_subcounty_division_tc,
+        a5_parish_ward, a6_lc1_village_cell — all 7 GeographicUnit
+        codes. Missing geography raises KeyError → row goes to
+        Quarantine.
+        household_members[] with ≥1 member. Empty roster raises
+        KeyError too — a registry record without people is
+        semantically meaningless.
+
+    Best-effort:
+        gps from a11_12_gps; urban/rural from a7_rural_urban
+        ('1'=rural, '2'=urban per UBOS convention).
+    """
+    geo_keys = (
+        "a0_region", "a1_subregion", "a2_district_city",
+        "a3_county_municipality", "a4_subcounty_division_tc",
+        "a5_parish_ward", "a6_lc1_village_cell",
+    )
+    for k in geo_keys:
+        if not raw.get(k):
+            raise KeyError(f"missing required Kobo geo field: {k}")
+
+    members_raw = raw.get("household_members") or []
+    if not members_raw:
+        raise KeyError("Kobo submission has no household_members rows")
+
+    lat, lng, gps_acc = _parse_kobo_gps(raw.get("a11_12_gps"))
+    urban_rural = "urban" if str(raw.get("a7_rural_urban") or "").strip() == "2" else "rural"
+
+    canonical: dict = {
+        "geographic": {
+            "region": raw["a0_region"],
+            "sub_region": raw["a1_subregion"],
+            "district": raw["a2_district_city"],
+            "county": raw["a3_county_municipality"],
+            "sub_county": raw["a4_subcounty_division_tc"],
+            "parish": raw["a5_parish_ward"],
+            "village": raw["a6_lc1_village_cell"],
+        },
+        "urban_rural": urban_rural,
+        "address_narrative": (raw.get("b3_address") or "").strip(),
+        "gps_lat": lat,
+        "gps_lng": lng,
+        "gps_accuracy_m": gps_acc,
+        "members": [
+            _kobo_member_to_canonical(m, i)
+            for i, m in enumerate(members_raw, start=1)
+        ],
+        "_source_keys": {
+            "kobo_submission_id": str(raw.get("_id", "")),
+            "kobo_uuid": raw.get("_uuid", ""),
+            "kobo_form_id": raw.get("_xform_id_string", ""),
+            "kobo_household_number": raw.get("a9_household_number", ""),
+            "kobo_enumeration_area": raw.get("a8_enumeration_area", ""),
+            "kobo_submitted_by": raw.get("_submitted_by", ""),
+            "kobo_submission_time": raw.get("_submission_time", ""),
+        },
+    }
+    return canonical
+
+
 def acquire_token(
     server_url: str, username: str, password: str,
     *, session: requests.Session | None = None,
@@ -150,12 +339,13 @@ class KoboConnector:
 
     code = "KOBO-PILOT"
 
-    # The canonicalisation-only methods from US-S8-005 stay set to
-    # None — Kobo's canonical mapping for submissions isn't part of
-    # this story (see "Out of scope" in the prompt). When it lands,
-    # it joins as a new module-level kobo_to_canonical and this
-    # canonicalize attribute switches to it.
-    canonicalize = None
+    # canonicalize wired to the module-level kobo_to_canonical
+    # (US-S11-011). The function is pure — it raises KeyError on
+    # missing required fields so stage_from_landing routes the row to
+    # Quarantine per AC-DIH-QUARANTINE. process stays None: Kobo uses
+    # the generic DIH run path (land → stage → promote) rather than a
+    # side-effecting driver like NIRA reverse-feed.
+    canonicalize = staticmethod(kobo_to_canonical)
     process = None
 
     def test_connection(self, credentials: dict) -> ConnectionTestResult:
