@@ -594,3 +594,125 @@ class TestAutoEscalation:
             "apps.update_workflow.tasks.escalate_stale_change_requests_task"
             in tasks
         )
+
+
+# --- US-S10-004 — bulk-action endpoints ----------------------------------
+
+
+class TestBulkActions:
+    """Bulk endpoints run rows through the same services as per-row.
+    Guards (no-self-approve, wrong state, missing reason) surface as
+    `skipped` per row; out-of-scope ids surface as `not_found`."""
+
+    @pytest.fixture
+    def staff_user(self, db, django_user_model):
+        return django_user_model.objects.create_user(
+            username="reviewer", password="p",
+            is_staff=True, is_superuser=True,
+        )
+
+    @pytest.fixture
+    def api_client(self, staff_user):
+        from rest_framework.test import APIClient
+        c = APIClient()
+        c.force_authenticate(user=staff_user)
+        return c
+
+    def _submitted(self, member, *, requester="enum-a"):
+        req = _draft(member, requester=requester)
+        submit_change_request(req)
+        return req
+
+    def test_bulk_approve_commits_all_eligible(self, db, member, api_client):
+        a = self._submitted(member, requester="enum-1")
+        # Second CR — different surname to avoid concurrent edit clash.
+        b = _draft(member, requester="enum-2",
+                    changes={"first_name": {"old": "James", "new": "Jane"}})
+        submit_change_request(b)
+        r = api_client.post("/api/v1/upd/change-requests/bulk-approve/",
+                             data={"ids": [a.id, b.id], "actor": "approver-x"},
+                             format="json")
+        assert r.status_code == 200
+        assert set(r.data["acted"]) == {a.id, b.id}
+        assert r.data["skipped"] == []
+        assert r.data["not_found"] == []
+        a.refresh_from_db()
+        assert a.status == ChangeStatus.COMMITTED
+
+    def test_bulk_reject_requires_reason(self, db, member, api_client):
+        a = self._submitted(member)
+        r = api_client.post("/api/v1/upd/change-requests/bulk-reject/",
+                             data={"ids": [a.id], "actor": "approver-x"},
+                             format="json")
+        assert r.status_code == 400
+        assert "reason" in r.data["detail"].lower()
+
+    def test_bulk_reject_with_reason(self, db, member, api_client):
+        a = self._submitted(member)
+        r = api_client.post("/api/v1/upd/change-requests/bulk-reject/",
+                             data={"ids": [a.id], "actor": "approver-x",
+                                   "reason": "Insufficient evidence (AC-UPD-EVIDENCE)"},
+                             format="json")
+        assert r.status_code == 200
+        assert r.data["acted"] == [a.id]
+        a.refresh_from_db()
+        assert a.status == ChangeStatus.REJECTED
+
+    def test_bulk_skips_self_approve(self, db, member, api_client):
+        """A row whose requester == actor must NOT be approved by the
+        same actor; it lands in `skipped`."""
+        a = self._submitted(member, requester="self")
+        b = self._submitted(member, requester="someone-else")
+        r = api_client.post("/api/v1/upd/change-requests/bulk-approve/",
+                             data={"ids": [a.id, b.id], "actor": "self"},
+                             format="json")
+        assert r.status_code == 200
+        # 'b' acted (different requester), 'a' skipped (self-approve).
+        assert b.id in r.data["acted"]
+        skipped_ids = {s["id"] for s in r.data["skipped"]}
+        assert a.id in skipped_ids
+        skipped_reasons = " ".join(s["reason"] for s in r.data["skipped"])
+        assert "NO-SELF-APPROVE" in skipped_reasons
+
+    def test_bulk_skips_wrong_state(self, db, member, api_client):
+        """A DRAFT row (not submitted) can't be approved — bulk should
+        skip without aborting the batch."""
+        draft = _draft(member)  # status=DRAFT, not SUBMITTED
+        submitted = self._submitted(member, requester="other")
+        r = api_client.post("/api/v1/upd/change-requests/bulk-approve/",
+                             data={"ids": [draft.id, submitted.id], "actor": "approver"},
+                             format="json")
+        assert r.status_code == 200
+        assert submitted.id in r.data["acted"]
+        assert any(s["id"] == draft.id for s in r.data["skipped"])
+
+    def test_unknown_id_reports_not_found(self, db, member, api_client):
+        a = self._submitted(member)
+        unknown = "01ABSENT00000000000000000A"
+        r = api_client.post("/api/v1/upd/change-requests/bulk-approve/",
+                             data={"ids": [a.id, unknown], "actor": "approver"},
+                             format="json")
+        assert r.status_code == 200
+        assert r.data["acted"] == [a.id]
+        assert r.data["not_found"] == [unknown]
+
+    def test_bulk_escalate_bumps_role(self, db, member, api_client):
+        from apps.update_workflow.services import ESCALATION_ROLE
+        a = self._submitted(member)
+        r = api_client.post("/api/v1/upd/change-requests/bulk-escalate/",
+                             data={"ids": [a.id], "actor": "supervisor"},
+                             format="json")
+        assert r.status_code == 200
+        assert r.data["acted"] == [a.id]
+        a.refresh_from_db()
+        assert a.required_role == ESCALATION_ROLE
+
+    def test_bulk_caps_batch_size(self, db, member, api_client):
+        """The serializer caps `ids` at 200 items so a runaway client
+        can't queue an unbounded batch."""
+        a = self._submitted(member)
+        big = [a.id] + [f"01ABSENT{i:018d}" for i in range(250)]
+        r = api_client.post("/api/v1/upd/change-requests/bulk-approve/",
+                             data={"ids": big, "actor": "approver"},
+                             format="json")
+        assert r.status_code == 400
