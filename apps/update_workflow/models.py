@@ -114,3 +114,45 @@ class ChangeRequest(models.Model):
 
     def __str__(self) -> str:
         return f"CR {self.id} {self.entity_type}:{self.entity_id} [{self.status}]"
+
+
+class UpdRoutingRule(models.Model):
+    """Operations-managed routing for (change_type, pmt_relevant) tuples.
+
+    Per UPD-O-01, the SAD's hardcoded matrix is a stopgap. This table
+    lets operations rebalance load (e.g., raise CORRECTION SLA from 72h
+    to 96h during a backlog) without a deploy. `apps.update_workflow.
+    routing.route()` reads the active row here and falls back to the
+    DEFAULT_MATRIX constants when no row exists, so removing all rows
+    cannot break the system.
+
+    Active rule is unique per (change_type, pmt_relevant); inactive
+    rules are retained for audit / version history.
+    """
+
+    change_type = models.CharField(max_length=24, choices=ChangeType.choices)
+    pmt_relevant = models.BooleanField()
+    required_role = models.CharField(max_length=32)
+    sla_hours = models.PositiveIntegerField()
+    is_active = models.BooleanField(default=True)
+    note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "UPD routing rule"
+        verbose_name_plural = "UPD routing rules"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["change_type", "pmt_relevant"],
+                condition=models.Q(is_active=True),
+                name="upd_routing_unique_active_per_tuple",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["change_type", "pmt_relevant", "is_active"]),
+        ]
+
+    def __str__(self) -> str:
+        return (f"{self.change_type}/pmt={self.pmt_relevant} "
+                f"-> {self.required_role} ({self.sla_hours}h)")

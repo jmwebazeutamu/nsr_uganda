@@ -1,8 +1,13 @@
-"""Default routing matrix per SAD §4.4.4.
+"""Routing matrix per SAD §4.4.4.
 
-Open item UPD-O-01 will finalise this; the defaults below are what the
-SAD proposes. Encoding the matrix here keeps the rules data-shaped so
-the eventual REF-DATA-managed table replaces this module 1:1.
+UPD-O-01 closure: the matrix is now operations-editable through
+apps.update_workflow.models.UpdRoutingRule. The DEFAULT_MATRIX below
+is the fallback used when no active row exists for a
+(change_type, pmt_relevant) tuple — deleting every row cannot break
+the system, the SAD defaults take over.
+
+The fallback also serves as the seed source for the data migration
+that populates the table on first deploy (migration 0003).
 """
 
 from __future__ import annotations
@@ -32,6 +37,20 @@ DEFAULT_MATRIX: dict[tuple[str, bool], tuple[str, int]] = {
 
 
 def route(change_type: str, *, pmt_relevant: bool) -> tuple[str, timedelta]:
-    """Return (required_role, sla_window) for a change_type+pmt_relevant pair."""
+    """Return (required_role, sla_window) for a change_type+pmt_relevant pair.
+
+    Looks up the active UpdRoutingRule first; falls back to
+    DEFAULT_MATRIX when no row exists. The DB read is a single
+    indexed query so the hot path stays cheap.
+    """
+    from .models import UpdRoutingRule
+    rule = (
+        UpdRoutingRule.objects
+        .filter(change_type=change_type, pmt_relevant=pmt_relevant, is_active=True)
+        .only("required_role", "sla_hours")
+        .first()
+    )
+    if rule is not None:
+        return rule.required_role, timedelta(hours=rule.sla_hours)
     role, hours = DEFAULT_MATRIX[(change_type, pmt_relevant)]
     return role, timedelta(hours=hours)

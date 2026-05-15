@@ -1,6 +1,20 @@
 from django.contrib import admin
 
-from .models import ChangeRequest
+from .models import ChangeRequest, UpdRoutingRule
+
+
+@admin.register(UpdRoutingRule)
+class UpdRoutingRuleAdmin(admin.ModelAdmin):
+    list_display = ("change_type", "pmt_relevant", "required_role",
+                    "sla_hours", "is_active", "updated_at")
+    list_filter = ("change_type", "pmt_relevant", "is_active")
+    search_fields = ("required_role", "note")
+    readonly_fields = ("created_at", "updated_at")
+    fieldsets = (
+        (None, {"fields": ("change_type", "pmt_relevant", "is_active")}),
+        ("Routing", {"fields": ("required_role", "sla_hours", "note")}),
+        ("Timestamps", {"fields": ("created_at", "updated_at")}),
+    )
 
 
 @admin.register(ChangeRequest)

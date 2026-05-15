@@ -333,3 +333,75 @@ class TestAutoCommit:
         assert ChangeType.VITAL_EVENT in AUTO_COMMIT_CHANGE_TYPES
         assert ChangeType.PROGRAMME_STATE in AUTO_COMMIT_CHANGE_TYPES
         assert ChangeType.CORRECTION not in AUTO_COMMIT_CHANGE_TYPES
+
+
+class TestRoutingMatrixViaRefData:
+    """UPD-O-01: routing matrix is operations-editable via
+    UpdRoutingRule. route() prefers the active DB row; if none exists
+    it falls back to the hardcoded DEFAULT_MATRIX so deleting all rows
+    cannot break the system."""
+
+    def test_seed_migration_populated_defaults(self, db):
+        from apps.update_workflow.models import UpdRoutingRule
+        # Migration 0004 seeded 12 rows (6 change_types x 2 pmt_relevant).
+        assert UpdRoutingRule.objects.filter(is_active=True).count() == 12
+
+    def test_db_row_overrides_default(self, db):
+        from datetime import timedelta
+
+        from apps.update_workflow.models import UpdRoutingRule
+        from apps.update_workflow.routing import route
+
+        # Operations decide to relax CORRECTION/non-PMT SLA from 72h to 96h
+        # and move it from 'supervisor' to 'cdo'.
+        UpdRoutingRule.objects.filter(
+            change_type=ChangeType.CORRECTION, pmt_relevant=False,
+        ).update(required_role="cdo", sla_hours=96)
+
+        role, window = route(ChangeType.CORRECTION, pmt_relevant=False)
+        assert role == "cdo"
+        assert window == timedelta(hours=96)
+
+    def test_fallback_when_no_active_row(self, db):
+        from datetime import timedelta
+
+        from apps.update_workflow.models import UpdRoutingRule
+        from apps.update_workflow.routing import route
+
+        # Soft-delete (deactivate) the seeded row for CORRECTION/PMT=True.
+        UpdRoutingRule.objects.filter(
+            change_type=ChangeType.CORRECTION, pmt_relevant=True,
+        ).update(is_active=False)
+
+        # Fallback to DEFAULT_MATRIX kicks in.
+        role, window = route(ChangeType.CORRECTION, pmt_relevant=True)
+        assert role == "cdo"
+        assert window == timedelta(hours=48)
+
+    def test_unique_active_constraint_per_tuple(self, db):
+        """Cannot have two active rules for the same
+        (change_type, pmt_relevant). Inactive duplicates are fine."""
+        from django.db import IntegrityError, transaction
+
+        from apps.update_workflow.models import UpdRoutingRule
+
+        with pytest.raises(IntegrityError):
+            with transaction.atomic():
+                UpdRoutingRule.objects.create(
+                    change_type=ChangeType.CORRECTION, pmt_relevant=False,
+                    required_role="other", sla_hours=24, is_active=True,
+                )
+
+    def test_inactive_duplicate_allowed_for_history(self, db):
+        from apps.update_workflow.models import UpdRoutingRule
+        # Inactive duplicate is fine — supports version history.
+        UpdRoutingRule.objects.create(
+            change_type=ChangeType.CORRECTION, pmt_relevant=False,
+            required_role="old_role", sla_hours=24, is_active=False,
+            note="historical",
+        )
+        active = UpdRoutingRule.objects.filter(
+            change_type=ChangeType.CORRECTION, pmt_relevant=False,
+            is_active=True,
+        ).count()
+        assert active == 1  # only the seeded one remains active
