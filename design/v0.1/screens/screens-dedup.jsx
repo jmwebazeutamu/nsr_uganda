@@ -214,12 +214,33 @@ const DedupRow = ({ field, value, onChange }) => {
         {f.fixed ? (
           <span className="t-bodysm muted"><Icon name="lock" size={11}/> Fixed: {f.fixed} <span style={{marginLeft:4}}>(rule)</span></span>
         ) : (
-          <div className="seg" style={{width:'100%'}}>
-            <button className={value === 'A' ? 'on' : ''} onClick={() => onChange('A')} style={{flex:1}}>A</button>
-            <button className={value === 'B' ? 'on' : ''} onClick={() => onChange('B')} style={{flex:1}}>B</button>
-            <button className={value === 'Both' ? 'on' : ''} onClick={() => f.list && onChange('Both')} disabled={!f.list} style={{flex:1, opacity: f.list ? 1 : 0.4}}
-              title={f.list ? "" : "Disabled — only list-like fields support Both"}>Both</button>
-          </div>
+          // Native radio group — arrow keys move within the row for free;
+          // aria-disabled flags the Both option when the field is non-list.
+          <fieldset className="radio-group" aria-label={`Choose value for ${f.label}`}>
+            <legend>Choose value for {f.label}</legend>
+            {['A', 'B', 'Both'].map(opt => {
+              const disabled = opt === 'Both' && !f.list;
+              const inputId = `pick-${f.label.replace(/\s+/g, '-')}-${opt}`;
+              return (
+                <React.Fragment key={opt}>
+                  <input
+                    type="radio"
+                    id={inputId}
+                    name={`pick-${f.label}`}
+                    value={opt}
+                    checked={value === opt}
+                    onChange={() => !disabled && onChange(opt)}
+                    disabled={disabled}
+                  />
+                  <label
+                    htmlFor={inputId}
+                    aria-disabled={disabled || undefined}
+                    title={disabled ? "Disabled — only list-like fields support Both" : ""}
+                  >{opt}</label>
+                </React.Fragment>
+              );
+            })}
+          </fieldset>
         )}
       </div>
       <div style={{padding:'12px 16px', background:'var(--accent-danger-bg)', borderLeft:'3px solid var(--accent-danger)', display:'flex', alignItems:'center'}}>

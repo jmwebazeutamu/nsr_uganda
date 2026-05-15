@@ -22,8 +22,8 @@ Screens are React components inside the module JSX files under `v0.1/screens/`. 
 | 7b | DRS Field Selector | US-098 | `screens-drs.jsx` → `<FieldStep>` | built |
 | 7c | DRS Preview pane | US-098 | `screens-drs.jsx` → `<PreviewStep>` | built |
 | 7d | DRS Delivery method choice | US-099, US-100, US-101 | `screens-drs.jsx` → `<SubmitStep>` | built |
-| 8 | DPO cumulative volume console | US-103 | _not yet built_ | **TODO** |
-| 9 | Household detail (registry view) | US-005, US-090 | _not yet built_ | **TODO** |
+| 8 | DPO cumulative volume console | US-103 | `screens-dpo.jsx` → `<DPOScreen>` | built |
+| 9 | Household detail (registry view) | US-005, US-090 | `screens-household.jsx` → `<HouseholdScreen>` | built |
 | 10 | Home dashboard (role-aware) | (general) | `screens-home.jsx` → `<HomeScreen role="…">` for each of `ROLES` (Parish Chief, CDO, District M&E, NSR Unit Coordinator, DPO) | built |
 
 ---
