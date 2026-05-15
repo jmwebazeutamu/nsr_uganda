@@ -79,4 +79,52 @@ class ScopedQuerysetMixin:
 
     def get_queryset(self):
         qs = super().get_queryset()
-        return qs.filter(scope_q_for_field(self.request.user, self.scope_field_path))
+        return qs.filter(self._scope_q())
+
+    def _scope_q(self) -> Q:
+        return scope_q_for_field(self.request.user, self.scope_field_path)
+
+
+class HouseholdIdScopedQuerysetMixin(ScopedQuerysetMixin):
+    """ABAC variant for models that hold the household reference as a
+    CharField (`household_id`, `provisional_registry_id`) rather than a
+    real Django FK to Household. Resolves the scoped households once
+    and uses an IN subquery.
+
+    Applies to:
+    - Submission.provisional_registry_id (pre-promotion the household
+      doesn't exist yet — those rows are invisible to scoped operators,
+      which is correct: pre-promotion lives in DIH and is NSR-Unit-
+      visibility only).
+    - Grievance.household_id.
+    - StageRecord.provisional_registry_id (same pre-promotion behaviour).
+    """
+
+    scope_field_path = "household_id"
+
+    def _scope_q(self) -> Q:
+        user = self.request.user
+        if user is None or not getattr(user, "is_authenticated", False):
+            return Q(pk__in=[])
+        if getattr(user, "is_superuser", False):
+            return ~Q(pk__in=[])
+        scopes = list(
+            OperatorScope.objects.filter(user=user, active=True)
+            .values_list("scope_level", "scope_code")
+        )
+        if not scopes:
+            return Q(pk__in=[])
+        if any(level == ScopeLevel.NATIONAL for level, _ in scopes):
+            return ~Q(pk__in=[])
+        codes = [c for level, c in scopes if level == ScopeLevel.SUB_REGION and c]
+        if not codes:
+            return Q(pk__in=[])
+
+        # Imported lazily so apps.security doesn't depend on
+        # apps.data_management at module import (cycle safety).
+        from apps.data_management.models import Household
+        household_ids = list(
+            Household.objects.filter(sub_region_code__in=codes)
+            .values_list("id", flat=True)
+        )
+        return Q(**{f"{self.scope_field_path}__in": household_ids})

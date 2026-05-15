@@ -167,3 +167,122 @@ class TestScopeAcrossFKRelations:
         r = _client_for(u).get("/api/v1/ref/referrals/")
         assert r.status_code == 200
         assert r.data["count"] == 0
+
+
+class TestScopeViaHouseholdIdSubquery:
+    """HouseholdIdScopedQuerysetMixin handles models that hold a
+    household reference as a CharField (Grievance.household_id) or as a
+    bare ULID (Submission/StageRecord.provisional_registry_id)."""
+
+    def test_grievance_scoped_by_household(
+        self, db, django_user_model, two_sub_regions, households_in_each,
+    ):
+        from apps.grievance.models import Category
+        from apps.grievance.services import open_grievance
+
+        for hh in households_in_each.values():
+            open_grievance(category=Category.OTHER, description="x",
+                           household_id=hh.id)
+
+        u = django_user_model.objects.create_user(username="grm-op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/grm/grievances/")
+        assert r.status_code == 200
+        assert r.data["count"] == 1
+        assert r.data["results"][0]["household_id"] == \
+            households_in_each["SR-BUGANDA"].id
+
+    def test_grievance_with_no_household_invisible_to_scoped_user(
+        self, db, django_user_model, two_sub_regions,
+    ):
+        from apps.grievance.models import Category
+        from apps.grievance.services import open_grievance
+
+        # Grievance with no household_id (e.g., anonymous complaint
+        # about operator conduct).
+        open_grievance(category=Category.OPERATOR_CONDUCT,
+                       description="anonymous complaint")
+        u = django_user_model.objects.create_user(username="grm-op2", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/grm/grievances/")
+        # No household_id -> not in any sub-region's IN-subquery -> 0 rows.
+        assert r.data["count"] == 0
+
+    def test_stage_record_pre_promotion_invisible_to_sub_region_operator(
+        self, db, django_user_model, two_sub_regions,
+    ):
+        # Pre-promotion StageRecords have a provisional_registry_id but
+        # no corresponding Household. Sub-region operators see 0 rows;
+        # only national scope (and superusers) see them.
+        from datetime import date
+
+        from apps.ingestion_hub.models import (
+            Connector,
+            DataProvisionAgreement,
+            SourceSystem,
+            SourceSystemKind,
+        )
+        from apps.ingestion_hub.services import (
+            land_payload,
+            stage_from_landing,
+            start_connector_run,
+        )
+
+        src = SourceSystem.objects.create(code="ABAC-WEB", name="ABAC test",
+                                          kind=SourceSystemKind.WEB)
+        DataProvisionAgreement.objects.create(
+            source_system=src, reference="DPA-ABAC-1",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+        )
+        conn = Connector.objects.create(source_system=src, name="abac-test")
+        run = start_connector_run(conn)
+        landing = land_payload(run, {"members": []})
+        stage_from_landing(landing, canonical_payload={"members": []})
+
+        u = django_user_model.objects.create_user(username="parish", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/dih/stage-records/")
+        assert r.status_code == 200
+        assert r.data["count"] == 0
+
+    def test_national_scope_sees_pre_promotion_stage_records(
+        self, db, django_user_model,
+    ):
+        from datetime import date
+
+        from apps.ingestion_hub.models import (
+            Connector,
+            DataProvisionAgreement,
+            SourceSystem,
+            SourceSystemKind,
+        )
+        from apps.ingestion_hub.services import (
+            land_payload,
+            stage_from_landing,
+            start_connector_run,
+        )
+
+        src = SourceSystem.objects.create(code="ABAC-WEB-2", name="ABAC test 2",
+                                          kind=SourceSystemKind.WEB)
+        DataProvisionAgreement.objects.create(
+            source_system=src, reference="DPA-ABAC-2",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+        )
+        conn = Connector.objects.create(source_system=src, name="abac-test-2")
+        run = start_connector_run(conn)
+        landing = land_payload(run, {"members": []})
+        stage_from_landing(landing, canonical_payload={"members": []})
+
+        u = django_user_model.objects.create_user(username="nsr-unit", password="p")
+        OperatorScope.objects.create(user=u, scope_level=ScopeLevel.NATIONAL, scope_code="")
+        r = _client_for(u).get("/api/v1/dih/stage-records/")
+        assert r.data["count"] >= 1

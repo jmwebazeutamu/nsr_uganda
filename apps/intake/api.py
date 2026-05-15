@@ -3,6 +3,7 @@ from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.security.abac import HouseholdIdScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
 from .models import Channel, FormVersion, Submission, SubmissionResult
@@ -57,8 +58,14 @@ class FormVersionViewSet(viewsets.ReadOnlyModelViewSet):
     list=extend_schema(tags=["intake"], summary="List submissions"),
     retrieve=extend_schema(tags=["intake"], summary="Retrieve a submission"),
 )
-class SubmissionViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
+class SubmissionViewSet(
+    AuditReadMixin, HouseholdIdScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet,
+):
     audit_entity_type = "submission"
+    # Submission.provisional_registry_id == Household.id post-promotion.
+    # Pre-promotion the FK target doesn't exist, so a scoped operator
+    # can't see pre-promotion submissions — those belong to NSR Unit.
+    scope_field_path = "provisional_registry_id"
     queryset = Submission.objects.all().order_by("-created_at")
     serializer_class = SubmissionSerializer
     filterset_fields = ["channel", "state", "result"]

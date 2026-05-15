@@ -3,6 +3,7 @@ from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.security.abac import HouseholdIdScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
 from .models import (
@@ -94,10 +95,20 @@ class ConnectorRunViewSet(viewsets.ReadOnlyModelViewSet):
     filterset_fields = ["status", "connector"]
 
 
-class StageRecordViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
+class StageRecordViewSet(
+    AuditReadMixin, HouseholdIdScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet,
+):
     """Stage records carry the provisional Registry ID and the canonical
     payload. The /promote and /reject actions are the public surface for
-    NSR Unit operator decisions (AC-DIH-PROMOTE-ATOMIC, AC-DIH-REJECT-VOID)."""
+    NSR Unit operator decisions (AC-DIH-PROMOTE-ATOMIC, AC-DIH-REJECT-VOID).
+
+    Pre-promotion StageRecords have a provisional_registry_id that
+    doesn't yet match a Household, so the IN-subquery returns nothing
+    for scoped operators — pre-promotion rows are NSR-Unit-visibility
+    only, matching SAD §4.6 (NSR Unit reviews the DIH queue).
+    """
+
+    scope_field_path = "provisional_registry_id"
 
     audit_entity_type = "stage_record"
     queryset = StageRecord.objects.all().order_by("-created_at")

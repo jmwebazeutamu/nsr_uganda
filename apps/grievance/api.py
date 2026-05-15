@@ -3,6 +3,7 @@ from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.security.abac import HouseholdIdScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
 from .models import Grievance
@@ -48,8 +49,13 @@ class _Resolve(serializers.Serializer):
     retrieve=extend_schema(tags=["grm"], summary="Retrieve a grievance"),
     create=extend_schema(tags=["grm"], summary="Open a new grievance"),
 )
-class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
+class GrievanceViewSet(
+    AuditReadMixin, HouseholdIdScopedQuerysetMixin, viewsets.ModelViewSet,
+):
     audit_entity_type = "grievance"
+    # Grievance.household_id is a CharField (not a real FK) because the
+    # GRM may open before a confirmed household exists.
+    scope_field_path = "household_id"
     queryset = Grievance.objects.all().order_by("-opened_at")
     serializer_class = GrievanceSerializer
     filterset_fields = ["status", "tier", "category", "assigned_to"]
