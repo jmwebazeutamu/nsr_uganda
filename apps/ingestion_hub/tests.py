@@ -24,6 +24,7 @@ from apps.data_management.models import Household, Member
 from apps.dqa.models import DqaRule, RuleStatus, Severity
 from apps.ingestion_hub.models import (
     Connector,
+    ConnectorRun,
     DataProvisionAgreement,
     SourceSystem,
     SourceSystemKind,
@@ -397,3 +398,88 @@ class TestFastTrackSampling:
             stage = _make_stage(connector, geo_codes)
             process_stage_record(stage, actor="orch")
         assert FastTrackAuditSample.objects.count() == 0
+
+
+# --- US-S10-005 — ConnectorRun admin enhancements -------------------------
+
+
+class TestConnectorRunAdmin:
+    """list_display shows status badge + duration; bulk action
+    "mark stuck FAILED" only acts on RUNNING rows older than the
+    6-hour threshold."""
+
+    @pytest.fixture
+    def admin_client(self, db, django_user_model):
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="ops", password="p", is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        return c
+
+    def _running_run(self, hours_ago: int):
+        from datetime import date, timedelta
+
+        from django.utils import timezone
+
+        from apps.ingestion_hub.models import (
+            Connector,
+            ConnectorRunStatus,
+            DataProvisionAgreement,
+            SourceSystem,
+            SourceSystemKind,
+        )
+        src = SourceSystem.objects.create(
+            code=f"SRC-{hours_ago}", name="x", kind=SourceSystemKind.WEB,
+        )
+        DataProvisionAgreement.objects.create(
+            source_system=src, reference=f"DPA-{hours_ago}",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+        )
+        conn = Connector.objects.create(source_system=src, name="c")
+        run = ConnectorRun.objects.create(
+            connector=conn, status=ConnectorRunStatus.RUNNING,
+        )
+        ConnectorRun.objects.filter(pk=run.pk).update(
+            started_at=timezone.now() - timedelta(hours=hours_ago),
+        )
+        run.refresh_from_db()
+        return run
+
+    def test_status_badge_marks_stuck_for_long_running(self, db):
+        from apps.ingestion_hub.admin import ConnectorRunAdmin
+        run = self._running_run(hours_ago=12)
+        html = str(ConnectorRunAdmin(ConnectorRun, admin_site=None).status_badge(run))
+        assert "STUCK" in html
+
+    def test_status_badge_does_not_mark_recent_running(self, db):
+        from apps.ingestion_hub.admin import ConnectorRunAdmin
+        run = self._running_run(hours_ago=1)
+        html = str(ConnectorRunAdmin(ConnectorRun, admin_site=None).status_badge(run))
+        assert "STUCK" not in html
+        # Falls through to the normal "running" colour.
+        assert "running" in html
+
+    def test_duration_display_for_running_row(self, db):
+        from apps.ingestion_hub.admin import ConnectorRunAdmin
+        run = self._running_run(hours_ago=2)
+        s = ConnectorRunAdmin(ConnectorRun, admin_site=None).duration_display(run)
+        assert "running" in s
+
+    def test_bulk_mark_stuck_only_affects_old_running(self, admin_client):
+        from apps.ingestion_hub.models import ConnectorRunStatus
+        stuck = self._running_run(hours_ago=12)
+        fresh = self._running_run(hours_ago=1)
+        admin_client.post("/admin/ingestion_hub/connectorrun/", data={
+            "action": "mark_stuck_runs_failed",
+            "_selected_action": [stuck.pk, fresh.pk],
+        })
+        stuck.refresh_from_db()
+        fresh.refresh_from_db()
+        assert stuck.status == ConnectorRunStatus.FAILED
+        assert stuck.finished_at is not None
+        assert "stuck since" in stuck.note
+        # Fresh run untouched.
+        assert fresh.status == ConnectorRunStatus.RUNNING
+        assert fresh.finished_at is None

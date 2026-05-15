@@ -1,8 +1,13 @@
-from django.contrib import admin
+from datetime import timedelta
+
+from django.contrib import admin, messages
+from django.utils import timezone
+from django.utils.html import format_html
 
 from .models import (
     Connector,
     ConnectorRun,
+    ConnectorRunStatus,
     DataProvisionAgreement,
     FastTrackAuditSample,
     MappingRule,
@@ -14,6 +19,11 @@ from .models import (
     SourceSystem,
     StageRecord,
 )
+
+# Runs sitting in RUNNING state beyond this are considered stuck —
+# Celery worker likely died mid-import. Operations runbook fires the
+# bulk "mark failed" admin action to clear them.
+STUCK_RUN_THRESHOLD = timedelta(hours=6)
 
 
 @admin.register(SourceSystem)
@@ -41,16 +51,92 @@ class ConnectorAdmin(admin.ModelAdmin):
 
 @admin.register(ConnectorRun)
 class ConnectorRunAdmin(admin.ModelAdmin):
-    list_display = ("started_at", "connector", "status", "records_landed",
-                    "records_promoted", "records_quarantined", "records_rejected")
+    list_display = (
+        "started_at", "connector", "status_badge",
+        "records_received", "records_landed", "records_staged",
+        "records_promoted", "records_quarantined", "records_rejected",
+        "duration_display",
+    )
     list_filter = ("status", "connector")
     raw_id_fields = ("connector",)
     date_hierarchy = "started_at"
+    actions = ("mark_stuck_runs_failed",)
     readonly_fields = (
         "id", "connector", "started_at", "finished_at", "status",
         "records_received", "records_landed", "records_staged",
         "records_promoted", "records_quarantined", "records_rejected",
+        "duration_display",
     )
+
+    @admin.display(description="Status")
+    def status_badge(self, obj: ConnectorRun) -> str:
+        """Colour-coded status with a red 'STUCK' overlay for RUNNING
+        rows older than STUCK_RUN_THRESHOLD. Same XSS-clean pattern
+        as the GRM admin badge from S4-005."""
+        tone = {
+            ConnectorRunStatus.PENDING:     ("#999",    obj.status),
+            ConnectorRunStatus.RUNNING:     ("#1565c0", obj.status),
+            ConnectorRunStatus.SUCCEEDED:   ("#198754", obj.status),
+            ConnectorRunStatus.FAILED:      ("#b00",    obj.status),
+            ConnectorRunStatus.QUARANTINED: ("#b87410", obj.status),
+        }.get(obj.status, ("#666", obj.status))
+        color, label = tone
+        # Stuck overlay — visible only on RUNNING rows past threshold.
+        if (obj.status == ConnectorRunStatus.RUNNING
+                and (timezone.now() - obj.started_at) > STUCK_RUN_THRESHOLD):
+            return format_html(
+                '<span style="color:#b00;font-weight:600">{}</span>',
+                "STUCK > 6h",
+            )
+        return format_html('<span style="color:{}">{}</span>', color, label)
+
+    @admin.display(description="Duration")
+    def duration_display(self, obj: ConnectorRun) -> str:
+        """Compact h:mm:ss for finished runs, "running for Xh Ym" for
+        live ones. None for pending."""
+        if obj.status == ConnectorRunStatus.PENDING:
+            return "—"
+        end = obj.finished_at or timezone.now()
+        delta = end - obj.started_at
+        hours = delta.total_seconds() / 3600
+        if obj.finished_at is None:
+            if hours >= 1:
+                return f"running {hours:.1f}h"
+            return f"running {delta.total_seconds()/60:.0f}m"
+        if hours >= 1:
+            return f"{int(hours)}h {int(delta.total_seconds()/60) % 60}m"
+        return f"{int(delta.total_seconds()/60)}m {int(delta.total_seconds()) % 60}s"
+
+    @admin.action(description="Mark stuck RUNNING runs as FAILED (≥ 6h since start)")
+    def mark_stuck_runs_failed(self, request, queryset):
+        """Bulk-fail runs that have been RUNNING beyond the stuck
+        threshold. Doesn't touch records_* counters — those reflect
+        whatever the worker managed before it died, and an operator
+        reading the audit chain can see exactly how far the run got.
+        finished_at gets set to now() so the duration display flips
+        from the rolling 'running' indicator to a fixed h:m number."""
+        cutoff = timezone.now() - STUCK_RUN_THRESHOLD
+        target = queryset.filter(
+            status=ConnectorRunStatus.RUNNING, started_at__lt=cutoff,
+        )
+        marked = 0
+        for run in target:
+            run.status = ConnectorRunStatus.FAILED
+            run.finished_at = timezone.now()
+            run.note = (
+                (run.note + "\n" if run.note else "")
+                + f"Admin marked as FAILED via bulk action — was stuck "
+                f"since {run.started_at.isoformat()}."
+            )
+            run.save(update_fields=["status", "finished_at", "note"])
+            marked += 1
+        skipped = queryset.count() - marked
+        self.message_user(
+            request,
+            f"Marked {marked} stuck run(s) as FAILED; {skipped} skipped "
+            f"(either not RUNNING or under the {STUCK_RUN_THRESHOLD} threshold).",
+            level=messages.SUCCESS if marked else messages.WARNING,
+        )
 
 
 @admin.register(RawLanding)
