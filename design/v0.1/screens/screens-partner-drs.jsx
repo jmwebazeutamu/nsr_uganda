@@ -110,12 +110,53 @@ const STATUS_FILTERS = [
   { id: "delivered", label: "Delivered",        count: PDRS_REQUESTS.filter(r => r.status === "delivered").length },
 ];
 
+// Active DSA's allowed_scopes shape (mock — real fetch reads from
+// DataSharingAgreement.allowed_scopes per S3-002). The builder
+// constrains every input to a subset of this; validate_against_dsa
+// (apps/data_requests/services.py) is the server-side gate.
+const ACTIVE_DSA = {
+  reference: "DSA-PDM-2026-01",
+  valid_through: "31 Dec 2026",
+  allowed_scopes: {
+    fields: [
+      "household.id",
+      "household.sub_region_code",
+      "household.urban_rural",
+      "household.current_vulnerability_band",
+      "household.current_pmt_score",
+      "member.line_number",
+      "member.first_name",
+      "member.surname",
+      "member.sex",
+      "member.date_of_birth",
+      "member.relationship_to_head",
+    ],
+    sub_region_codes: ["SR-BUGANDA-SOUTH", "SR-BUGANDA-NORTH",
+                       "SR-BUSOGA", "SR-KARAMOJA"],
+    programme_codes: ["PDM"],
+    max_rows_per_request: 50000,
+  },
+};
+
 const PartnerDRSScreen = () => {
+  // mode: "list" (the S9-005 view) or "build" (the S10-003 builder)
+  const [mode, setMode] = useStatePDrs("list");
   const [statusFilter, setStatusFilter] = useStatePDrs("all");
   const [selectedRow, setSelectedRow] = useStatePDrs(PDRS_REQUESTS[0].id);
   const [auditOpen, setAuditOpen] = useStatePDrs(false);
   const [toast, setToast] = useStatePDrs("");
 
+  const onBuilderSubmit = (payload) => {
+    // Real wiring: POST /api/v1/drs/requests/ with payload, then
+    // POST /api/v1/drs/requests/{id}/submit/. Mockup toasts and
+    // returns to the list.
+    setToast(`Request submitted — ${payload.fields.length} fields · ` +
+             `cap ${payload.max_rows.toLocaleString()} rows · awaiting NSR Unit approval`);
+    setMode("list");
+  };
+
+  // Hooks must run in the same order every render — compute the
+  // list-mode memos unconditionally, then branch on mode below.
   const rows = useMemoPDrs(() => (
     statusFilter === "all"
       ? PDRS_REQUESTS
@@ -126,6 +167,12 @@ const PartnerDRSScreen = () => {
     () => PDRS_REQUESTS.find(r => r.id === selectedRow),
     [selectedRow],
   );
+
+  if (mode === "build") {
+    return <RequestBuilder dsa={ACTIVE_DSA}
+                            onSubmit={onBuilderSubmit}
+                            onCancel={() => setMode("list")}/>;
+  }
 
   const onDownload = (r) => {
     // Real wiring: hit r.download_url; the response is NDJSON
@@ -142,7 +189,9 @@ const PartnerDRSScreen = () => {
         sub="Bulk-extract requests under your active DSA. Pending submissions go through NSR Unit approval before download."
         right={<>
           <button className="btn" onClick={() => setAuditOpen(true)}><Icon name="history"/> Audit chain</button>
-          <button className="btn primary"><Icon name="plus"/> New request</button>
+          <button className="btn primary" onClick={() => setMode("build")}>
+            <Icon name="plus"/> New request
+          </button>
         </>}
       />
 
@@ -370,6 +419,238 @@ const PartnerDRSScreen = () => {
         onClose={() => setAuditOpen(false)}
       />
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
+    </div>
+  );
+};
+
+// ============================================================
+// US-S10-003 — Request builder (partner-side)
+// ============================================================
+//
+// Wizard-style form constrained to the active DSA's allowed_scopes.
+// Submit validates client-side that every payload key is a subset
+// of the DSA — same shape as validate_against_dsa server-side
+// (apps/data_requests/services.py). Reduces the round-trip when
+// partners try to ask for fields they don't have.
+
+const RequestBuilder = ({ dsa, onSubmit, onCancel }) => {
+  const scopes = dsa.allowed_scopes;
+  const [fields, setFields] = useStatePDrs(new Set());
+  const [subRegions, setSubRegions] = useStatePDrs(new Set());
+  const [maxRows, setMaxRows] = useStatePDrs(
+    Math.min(5000, scopes.max_rows_per_request || 5000),
+  );
+  const [requesterNote, setRequesterNote] = useStatePDrs("");
+
+  const toggle = (set, key, setter) => {
+    const next = new Set(set);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    setter(next);
+  };
+
+  const fieldsByPrefix = useMemoPDrs(() => {
+    const groups = { household: [], member: [] };
+    (scopes.fields || []).forEach(f => {
+      const prefix = f.split(".")[0];
+      (groups[prefix] = groups[prefix] || []).push(f);
+    });
+    return groups;
+  }, [scopes.fields]);
+
+  const hasMemberField = useMemoPDrs(
+    () => Array.from(fields).some(f => f.startsWith("member.")),
+    [fields],
+  );
+
+  const valid = fields.size > 0 && maxRows > 0
+                 && maxRows <= scopes.max_rows_per_request;
+
+  const payload = {
+    fields: Array.from(fields).sort(),
+    sub_region_codes: Array.from(subRegions).sort(),
+    max_rows: maxRows,
+    requester_note: requesterNote,
+  };
+  if ((scopes.programme_codes || []).length) {
+    payload.programme_codes = scopes.programme_codes;
+  }
+
+  return (
+    <div className="page" style={{paddingBottom:0, position:'relative'}}>
+      <PageHeader
+        eyebrow="PARTNER DRS · NEW REQUEST · US-S10-003"
+        title={<>Build data request</>}
+        sub={<>Under DSA <span className="t-mono">{dsa.reference}</span> · valid through {dsa.valid_through}</>}
+        right={<>
+          <button className="btn" onClick={onCancel}>
+            <Icon name="x" size={13}/> Cancel
+          </button>
+          <button className="btn primary" disabled={!valid}
+                  onClick={() => onSubmit(payload)}>
+            <Icon name="check" size={13}/> Submit for approval
+          </button>
+        </>}
+      />
+
+      <div style={{display:"grid", gridTemplateColumns:"1fr 380px", gap:16}}>
+        <div className="col gap-3">
+
+          {/* Fields */}
+          <div className="card">
+            <div className="card-toolbar">
+              <strong className="t-bodysm">Fields requested</strong>
+              <span className="t-cap">{fields.size} of {(scopes.fields || []).length} selected</span>
+              <div style={{flex:1}}/>
+              <button className="btn" style={{fontSize:12, padding:"4px 10px"}}
+                      onClick={() => setFields(new Set(scopes.fields))}>
+                Select all
+              </button>
+              <button className="btn" style={{fontSize:12, padding:"4px 10px"}}
+                      onClick={() => setFields(new Set())}>
+                Clear
+              </button>
+            </div>
+            <div style={{padding:"4px 16px 16px"}}>
+              {Object.entries(fieldsByPrefix).map(([prefix, list]) => (
+                <div key={prefix} style={{marginTop:12}}>
+                  <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:6}}>
+                    {prefix.toUpperCase()}
+                  </div>
+                  <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:6}}>
+                    {list.map(f => (
+                      <label key={f} className="row gap-2"
+                             style={{padding:"6px 10px", borderRadius:6,
+                                     background: fields.has(f) ? "var(--accent-data-bg)" : "transparent",
+                                     border: fields.has(f) ? "1px solid var(--accent-data)" : "1px solid var(--neutral-200)",
+                                     cursor:"pointer", fontSize:13}}>
+                        <input type="checkbox" checked={fields.has(f)}
+                               onChange={() => toggle(fields, f, setFields)}/>
+                        <span className="t-mono" style={{fontSize:12}}>{f}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Geography */}
+          <div className="card">
+            <div className="card-toolbar">
+              <strong className="t-bodysm">Geography</strong>
+              <span className="t-cap">
+                {subRegions.size === 0
+                  ? "empty = all DSA-scoped sub-regions"
+                  : `${subRegions.size} of ${(scopes.sub_region_codes || []).length} selected`}
+              </span>
+            </div>
+            <div style={{padding:"4px 16px 16px", display:"flex", flexWrap:"wrap", gap:8}}>
+              {(scopes.sub_region_codes || []).map(code => (
+                <button key={code} className="chip-btn"
+                        onClick={() => toggle(subRegions, code, setSubRegions)}
+                        style={{
+                          padding:"6px 10px", borderRadius:8, fontSize:13, fontWeight:500,
+                          border: subRegions.has(code) ? "1px solid var(--accent-data)" : "1px solid var(--neutral-300)",
+                          background: subRegions.has(code) ? "var(--accent-data-bg)" : "white",
+                          color: subRegions.has(code) ? "var(--accent-data)" : "var(--neutral-800)",
+                          cursor:"pointer", fontFamily:"monospace",
+                        }}>
+                  {code}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Row cap + note */}
+          <div className="card">
+            <div className="card-toolbar">
+              <strong className="t-bodysm">Cap + note</strong>
+            </div>
+            <div style={{padding:"4px 16px 16px"}}>
+              <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:6}}>
+                MAX ROWS (DSA cap = {scopes.max_rows_per_request.toLocaleString()})
+              </div>
+              <input type="number" min={1} max={scopes.max_rows_per_request}
+                     value={maxRows}
+                     onChange={(e) => setMaxRows(Number(e.target.value || 0))}
+                     className="field-input"
+                     style={{width:200, padding:"6px 10px", border:"1px solid var(--neutral-300)",
+                              borderRadius:6, fontFamily:"monospace", fontSize:13}}/>
+              {maxRows > scopes.max_rows_per_request && (
+                <div className="t-bodysm" style={{color:"var(--accent-danger)", marginTop:4}}>
+                  Exceeds DSA cap by {(maxRows - scopes.max_rows_per_request).toLocaleString()} rows.
+                </div>
+              )}
+
+              <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>
+                NOTE (optional — visible to NSR Unit reviewer)
+              </div>
+              <textarea value={requesterNote}
+                        onChange={(e) => setRequesterNote(e.target.value)}
+                        rows={3}
+                        placeholder="e.g., Quarterly recertification cohort for PDM SACCO disbursement"
+                        className="field-textarea"
+                        style={{width:"100%", padding:"8px 10px",
+                                 border:"1px solid var(--neutral-300)", borderRadius:6,
+                                 fontFamily:"inherit", fontSize:13, resize:"vertical"}}/>
+            </div>
+          </div>
+        </div>
+
+        {/* Right rail — preview + hints */}
+        <div className="col gap-3">
+          <div className="card" style={{borderTop:"3px solid var(--accent-data)"}}>
+            <div className="card-header" style={{padding:"12px 16px"}}>
+              <div>
+                <div className="t-cap"><Icon name="eye" size={11}/> REQUEST PAYLOAD</div>
+                <h3 className="t-h3" style={{margin:"2px 0 0"}}>What will be submitted</h3>
+              </div>
+            </div>
+            <div style={{padding:16}}>
+              <pre style={{fontFamily:"monospace", fontSize:11, lineHeight:1.5,
+                            color:"var(--neutral-800)", background:"var(--neutral-50)",
+                            padding:12, borderRadius:6, margin:0, overflow:"auto"}}>
+{JSON.stringify(payload, null, 2)}
+              </pre>
+            </div>
+          </div>
+
+          <div className="card" style={{padding:"12px 16px", background:"var(--neutral-50)"}}>
+            <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:6}}>
+              <Icon name="info" size={11}/> VALIDATION
+            </div>
+            <ul style={{margin:0, paddingLeft:16, fontSize:12, lineHeight:1.6,
+                         color:"var(--neutral-700)"}}>
+              <li style={{color: fields.size > 0 ? "var(--accent-data)" : "var(--accent-danger)"}}>
+                At least one field selected
+              </li>
+              <li style={{color: maxRows > 0 && maxRows <= scopes.max_rows_per_request ? "var(--accent-data)" : "var(--accent-danger)"}}>
+                Row cap within DSA limit ({scopes.max_rows_per_request.toLocaleString()})
+              </li>
+              <li>
+                Geography {subRegions.size === 0 ? "uses all DSA-scoped regions" : `restricted to ${subRegions.size} sub-region(s)`}
+              </li>
+              {hasMemberField && (
+                <li style={{color:"var(--accent-quality)"}}>
+                  member.* fields requested — NSR Unit will scrutinise these
+                </li>
+              )}
+            </ul>
+          </div>
+
+          <div className="card" style={{padding:"12px 16px"}}>
+            <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:6}}>
+              <Icon name="clock" size={11}/> NEXT STEPS
+            </div>
+            <ol style={{margin:0, paddingLeft:16, fontSize:12, lineHeight:1.6, color:"var(--neutral-700)"}}>
+              <li>Submit → request lands at SUBMITTED</li>
+              <li>NSR Unit reviewer approves or rejects within 3 working days</li>
+              <li>Approved requests get a manifest SHA-256 and 30-day TTL</li>
+              <li>You download from this portal when status flips to DELIVERED</li>
+            </ol>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };

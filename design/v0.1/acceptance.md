@@ -165,6 +165,14 @@ and `PARTNER_DPO` per ADR-0006.
 | UI-PDRS-9 | Role visibility: hidden from all operator roles (Parish Chief, CDO, NSR Unit, DPO); visible to PARTNER_ANALYST + PARTNER_DPO; partner role sees ONLY this screen + Home in the side nav |
 | UI-PDRS-10 | Audit drawer shows the lifecycle: submitted → approved/rejected → rendered+delivered |
 | UI-PDRS-11 | Tokens-only — no hex colours hardcoded outside tokens.css |
+| UI-PDRS-BUILDER-1 | "New request" button switches to a builder mode within the same screen (no router change); back/cancel returns to the list |
+| UI-PDRS-BUILDER-2 | Fields panel grouped by prefix (household.* / member.*); each row is a checkbox with the dotted-key field name in monospace; "Select all" + "Clear" affordances |
+| UI-PDRS-BUILDER-3 | Geography panel uses chip-buttons sourced from DSA.allowed_scopes.sub_region_codes; empty selection explained as "uses all DSA-scoped regions" (matches validate_against_dsa semantics — absent key = no constraint) |
+| UI-PDRS-BUILDER-4 | Row cap input bounded by DSA.allowed_scopes.max_rows_per_request; live validation warning when exceeded |
+| UI-PDRS-BUILDER-5 | Right rail shows the exact JSON request_payload that will POST — same shape as validate_against_dsa expects (apps/data_requests/services.py); reduces round-trip when partners ask for fields outside scope |
+| UI-PDRS-BUILDER-6 | Validation checklist: green/red bullets for "at least one field selected", "row cap within DSA limit"; amber note when `member.*` fields are requested (reminds partner those will be scrutinised) |
+| UI-PDRS-BUILDER-7 | "Submit for approval" button disabled until all required validations pass |
+| UI-PDRS-BUILDER-8 | "Next steps" card explains the lifecycle (submit → reviewer → manifest + TTL → download) so the partner knows what to expect |
 
 ### 11. GRM workbench (US-S2-008, US-S3-004, US-S4-005, US-S7-001)
 
