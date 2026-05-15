@@ -41,6 +41,9 @@ SOURCES = [
      "connector": "web-default", "residence_days": 30},
     {"code": "KOBO-PILOT", "name": "Kobo pilot", "kind": SourceSystemKind.KOBO,
      "connector": "kobo-pilot", "residence_days": 30},
+    {"code": "PDM-MIS", "name": "Parish Development Model MIS",
+     "kind": SourceSystemKind.PARTNER_MIS,
+     "connector": "pdm-mis-pull", "residence_days": 30},
 ]
 
 
