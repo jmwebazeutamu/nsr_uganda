@@ -335,18 +335,33 @@ class TestKoboCanonicalMapper:
         from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
         assert c.canonicalize is kobo_to_canonical
 
-    def test_geographic_codes_pass_through(self):
+    def test_geographic_codes_translated_to_nsr_canonical(self):
+        """The Kobo form writes lowercase names + underscore codes;
+        the canonical mapper translates to the NSR convention used by
+        load_ubos_geography (R-/SR- prefixed for region/sub-region,
+        dot-separated for district downstream, fabricated village
+        code from parish + slug(village_name))."""
         from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
         out = kobo_to_canonical(SAMPLE_KOBO_PAYLOAD)
         assert out["geographic"] == {
-            "region": "western",
-            "sub_region": "kigezi",
+            "region": "R-WESTERN",
+            "sub_region": "SR-KIGEZI-WESTERN",
             "district": "412",
-            "county": "412_02",
-            "sub_county": "412_02_05",
-            "parish": "412_02_05_01",
-            "village": "Akello Village",
+            "county": "412.02",
+            "sub_county": "412.02.05",
+            "parish": "412.02.05.01",
+            "village": "412.02.05.01.AKELLO-VILLAGE",
         }
+
+    def test_geo_source_keys_capture_original_form_values(self):
+        """Pre-canonicalisation values stay in _source_keys for the
+        UPD reviewer to inspect."""
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        out = kobo_to_canonical(SAMPLE_KOBO_PAYLOAD)
+        sk = out["_source_keys"]
+        assert sk["kobo_region_name"] == "western"
+        assert sk["kobo_subregion_name"] == "kigezi"
+        assert sk["kobo_village_name"] == "Akello Village"
 
     def test_urban_rural_code_maps_to_label(self):
         from apps.ingestion_hub.connectors.kobo import kobo_to_canonical

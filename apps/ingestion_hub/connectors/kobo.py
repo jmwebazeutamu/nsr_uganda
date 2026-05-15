@@ -226,6 +226,75 @@ def _to_int(value) -> int | None:
         return None
 
 
+def _slug(value: str) -> str:
+    """Match load_ubos_geography._slug: uppercase, spaces/slashes → hyphen."""
+    return value.strip().upper().replace(" ", "-").replace("/", "-")
+
+
+def _canonicalize_kobo_geo(raw: dict) -> dict:
+    """Translate the Kobo form's geographic representation into the
+    NSR canonical codes that GeographicUnit rows are keyed on.
+
+    The Kobo form writes:
+      a0_region              "western"            (name, lowercased)
+      a1_subregion           "kigezi"             (name, lowercased)
+      a2_district_city       "412"                (UBOS district code)
+      a3_county_municipality "412_02"             (district_county, _-separated)
+      a4_subcounty_division_tc "412_02_05"        (district_county_subcounty)
+      a5_parish_ward         "412_02_05_01"       (district_county_subcounty_parish)
+      a6_lc1_village_cell    "Akello Village"     (name only — no UBOS code at
+                                                   this level per the loader)
+
+    The UBOS loader (scripts/load_ubos_geography.py) writes:
+      region:     "R-WESTERN"                     (R-{SLUG})
+      sub_region: "SR-KIGEZI-WESTERN"             (SR-{SLUG}-{R_SLUG})
+      district:   "412"                           (same)
+      county:     "412.02"                        (.-separated)
+      sub_county: "412.02.05"
+      parish:     "412.02.05.01"
+      village:    (not loaded today — UBOS source has no village rows)
+
+    Village is fabricated from `{parish_code}.{slug(village_name)}`
+    so the Household.village FK can be satisfied without requiring a
+    UBOS village registry that doesn't exist yet. Operators can
+    rename / re-link villages later via a UPD ChangeRequest.
+    """
+    region_name = (raw.get("a0_region") or "").strip()
+    subregion_name = (raw.get("a1_subregion") or "").strip()
+    district_code = (raw.get("a2_district_city") or "").strip()
+    county_code = (raw.get("a3_county_municipality") or "").strip().replace("_", ".")
+    subcounty_code = (raw.get("a4_subcounty_division_tc") or "").strip().replace("_", ".")
+    parish_code = (raw.get("a5_parish_ward") or "").strip().replace("_", ".")
+    village_name = (raw.get("a6_lc1_village_cell") or "").strip()
+
+    region_code = f"R-{_slug(region_name)}" if region_name else ""
+    subregion_code = (
+        f"SR-{_slug(subregion_name)}-{_slug(region_name)}"
+        if subregion_name and region_name else ""
+    )
+    village_code = (
+        f"{parish_code}.{_slug(village_name)}"
+        if parish_code and village_name else ""
+    )
+
+    return {
+        "region": region_code,
+        "sub_region": subregion_code,
+        "district": district_code,
+        "county": county_code,
+        "sub_county": subcounty_code,
+        "parish": parish_code,
+        "village": village_code,
+        # Lineage so the UPD reviewer can see what the form originally
+        # captured if we later need to renegotiate the encoding.
+        "_form_values": {
+            "region_name": region_name,
+            "subregion_name": subregion_name,
+            "village_name": village_name,
+        },
+    }
+
+
 def kobo_to_canonical(raw: dict) -> dict:
     """Convert a Kobo Toolbox submission (NSR socio-economic
     questionnaire v2) to the canonical NSR shape consumed by
@@ -261,16 +330,14 @@ def kobo_to_canonical(raw: dict) -> dict:
     lat, lng, gps_acc = _parse_kobo_gps(raw.get("a11_12_gps"))
     urban_rural = "urban" if str(raw.get("a7_rural_urban") or "").strip() == "2" else "rural"
 
+    geographic = _canonicalize_kobo_geo(raw)
+    # The lineage block stays inside _source_keys so the
+    # promote_stage_record path (which only consumes the named geo
+    # fields) doesn't see an unexpected key.
+    geo_form_values = geographic.pop("_form_values")
+
     canonical: dict = {
-        "geographic": {
-            "region": raw["a0_region"],
-            "sub_region": raw["a1_subregion"],
-            "district": raw["a2_district_city"],
-            "county": raw["a3_county_municipality"],
-            "sub_county": raw["a4_subcounty_division_tc"],
-            "parish": raw["a5_parish_ward"],
-            "village": raw["a6_lc1_village_cell"],
-        },
+        "geographic": geographic,
         "urban_rural": urban_rural,
         "address_narrative": (raw.get("b3_address") or "").strip(),
         "gps_lat": lat,
@@ -288,6 +355,12 @@ def kobo_to_canonical(raw: dict) -> dict:
             "kobo_enumeration_area": raw.get("a8_enumeration_area", ""),
             "kobo_submitted_by": raw.get("_submitted_by", ""),
             "kobo_submission_time": raw.get("_submission_time", ""),
+            # Original geo form values pre-canonicalisation. Useful
+            # when the UPD reviewer needs to see what the enumerator
+            # actually typed.
+            "kobo_region_name": geo_form_values["region_name"],
+            "kobo_subregion_name": geo_form_values["subregion_name"],
+            "kobo_village_name": geo_form_values["village_name"],
         },
     }
     return canonical
