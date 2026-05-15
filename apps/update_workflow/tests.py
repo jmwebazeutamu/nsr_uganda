@@ -405,3 +405,90 @@ class TestRoutingMatrixViaRefData:
             is_active=True,
         ).count()
         assert active == 1  # only the seeded one remains active
+
+
+class TestChangeRequestAdminWorkbench:
+    """Sprint 5 parallel of GRM S4-005. Approvers need a triage surface
+    when the React console isn't deployed. The admin delegates to
+    services so audit + signal wiring are identical to the REST API."""
+
+    @pytest.fixture
+    def staff_user(self, db, django_user_model):
+        return django_user_model.objects.create_user(
+            username="approver", password="p",
+            is_staff=True, is_superuser=True,
+        )
+
+    @pytest.fixture
+    def admin_client(self, staff_user):
+        from django.test import Client
+        c = Client()
+        c.force_login(staff_user)
+        return c
+
+    def test_changelist_renders(self, admin_client, member):
+        req = _draft(member, requester="enum-9")
+        r = admin_client.get("/admin/update_workflow/changerequest/")
+        assert r.status_code == 200
+        assert req.id.encode() in r.content
+
+    def test_sla_badge_overdue_when_past_deadline(self, db, member):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.update_workflow.admin import ChangeRequestAdmin
+        req = _draft(member)
+        submit_change_request(req)
+        req.sla_deadline = timezone.now() - timedelta(hours=1)
+        req.save(update_fields=["sla_deadline"])
+        a = ChangeRequestAdmin(ChangeRequest, admin_site=None)
+        assert "OVERDUE" in a.sla_badge(req)
+
+    def test_sla_badge_neutral_for_terminal_states(self, member):
+        from apps.update_workflow.admin import ChangeRequestAdmin
+        req = _draft(member)
+        submit_change_request(req)
+        commit_change_request(req, approver="someone-else")
+        a = ChangeRequestAdmin(ChangeRequest, admin_site=None)
+        badge = a.sla_badge(req)
+        assert "OVERDUE" not in badge
+        assert "—" in badge
+
+    def test_bulk_reject_skips_non_pending(self, admin_client, member):
+        # Two requests: one PENDING_APPROVAL (eligible), one DRAFT (skipped).
+        eligible = _draft(member, requester="enum-1")
+        submit_change_request(eligible)
+        draft = _draft(member, requester="enum-2",
+                       changes={"first_name": {"old": "James", "new": "Jane"}})
+        r = admin_client.post("/admin/update_workflow/changerequest/", data={
+            "action": "admin_reject",
+            "_selected_action": [eligible.id, draft.id],
+        })
+        assert r.status_code in (200, 302)
+        eligible.refresh_from_db()
+        draft.refresh_from_db()
+        assert eligible.status == ChangeStatus.REJECTED
+        assert draft.status == ChangeStatus.DRAFT  # unchanged
+
+    def test_bulk_reject_skips_self_approve(self, db, member, django_user_model):
+        """Admin user can't reject their own request — the no-self-approve
+        guard from services.reject_change_request fires."""
+        from django.test import Client
+
+        # Set up admin user whose username matches the requester.
+        u = django_user_model.objects.create_user(
+            username="enum-self", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        req = _draft(member, requester="enum-self")
+        submit_change_request(req)
+        c.post("/admin/update_workflow/changerequest/", data={
+            "action": "admin_reject",
+            "_selected_action": [req.id],
+        })
+        req.refresh_from_db()
+        # Still PENDING_APPROVAL — bulk action skipped, did not reject.
+        assert req.status == ChangeStatus.PENDING_APPROVAL
