@@ -72,3 +72,58 @@ class TestVerifyApi:
                         data='{"nin": "CM1234567890AB"}',
                         content_type="application/json")
         assert r.status_code == 403
+
+
+class TestNiraClientFactory:
+    """SAD §4.5 provider seam — callers call get_nira_client(), so the
+    mock-vs-live decision is one settings flag instead of conditional
+    code at every call site."""
+
+    def test_default_provider_is_mock(self, settings):
+        from apps.identity_verification.client import (
+            MockNiraClient,
+            get_nira_client,
+        )
+        # Default is "mock" per settings; ensure the factory returns it.
+        settings.NIRA_PROVIDER = "mock"
+        assert isinstance(get_nira_client(), MockNiraClient)
+
+    def test_mock_client_delegates_to_mock_module(self, settings):
+        from apps.identity_verification.client import get_nira_client
+        settings.NIRA_PROVIDER = "mock"
+        r = get_nira_client().verify_nin("CM1234567890AB")
+        assert r["status"] == "match"
+
+    def test_live_client_selected_when_flag_set(self, settings):
+        from apps.identity_verification.client import (
+            LiveNiraClient,
+            get_nira_client,
+        )
+        settings.NIRA_PROVIDER = "live"
+        assert isinstance(get_nira_client(), LiveNiraClient)
+
+    def test_live_client_raises_not_implemented(self, settings):
+        from apps.identity_verification.client import get_nira_client
+        settings.NIRA_PROVIDER = "live"
+        with pytest.raises(NotImplementedError, match="NIRA-O-01"):
+            get_nira_client().verify_nin("CM1234567890AB")
+
+    def test_unknown_provider_raises_value_error(self, settings):
+        from apps.identity_verification.client import get_nira_client
+        settings.NIRA_PROVIDER = "neither"
+        with pytest.raises(ValueError, match="NIRA_PROVIDER"):
+            get_nira_client()
+
+    def test_provider_choice_re_read_per_call(self, settings):
+        """Per-test settings override must take effect on the very next
+        call — important because the factory is invoked from request
+        handlers, not bound at module import."""
+        from apps.identity_verification.client import (
+            LiveNiraClient,
+            MockNiraClient,
+            get_nira_client,
+        )
+        settings.NIRA_PROVIDER = "mock"
+        assert isinstance(get_nira_client(), MockNiraClient)
+        settings.NIRA_PROVIDER = "live"
+        assert isinstance(get_nira_client(), LiveNiraClient)

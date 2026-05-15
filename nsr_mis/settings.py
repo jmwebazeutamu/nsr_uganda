@@ -133,3 +133,9 @@ SPECTACULAR_SETTINGS = {
 # known-public values.
 NSR_NIN_PEPPER = env("NSR_NIN_PEPPER", default="dev-only-nin-pepper-replace-before-deploy")
 NSR_DATA_KEY = env("NSR_DATA_KEY", default="6kZf3vUYNDxBcLg3Vh-uYqOjQp4mEX0sIqAJ8u3OZk0=")
+
+# --- IDV / NIRA client selection ------------------------------------------
+# Switches between the in-process mock and the live NIRA HTTP client.
+# Live client raises NotImplementedError until the sandbox creds are
+# provisioned (NIRA-O-01). See apps.identity_verification.client.
+NIRA_PROVIDER = env("NIRA_PROVIDER", default="mock")
