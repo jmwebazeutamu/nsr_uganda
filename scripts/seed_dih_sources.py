@@ -47,6 +47,9 @@ SOURCES = [
     {"code": "NUSAF-MIS", "name": "Northern Uganda Social Action Fund MIS",
      "kind": SourceSystemKind.PARTNER_MIS,
      "connector": "nusaf-mis-pull", "residence_days": 30},
+    {"code": "WFP-SCOPE", "name": "WFP SCOPE beneficiary registry",
+     "kind": SourceSystemKind.WFP_SCOPE,
+     "connector": "wfp-scope-pull", "residence_days": 30},
 ]
 
 
