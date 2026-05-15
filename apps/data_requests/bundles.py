@@ -36,12 +36,7 @@ from typing import Any
 from apps.data_management.models import Household, Member
 
 from .models import DataRequest
-
-# In-process bundle store. Maps manifest_sha256 -> bytes. Swap for a
-# MinIO client when the object store lands; the interface
-# (put/get/exists) is the seam.
-BUNDLE_STORE: dict[str, bytes] = {}
-
+from .storage import get_bundle_storage
 
 # Default exportable Household fields, dotted-keyed. The full set is
 # what an unrestricted DSA gets; allowed_scopes.fields trims this.
@@ -188,12 +183,13 @@ def render_bundle(req: DataRequest) -> tuple[bytes, int]:
 def put_bundle(manifest_sha256: str, body: bytes) -> None:
     """Persist a rendered bundle keyed by its manifest hash. Idempotent:
     re-puts of the same hash leave the existing bytes alone (the hash
-    is content-addressable, so identical bytes are guaranteed)."""
-    BUNDLE_STORE.setdefault(manifest_sha256, body)
+    is content-addressable, so identical bytes are guaranteed).
+    Backend selected by settings.DRS_BUNDLE_STORAGE."""
+    get_bundle_storage().put(manifest_sha256, body)
 
 
 def get_bundle(manifest_sha256: str) -> bytes | None:
-    return BUNDLE_STORE.get(manifest_sha256)
+    return get_bundle_storage().get(manifest_sha256)
 
 
 def prepare_and_deliver(req: DataRequest, *, actor: str) -> DataRequest:

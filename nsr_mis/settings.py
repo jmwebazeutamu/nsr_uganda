@@ -139,3 +139,9 @@ NSR_DATA_KEY = env("NSR_DATA_KEY", default="6kZf3vUYNDxBcLg3Vh-uYqOjQp4mEX0sIqAJ
 # Live client raises NotImplementedError until the sandbox creds are
 # provisioned (NIRA-O-01). See apps.identity_verification.client.
 NIRA_PROVIDER = env("NIRA_PROVIDER", default="mock")
+
+# --- DRS bundle storage backend -------------------------------------------
+# 'memory' = in-process dict (dev / CI default).
+# 'minio'  = MinIO client (placeholder, raises NotImplementedError until
+#            DRS-O-02 closes — see apps.data_requests.storage).
+DRS_BUNDLE_STORAGE = env("DRS_BUNDLE_STORAGE", default="memory")

@@ -801,3 +801,73 @@ class TestBundleMembersEmbedding:
         )
         with pytest.raises(DrsError, match="outside DSA scope"):
             submit_data_request(req)
+
+
+class TestBundleStorageSeam:
+    """S6-003 — BundleStorage Protocol with swappable backends.
+    Memory backend handles dev/CI; MinIO is the prod placeholder
+    that raises until DRS-O-02 closes."""
+
+    def test_default_backend_is_memory(self, db, settings):
+        from apps.data_requests.storage import (
+            InMemoryBundleStorage,
+            get_bundle_storage,
+        )
+        settings.DRS_BUNDLE_STORAGE = "memory"
+        assert isinstance(get_bundle_storage(), InMemoryBundleStorage)
+
+    def test_memory_backend_round_trips(self, db, settings):
+        from apps.data_requests.storage import get_bundle_storage
+        settings.DRS_BUNDLE_STORAGE = "memory"
+        storage = get_bundle_storage()
+        storage._reset_for_tests()
+        storage.put("abc", b"hello")
+        assert storage.exists("abc")
+        assert storage.get("abc") == b"hello"
+        assert storage.get("missing") is None
+
+    def test_memory_put_is_idempotent(self, db, settings):
+        from apps.data_requests.storage import get_bundle_storage
+        settings.DRS_BUNDLE_STORAGE = "memory"
+        storage = get_bundle_storage()
+        storage._reset_for_tests()
+        # Same hash + same bytes -> single entry (content-addressable).
+        storage.put("hh1", b"contents")
+        storage.put("hh1", b"contents")
+        assert storage.get("hh1") == b"contents"
+
+    def test_minio_backend_placeholder_raises(self, db, settings):
+        from apps.data_requests.storage import get_bundle_storage
+        settings.DRS_BUNDLE_STORAGE = "minio"
+        storage = get_bundle_storage()
+        with pytest.raises(NotImplementedError, match="DRS-O-02"):
+            storage.put("h", b"x")
+        with pytest.raises(NotImplementedError, match="DRS-O-02"):
+            storage.get("h")
+        with pytest.raises(NotImplementedError, match="DRS-O-02"):
+            storage.exists("h")
+
+    def test_unknown_backend_raises_value_error(self, db, settings):
+        from apps.data_requests.storage import get_bundle_storage
+        settings.DRS_BUNDLE_STORAGE = "s3"
+        with pytest.raises(ValueError, match="DRS_BUNDLE_STORAGE"):
+            get_bundle_storage()
+
+    def test_factory_re_reads_setting_per_call(self, db, settings):
+        from apps.data_requests.storage import (
+            InMemoryBundleStorage,
+            MinIOBundleStorage,
+            get_bundle_storage,
+        )
+        settings.DRS_BUNDLE_STORAGE = "memory"
+        assert isinstance(get_bundle_storage(), InMemoryBundleStorage)
+        settings.DRS_BUNDLE_STORAGE = "minio"
+        assert isinstance(get_bundle_storage(), MinIOBundleStorage)
+
+    def test_put_bundle_routes_through_factory(self, db, settings):
+        from apps.data_requests.bundles import get_bundle, put_bundle
+        from apps.data_requests.storage import get_bundle_storage
+        settings.DRS_BUNDLE_STORAGE = "memory"
+        get_bundle_storage()._reset_for_tests()
+        put_bundle("seam-hash", b"seam-bytes")
+        assert get_bundle("seam-hash") == b"seam-bytes"
