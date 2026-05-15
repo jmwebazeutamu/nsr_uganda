@@ -26,4 +26,5 @@ urlpatterns = [
     path("api/v1/idv/", include("apps.identity_verification.urls")),
     path("api/v1/upd/", include("apps.update_workflow.urls")),
     path("api/v1/pmt/", include("apps.pmt.urls")),
+    path("api/v1/intake/", include("apps.intake.urls")),
 ]
