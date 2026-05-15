@@ -7,7 +7,7 @@ This folder holds the design source-of-truth for the NSR MIS operator console an
 ```
 /design
 ├── README.md                       # this file
-├── NSR MIS Console.html            # preview harness — open in a browser to view all screens
+├── nsr-mis-console.html            # preview harness — open in a browser to view all screens
 ├── styles.css                      # harness stylesheet; consumes v0.1/tokens.css variables
 ├── app.jsx                         # harness shell: routing, role switcher, layout chrome
 ├── components.jsx                  # shared component library (Chip, KPI, PageHeader, Field, …)
@@ -30,10 +30,10 @@ This folder holds the design source-of-truth for the NSR MIS operator console an
 ## How to view the preview
 
 ```
-open "/Users/johnsonmwebaze/nsr_sris_dev/design/NSR MIS Console.html"
+open "/Users/johnsonmwebaze/nsr_sris_dev/design/nsr-mis-console.html"
 ```
 
-Or, equivalently, serve `/design` over any static HTTP server and open `NSR MIS Console.html`. The harness loads `v0.1/tokens.css` first (defining the CSS variables), then `styles.css`, then the JSX files via Babel-standalone.
+Or, equivalently, serve `/design` over any static HTTP server and open `nsr-mis-console.html`. The harness loads `v0.1/tokens.css` first (defining the CSS variables), then `styles.css`, then the JSX files via Babel-standalone.
 
 The tweaks panel (bottom-right, dev-only) toggles device (desktop / CAPI tablet), role (Parish Chief, CDO, District M&E, NSR Unit Coordinator, DPO), and density (comfortable / compact). Use it to satisfy the cross-cutting acceptance gates in one session.
 
@@ -51,14 +51,14 @@ The tweaks panel (bottom-right, dev-only) toggles device (desktop / CAPI tablet)
 4. Export the screen via `Object.assign(window, { <ComponentName> })` so the harness can route to it.
 5. Use only `var(--…)` references for colour, font, type, and spacing — never hard-code a hex, px, or font family outside `tokens.css`.
 6. Wire it into `app.jsx` routing and into the tweaks panel where state variants exist.
-7. Open `NSR MIS Console.html` at 1366 wide and run the per-screen acceptance gates in `v0.1/acceptance.md`.
+7. Open `nsr-mis-console.html` at 1366 wide and run the per-screen acceptance gates in `v0.1/acceptance.md`.
 8. Commit with message `[US-XXX] design(<screen>): add <ComponentName>`.
 
 ## How to revise an existing screen
 
 1. Bump the design version: copy `v0.1/` to `v0.2/` and revise there. Keep `v0.1/` immutable for the engineering team that built against it.
 2. Document the diff in `v0.2/CHANGELOG.md`.
-3. Update the harness `<script>` and `<link>` paths in `NSR MIS Console.html` to point at the new version.
+3. Update the harness `<script>` and `<link>` paths in `nsr-mis-console.html` to point at the new version.
 4. Update `/CLAUDE.md`'s `/design` layout block to point at the new version.
 
 ## What this folder is NOT

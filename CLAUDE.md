@@ -71,7 +71,7 @@ Do not introduce alternative frameworks without an ADR.
 │   ├── contract/               # OpenAPI contract tests
 │   └── e2e/
 ├── /design                     # design source-of-truth — see /design/README.md
-│   ├── NSR MIS Console.html    # runnable preview harness (React + Babel-standalone)
+│   ├── nsr-mis-console.html    # runnable preview harness (React + Babel-standalone)
 │   ├── styles.css, app.jsx, components.jsx, tweaks-panel.jsx   # harness
 │   └── v0.1/                   # versioned design snapshot
 │       ├── tokens.css          # design tokens — from /docs/04 §4

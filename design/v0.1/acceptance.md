@@ -6,7 +6,7 @@ Each design mockup is anchored to one or more user stories from `/docs/03_backlo
 
 ## Priority screens (build order)
 
-Screens are React components inside the module JSX files under `v0.1/screens/`. State variants (device, role, wizard step) are props, not separate files. The harness (`/design/NSR MIS Console.html`) routes to each by component name.
+Screens are React components inside the module JSX files under `v0.1/screens/`. State variants (device, role, wizard step) are props, not separate files. The harness (`/design/nsr-mis-console.html`) routes to each by component name.
 
 | # | Screen | Anchored to | Built in | Status |
 |---|---|---|---|---|
