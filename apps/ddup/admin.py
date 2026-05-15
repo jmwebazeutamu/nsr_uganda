@@ -1,6 +1,7 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 
-from .models import DdupModelVersion, MatchPair, MergeDecision
+from .models import DdupModelVersion, MatchPair, MergeAction, MergeDecision
+from .services import MergeError, reverse_merge_decision
 
 
 @admin.register(DdupModelVersion)
@@ -31,13 +32,43 @@ class MergeDecisionAdmin(admin.ModelAdmin):
     readonly_fields = (
         "id", "match_pair", "action", "surviving_record_id", "losing_record_id",
         "chosen_field_values", "reason", "decided_by", "decided_at",
-        "reverse_window_until", "reversed_at", "reversed_by",
+        "reverse_window_until", "reversed_at", "reversed_by", "reversed_reason",
+        "pre_merge_snapshot",
     )
     raw_id_fields = ("match_pair",)
     ordering = ("-decided_at",)
+    actions = ("admin_reverse_merge",)
 
     def has_add_permission(self, request):
         return False
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+    @admin.action(description="Reverse selected MERGE decisions (within 30d window)")
+    def admin_reverse_merge(self, request, queryset):
+        """Bulk reverse — delegates to services.reverse_merge_decision
+        so audit + guard semantics are identical to the REST surface.
+        Skipped rows (already reversed, window closed, non-MERGE) are
+        counted and surfaced as a warning rather than aborting the
+        batch — same pattern as GRM S4-005 and UPD S5-001 admin
+        actions."""
+        actor = (getattr(request.user, "username", "") or "admin-bot")
+        reason = "admin bulk reverse (no detail captured)"
+        reversed_count = 0
+        skipped = 0
+        for decision in queryset:
+            if decision.action != MergeAction.MERGE:
+                skipped += 1
+                continue
+            try:
+                reverse_merge_decision(decision, actor=actor, reason=reason)
+                reversed_count += 1
+            except MergeError:
+                skipped += 1
+        self.message_user(
+            request,
+            f"Reversed {reversed_count} decision(s); {skipped} skipped "
+            "(non-MERGE, already reversed, or window closed).",
+            level=messages.SUCCESS if reversed_count else messages.WARNING,
+        )

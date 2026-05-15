@@ -463,3 +463,141 @@ class TestReverseMerge:
         decision = reject_pair(pair, actor="op", reason="not duplicates")
         with pytest.raises(MergeError, match="only MERGE"):
             reverse_merge_decision(decision, actor="rv", reason="r")
+
+
+# --- US-S6-001 — reverse-merge surface (API + admin) -----------------------
+
+class TestReverseMergeApi:
+    """Per US-S6-001: POST /api/v1/ddup/merge-decisions/{id}/reverse/
+    triggers the same reverse_merge_decision() service that S5-003
+    shipped. Guards (window, double-reverse, reason) surface as 400."""
+
+    def _make_merge(self, household, active_model):
+        from apps.ddup.services import merge_member_pair
+        from apps.security.hashing import nin_hash as _nin_hash
+        h = _nin_hash("CM1234567890AB")
+        Member.objects.create(household=household, line_number=1, surname="A",
+                              first_name="X", sex="M", nin_hash=h, nin_last4="00AB")
+        b = Member.objects.create(household=household, line_number=2, surname="B",
+                                  first_name="Y", sex="M", nin_hash=h, nin_last4="00AB")
+        pair = discover_nin_pairs(actor="system")[0]
+        return merge_member_pair(pair, surviving_id=b.id,
+                                 chosen_field_values={}, actor="op-1", note="")
+
+    def test_reverse_via_api(self, household, active_model, django_user_model):
+        from rest_framework.test import APIClient
+        decision = self._make_merge(household, active_model)
+        u = django_user_model.objects.create_user(
+            username="reviewer", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.post(
+            f"/api/v1/ddup/merge-decisions/{decision.id}/reverse/",
+            data={"actor": "reviewer-2", "reason": "id mismatch"},
+            format="json",
+        )
+        assert r.status_code == 200, r.data
+        assert r.data["reversed_at"] is not None
+        assert r.data["reversed_by"] == "reviewer-2"
+        assert "mismatch" in r.data["reversed_reason"]
+
+    def test_reverse_api_400_outside_window(
+        self, household, active_model, django_user_model,
+    ):
+        from datetime import timedelta
+
+        from django.utils import timezone
+        from rest_framework.test import APIClient
+        decision = self._make_merge(household, active_model)
+        decision.reverse_window_until = timezone.now() - timedelta(seconds=1)
+        decision.save(update_fields=["reverse_window_until"])
+        u = django_user_model.objects.create_user(
+            username="late", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.post(
+            f"/api/v1/ddup/merge-decisions/{decision.id}/reverse/",
+            data={"actor": "late", "reason": "too late"},
+            format="json",
+        )
+        assert r.status_code == 400
+        assert "window closed" in r.data["detail"]
+
+    def test_reverse_api_requires_reason(
+        self, household, active_model, django_user_model,
+    ):
+        from rest_framework.test import APIClient
+        decision = self._make_merge(household, active_model)
+        u = django_user_model.objects.create_user(
+            username="lazy", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        # Empty reason -> DRF serializer rejects (CharField required-non-blank).
+        r = c.post(
+            f"/api/v1/ddup/merge-decisions/{decision.id}/reverse/",
+            data={"actor": "lazy", "reason": ""},
+            format="json",
+        )
+        assert r.status_code == 400
+
+
+class TestReverseMergeAdmin:
+    """The admin bulk action wraps the same service so audit chain and
+    guards are identical to the API surface."""
+
+    @pytest.fixture
+    def admin_client(self, db, django_user_model):
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="reviewer-admin", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        return c
+
+    def test_bulk_reverse_flips_pair_back_to_pending(
+        self, admin_client, household, active_model,
+    ):
+        from apps.ddup.services import merge_member_pair
+        from apps.security.hashing import nin_hash as _nin_hash
+        h = _nin_hash("CM1234567890AB")
+        Member.objects.create(household=household, line_number=1, surname="A",
+                              first_name="X", sex="M", nin_hash=h, nin_last4="00AB")
+        b = Member.objects.create(household=household, line_number=2, surname="B",
+                                  first_name="Y", sex="M", nin_hash=h, nin_last4="00AB")
+        pair = discover_nin_pairs(actor="system")[0]
+        decision = merge_member_pair(pair, surviving_id=b.id,
+                                     chosen_field_values={}, actor="op-1", note="")
+        r = admin_client.post("/admin/ddup/mergedecision/", data={
+            "action": "admin_reverse_merge",
+            "_selected_action": [decision.id],
+        })
+        assert r.status_code in (200, 302)
+        decision.refresh_from_db()
+        pair.refresh_from_db()
+        assert decision.reversed_at is not None
+        assert pair.status == PairStatus.PENDING
+
+    def test_bulk_reverse_skips_non_merge_actions(
+        self, admin_client, household, active_model,
+    ):
+        from apps.ddup.services import reject_pair
+        from apps.security.hashing import nin_hash as _nin_hash
+        h = _nin_hash("CM1234567890AB")
+        Member.objects.create(household=household, line_number=1, surname="A",
+                              first_name="X", sex="M", nin_hash=h)
+        Member.objects.create(household=household, line_number=2, surname="B",
+                              first_name="Y", sex="M", nin_hash=h)
+        pair = discover_nin_pairs(actor="system")[0]
+        decision = reject_pair(pair, actor="op", reason="not duplicates")
+        admin_client.post("/admin/ddup/mergedecision/", data={
+            "action": "admin_reverse_merge",
+            "_selected_action": [decision.id],
+        })
+        decision.refresh_from_db()
+        # REJECT decision unchanged — admin action skipped it.
+        assert decision.reversed_at is None
