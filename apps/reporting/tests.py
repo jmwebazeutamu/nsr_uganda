@@ -745,3 +745,110 @@ class TestWeeklyHouseholdRegistrations:
         ).first()
         assert ev is not None
         assert ev.action == "dashboard_read"
+
+
+# --- US-S11-007 — comparative dashboards ---------------------------------
+
+
+class TestComparativeMetric:
+    URL = "/api/v1/rpt/dashboards/comparative/"
+
+    @pytest.fixture
+    def superuser(self, django_user_model):
+        return django_user_model.objects.create_user(
+            username="su", password="x", is_superuser=True, is_staff=True,
+        )
+
+    def _client(self, user):
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c
+
+    def test_unknown_metric_rejects(self, db, superuser):
+        r = self._client(superuser).get(self.URL, {"metric": "bogus"})
+        assert r.status_code == 400
+        assert "bogus" in r.data["detail"]
+
+    def test_unknown_period_rejects(self, db, superuser):
+        r = self._client(superuser).get(self.URL, {"compare": "yoy"})
+        assert r.status_code == 400
+
+    def test_zero_baseline_yields_null_delta_pct(self, db, superuser):
+        """No households in either window → delta_pct is None (avoid
+        0/0). delta_abs is 0."""
+        r = self._client(superuser).get(self.URL, {"metric": "households_created"})
+        assert r.status_code == 200
+        assert r.data["delta_abs"] == 0
+        assert r.data["delta_pct"] is None
+
+    def test_current_window_counts_recent_rows(self, db, households, superuser):
+        """Households created right now land in the current window."""
+        r = self._client(superuser).get(
+            self.URL, {"metric": "households_created", "compare": "wow"},
+        )
+        assert r.status_code == 200
+        assert r.data["current"]["count"] == 2
+        assert r.data["previous"]["count"] == 0
+        assert r.data["delta_abs"] == 2
+
+    def test_period_window_size_differs_for_wow_vs_mom(self, db, superuser):
+        wow = self._client(superuser).get(
+            self.URL, {"metric": "households_created", "compare": "wow"},
+        )
+        mom = self._client(superuser).get(
+            self.URL, {"metric": "households_created", "compare": "mom"},
+        )
+        # DRF returns datetime objects directly in response.data for an
+        # APIView returning a dict (not the serialised string), so we
+        # diff them straight away.
+        assert (wow.data["current"]["to"] - wow.data["current"]["from"]).days == 7
+        assert (mom.data["current"]["to"] - mom.data["current"]["from"]).days == 30
+
+    def test_csv_export_two_rows_plus_header(self, db, superuser):
+        r = self._client(superuser).get(
+            self.URL,
+            {"metric": "households_created", "compare": "wow", "export": "csv"},
+        )
+        assert r.status_code == 200
+        assert r["Content-Type"] == "text/csv"
+        lines = r.content.decode().strip().splitlines()
+        # 1 header + 2 data rows.
+        assert len(lines) == 3
+        assert lines[0].startswith("metric,period,window,from,to,count,delta_abs,delta_pct")
+        assert "previous" in lines[1]
+        assert "current" in lines[2]
+
+    def test_audit_event_emitted(self, db, superuser):
+        self._client(superuser).get(
+            self.URL, {"metric": "households_created", "compare": "wow"},
+        )
+        ev = AuditEvent.objects.filter(
+            entity_type="rpt_dashboard",
+            entity_id="comparative_households_created_wow",
+        ).first()
+        assert ev is not None
+        assert ev.action == "dashboard_read"
+
+    def test_abac_applied_to_metric_counter(self, db, two_sub_regions, households, django_user_model):
+        """A sub-region operator only sees households in their scope —
+        same plumbing the row-level dashboards use."""
+        user = django_user_model.objects.create_user(username="op", password="x")
+        OperatorScope.objects.create(
+            user=user, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = self._client(user).get(
+            self.URL, {"metric": "households_created", "compare": "wow"},
+        )
+        assert r.status_code == 200
+        assert r.data["current"]["count"] == 1  # only Buganda visible
+
+    def test_empty_scope_user_sees_zero(self, db, households, django_user_model):
+        user = django_user_model.objects.create_user(username="nobody", password="x")
+        # No OperatorScope row -> codes = [], count short-circuits to 0.
+        r = self._client(user).get(
+            self.URL, {"metric": "households_created", "compare": "wow"},
+        )
+        assert r.status_code == 200
+        assert r.data["current"]["count"] == 0
+        assert r.data["previous"]["count"] == 0

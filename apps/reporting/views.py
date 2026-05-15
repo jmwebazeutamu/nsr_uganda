@@ -436,6 +436,188 @@ class PromotionLatencyByConnector(APIView):
         return _render(request, out, "promotion-latency-by-connector")
 
 
+class CompareWindowSerializer(serializers.Serializer):
+    from_ = serializers.DateTimeField(source="from")  # `from` is keyword
+    to = serializers.DateTimeField()
+    count = serializers.IntegerField()
+
+
+class CompareResultSerializer(serializers.Serializer):
+    metric = serializers.CharField()
+    period = serializers.ChoiceField(choices=["wow", "mom"])
+    current = CompareWindowSerializer()
+    previous = CompareWindowSerializer()
+    delta_abs = serializers.IntegerField()
+    delta_pct = serializers.FloatField(allow_null=True)
+
+
+# Registry of supported comparative metrics (US-S11-007). Each entry
+# is a callable taking (request, since, until) and returning the count
+# of matching rows in [since, until). New metrics land by appending an
+# entry here and the GET handler picks them up automatically — keeps
+# the comparative surface independent of the per-dashboard plumbing.
+def _count_households_created(request, since, until):
+    return Household.objects.filter(
+        scope_q_for_field(request.user, "sub_region_code"),
+        created_at__gte=since, created_at__lt=until,
+    ).count()
+
+
+def _count_submissions(request, since, until):
+    from apps.intake.models import Submission
+    from apps.security.abac import _scoped_codes
+    codes = _scoped_codes(request.user)
+    base = Submission.objects.filter(created_at__gte=since, created_at__lt=until)
+    if codes is None:
+        return base.count()
+    if not codes:
+        return 0
+    household_ids = list(
+        Household.objects.filter(sub_region_code__in=codes)
+                          .values_list("id", flat=True),
+    )
+    return base.filter(provisional_registry_id__in=household_ids).count()
+
+
+def _count_grievances_opened(request, since, until):
+    from apps.security.abac import _scoped_codes
+    codes = _scoped_codes(request.user)
+    base = Grievance.objects.filter(created_at__gte=since, created_at__lt=until)
+    if codes is None:
+        return base.count()
+    if not codes:
+        return 0
+    household_ids = list(
+        Household.objects.filter(sub_region_code__in=codes)
+                          .values_list("id", flat=True),
+    )
+    return base.filter(household_id__in=household_ids).count()
+
+
+def _count_change_requests_committed(request, since, until):
+    from apps.security.abac import _scoped_codes
+    from apps.update_workflow.models import ChangeRequest, ChangeRequestStatus
+    codes = _scoped_codes(request.user)
+    base = ChangeRequest.objects.filter(
+        status=ChangeRequestStatus.COMMITTED,
+        decided_at__gte=since, decided_at__lt=until,
+    )
+    if codes is None:
+        return base.count()
+    if not codes:
+        return 0
+    household_ids = list(
+        Household.objects.filter(sub_region_code__in=codes)
+                          .values_list("id", flat=True),
+    )
+    return base.filter(household_id__in=household_ids).count()
+
+
+_COMPARE_METRICS = {
+    "households_created": _count_households_created,
+    "submissions": _count_submissions,
+    "grievances_opened": _count_grievances_opened,
+    "change_requests_committed": _count_change_requests_committed,
+}
+
+_COMPARE_PERIODS = {"wow": 7, "mom": 30}
+
+
+@extend_schema(
+    tags=["rpt"],
+    summary="Same metric across two time windows (week-over-week / month-over-month)",
+    responses={200: CompareResultSerializer()},
+)
+class ComparativeMetric(APIView):
+    """Returns a single number for the current window plus the same
+    number for the immediately-preceding window of equal length, with
+    absolute + percent deltas.
+
+    Query params:
+        metric  — one of households_created, submissions,
+                  grievances_opened, change_requests_committed
+        compare — wow (default) for 7-day or mom for 30-day windows
+
+    The point of this dashboard isn't to replace the trend charts (S8-004,
+    S6-005) — it's to surface a single 'is this week worse than last week'
+    signal an operator can read at a glance. ABAC scope flows through
+    each counter exactly like the row-level dashboards.
+    """
+
+    def get(self, request):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        metric_key = request.query_params.get("metric", "households_created")
+        period = request.query_params.get("compare", "wow")
+        if metric_key not in _COMPARE_METRICS:
+            return Response(
+                {"detail": f"unknown metric '{metric_key}'; allowed: "
+                           f"{sorted(_COMPARE_METRICS)}"},
+                status=400,
+            )
+        if period not in _COMPARE_PERIODS:
+            return Response(
+                {"detail": f"unknown compare '{period}'; allowed: wow, mom"},
+                status=400,
+            )
+        days = _COMPARE_PERIODS[period]
+        now = timezone.now()
+        cur_to = now
+        cur_from = now - timedelta(days=days)
+        prev_to = cur_from
+        prev_from = cur_from - timedelta(days=days)
+
+        counter = _COMPARE_METRICS[metric_key]
+        cur = counter(request, cur_from, cur_to)
+        prev = counter(request, prev_from, prev_to)
+        delta_abs = cur - prev
+        # Avoid 0/0 nonsense — when there's no prior baseline, percent
+        # delta is meaningless and we surface it as None for the caller
+        # to render as '—' rather than '+Infinity%'.
+        delta_pct = (delta_abs / prev) if prev else None
+
+        out = {
+            "metric": metric_key,
+            "period": period,
+            "current": {"from": cur_from, "to": cur_to, "count": cur},
+            "previous": {"from": prev_from, "to": prev_to, "count": prev},
+            "delta_abs": delta_abs,
+            "delta_pct": delta_pct,
+        }
+        _audit_dashboard_read(
+            request, f"comparative_{metric_key}_{period}", 1,
+        )
+        if request.query_params.get("export", "").lower() != "csv":
+            return Response(out)
+
+        # CSV variant — two-row tabular layout the partner spreadsheets
+        # can paste into. Columns mirror the field names so the file is
+        # self-describing.
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow((
+            "metric", "period", "window", "from", "to", "count",
+            "delta_abs", "delta_pct",
+        ))
+        writer.writerow((
+            metric_key, period, "previous",
+            prev_from.isoformat(), prev_to.isoformat(), prev,
+            "", "",
+        ))
+        writer.writerow((
+            metric_key, period, "current",
+            cur_from.isoformat(), cur_to.isoformat(), cur,
+            delta_abs, f"{delta_pct:.4f}" if delta_pct is not None else "",
+        ))
+        response = HttpResponse(buf.getvalue(), content_type="text/csv")
+        response["Content-Disposition"] = (
+            f'attachment; filename="comparative-{metric_key}-{period}.csv"'
+        )
+        return response
+
+
 @extend_schema(
     tags=["rpt"],
     summary="Open grievance count grouped by tier",

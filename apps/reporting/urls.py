@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    ComparativeMetric,
     GrievancesByCategory,
     HouseholdsByPmtBand,
     HouseholdsBySubRegion,
@@ -44,4 +45,7 @@ urlpatterns = [
     path("dashboards/grievances-by-category/",
          GrievancesByCategory.as_view(),
          name="rpt-grievances-by-category"),
+    path("dashboards/comparative/",
+         ComparativeMetric.as_view(),
+         name="rpt-comparative"),
 ]
