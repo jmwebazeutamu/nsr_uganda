@@ -174,6 +174,104 @@ def discover_phone_pairs(*, actor: str = "system") -> list[MatchPair]:
     return created
 
 
+def discover_probabilistic_pairs(*, actor: str = "system") -> list[MatchPair]:
+    """Tier 3: weighted-similarity matching within village blocks.
+
+    Reads weights + threshold from active DdupModelVersion.config[
+    "tier3"]. Default config (used when the model version doesn't
+    provide its own) weights surname + first_name highest because
+    they're the strongest individual signals; DOB year + village
+    are cheaper checks that prevent obviously-different rows from
+    crossing the threshold.
+
+    Per SAD §4.3.1 tier 3. Blocking is by Household.village_id so
+    the comparison is O(N²) within each village, not across the
+    country (Uganda has ~10,800 villages; biggest realistic block
+    is < 1000 members).
+
+    Tier 1 / Tier 2 pairs are preserved by the (record_type, a, b)
+    uniqueness constraint — same logic as tier 2 over tier 1.
+    """
+    from collections import defaultdict
+    from decimal import Decimal
+
+    from .similarity import (
+        composite_score,
+        exact,
+        jaro_winkler,
+        year_proximity,
+    )
+
+    model = get_active_model_version()
+    cfg = (model.config or {}).get("tier3") or {}
+    weights = cfg.get("weights") or {
+        "surname": 0.30,
+        "first_name": 0.30,
+        "date_of_birth": 0.15,
+        "sex": 0.10,
+        "village": 0.15,
+    }
+    threshold = cfg.get("threshold", 0.85)
+
+    # Block by village to keep the comparison tractable.
+    by_village: dict[str, list] = defaultdict(list)
+    qs = (
+        Member.objects
+        .filter(is_deleted=False)
+        .select_related("household")
+        .only(
+            "id", "surname", "first_name", "date_of_birth", "sex",
+            "household__village_id",
+        )
+    )
+    for m in qs:
+        by_village[m.household.village_id].append(m)
+
+    created: list[MatchPair] = []
+    for members in by_village.values():
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda x: x.id)
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                a, b = members[i], members[j]
+                scores = {
+                    "surname": jaro_winkler(a.surname or "", b.surname or ""),
+                    "first_name": jaro_winkler(
+                        a.first_name or "", b.first_name or "",
+                    ),
+                    "date_of_birth": year_proximity(
+                        a.date_of_birth, b.date_of_birth,
+                    ),
+                    "sex": exact(a.sex, b.sex),
+                    "village": exact(
+                        a.household.village_id, b.household.village_id,
+                    ),
+                }
+                composite = composite_score(
+                    [(weights.get(k, 0.0), s) for k, s in scores.items()],
+                )
+                if composite < threshold:
+                    continue
+                pair = _record_pair(
+                    record_a_id=a.id, record_b_id=b.id,
+                    tier=3, match_reason="probabilistic",
+                    model=model, actor=actor,
+                )
+                if pair is not None:
+                    # Persist the breakdown so reviewers see why the
+                    # pair fired.
+                    pair.composite_score = Decimal(f"{composite:.3f}")
+                    pair.per_field_scores = {
+                        k: round(s, 3) for k, s in scores.items()
+                    }
+                    pair.save(update_fields=[
+                        "composite_score", "per_field_scores", "updated_at",
+                    ])
+                    created.append(pair)
+    return created
+
+
 # ---------------------------------------------------------------------------
 # Merge-commit transaction
 

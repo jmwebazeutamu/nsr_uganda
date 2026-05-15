@@ -601,3 +601,229 @@ class TestReverseMergeAdmin:
         decision.refresh_from_db()
         # REJECT decision unchanged — admin action skipped it.
         assert decision.reversed_at is None
+
+
+# --- US-S7-003 — tier 3 probabilistic discovery ---------------------------
+
+
+class TestSimilarityPrimitives:
+    """Self-contained similarity functions in apps.ddup.similarity.
+    These are the building blocks composite_score combines into a
+    weighted match score."""
+
+    def test_jaro_winkler_exact_match(self):
+        from apps.ddup.similarity import jaro_winkler
+        assert jaro_winkler("OKELLO", "OKELLO") == 1.0
+
+    def test_jaro_winkler_close_variants(self):
+        """OCHELLO vs OKELLO should score high — same length, single
+        substitution, common prefix."""
+        from apps.ddup.similarity import jaro_winkler
+        assert jaro_winkler("OCHELLO", "OKELLO") > 0.85
+
+    def test_jaro_winkler_empty_strings(self):
+        from apps.ddup.similarity import jaro_winkler
+        assert jaro_winkler("", "") == 1.0
+        assert jaro_winkler("X", "") == 0.0
+        assert jaro_winkler("", "Y") == 0.0
+
+    def test_year_proximity_same_year(self):
+        from datetime import date
+
+        from apps.ddup.similarity import year_proximity
+        assert year_proximity(date(1980, 1, 1), date(1980, 12, 31)) == 1.0
+
+    def test_year_proximity_one_year_apart(self):
+        from datetime import date
+
+        from apps.ddup.similarity import year_proximity
+        # max_years=2 -> 1 year apart = 0.5
+        assert year_proximity(date(1980, 1, 1), date(1981, 1, 1)) == 0.5
+
+    def test_year_proximity_missing_dob_yields_zero(self):
+        from datetime import date
+
+        from apps.ddup.similarity import year_proximity
+        assert year_proximity(None, date(1980, 1, 1)) == 0.0
+        assert year_proximity(date(1980, 1, 1), None) == 0.0
+
+    def test_exact_treats_empty_as_missing(self):
+        from apps.ddup.similarity import exact
+        # Two empties should NOT be a match — would collapse blank villages.
+        assert exact("", "") == 0.0
+        assert exact(None, None) == 0.0
+        assert exact("V1", "V1") == 1.0
+        assert exact("V1", "V2") == 0.0
+
+    def test_composite_score_weighted_average(self):
+        from apps.ddup.similarity import composite_score
+        # 0.5 weight at 1.0 + 0.5 weight at 0.0 = 0.5
+        assert composite_score([(0.5, 1.0), (0.5, 0.0)]) == 0.5
+        # Empty -> 0.0 not divide-by-zero
+        assert composite_score([]) == 0.0
+        # All-zero weights -> 0.0 defensively
+        assert composite_score([(0, 0.5), (0, 1.0)]) == 0.0
+
+
+class TestProbabilisticDiscovery:
+    """Tier 3: composite-score matching within village blocks.
+    Different households (so neither NIN nor phone tier 1/2 fires)
+    but same village + very similar names + same DOB year + same sex
+    should cross the 0.85 default threshold."""
+
+    @pytest.fixture
+    def two_households_same_village(self, db, geo):
+        # Two households sharing the same village node from `geo`.
+        h1 = Household.objects.create(
+            region=geo["r"], sub_region=geo["sr"], district=geo["d"],
+            county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
+            village=geo["v"], urban_rural="rural",
+        )
+        h2 = Household.objects.create(
+            region=geo["r"], sub_region=geo["sr"], district=geo["d"],
+            county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
+            village=geo["v"], urban_rural="rural",
+        )
+        return h1, h2
+
+    @pytest.fixture
+    def other_village_household(self, db, geo):
+        # A second village, same parish — for the blocking test.
+        v2 = GeographicUnit.objects.create(
+            level="village", code="T-V2", name="other-village",
+            parent=geo["p"], effective_from=date(2026, 1, 1),
+        )
+        return Household.objects.create(
+            region=geo["r"], sub_region=geo["sr"], district=geo["d"],
+            county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
+            village=v2, urban_rural="rural",
+        )
+
+    def test_high_similarity_pair_within_village(
+        self, two_households_same_village, active_model,
+    ):
+        from apps.ddup.services import discover_probabilistic_pairs
+        h1, h2 = two_households_same_village
+        m1 = Member.objects.create(
+            household=h1, line_number=1, surname="OKELLO",
+            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+        )
+        m2 = Member.objects.create(
+            household=h2, line_number=1, surname="OKELLO",
+            first_name="JAMES", sex="M", date_of_birth=date(1980, 6, 15),
+        )
+        created = discover_probabilistic_pairs(actor="system")
+        assert len(created) == 1
+        pair = created[0]
+        assert pair.tier == 3
+        assert pair.match_reason == "probabilistic"
+        # Composite is recorded and at/above threshold.
+        assert pair.composite_score is not None
+        assert float(pair.composite_score) >= 0.85
+        # Per-field breakdown stored for reviewer transparency.
+        assert pair.per_field_scores["surname"] == 1.0
+        assert pair.per_field_scores["village"] == 1.0
+        # Both members in scope.
+        assert {pair.record_a_id, pair.record_b_id} == {m1.id, m2.id}
+
+    def test_low_similarity_pair_skipped(
+        self, two_households_same_village, active_model,
+    ):
+        from apps.ddup.services import discover_probabilistic_pairs
+        h1, h2 = two_households_same_village
+        Member.objects.create(
+            household=h1, line_number=1, surname="OKELLO",
+            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+        )
+        Member.objects.create(
+            household=h2, line_number=1, surname="NAKATO",
+            first_name="ALICE", sex="F", date_of_birth=date(1995, 1, 1),
+        )
+        assert discover_probabilistic_pairs(actor="system") == []
+
+    def test_village_blocking_prevents_cross_village_pair(
+        self, two_households_same_village, other_village_household,
+        active_model,
+    ):
+        """Two identical-looking members in different villages should
+        NOT pair via tier 3 — the blocking is by village_id."""
+        from apps.ddup.services import discover_probabilistic_pairs
+        h1, _ = two_households_same_village
+        h_other = other_village_household
+        Member.objects.create(
+            household=h1, line_number=1, surname="OKELLO",
+            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+        )
+        Member.objects.create(
+            household=h_other, line_number=1, surname="OKELLO",
+            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+        )
+        # Each village now has 1 member — no within-village comparison
+        # possible.
+        assert discover_probabilistic_pairs(actor="system") == []
+
+    def test_tier1_pair_not_redisco_as_tier3(
+        self, two_households_same_village, active_model,
+    ):
+        """Same NIN -> tier 1 wins; the (a,b) uniqueness constraint
+        blocks a tier-3 row for the same pair."""
+        from apps.ddup.services import (
+            discover_nin_pairs,
+            discover_probabilistic_pairs,
+        )
+        h1, h2 = two_households_same_village
+        h = _hash("CM1234567890AB")
+        Member.objects.create(
+            household=h1, line_number=1, surname="OKELLO",
+            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+            nin_hash=h,
+        )
+        Member.objects.create(
+            household=h2, line_number=1, surname="OKELLO",
+            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+            nin_hash=h,
+        )
+        tier1 = discover_nin_pairs(actor="system")
+        tier3 = discover_probabilistic_pairs(actor="system")
+        assert len(tier1) == 1 and tier1[0].tier == 1
+        assert tier3 == []  # already represented as tier 1
+
+    def test_idempotent(self, two_households_same_village, active_model):
+        from apps.ddup.services import discover_probabilistic_pairs
+        h1, h2 = two_households_same_village
+        for hh in (h1, h2):
+            Member.objects.create(
+                household=hh, line_number=1, surname="OKELLO",
+                first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+            )
+        first = discover_probabilistic_pairs(actor="system")
+        second = discover_probabilistic_pairs(actor="system")
+        assert len(first) == 1
+        assert second == []
+
+    def test_threshold_overridable_via_model_config(
+        self, two_households_same_village, db,
+    ):
+        """A more permissive threshold should pull in pairs that the
+        default 0.85 misses."""
+        from apps.ddup.services import (
+            activate_model_version,
+            discover_probabilistic_pairs,
+        )
+        permissive = DdupModelVersion.objects.create(
+            version=2, author="archer",
+            config={"tier3": {"threshold": 0.5}},
+        )
+        activate_model_version(permissive, approver="bob")
+        h1, h2 = two_households_same_village
+        # Names diverge enough to score < 0.85 but probably > 0.5.
+        Member.objects.create(
+            household=h1, line_number=1, surname="OKELLO",
+            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+        )
+        Member.objects.create(
+            household=h2, line_number=1, surname="OKELO",
+            first_name="JAMS", sex="M", date_of_birth=date(1985, 1, 1),
+        )
+        created = discover_probabilistic_pairs(actor="system")
+        assert len(created) == 1
