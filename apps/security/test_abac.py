@@ -286,3 +286,132 @@ class TestScopeViaHouseholdIdSubquery:
         OperatorScope.objects.create(user=u, scope_level=ScopeLevel.NATIONAL, scope_code="")
         r = _client_for(u).get("/api/v1/dih/stage-records/")
         assert r.data["count"] >= 1
+
+
+class TestChangeRequestEntityTypeUnion:
+    """ChangeRequest carries (entity_type, entity_id). The scope filter
+    must OR a household-id-in-scope match with a member-id-in-scope
+    match (where the member belongs to a scoped household)."""
+
+    def test_household_change_request_visible_to_household_scope(
+        self, db, django_user_model, two_sub_regions, households_in_each,
+    ):
+        from apps.update_workflow.models import (
+            ChangeRequest,
+            ChangeType,
+            EntityType,
+            SourceChannel,
+        )
+
+        ChangeRequest.objects.create(
+            entity_type=EntityType.HOUSEHOLD,
+            entity_id=households_in_each["SR-BUGANDA"].id,
+            change_type=ChangeType.CORRECTION,
+            changes={"address_narrative": {"old": "", "new": "Plot 7"}},
+            source_channel=SourceChannel.PARISH, requester="op",
+        )
+        ChangeRequest.objects.create(
+            entity_type=EntityType.HOUSEHOLD,
+            entity_id=households_in_each["SR-KARAMOJA"].id,
+            change_type=ChangeType.CORRECTION,
+            changes={"address_narrative": {"old": "", "new": "Plot 9"}},
+            source_channel=SourceChannel.PARISH, requester="op",
+        )
+        u = django_user_model.objects.create_user(username="upd-buganda", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/upd/change-requests/")
+        assert r.status_code == 200
+        assert r.data["count"] == 1
+
+    def test_member_change_request_resolved_via_household(
+        self, db, django_user_model, two_sub_regions, households_in_each,
+    ):
+        from apps.data_management.models import Member
+        from apps.update_workflow.models import (
+            ChangeRequest,
+            ChangeType,
+            EntityType,
+            SourceChannel,
+        )
+
+        m = Member.objects.create(
+            household=households_in_each["SR-BUGANDA"], line_number=1,
+            surname="Okot", first_name="J", sex="M",
+        )
+        ChangeRequest.objects.create(
+            entity_type=EntityType.MEMBER, entity_id=m.id,
+            change_type=ChangeType.CORRECTION,
+            changes={"surname": {"old": "Okot", "new": "Okello"}},
+            source_channel=SourceChannel.PARISH, requester="op",
+        )
+        u = django_user_model.objects.create_user(username="upd-buganda-2", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/upd/change-requests/")
+        assert r.data["count"] == 1
+        assert r.data["results"][0]["entity_id"] == m.id
+
+    def test_change_request_outside_scope_invisible(
+        self, db, django_user_model, two_sub_regions, households_in_each,
+    ):
+        from apps.update_workflow.models import (
+            ChangeRequest,
+            ChangeType,
+            EntityType,
+            SourceChannel,
+        )
+
+        ChangeRequest.objects.create(
+            entity_type=EntityType.HOUSEHOLD,
+            entity_id=households_in_each["SR-KARAMOJA"].id,
+            change_type=ChangeType.CORRECTION,
+            changes={"address_narrative": {"old": "", "new": "Plot 9"}},
+            source_channel=SourceChannel.PARISH, requester="op",
+        )
+        u = django_user_model.objects.create_user(username="upd-buganda-3", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/upd/change-requests/")
+        assert r.data["count"] == 0
+
+
+class TestPmtResultFkScope:
+    def test_pmt_result_scoped_via_household_fk(
+        self, db, django_user_model, two_sub_regions, households_in_each,
+    ):
+        from decimal import Decimal
+
+        from apps.pmt.models import Band, ModelStatus, PMTModelVersion, PMTResult
+
+        model = PMTModelVersion.objects.create(
+            version=1, intercept=Decimal("50"), variables=[],
+            band_cutoffs={
+                Band.EXTREME_POVERTY: 0, Band.POVERTY: 30,
+                Band.VULNERABLE: 60, Band.NOT_POOR: 80,
+            },
+            author="a", status=ModelStatus.ACTIVE,
+        )
+        for hh in households_in_each.values():
+            PMTResult.objects.create(
+                household=hh, model_version=model,
+                score=Decimal("55"), band=Band.POVERTY,
+                triggered_by="manual",
+            )
+
+        u = django_user_model.objects.create_user(username="pmt-buganda", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/pmt/results/")
+        assert r.status_code == 200
+        assert r.data["count"] == 1
+        assert r.data["results"][0]["household"] == \
+            households_in_each["SR-BUGANDA"].id

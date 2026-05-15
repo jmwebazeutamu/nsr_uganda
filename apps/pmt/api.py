@@ -4,6 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.data_management.models import Household
+from apps.security.abac import ScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
 from .models import PMTModelVersion, PMTResult
@@ -39,8 +40,9 @@ class PMTModelVersionViewSet(viewsets.ReadOnlyModelViewSet):
     list=extend_schema(tags=["pmt"], summary="List PMT results"),
     retrieve=extend_schema(tags=["pmt"], summary="Retrieve a PMT result"),
 )
-class PMTResultViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
+class PMTResultViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
     audit_entity_type = "pmt_result"
+    scope_field_path = "household__sub_region_code"
     queryset = PMTResult.objects.all().order_by("-computed_at")
     serializer_class = PMTResultSerializer
     filterset_fields = ["band", "triggered_by"]

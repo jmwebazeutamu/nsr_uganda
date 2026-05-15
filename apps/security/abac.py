@@ -85,6 +85,25 @@ class ScopedQuerysetMixin:
         return scope_q_for_field(self.request.user, self.scope_field_path)
 
 
+def _scoped_codes(user) -> list[str] | None:
+    """Resolve a user to the list of sub_region_codes their active
+    scopes cover. Returns None as a sentinel for 'visible to all' (i.e.,
+    superuser or national scope) and [] for fail-closed."""
+    if user is None or not getattr(user, "is_authenticated", False):
+        return []
+    if getattr(user, "is_superuser", False):
+        return None  # superuser sees everything
+    scopes = list(
+        OperatorScope.objects.filter(user=user, active=True)
+        .values_list("scope_level", "scope_code")
+    )
+    if not scopes:
+        return []  # fail-closed
+    if any(level == ScopeLevel.NATIONAL for level, _ in scopes):
+        return None  # wildcard
+    return [c for level, c in scopes if level == ScopeLevel.SUB_REGION and c]
+
+
 class HouseholdIdScopedQuerysetMixin(ScopedQuerysetMixin):
     """ABAC variant for models that hold the household reference as a
     CharField (`household_id`, `provisional_registry_id`) rather than a
@@ -103,20 +122,9 @@ class HouseholdIdScopedQuerysetMixin(ScopedQuerysetMixin):
     scope_field_path = "household_id"
 
     def _scope_q(self) -> Q:
-        user = self.request.user
-        if user is None or not getattr(user, "is_authenticated", False):
-            return Q(pk__in=[])
-        if getattr(user, "is_superuser", False):
-            return ~Q(pk__in=[])
-        scopes = list(
-            OperatorScope.objects.filter(user=user, active=True)
-            .values_list("scope_level", "scope_code")
-        )
-        if not scopes:
-            return Q(pk__in=[])
-        if any(level == ScopeLevel.NATIONAL for level, _ in scopes):
-            return ~Q(pk__in=[])
-        codes = [c for level, c in scopes if level == ScopeLevel.SUB_REGION and c]
+        codes = _scoped_codes(self.request.user)
+        if codes is None:
+            return ~Q(pk__in=[])  # wildcard
         if not codes:
             return Q(pk__in=[])
 
@@ -128,3 +136,37 @@ class HouseholdIdScopedQuerysetMixin(ScopedQuerysetMixin):
             .values_list("id", flat=True)
         )
         return Q(**{f"{self.scope_field_path}__in": household_ids})
+
+
+class ChangeRequestScopedQuerysetMixin(ScopedQuerysetMixin):
+    """ABAC variant for ChangeRequest. The row carries (entity_type,
+    entity_id) where entity_type ∈ {household, member}. We resolve the
+    scope to the matching household IDs once and OR two clauses:
+
+        Q(entity_type='household', entity_id__in=<household_ids>) |
+        Q(entity_type='member',    entity_id__in=<member_ids_for_those_households>)
+
+    so an operator scoped to sub-region X sees CRs that target either a
+    household in X or a member of a household in X.
+    """
+
+    def _scope_q(self) -> Q:
+        codes = _scoped_codes(self.request.user)
+        if codes is None:
+            return ~Q(pk__in=[])
+        if not codes:
+            return Q(pk__in=[])
+
+        from apps.data_management.models import Household, Member
+        household_ids = list(
+            Household.objects.filter(sub_region_code__in=codes)
+            .values_list("id", flat=True)
+        )
+        member_ids = list(
+            Member.objects.filter(household_id__in=household_ids)
+            .values_list("id", flat=True)
+        )
+        return (
+            Q(entity_type="household", entity_id__in=household_ids)
+            | Q(entity_type="member", entity_id__in=member_ids)
+        )

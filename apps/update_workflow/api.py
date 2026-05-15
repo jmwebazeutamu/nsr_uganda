@@ -3,6 +3,7 @@ from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.security.abac import ChangeRequestScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
 from .models import ChangeRequest
@@ -44,7 +45,9 @@ class _ActorReason(serializers.Serializer):
     retrieve=extend_schema(tags=["upd"], summary="Retrieve a change request"),
     create=extend_schema(tags=["upd"], summary="Create a draft change request"),
 )
-class ChangeRequestViewSet(AuditReadMixin, viewsets.ModelViewSet):
+class ChangeRequestViewSet(
+    AuditReadMixin, ChangeRequestScopedQuerysetMixin, viewsets.ModelViewSet,
+):
     audit_entity_type = "change_request"
     queryset = ChangeRequest.objects.all().order_by("-created_at")
     serializer_class = ChangeRequestSerializer
