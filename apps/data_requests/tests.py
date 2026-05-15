@@ -550,3 +550,77 @@ class TestBundleRendering:
         assert r.status_code == 200
         assert r.data["status"] == RequestStatus.DELIVERED
         assert r.data["row_count_delivered"] == 4
+
+
+class TestExpirySweep:
+    """S5-006 — `expire_data_requests` management command flips
+    DELIVERED rows past expires_at to EXPIRED. Idempotent + safe to
+    re-run."""
+
+    @pytest.fixture
+    def delivered_past_due(self, draft_request):
+        """Take a DataRequest through to DELIVERED, then back-date
+        expires_at into the past so the sweep should pick it up."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+        submit_data_request(draft_request)
+        approve_data_request(draft_request, approver="dpo-1")
+        deliver_data_request(
+            draft_request, manifest_sha256="a" * 64, row_count=1,
+            actor="export-bot",
+        )
+        draft_request.expires_at = timezone.now() - timedelta(hours=1)
+        draft_request.save(update_fields=["expires_at"])
+        return draft_request
+
+    def test_command_expires_past_due_delivered(
+        self, delivered_past_due, capsys,
+    ):
+        from django.core.management import call_command
+        call_command("expire_data_requests")
+        delivered_past_due.refresh_from_db()
+        assert delivered_past_due.status == RequestStatus.EXPIRED
+        out = capsys.readouterr().out
+        assert "expired=1" in out
+
+    def test_command_skips_not_yet_due(self, draft_request, capsys):
+        """A DELIVERED row whose expires_at is in the future is NOT
+        touched."""
+        from django.core.management import call_command
+        submit_data_request(draft_request)
+        approve_data_request(draft_request, approver="dpo-1")
+        deliver_data_request(
+            draft_request, manifest_sha256="b" * 64, row_count=2,
+            actor="export-bot",
+        )
+        # Default TTL leaves expires_at 30 days in the future.
+        call_command("expire_data_requests")
+        draft_request.refresh_from_db()
+        assert draft_request.status == RequestStatus.DELIVERED
+        out = capsys.readouterr().out
+        assert "expired=0" in out
+
+    def test_command_is_idempotent_on_re_run(
+        self, delivered_past_due, capsys,
+    ):
+        from django.core.management import call_command
+        call_command("expire_data_requests")
+        # Second run: the row is already EXPIRED so it's outside the
+        # candidate filter (status=DELIVERED) and the sweep is a no-op.
+        capsys.readouterr()  # drain first-run output
+        call_command("expire_data_requests")
+        out = capsys.readouterr().out
+        assert "candidates=0" in out
+        assert "errors=0" in out
+
+    def test_command_records_custom_actor(self, delivered_past_due):
+        from django.core.management import call_command
+
+        from apps.security.models import AuditEvent
+        call_command("expire_data_requests", "--actor", "nightly-cron")
+        ev = AuditEvent.objects.filter(
+            entity_type="data_request", action="expire",
+        ).first()
+        assert ev is not None
+        assert ev.actor_id == "nightly-cron"
