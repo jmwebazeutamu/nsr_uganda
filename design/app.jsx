@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -20,6 +20,7 @@ const NAV = [
   { id: "grm",     label: "Grievances",    icon: "message",   count: 7 },
   { section: "DATA" },
   { id: "drs",     label: "Data Requests", icon: "download",  count: 9 },
+  { id: "partner-drs", label: "My requests", icon: "download", count: 5 },
   { id: "receipt", label: "Receipt slip",  icon: "print" },
 ];
 
@@ -48,12 +49,19 @@ function App() {
   const role = tweaks.role;
   const roleData = ROLE_CONTENT[role] || ROLE_CONTENT["nsr-unit"];
 
-  // Role-aware nav: hide things outside role scope
+  // Role-aware nav: hide things outside role scope.
+  // Partner roles see ONLY their portal — they have no business in
+  // the operator-side workflows.
   const visibleNav = NAV.filter(n => {
-    if (n.section) return true;
-    if (role === "parish" && ["dih","drs","dedup"].includes(n.id)) return false;
-    if (role === "dpo"    && ["capture","upd","dedup","grm","receipt"].includes(n.id)) return false;
-    if (role === "cdo"    && ["dih","drs"].includes(n.id)) return false;
+    if (n.section) {
+      if (role === "partner-analyst" && n.section === "WORKFLOWS") return false;
+      return true;
+    }
+    if (role === "parish" && ["dih","drs","dedup","partner-drs"].includes(n.id)) return false;
+    if (role === "dpo"    && ["capture","upd","dedup","grm","receipt","partner-drs"].includes(n.id)) return false;
+    if (role === "cdo"    && ["dih","drs","partner-drs"].includes(n.id)) return false;
+    if (role === "nsr-unit" && n.id === "partner-drs") return false;
+    if (role === "partner-analyst" && !["home","partner-drs","kit"].includes(n.id)) return false;
     return true;
   });
 
@@ -124,6 +132,7 @@ function App() {
         {screen === "upd"     && <UPDScreen changeRequestId={screenPayload?.changeRequestId}/>}
         {screen === "drs"     && <DRSScreen/>}
         {screen === "grm"     && <GRMScreen onNavigate={navigate}/>}
+        {screen === "partner-drs" && <PartnerDRSScreen/>}
       </main>
 
       {/* Tweaks */}
@@ -131,10 +140,11 @@ function App() {
         <TweakSection label="Operator role">
           <TweakSelect label="Role" value={tweaks.role} onChange={(v) => setTweak('role', v)}
             options={[
-              { value: "nsr-unit", label: "NSR Unit Coordinator" },
-              { value: "parish",   label: "Parish Chief" },
-              { value: "cdo",      label: "Community Development Officer" },
-              { value: "dpo",      label: "Data Protection Officer" },
+              { value: "nsr-unit",        label: "NSR Unit Coordinator" },
+              { value: "parish",          label: "Parish Chief" },
+              { value: "cdo",             label: "Community Development Officer" },
+              { value: "dpo",             label: "Data Protection Officer" },
+              { value: "partner-analyst", label: "Partner Analyst (PDM/NUSAF/WFP)" },
             ]}/>
         </TweakSection>
 

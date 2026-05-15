@@ -73,6 +73,25 @@ const ROLE_CONTENT = {
       ]},
     ],
   },
+  "partner-analyst": {
+    name: "Partner Analyst",
+    person: "Nakimuli Sarah",
+    org: "PDM Programme Office · MGLSD",
+    kpis: [
+      { title: "Delivered (30d)", value: "12", trend: "up", trendValue: "+3 wk", foot: "Avg 2,140 rows/req", spark: [6,7,8,9,10,11,12] },
+      { title: "Pending approval", value: "1", trend: "flat", trendValue: "—", foot: "Submitted 14 May 14:15", spark: [0,1,1,2,1,1,1] },
+      { title: "Bundles expiring 7d", value: "2", trend: "flat", trendValue: "—", foot: "30d TTL since delivery", spark: [3,3,2,2,2,2,2] },
+      { title: "Active DSA", value: "DSA-PDM-2026-01", suffix: "", foot: "Valid 01 Jan 2026 → 31 Dec 2026" },
+    ],
+    queues: [
+      { title: "Pending approval", icon: "clock", count: 1, items: [
+        { id: "01DRS2026051400003", who: "DSA-PDM-2026-01 · sub-region BUGANDA-SOUTH", note: "household.id + sub_region_code · programme PDM", chip: "Pending Approval", age: "6h" },
+      ]},
+      { title: "Delivered (downloadable)", icon: "download", count: 2, items: [
+        { id: "01DRS2026051400001", who: "DSA-PDM-2026-01 · 1,284 rows", note: "Manifest a3f8e91c… · expires 12 Jun 11:42", chip: "Delivered", age: "yesterday" },
+      ]},
+    ],
+  },
   "dpo": {
     name: "Data Protection Officer",
     person: "Mukasa Robert",

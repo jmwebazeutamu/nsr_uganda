@@ -26,6 +26,7 @@ Screens are React components inside the module JSX files under `v0.1/screens/`. 
 | 9 | Household detail (registry view) | US-005, US-090 | `screens-household.jsx` → `<HouseholdScreen>` | built |
 | 10 | Home dashboard (role-aware) | (general) | `screens-home.jsx` → `<HomeScreen role="…">` for each of `ROLES` (Parish Chief, CDO, District M&E, NSR Unit Coordinator, DPO) | built |
 | 11 | GRM workbench (triage + lifecycle) | US-S2-008, US-S3-004, US-S4-005, US-S7-001 | `screens-grm.jsx` → `<GRMScreen>` | built |
+| 12 | Partner DRS portal (my requests + download) | US-S3-002, US-S7-004, US-S8-003, US-S9-003 | `screens-partner-drs.jsx` → `<PartnerDRSScreen>` | built |
 
 ---
 
@@ -142,6 +143,28 @@ Each screen must satisfy the acceptance criteria of its anchored user story PLUS
 | District M&E | SLA Breach dashboard, sample audits, PMT-band shift alerts |
 | NSR Unit Coordinator | DIH review queue depth, fast-track auto-promote rate, bulk batches awaiting two-person approval, DSAs expiring 30d |
 | DPO | Anomaly alerts, erasure requests, DPIA review tasks |
+
+### 12. Partner DRS portal (US-S3-002, US-S7-004, US-S8-003, US-S9-003)
+
+The first partner-facing surface. Reads through
+`/api/v1/drs/requests/mine/` (S7-004 PartnerScopedQuerysetMixin) and
+downloads through `/api/v1/drs/requests/{id}/download/` (S8-003)
+which is rate-limited per S9-003. Role-gated to `PARTNER_ANALYST`
+and `PARTNER_DPO` per ADR-0006.
+
+| AC | Pass when |
+|---|---|
+| UI-PDRS-1 | Status filter strip (All / Pending approval / Approved / Delivered) with live counts |
+| UI-PDRS-2 | List columns: request id (monospace), DSA reference, status chip, row count (right-aligned monospace, em-dash when not yet delivered), submitted date, expires date, inline Download button |
+| UI-PDRS-3 | Inline Download button enabled only when status=DELIVERED AND download_url is present; emits the future endpoint pattern `/api/v1/drs/requests/{id}/download/` |
+| UI-PDRS-4 | Detail rail shows DSA reference, fields requested (each as a chip — programme-toned for `member.*`, otherwise neutral), geography chips when scoped, row cap |
+| UI-PDRS-5 | Rejected rows surface the decision_reason in a red-tinted callout — partners can see WHY without contacting the NSR Unit |
+| UI-PDRS-6 | Delivered rows show: row count, full 64-char manifest SHA-256 (monospace, wraps cleanly), expiry date. Partners verify integrity by re-hashing the downloaded NDJSON |
+| UI-PDRS-7 | "About this portal" hint card explains: scope, 10/min download rate limit (S9-003), 30d bundle TTL (S5-002), audit on every read/download |
+| UI-PDRS-8 | Empty state (no rows match filter) shows the calm inbox icon — no marketing copy |
+| UI-PDRS-9 | Role visibility: hidden from all operator roles (Parish Chief, CDO, NSR Unit, DPO); visible to PARTNER_ANALYST + PARTNER_DPO; partner role sees ONLY this screen + Home in the side nav |
+| UI-PDRS-10 | Audit drawer shows the lifecycle: submitted → approved/rejected → rendered+delivered |
+| UI-PDRS-11 | Tokens-only — no hex colours hardcoded outside tokens.css |
 
 ### 11. GRM workbench (US-S2-008, US-S3-004, US-S4-005, US-S7-001)
 
