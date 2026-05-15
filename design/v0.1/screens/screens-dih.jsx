@@ -7,7 +7,7 @@
 // harness, unauthenticated, backend down) the screen falls back to
 // MOCK_DIH_ROWS so the design preview still works.
 
-const { useState: useStateDIH, useMemo: useMemoDIH, useEffect: useEffectDIH } = React;
+const { useState: useStateDIH, useMemo: useMemoDIH, useEffect: useEffectDIH, useRef: useRefDIH } = React;
 
 
 // Reads Django's csrftoken cookie — required for session-auth POSTs
@@ -135,6 +135,18 @@ const DIHScreen = () => {
   }, []);
 
   const current = useMemoDIH(() => rows.find(r => r.id === selectedRow), [rows, selectedRow]);
+
+  // Detail rail sits BELOW the queue table (not beside it) — clicking
+  // a row scrolls it into view so operators don't have to hunt for it.
+  // Only fires when the user actively changes selection (the initial
+  // render also runs this but `behavior:smooth` makes that visible
+  // anyway, which doubles as a cue).
+  const detailRef = useRefDIH(null);
+  useEffectDIH(() => {
+    if (current && detailRef.current) {
+      detailRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [selectedRow]);
 
   const auditEvents = [
     { who: "System DIH", action: "received from", detail: "Capture channel CAPI · tablet PCH-7411 · Parish Office Pageya", time: "1h 12m ago", audit: "A-2026-05-14-00471", tone: "system" },
@@ -374,7 +386,7 @@ const DIHScreen = () => {
         </div>
       )}
       {current && (
-      <div style={{display:'grid', gridTemplateColumns:'1fr 1fr 360px', gap:16}}>
+      <div ref={detailRef} style={{display:'grid', gridTemplateColumns:'1fr 1fr 360px', gap:16, scrollMarginTop:80}}>
         {/* Column 1: Staged */}
         <div className="card" style={{borderTop:'3px solid var(--accent-data)'}}>
           <div className="card-header" style={{padding:'14px 20px'}}>
@@ -386,37 +398,96 @@ const DIHScreen = () => {
             <Chip>{current.status}</Chip>
           </div>
           <div style={{padding:16}}>
-            <RecordSummary
-              fields={[
-                ["Provisional ID", current.id, "mono"],
-                ["Head NIN", "CM89241023ABCD", "mono"],
-                ["Phone", "+256 781 552119"],
-                ["Parish", "Pageya · Bobi · Gulu"],
-                ["GPS", "2.79103, 32.29841 · 8m", "mono"],
-                ["Members", "5 (head + spouse + 3 dependants)"],
-                ["PMT band", <Chip tone="eligibility">Poorest 40%</Chip>],
-                ["Roof material", "Iron sheets"],
-                ["Source", "Walk-in CAPI · Lokwang Peter (PCH-7411)"],
-              ]}
-            />
-            <SectionAccordion title="Roster (5 members)" tint="identity" defaultOpen>
-              <RosterTable members={[
-                { name: "Akello Grace",     rel: "Head",    sex: "F", age: 34, nin: "CM89241023ABCD" },
-                { name: "Okello Charles",   rel: "Spouse",  sex: "M", age: 38, nin: "CM89110218EFGH" },
-                { name: "Akello Joy",       rel: "Daughter",sex: "F", age: 12, nin: "—" },
-                { name: "Okello Brian",     rel: "Son",     sex: "M", age: 9,  nin: "—" },
-                { name: "Akello Mercy",     rel: "Daughter",sex: "F", age: 4,  nin: "—" },
-              ]}/>
-            </SectionAccordion>
-            <SectionAccordion title="Health & Disability" tint="danger">
-              <SimpleKV rows={[["Members with disability","0"],["Chronic conditions","none reported"],["Pregnant / lactating","1 (head)"]]}/>
-            </SectionAccordion>
-            <SectionAccordion title="Education" tint="update">
-              <SimpleKV rows={[["School-age children","3 of 3 enrolled"],["Adult literacy","head literate"]]}/>
-            </SectionAccordion>
-            <SectionAccordion title="Housing & Assets" tint="eligibility">
-              <SimpleKV rows={[["Roof","Iron sheets"],["Walls","Brick (burnt)"],["Floor","Cement"],["Toilet","Pit latrine (covered)"],["Water source","Borehole, < 1 km"]]}/>
-            </SectionAccordion>
+            {(() => {
+              // Live mode: derive the summary + roster from the
+              // canonical payload the API returned. Mock mode: fall
+              // back to the original hardcoded fields so the design
+              // preview still tells the visual story.
+              const payload = current._payload;
+              if (payload) {
+                const members = payload.members || [];
+                const head = members.find(m => m.is_head) || members[0] || {};
+                const geo = payload.geographic || {};
+                const sourceKeys = payload._source_keys || {};
+                const gpsLine = (payload.gps_lat != null && payload.gps_lng != null)
+                  ? `${Number(payload.gps_lat).toFixed(5)}, ${Number(payload.gps_lng).toFixed(5)}` +
+                    (payload.gps_accuracy_m ? ` · ${payload.gps_accuracy_m}m` : "")
+                  : "—";
+                const sourceLine = sourceKeys.kobo_form_id
+                  ? `Kobo · form ${sourceKeys.kobo_form_id} · submitted by ${sourceKeys.kobo_submitted_by || "unknown"}`
+                  : "—";
+                return (
+                  <>
+                    <RecordSummary
+                      fields={[
+                        ["Provisional ID", current.id, "mono"],
+                        ["Head NIN", head.nin || "—", "mono"],
+                        ["Phone", head.telephone_1 || "—"],
+                        ["Parish", `${geo.parish || "—"} · ${sourceKeys.kobo_village_name || "—"}`],
+                        ["GPS", gpsLine, "mono"],
+                        ["Members", `${members.length}`],
+                        ["Address", payload.address_narrative || "—"],
+                        ["Urban / rural", payload.urban_rural || "—"],
+                        ["Source", sourceLine],
+                      ]}
+                    />
+                    <SectionAccordion title={`Roster (${members.length} members)`} tint="identity" defaultOpen>
+                      <RosterTable members={members.map(m => ({
+                        name: [m.surname, m.first_name].filter(Boolean).join(" "),
+                        rel: m.is_head ? "Head" : (m.relationship_to_head || "—"),
+                        sex: m.sex || "—",
+                        age: m.age_years != null ? m.age_years : "—",
+                        nin: m.nin || "—",
+                      }))}/>
+                    </SectionAccordion>
+                  </>
+                );
+              }
+              // Mock fallback — original design-preview content.
+              return (
+                <>
+                  <RecordSummary
+                    fields={[
+                      ["Provisional ID", current.id, "mono"],
+                      ["Head NIN", "CM89241023ABCD", "mono"],
+                      ["Phone", "+256 781 552119"],
+                      ["Parish", "Pageya · Bobi · Gulu"],
+                      ["GPS", "2.79103, 32.29841 · 8m", "mono"],
+                      ["Members", "5 (head + spouse + 3 dependants)"],
+                      ["PMT band", <Chip tone="eligibility">Poorest 40%</Chip>],
+                      ["Roof material", "Iron sheets"],
+                      ["Source", "Walk-in CAPI · Lokwang Peter (PCH-7411)"],
+                    ]}
+                  />
+                  <SectionAccordion title="Roster (5 members)" tint="identity" defaultOpen>
+                    <RosterTable members={[
+                      { name: "Akello Grace",     rel: "Head",    sex: "F", age: 34, nin: "CM89241023ABCD" },
+                      { name: "Okello Charles",   rel: "Spouse",  sex: "M", age: 38, nin: "CM89110218EFGH" },
+                      { name: "Akello Joy",       rel: "Daughter",sex: "F", age: 12, nin: "—" },
+                      { name: "Okello Brian",     rel: "Son",     sex: "M", age: 9,  nin: "—" },
+                      { name: "Akello Mercy",     rel: "Daughter",sex: "F", age: 4,  nin: "—" },
+                    ]}/>
+                  </SectionAccordion>
+                </>
+              );
+            })()}
+            {/* Health / Education / Housing accordions stay mock-only
+                for now — these come from later modules (PMT, etc.) and
+                aren't carried on the canonical_payload yet. Hidden in
+                live mode so operators don't see misleading numbers. */}
+            {!current._payload && (
+              <>
+                <SectionAccordion title="Health & Disability" tint="danger">
+                  <SimpleKV rows={[["Members with disability","0"],["Chronic conditions","none reported"],["Pregnant / lactating","1 (head)"]]}/>
+                </SectionAccordion>
+                <SectionAccordion title="Education" tint="update">
+                  <SimpleKV rows={[["School-age children","3 of 3 enrolled"],["Adult literacy","head literate"]]}/>
+                </SectionAccordion>
+                <SectionAccordion title="Housing & Assets" tint="eligibility">
+                  <SimpleKV rows={[["Roof","Iron sheets"],["Walls","Brick (burnt)"],["Floor","Cement"],["Toilet","Pit latrine (covered)"],["Water source","Borehole, < 1 km"]]}/>
+                </SectionAccordion>
+              </>
+            )}
           </div>
         </div>
 
