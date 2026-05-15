@@ -492,3 +492,105 @@ class TestChangeRequestAdminWorkbench:
         req.refresh_from_db()
         # Still PENDING_APPROVAL — bulk action skipped, did not reject.
         assert req.status == ChangeStatus.PENDING_APPROVAL
+
+
+# --- US-S7-001 — SLA-breach auto-escalation -------------------------------
+
+
+class TestAutoEscalation:
+    """Stale PENDING_APPROVAL rows get their required_role bumped to
+    district M&E and their sla_deadline extended by 48h. Idempotent
+    (re-runs cannot re-escalate already-escalated rows). Audit
+    emission carries the from_role / to_role / new_sla_deadline."""
+
+    def _stale(self, member, *, requester="enum-x", role="supervisor"):
+        from datetime import timedelta
+
+        from django.utils import timezone
+        req = _draft(member, requester=requester)
+        submit_change_request(req)
+        # Pretend the routed role and SLA are what we expect, then
+        # back-date the SLA so the sweep sees it as breached.
+        req.required_role = role
+        req.sla_deadline = timezone.now() - timedelta(hours=1)
+        req.save(update_fields=["required_role", "sla_deadline"])
+        return req
+
+    def test_escalates_stale_row(self, db, member):
+        from apps.update_workflow.services import (
+            ESCALATION_ROLE,
+            escalate_stale_change_requests,
+        )
+        req = self._stale(member, role="supervisor")
+        counts = escalate_stale_change_requests()
+        assert counts == {"candidates": 1, "escalated": 1}
+        req.refresh_from_db()
+        assert req.required_role == ESCALATION_ROLE
+        # SLA window pushed forward (now > original past-due deadline).
+        from django.utils import timezone
+        assert req.sla_deadline > timezone.now()
+
+    def test_does_not_escalate_fresh_row(self, db, member):
+        from apps.update_workflow.services import (
+            escalate_stale_change_requests,
+        )
+        req = _draft(member)
+        submit_change_request(req)
+        # SLA deadline is in the future — submit_change_request just set it.
+        counts = escalate_stale_change_requests()
+        assert counts == {"candidates": 0, "escalated": 0}
+        req.refresh_from_db()
+        # Role unchanged from whatever the routing matrix returned.
+        assert req.required_role != "district_m_and_e"
+
+    def test_idempotent_on_re_run(self, db, member):
+        from apps.update_workflow.services import (
+            escalate_stale_change_requests,
+        )
+        self._stale(member)
+        first = escalate_stale_change_requests()
+        second = escalate_stale_change_requests()
+        assert first["escalated"] == 1
+        # Already at ESCALATION_ROLE -> excluded from the second sweep.
+        assert second == {"candidates": 0, "escalated": 0}
+
+    def test_escalate_emits_audit(self, db, member):
+        from apps.update_workflow.services import (
+            escalate_stale_change_requests,
+        )
+        req = self._stale(member, role="supervisor")
+        escalate_stale_change_requests()
+        events = list(
+            AuditEvent.objects.filter(
+                entity_type="change_request", entity_id=req.id,
+                action="escalate",
+            ),
+        )
+        assert len(events) == 1
+        ev = events[0]
+        assert ev.actor_id == "sla-auto-escalator"
+        assert ev.field_changes["from_role"] == "supervisor"
+        assert ev.field_changes["to_role"] == "district_m_and_e"
+
+    def test_management_command_runs(self, db, member, capsys):
+        from django.core.management import call_command
+        self._stale(member)
+        call_command("escalate_stale_change_requests")
+        out = capsys.readouterr().out
+        assert "escalated=1" in out
+
+    def test_celery_task_runs(self, db, member):
+        from apps.update_workflow.tasks import (
+            escalate_stale_change_requests_task,
+        )
+        self._stale(member)
+        result = escalate_stale_change_requests_task.run()
+        assert result == {"candidates": 1, "escalated": 1}
+
+    def test_beat_schedule_includes_escalation(self):
+        from nsr_mis.celery import app
+        tasks = {entry["task"] for entry in app.conf.beat_schedule.values()}
+        assert (
+            "apps.update_workflow.tasks.escalate_stale_change_requests_task"
+            in tasks
+        )

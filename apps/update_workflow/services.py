@@ -22,6 +22,7 @@ deterministic fraction so QA can audit auto decisions retrospectively.
 from __future__ import annotations
 
 import hashlib
+from datetime import timedelta
 from typing import Any
 
 import django.dispatch
@@ -33,6 +34,9 @@ from apps.security.audit import emit as emit_audit
 
 from .models import ChangeRequest, ChangeStatus, ChangeType, EntityType
 from .routing import route
+
+ESCALATION_ROLE = "district_m_and_e"
+ESCALATION_WINDOW = timedelta(hours=48)
 
 AUTO_COMMIT_CHANGE_TYPES = frozenset({
     ChangeType.VITAL_EVENT,
@@ -273,3 +277,49 @@ def _write_version(entity_type: str, target, req: ChangeRequest) -> None:
             telephone_1=target.telephone_1,
             telephone_2=target.telephone_2,
         )
+
+
+# ---------------------------------------------------------------------------
+# SLA-breach auto-escalation (US-S7-001)
+
+
+@transaction.atomic
+def escalate_change_request(cr: ChangeRequest) -> ChangeRequest:
+    """Bump a single PENDING_APPROVAL request to district M&E and
+    extend its SLA window. Caller is responsible for the
+    'past sla_deadline' check — this is the per-row primitive."""
+    if cr.status != ChangeStatus.PENDING_APPROVAL:
+        raise UpdError(
+            f"can only escalate PENDING_APPROVAL (got {cr.status})",
+        )
+    prev_role = cr.required_role
+    cr.required_role = ESCALATION_ROLE
+    cr.sla_deadline = timezone.now() + ESCALATION_WINDOW
+    cr.save(update_fields=["required_role", "sla_deadline", "updated_at"])
+    emit_audit(
+        "escalate", "change_request", cr.id, actor="sla-auto-escalator",
+        reason=f"SLA breached; was {prev_role}",
+        field_changes={
+            "from_role": prev_role, "to_role": ESCALATION_ROLE,
+            "new_sla_deadline": cr.sla_deadline.isoformat(),
+        },
+    )
+    return cr
+
+
+def escalate_stale_change_requests() -> dict[str, int]:
+    """Sweep every PENDING_APPROVAL row whose sla_deadline has lapsed
+    AND whose required_role isn't already at the escalation role.
+    The second clause makes the sweep idempotent — re-running cannot
+    re-escalate an already-escalated row, so the audit chain doesn't
+    fill up with duplicate escalate events."""
+    now = timezone.now()
+    stale = list(
+        ChangeRequest.objects.filter(
+            status=ChangeStatus.PENDING_APPROVAL,
+            sla_deadline__lt=now,
+        ).exclude(required_role=ESCALATION_ROLE),
+    )
+    for cr in stale:
+        escalate_change_request(cr)
+    return {"candidates": len(stale), "escalated": len(stale)}

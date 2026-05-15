@@ -51,4 +51,11 @@ app.conf.beat_schedule = {
         # is seconds but partner-facing TTL is days.
         "schedule": crontab(minute=0),
     },
+    "escalate-stale-change-requests": {
+        "task": "apps.update_workflow.tasks.escalate_stale_change_requests_task",
+        # Every 15 minutes — finer than the hourly DRS sweep because
+        # approval SLAs are tighter (24h-72h) and supervisor pressure
+        # builds in real time.
+        "schedule": crontab(minute="*/15"),
+    },
 }
