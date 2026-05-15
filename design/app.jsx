@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, AdminScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -115,10 +115,13 @@ function App() {
           <Icon name="barchart" size={18}/>
           <span className="nav-label">Reports</span>
         </button>
-        <button className="nav-item" onClick={() => alert('Admin — out of scope for this design pass')}>
-          <Icon name="shield" size={18}/>
-          <span className="nav-label">Admin</span>
-        </button>
+        {role !== "partner-analyst" && (
+          <button className={`nav-item ${screen === "admin" ? "active" : ""}`}
+                  onClick={() => navigate("admin")}>
+            <Icon name="shield" size={18}/>
+            <span className="nav-label">Admin</span>
+          </button>
+        )}
       </nav>
 
       {/* Main */}
@@ -133,6 +136,7 @@ function App() {
         {screen === "drs"     && <DRSScreen/>}
         {screen === "grm"     && <GRMScreen onNavigate={navigate}/>}
         {screen === "partner-drs" && <PartnerDRSScreen/>}
+        {screen === "admin"   && <AdminScreen/>}
       </main>
 
       {/* Tweaks */}

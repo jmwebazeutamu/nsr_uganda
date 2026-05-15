@@ -27,6 +27,7 @@ Screens are React components inside the module JSX files under `v0.1/screens/`. 
 | 10 | Home dashboard (role-aware) | (general) | `screens-home.jsx` → `<HomeScreen role="…">` for each of `ROLES` (Parish Chief, CDO, District M&E, NSR Unit Coordinator, DPO) | built |
 | 11 | GRM workbench (triage + lifecycle) | US-S2-008, US-S3-004, US-S4-005, US-S7-001 | `screens-grm.jsx` → `<GRMScreen>` | built |
 | 12 | Partner DRS portal (my requests + download) | US-S3-002, US-S7-004, US-S8-003, US-S9-003 | `screens-partner-drs.jsx` → `<PartnerDRSScreen>` | built |
+| 13 | System admin (DDUP feedback + connector runs) | US-S10-002, US-S10-005, US-S11-001 | `screens-admin.jsx` → `<AdminScreen>` | built |
 
 ---
 
@@ -173,6 +174,27 @@ and `PARTNER_DPO` per ADR-0006.
 | UI-PDRS-BUILDER-6 | Validation checklist: green/red bullets for "at least one field selected", "row cap within DSA limit"; amber note when `member.*` fields are requested (reminds partner those will be scrutinised) |
 | UI-PDRS-BUILDER-7 | "Submit for approval" button disabled until all required validations pass |
 | UI-PDRS-BUILDER-8 | "Next steps" card explains the lifecycle (submit → reviewer → manifest + TTL → download) so the partner knows what to expect |
+
+### 13. System admin (US-S10-002, US-S10-005, US-S11-001)
+
+The side-nav Admin button used to alert "out of scope" — this is
+its replacement. Tabbed surface that exposes admin work shipped on
+the Django side as native React tabs. Two tabs fully implemented;
+three stubs link out to the Django admin URL for now.
+
+| AC | Pass when |
+|---|---|
+| UI-ADMIN-1 | Side-nav Admin button no longer alerts "out of scope"; navigates to `<AdminScreen>` |
+| UI-ADMIN-2 | Tab strip with 5 tabs (Model versions / Connector runs / Routing matrix / Partners & DSAs / Operator scopes); active tab carries a 3px accent-data underline |
+| UI-ADMIN-3 | "Full Django admin" link in the page header opens `/admin/` in a new tab — operators who need everything always have a way through |
+| UI-ADMIN-4 | DDUP model-versions tab: row per version with status chip, auto/manual merge counts, auto-reverse rate chip (green <2%, amber <5%, red ≥5%); selected row's detail rail shows the same counters as KPI tiles |
+| UI-ADMIN-5 | When `auto_reverse_rate >= 0.05` the detail rail surfaces a red callout: "Above 5% — consider raising config.tier3.auto_merge_threshold for this version." (S10-002 calibration signal) |
+| UI-ADMIN-6 | Draft model versions show a "Request approval (AC-DDUP-MODEL-VERSION)" button — clicking would post to the approval endpoint (stubbed in mockup) |
+| UI-ADMIN-7 | Connector-runs tab: row per run with connector name, status chip + STUCK overlay for `RUNNING` rows past 6h (mirrors S10-005 admin badge), duration column, six counter columns (landed / promoted / quarantined / rejected highlighted by tone) |
+| UI-ADMIN-8 | Multi-select + bulk "Mark stuck runs as FAILED" action; toast confirms how many rows acted and how many skipped (matches S10-005 admin_action behaviour) |
+| UI-ADMIN-9 | Stub tabs (routing matrix / partners / scopes) show a calm card with a "Open in Django admin" link to the right path (`/admin/update_workflow/updroutingrule/` etc.) and a one-line description; the page never blanks on a tab change |
+| UI-ADMIN-10 | Role visibility: hidden for `partner-analyst` role (partner side has no admin surface); visible for all operator roles |
+| UI-ADMIN-11 | Tokens-only — no hex colours hardcoded outside tokens.css |
 
 ### 11. GRM workbench (US-S2-008, US-S3-004, US-S4-005, US-S7-001)
 
