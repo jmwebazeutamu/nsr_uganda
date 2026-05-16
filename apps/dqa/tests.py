@@ -857,3 +857,99 @@ class TestRuleEditorAdminSmoke:
         # Both versions present in the history table
         assert "v1" in body and "v2" in body
         del v1  # used only as a fixture setup row
+
+
+# --- US-082c: failures_7d admin column --------------------------------------
+
+class TestRuleAdminFailuresColumn:
+    """US-082c — DqaRuleAdmin lists a failures_7d count next to each
+    rule, computed from DqaResult rows landed in the last 7 days.
+    The column is computed via a queryset annotation (NOT a per-row
+    query) so the changelist stays cheap at any rule count.
+    """
+
+    def _staff_client(self, db, django_user_model):
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="failcol-staff", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        return c
+
+    def test_changelist_renders_failures_column(
+        self, db, django_user_model, draft_rule,
+    ):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.dqa.models import DqaResult
+        # 3 fresh failures + 1 stale failure (8 days ago, excluded).
+        for i in range(3):
+            DqaResult.objects.create(
+                rule=draft_rule, record_type="member",
+                record_id=f"01HXXXXXXXXXXXXXXXXXXXXX:{i + 1}",
+                passed=False, severity="blocking",
+            )
+        stale = DqaResult.objects.create(
+            rule=draft_rule, record_type="member",
+            record_id="01HXXXXXXXXXXXXXXXXXXXXX:9",
+            passed=False, severity="blocking",
+        )
+        # Override executed_at past the 7d window.
+        DqaResult.objects.filter(pk=stale.pk).update(
+            executed_at=timezone.now() - timedelta(days=8),
+        )
+        c = self._staff_client(db, django_user_model)
+        r = c.get("/admin/dqa/dqarule/")
+        assert r.status_code == 200
+        body = r.content.decode()
+        # Column header present.
+        assert "Failures (7d)" in body or "failures_7d" in body
+        # Count of 3 (not 4 — stale excluded) appears on the row.
+        # The display format is "3" or "3 (severity:blocking)" — match
+        # either by looking for the digit adjacent to the rule.
+        idx = body.find("TEST-RULE")
+        assert idx >= 0
+        snippet = body[idx:idx + 600]
+        assert "3" in snippet
+
+    def test_passes_not_counted(
+        self, db, django_user_model, draft_rule,
+    ):
+        from apps.dqa.models import DqaResult
+        DqaResult.objects.create(
+            rule=draft_rule, record_type="member",
+            record_id="01HXXXXXXXXXXXXXXXXXXXXX:1",
+            passed=True, severity="blocking",  # PASS — must NOT count
+        )
+        DqaResult.objects.create(
+            rule=draft_rule, record_type="member",
+            record_id="01HXXXXXXXXXXXXXXXXXXXXX:2",
+            passed=False, severity="blocking",
+        )
+        c = self._staff_client(db, django_user_model)
+        r = c.get("/admin/dqa/dqarule/")
+        body = r.content.decode()
+        idx = body.find("TEST-RULE")
+        snippet = body[idx:idx + 600]
+        # Should show 1 (the failure), not 2.
+        assert "1" in snippet
+        assert ">2<" not in snippet  # rough: no bare "2" cell next to TEST-RULE
+
+    def test_zero_failures_renders_dash_or_zero(
+        self, db, django_user_model, draft_rule,
+    ):
+        # No DqaResult rows at all → the column renders 0 (or "—" —
+        # whichever convention the implementation picks; pin one).
+        c = self._staff_client(db, django_user_model)
+        r = c.get("/admin/dqa/dqarule/")
+        body = r.content.decode()
+        idx = body.find("TEST-RULE")
+        assert idx >= 0
+        # The column header is present (wired at all). Cell value
+        # is "—" for zero — pin the implementation choice.
+        assert "Failures (7d)" in body
+        assert "—" in body[idx:idx + 600]

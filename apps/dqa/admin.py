@@ -11,13 +11,43 @@ from .services import ApprovalError, approve, retire, submit_for_approval
 
 @admin.register(DqaRule)
 class DqaRuleAdmin(admin.ModelAdmin):
-    list_display = ("rule_id", "version", "severity", "status", "author", "approved_by", "effective_from")
+    list_display = (
+        "rule_id", "version", "severity", "status",
+        "author", "approved_by", "effective_from",
+        # US-082c — count of DqaResult failures landed against this
+        # rule in the last 7 days. Computed via annotation on
+        # get_queryset (single SQL pass), not per-row.
+        "failures_7d",
+    )
     list_filter = ("status", "severity")
     search_fields = ("rule_id", "description", "author", "approved_by")
     readonly_fields = ("id", "created_at", "updated_at", "approved_at",
                        "submitted_at", "approval_note", "rejection_reason")
     ordering = ("rule_id", "-version")
     actions = ["action_submit", "action_approve_as_admin", "action_retire"]
+
+    # US-082c: changelist column derivation. Annotates the rule list
+    # queryset with a 7-day failure count so the admin can render
+    # "Failures (7d)" without per-row queries.
+    def get_queryset(self, request):
+        from datetime import timedelta
+
+        from django.db.models import Count, Q
+        from django.utils import timezone
+
+        qs = super().get_queryset(request)
+        cutoff = timezone.now() - timedelta(days=7)
+        return qs.annotate(
+            _failures_7d=Count(
+                "results",
+                filter=Q(results__passed=False, results__executed_at__gte=cutoff),
+            ),
+        )
+
+    @admin.display(description="Failures (7d)", ordering="_failures_7d")
+    def failures_7d(self, obj):
+        n = getattr(obj, "_failures_7d", 0) or 0
+        return f"{n:,}" if n else "—"
 
     _BASE_FIELDSETS = (
         (None, {"fields": ("id", "rule_id", "version", "status")}),
