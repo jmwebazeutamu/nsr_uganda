@@ -251,15 +251,47 @@ const HomeScreen = ({ role, onNavigate }) => {
   // /api/v1/rpt/dashboards/operator-kpis/ onto the role's mock cards.
   // Missing fetch (no backend / unauthenticated) leaves the mock
   // values intact so the design preview still tells the visual story.
+  //
+  // US-S14-004 — added a per-region drill-down. `region` defaults to
+  // empty (= all regions in operator's scope); a selector below lets
+  // the user narrow to a single sub-region and refetches the
+  // aggregator. Only the KPIs that depend on Household geography
+  // narrow — DRS counts are partner-side ABAC, stays national.
   const [liveKpis, setLiveKpis] = useStateHome(null);
+  const [region, setRegion] = useStateHome("");
+  const [subRegions, setSubRegions] = useStateHome([]);
   useEffectHome(() => {
     let cancelled = false;
-    fetch("/api/v1/rpt/dashboards/operator-kpis/", {
+    const url = "/api/v1/rpt/dashboards/operator-kpis/"
+      + (region ? `?region=${encodeURIComponent(region)}` : "");
+    fetch(url, {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
     })
       .then(rsp => rsp.ok ? rsp.json() : Promise.reject(rsp.status))
       .then(data => { if (!cancelled) setLiveKpis(data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [region]);
+
+  // Sub-region selector options — fetched once. Falls back to empty
+  // (the dropdown is hidden) when the reference-data endpoint is
+  // unreachable, e.g. preview under file:// without backend.
+  useEffectHome(() => {
+    let cancelled = false;
+    fetch("/api/v1/reference-data/geographic-units/?level=sub_region&page_size=100", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(rsp => rsp.ok ? rsp.json() : Promise.reject(rsp.status))
+      .then(data => {
+        if (cancelled) return;
+        const rows = (data.results || data || [])
+          .filter(g => (g.status || "active") === "active")
+          .map(g => ({ code: g.code, name: g.name }));
+        rows.sort((a, b) => a.name.localeCompare(b.name));
+        setSubRegions(rows);
+      })
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
@@ -325,10 +357,27 @@ const HomeScreen = ({ role, onNavigate }) => {
   return (
     <div className="page">
       <PageHeader
-        eyebrow={liveKpis ? "HOME · LIVE" : "HOME"}
+        eyebrow={liveKpis
+          ? (region ? `HOME · LIVE · DRILLED INTO ${region}` : "HOME · LIVE")
+          : "HOME"}
         title={<span>Good afternoon, <span style={{color:'var(--primary-900)'}}>{r.person.split(' ')[0]}</span></span>}
         sub={<>Signed in as {r.name}. Scope: {r.org}. Today is Thursday, 14 May 2026.</>}
         right={<>
+          {subRegions.length > 0 && (
+            <select
+              value={region}
+              onChange={(e) => setRegion(e.target.value)}
+              className="field-select"
+              style={{maxWidth:220, fontSize:13}}
+              aria-label="Drill down into a sub-region"
+              title="Narrow the KPIs and queues to one sub-region"
+            >
+              <option value="">All regions in scope</option>
+              {subRegions.map(s => (
+                <option key={s.code} value={s.code}>{s.name}</option>
+              ))}
+            </select>
+          )}
           <button className="btn"><Icon name="download"/> Export brief</button>
           <button className="btn btn-primary"><Icon name="plus"/> New capture</button>
         </>}

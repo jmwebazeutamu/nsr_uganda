@@ -30,6 +30,10 @@ from apps.security.audit_views import _client_ip
 
 
 class OperatorKpisSerializer(serializers.Serializer):
+    # Echoes ?region= back to the client so the home screen can
+    # show "Filtered: <region>" without having to track its own
+    # request state (US-S14-004).
+    region = serializers.CharField(allow_blank=True, required=False)
     households_total = serializers.IntegerField()
     households_with_pmt = serializers.IntegerField()
     stages_pending_promotion = serializers.IntegerField()
@@ -43,11 +47,22 @@ class OperatorKpisSerializer(serializers.Serializer):
     data_requests_delivered_7d = serializers.IntegerField()
 
 
-def _scoped_household_ids(user):
+def _scoped_household_ids(user, *, region: str | None = None):
     """Return the list of Household IDs visible to `user`, or None for
     unscoped (national / superuser). Used by the count helpers that
-    can't reach Household directly via a scope FK."""
+    can't reach Household directly via a scope FK.
+
+    When `region` is provided it narrows the result to just that
+    sub-region — used by US-S14-004's home-screen drill-down. If
+    the region isn't in the user's scope the result is an empty
+    list (caller treats this as "no data visible"). National
+    operators (`codes is None`) can drill into any region.
+    """
     codes = _scoped_codes(user)
+    if region:
+        if codes is not None and region not in codes:
+            return []
+        codes = [region]
     if codes is None:
         return None
     if not codes:
@@ -58,10 +73,10 @@ def _scoped_household_ids(user):
     )
 
 
-def _count_pending_stages(user, state: str) -> int:
+def _count_pending_stages(user, state: str, *, region: str | None = None) -> int:
     from apps.ingestion_hub.models import StageRecord
     base = StageRecord.objects.filter(state=state)
-    hh_ids = _scoped_household_ids(user)
+    hh_ids = _scoped_household_ids(user, region=region)
     if hh_ids is None:
         return base.count()
     if not hh_ids:
@@ -74,25 +89,35 @@ def _count_pending_stages(user, state: str) -> int:
     return base.filter(provisional_registry_id__in=hh_ids).count()
 
 
-def _count_change_requests(user) -> int:
-    from apps.update_workflow.models import ChangeRequest, ChangeRequestStatus
-    base = ChangeRequest.objects.filter(status=ChangeRequestStatus.PENDING_APPROVAL)
-    hh_ids = _scoped_household_ids(user)
+def _count_change_requests(user, *, region: str | None = None) -> int:
+    from apps.update_workflow.models import ChangeRequest, ChangeStatus, EntityType
+    base = ChangeRequest.objects.filter(status=ChangeStatus.PENDING_APPROVAL)
+    hh_ids = _scoped_household_ids(user, region=region)
     if hh_ids is None:
         return base.count()
     if not hh_ids:
         return 0
-    return base.filter(household_id__in=hh_ids).count()
+    # ChangeRequest stores the subject in (entity_type, entity_id) —
+    # not a dedicated household_id field. We count household-level
+    # CRs only here; member-level CRs would need a Member→Household
+    # join which would dominate dashboard latency. The home-screen
+    # KPI is a triage hint, not a precise count.
+    return base.filter(
+        entity_type=EntityType.HOUSEHOLD,
+        entity_id__in=hh_ids,
+    ).count()
 
 
-def _count_open_grievances(user, *, tier: str | None = None) -> int:
+def _count_open_grievances(
+    user, *, tier: str | None = None, region: str | None = None,
+) -> int:
     from apps.grievance.models import Grievance, GrievanceStatus
     base = Grievance.objects.exclude(
         status__in=[GrievanceStatus.RESOLVED, GrievanceStatus.CLOSED],
     )
     if tier:
         base = base.filter(tier=tier)
-    hh_ids = _scoped_household_ids(user)
+    hh_ids = _scoped_household_ids(user, region=region)
     if hh_ids is None:
         return base.count()
     if not hh_ids:
@@ -132,32 +157,58 @@ class OperatorKpisView(APIView):
     def get(self, request):
         from apps.ingestion_hub.models import StageRecordState
 
+        # US-S14-004 — optional ?region=<sub_region_code> drill-down.
+        # Empty string is treated as "no drill-down" so the React
+        # selector can pass through an "All regions" reset cleanly.
+        region = (request.query_params.get("region") or "").strip() or None
+        codes = _scoped_codes(request.user)
+        if region and codes is not None and region not in codes:
+            # Out-of-scope drill-down → return zeros rather than 403.
+            # The operator can still see structure of the dashboard;
+            # ABAC just yields nothing for the requested region.
+            region_out_of_scope = True
+        else:
+            region_out_of_scope = False
+
         scoped_hh = Household.objects.filter(
             scope_q_for_field(request.user, "sub_region_code"),
         )
-        households_total = scoped_hh.count()
-        households_with_pmt = scoped_hh.filter(
-            current_pmt_score__isnull=False,
-        ).count()
+        if region and not region_out_of_scope:
+            scoped_hh = scoped_hh.filter(sub_region_code=region)
+        if region_out_of_scope:
+            households_total = 0
+            households_with_pmt = 0
+        else:
+            households_total = scoped_hh.count()
+            households_with_pmt = scoped_hh.filter(
+                current_pmt_score__isnull=False,
+            ).count()
 
+        # DRS counts are partner-side (not geographic) — region filter
+        # doesn't apply. They stay national even when drilling down.
         payload = {
+            "region": region or "",
             "households_total": households_total,
             "households_with_pmt": households_with_pmt,
             "stages_pending_promotion": _count_pending_stages(
-                request.user, StageRecordState.PENDING_PROMOTION,
+                request.user, StageRecordState.PENDING_PROMOTION, region=region,
             ),
             "stages_ddup_review": _count_pending_stages(
-                request.user, StageRecordState.DDUP_REVIEW,
+                request.user, StageRecordState.DDUP_REVIEW, region=region,
             ),
             "stages_quality_failed": _count_pending_stages(
-                request.user, StageRecordState.QUALITY_FAILED,
+                request.user, StageRecordState.QUALITY_FAILED, region=region,
             ),
             "stages_idv_pending": _count_pending_stages(
-                request.user, StageRecordState.IDV_PENDING,
+                request.user, StageRecordState.IDV_PENDING, region=region,
             ),
-            "change_requests_pending": _count_change_requests(request.user),
-            "grievances_open": _count_open_grievances(request.user),
-            "grievances_l2_open": _count_open_grievances(request.user, tier="L2"),
+            "change_requests_pending": _count_change_requests(
+                request.user, region=region,
+            ),
+            "grievances_open": _count_open_grievances(request.user, region=region),
+            "grievances_l2_open": _count_open_grievances(
+                request.user, tier="L2", region=region,
+            ),
             "data_requests_pending_approval": _count_data_requests(
                 request.user, "submitted",
             ),
@@ -166,7 +217,7 @@ class OperatorKpisView(APIView):
         emit_audit(
             "dashboard_read", "rpt_dashboard", "operator_kpis",
             actor=getattr(request.user, "username", "") or "anonymous",
-            reason=f"households_total={households_total}",
+            reason=f"households_total={households_total} region={region or 'all'}",
             ip_address=_client_ip(request),
             user_agent=request.META.get("HTTP_USER_AGENT", ""),
         )

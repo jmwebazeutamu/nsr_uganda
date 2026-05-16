@@ -852,3 +852,87 @@ class TestComparativeMetric:
         assert r.status_code == 200
         assert r.data["current"]["count"] == 0
         assert r.data["previous"]["count"] == 0
+
+
+class TestOperatorKpisRegionDrillDown:
+    """US-S14-004 — per-region drill-down on the home KPI aggregator.
+
+    The view accepts ?region=<sub_region_code>; counts that depend on
+    Household geography (households_total, stages, change requests,
+    grievances) are narrowed to just that sub-region. DRS counts are
+    partner-side ABAC, not geographic — they stay national.
+    """
+
+    URL = "/api/v1/rpt/dashboards/operator-kpis/"
+
+    def test_superuser_no_region_sees_all_households(
+        self, db, households, django_user_model,
+    ):
+        su = django_user_model.objects.create_user(
+            username="kpis-su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(self.URL)
+        assert r.status_code == 200
+        assert r.data["region"] == ""
+        assert r.data["households_total"] == 2  # both sub-regions
+
+    def test_superuser_with_region_narrows_to_one_sub_region(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        su = django_user_model.objects.create_user(
+            username="kpis-su2", password="p", is_superuser=True,
+        )
+        buganda_code = two_sub_regions["SR-BUGANDA"]["sr"].code
+        r = _client_for(su).get(self.URL, {"region": buganda_code})
+        assert r.status_code == 200
+        assert r.data["region"] == buganda_code
+        assert r.data["households_total"] == 1  # only the Buganda HH
+
+    def test_out_of_scope_region_returns_zero_not_403(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        # Operator scoped to Buganda; drills into Karamoja → zeros, not 403.
+        u = django_user_model.objects.create_user(username="kpis-op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        karamoja_code = two_sub_regions["SR-KARAMOJA"]["sr"].code
+        r = _client_for(u).get(self.URL, {"region": karamoja_code})
+        assert r.status_code == 200
+        assert r.data["region"] == karamoja_code
+        # Buganda-scoped op drilling into Karamoja → all geo counts zero.
+        assert r.data["households_total"] == 0
+        assert r.data["change_requests_pending"] == 0
+        assert r.data["grievances_open"] == 0
+        assert r.data["stages_pending_promotion"] == 0
+
+    def test_in_scope_region_matches_no_region_for_single_scope_op(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        # Buganda-scoped operator: ?region=Buganda must equal no-region call
+        # since their effective scope is already Buganda only.
+        u = django_user_model.objects.create_user(username="kpis-op2", password="p")
+        buganda_code = two_sub_regions["SR-BUGANDA"]["sr"].code
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=buganda_code,
+        )
+        no_region = _client_for(u).get(self.URL).data
+        with_region = _client_for(u).get(self.URL, {"region": buganda_code}).data
+        assert no_region["households_total"] == with_region["households_total"] == 1
+        assert with_region["region"] == buganda_code
+
+    def test_audit_event_records_region(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        su = django_user_model.objects.create_user(
+            username="kpis-aud", password="p", is_superuser=True,
+        )
+        buganda_code = two_sub_regions["SR-BUGANDA"]["sr"].code
+        _client_for(su).get(self.URL, {"region": buganda_code})
+        ev = AuditEvent.objects.filter(
+            entity_type="rpt_dashboard", entity_id="operator_kpis",
+        ).order_by("-occurred_at").first()
+        assert ev is not None
+        assert f"region={buganda_code}" in (ev.reason or "")
