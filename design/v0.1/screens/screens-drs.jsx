@@ -150,6 +150,26 @@ const OperatorDRSList = ({ onNewRequest }) => {
     [allRequests],
   );
 
+  // US-S15-002 — average decision turnaround across the visible
+  // list. Counts only requests where submitted_at AND decided_at
+  // are both set (approved + rejected; never delivered, since
+  // delivery is post-decision). Reported in hours with one decimal
+  // if it's under 24, otherwise rounded days. Hidden when sample
+  // size is < 3 — a single fast decision isn't representative.
+  const decisionTurnaround = useMemoDRS(() => {
+    const decided = allRequests.filter(r => r.submitted_at && r.decided_at);
+    if (decided.length < 3) return null;
+    const deltas = decided.map(r => {
+      const ms = Date.parse(r.decided_at) - Date.parse(r.submitted_at);
+      return Number.isFinite(ms) && ms > 0 ? ms : null;
+    }).filter(v => v != null);
+    if (deltas.length < 3) return null;
+    const meanMs = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+    const hours = meanMs / (60 * 60 * 1000);
+    if (hours < 24) return { label: `avg ${hours.toFixed(1)}h`, n: deltas.length };
+    return { label: `avg ${(hours / 24).toFixed(1)}d`, n: deltas.length };
+  }, [allRequests]);
+
   const isLive = dataSource === "live" || dataSource === "live-empty";
 
   const confirmApprove = ({ note }) => {
@@ -201,11 +221,14 @@ const OperatorDRSList = ({ onNewRequest }) => {
   const eyebrowSuffix = dataSource === "live" ? " · LIVE"
     : dataSource === "live-empty" ? " · live · queue empty"
     : "";
+  const eyebrowTurnaround = decisionTurnaround
+    ? ` · ${decisionTurnaround.label} (n=${decisionTurnaround.n})`
+    : "";
 
   return (
     <div className="page" style={{paddingBottom:0}}>
       <PageHeader
-        eyebrow={"DATA REQUESTS · NSR UNIT INBOX" + eyebrowSuffix}
+        eyebrow={"DATA REQUESTS · NSR UNIT INBOX" + eyebrowSuffix + eyebrowTurnaround}
         title={<>Data requests <Chip>{rows.length}</Chip></>}
         sub="Triage incoming requests under each active DSA. Approve, reject or hold for clarification."
         right={<>
