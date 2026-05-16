@@ -128,12 +128,12 @@ const _hhApiToView = (h) => {
       nin_status: m.nin_status || "",
       telephone_1: m.telephone_1 || "",
     })),
-    // source_payload (US-S11-020) carries the canonical_payload of
-    // the upstream StageRecord — surfaces questionnaire blocks
-    // (housing, education, food security, etc.) that aren't on the
-    // Household model itself. Members in source_payload still carry
-    // their per-member detail blocks (health, education, employment).
-    source: h.source_payload || null,
+    // questionnaire (US-S11-020) carries the canonical_payload of
+    // the upstream StageRecord — surfaces blocks (housing,
+    // education, food security, etc.) that aren't on the Household
+    // model itself. Renamed from `source` to avoid shadowing the
+    // existing intake-source string above.
+    questionnaire: h.source_payload || null,
   };
 };
 
@@ -457,8 +457,8 @@ const _DataTable = ({ rows }) => (
 );
 
 const HealthTab = ({ hh }) => {
-  if (!hh.source) return <_SourceMissing section="Health & Disability"/>;
-  const members = (hh.source.members || []).filter(m => m.health);
+  if (!hh.questionnaire) return <_SourceMissing section="Health & Disability"/>;
+  const members = (hh.questionnaire.members || []).filter(m => m.health);
   if (members.length === 0) return <_SourceMissing section="Health & Disability"/>;
   return (
     <div style={{padding:"16px 20px"}}>
@@ -490,8 +490,8 @@ const HealthTab = ({ hh }) => {
 };
 
 const EducationTab = ({ hh }) => {
-  if (!hh.source) return <_SourceMissing section="Education"/>;
-  const members = (hh.source.members || []).filter(m => m.education);
+  if (!hh.questionnaire) return <_SourceMissing section="Education"/>;
+  const members = (hh.questionnaire.members || []).filter(m => m.education);
   if (members.length === 0) return <_SourceMissing section="Education"/>;
   return (
     <div style={{padding:"16px 20px"}}>
@@ -521,8 +521,8 @@ const EducationTab = ({ hh }) => {
 };
 
 const EmploymentTab = ({ hh }) => {
-  if (!hh.source) return <_SourceMissing section="Employment"/>;
-  const members = (hh.source.members || []).filter(m => m.employment);
+  if (!hh.questionnaire) return <_SourceMissing section="Employment"/>;
+  const members = (hh.questionnaire.members || []).filter(m => m.employment);
   if (members.length === 0) return <_SourceMissing section="Employment"/>;
   return (
     <div style={{padding:"16px 20px"}}>
@@ -553,8 +553,8 @@ const EmploymentTab = ({ hh }) => {
 };
 
 const HousingTab = ({ hh }) => {
-  if (!hh.source?.housing) return <_SourceMissing section="Housing & Assets"/>;
-  const h = hh.source.housing;
+  if (!hh.questionnaire?.housing) return <_SourceMissing section="Housing & Assets"/>;
+  const h = hh.questionnaire.housing;
   const assets = (h.assets_owned || "").split(/\s+/).filter(Boolean);
   return (
     <div style={{padding:"16px 20px"}}>
@@ -601,11 +601,11 @@ const HousingTab = ({ hh }) => {
 };
 
 const FoodShocksTab = ({ hh }) => {
-  if (!hh.source?.food_security && !hh.source?.shocks_coping) {
+  if (!hh.questionnaire?.food_security && !hh.questionnaire?.shocks_coping) {
     return <_SourceMissing section="Food & Shocks"/>;
   }
-  const fs = hh.source.food_security || {};
-  const sc = hh.source.shocks_coping || {};
+  const fs = hh.questionnaire.food_security || {};
+  const sc = hh.questionnaire.shocks_coping || {};
   const groups = fs.food_groups || {};
   const fiesKeys = Object.keys(fs.fies || {});
   const fiesYes = fiesKeys.filter(k => String(fs.fies[k]) === "1").length;
@@ -647,9 +647,9 @@ const FoodShocksTab = ({ hh }) => {
 };
 
 const ProgrammesTab = ({ hh }) => {
-  if (!hh.source) return <_SourceMissing section="Programmes"/>;
+  if (!hh.questionnaire) return <_SourceMissing section="Programmes"/>;
   // Aggregate programme participation across members.
-  const beneficiaries = (hh.source.members || []).filter(
+  const beneficiaries = (hh.questionnaire.members || []).filter(
     m => m.employment?.gov_program_beneficiary === "1",
   );
   return (
@@ -677,7 +677,7 @@ const ProgrammesTab = ({ hh }) => {
 };
 
 const ConsentTab = ({ hh }) => {
-  const iv = hh.source?.interview;
+  const iv = hh.questionnaire?.interview;
   if (!iv) return <_SourceMissing section="Consent"/>;
   return (
     <div style={{padding:"16px 20px"}}>
