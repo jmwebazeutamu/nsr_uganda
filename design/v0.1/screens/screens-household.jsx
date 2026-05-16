@@ -160,7 +160,7 @@ const _eduLabel = (code) => ({
 
 
 // Tab definitions match the redesign's IDs + count badges.
-const TABS = [
+const HH_TABS = [
   { id: "over",  label: "Overview" },
   { id: "rost",  label: "Roster" },
   { id: "hd",    label: "Health & Disability" },
@@ -315,7 +315,7 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
       <div role="tablist" style={{display:"flex", gap:0,
             borderBottom:"1px solid var(--neutral-300)",
             marginBottom:0, flexWrap:"wrap"}}>
-        {TABS.map(t => {
+        {HH_TABS.map(t => {
           const active = t.id === tab;
           return (
             <button key={t.id} role="tab" onClick={() => setTab(t.id)} style={{
