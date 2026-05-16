@@ -1,7 +1,411 @@
-/* global React, Icon, Chip, PageHeader, Modal, Field, Toast */
+/* global React, Icon, Chip, PageHeader, Modal, Field, ReasonModal, Toast */
 // NSR MIS — 11.7 DRS Query Builder + Field Selector
+// US-S14-002: operator-side list view added in front of the
+// existing wizard. Default mode = "list" (the inbox); "New
+// request" toggles to the wizard. Partner role still mounts the
+// wizard directly via PartnerDRSScreen.
 
-const { useState: useStateDRS } = React;
+const { useState: useStateDRS, useEffect: useEffectDRS, useMemo: useMemoDRS } = React;
+
+// DataRequest statuses mirror apps.data_requests.models.RequestStatus.
+// Operator-facing labels — "Pending decision" for the inbox state
+// the NSR Unit reviewer actually needs to act on.
+const ODRS_STATUSES = {
+  draft:     { label: "Draft",            tone: "neutral",     icon: "edit"     },
+  submitted: { label: "Pending decision", tone: "update",      icon: "clock"    },
+  approved:  { label: "Approved",         tone: "data",        icon: "check"    },
+  rejected:  { label: "Rejected",         tone: "danger",      icon: "x"        },
+  delivered: { label: "Delivered",        tone: "eligibility", icon: "download" },
+  expired:   { label: "Expired",          tone: "neutral",     icon: "lock"     },
+};
+
+// Operator-side mock list — only renders when the API call fails
+// or the harness is mounted under file://. Real rows replace this
+// from the /api/v1/drs/requests/ response.
+const ODRS_REQUESTS_MOCK = [
+  { id: "01DRS2026051400003", dsa: 1, dsa_reference: "DSA-PDM-2026-01",
+    requester: "partner-pdm-analyst",
+    request_payload: { fields: ["household.id", "household.sub_region_code"], programme_codes: ["PDM"] },
+    status: "submitted", submitted_at: "14 May 14:15", approver: "",
+    decided_at: null, decision_reason: "", delivered_at: null, expires_at: null,
+    manifest_sha256: "", row_count_delivered: null },
+  { id: "01DRS2026051400002", dsa: 1, dsa_reference: "DSA-PDM-2026-01",
+    requester: "partner-pdm-analyst",
+    request_payload: { fields: ["household.id", "household.current_vulnerability_band"],
+                       sub_region_codes: ["SR-BUGANDA-SOUTH", "SR-BUGANDA-NORTH"], max_rows: 10000 },
+    status: "approved", submitted_at: "14 May 08:30", approver: "nsr-unit-coordinator",
+    decided_at: "14 May 09:11", decision_reason: "", delivered_at: null, expires_at: null,
+    manifest_sha256: "", row_count_delivered: null },
+  { id: "01DRS2026051400001", dsa: 1, dsa_reference: "DSA-PDM-2026-01",
+    requester: "partner-pdm-analyst",
+    request_payload: { fields: ["household.id", "household.sub_region_code", "household.current_vulnerability_band"],
+                       sub_region_codes: ["SR-BUGANDA-SOUTH"], max_rows: 5000 },
+    status: "delivered", submitted_at: "12 May 09:00", approver: "nsr-unit-coordinator",
+    decided_at: "12 May 10:00",
+    decision_reason: "", delivered_at: "13 May 11:42", expires_at: "12 Jun 11:42",
+    manifest_sha256: "a3f8e91c52d04b7e2c1f6a5b9d0e7f4c8b6a2e1d4f5c9a7b3e0d8c2f1a9b5e6d",
+    row_count_delivered: 1284 },
+  { id: "01DRS2026051400004", dsa: 1, dsa_reference: "DSA-PDM-2026-01",
+    requester: "partner-pdm-analyst",
+    request_payload: { fields: ["member.nin_value"] },
+    status: "rejected", submitted_at: "10 May 11:00", approver: "nsr-unit-coordinator",
+    decided_at: "10 May 13:22",
+    decision_reason: "Field 'member.nin_value' outside DSA scope. Resubmit with allowed fields only.",
+    delivered_at: null, expires_at: null, manifest_sha256: "", row_count_delivered: null },
+];
+
+const ODRS_STATUS_FILTERS = [
+  { id: "all",       label: "All" },
+  { id: "submitted", label: "Pending decision" },
+  { id: "approved",  label: "Approved" },
+  { id: "delivered", label: "Delivered" },
+  { id: "rejected",  label: "Rejected" },
+];
+
+const ODRS_REJECT_REASONS = [
+  "Fields outside DSA allowed_scopes (resubmit needed)",
+  "Row cap exceeds DSA budget for the period",
+  "Geographic scope outside DSA region list",
+  "Insufficient justification in requester_note",
+  "Other (specify in note)",
+];
+
+const _odrsFetchJson = (url) => fetch(url, {
+  credentials: "same-origin",
+  headers: { Accept: "application/json" },
+}).then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`));
+
+const _odrsCsrf = () => {
+  const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return m ? m[1] : "";
+};
+
+const _odrsPost = (url, body) => fetch(url, {
+  method: "POST", credentials: "same-origin",
+  headers: { "Content-Type": "application/json",
+             "X-CSRFToken": _odrsCsrf(), Accept: "application/json" },
+  body: JSON.stringify(body),
+});
+
+const OperatorDRSList = ({ onNewRequest }) => {
+  // US-S14-002 — operator list view. Mirrors the partner list
+  // shape (S13-004) but reads /api/v1/drs/requests/ (full
+  // DataRequestSerializer) and offers approve/reject actions
+  // instead of download. The PartnerScopedQuerysetMixin on the
+  // viewset means an operator with no partner_id sees everything;
+  // a partner role would never end up here (partners get the
+  // PartnerDRSScreen wired in app.jsx).
+  const [liveRequests, setLiveRequests] = useStateDRS(null);
+  const [dataSource, setDataSource] = useStateDRS("mock");
+  const [reloadKey, setReloadKey] = useStateDRS(0);
+  const [statusFilter, setStatusFilter] = useStateDRS("submitted");
+  const [selectedRow, setSelectedRow] = useStateDRS(null);
+  const [approveOpen, setApproveOpen] = useStateDRS(false);
+  const [rejectOpen, setRejectOpen] = useStateDRS(false);
+  const [toast, setToast] = useStateDRS("");
+
+  useEffectDRS(() => {
+    let cancelled = false;
+    _odrsFetchJson("/api/v1/drs/requests/?page_size=50")
+      .then(data => {
+        if (cancelled) return;
+        const rows = (data.results || data || []).map(r => ({
+          ...r,
+          request_payload: r.request_payload || { fields: [] },
+        }));
+        setLiveRequests(rows);
+        setDataSource(rows.length === 0 ? "live-empty" : "live");
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [reloadKey]);
+
+  const allRequests = liveRequests || ODRS_REQUESTS_MOCK;
+  // Default selection: first row matching the active filter, else
+  // first row overall. Re-evaluated when the request list changes.
+  useEffectDRS(() => {
+    if (allRequests.length === 0) return;
+    if (selectedRow && allRequests.find(r => r.id === selectedRow)) return;
+    setSelectedRow(allRequests[0].id);
+  }, [allRequests]);
+
+  const rows = useMemoDRS(() => (
+    statusFilter === "all"
+      ? allRequests
+      : allRequests.filter(r => r.status === statusFilter)
+  ), [allRequests, statusFilter]);
+
+  const current = useMemoDRS(
+    () => allRequests.find(r => r.id === selectedRow),
+    [allRequests, selectedRow],
+  );
+
+  const filterCounts = useMemoDRS(
+    () => ODRS_STATUS_FILTERS.map(f => ({
+      ...f,
+      count: f.id === "all"
+        ? allRequests.length
+        : allRequests.filter(r => r.status === f.id).length,
+    })),
+    [allRequests],
+  );
+
+  const isLive = dataSource === "live" || dataSource === "live-empty";
+
+  const confirmApprove = ({ note }) => {
+    setApproveOpen(false);
+    if (!isLive || !current) {
+      setToast(`Approved · ${selectedRow.slice(0, 16)}… (mock)`);
+      return;
+    }
+    _odrsPost(`/api/v1/drs/requests/${current.id}/approve/`, {
+      approver: "operator", reason: note || "approved via DRS list view",
+    })
+      .then(async r => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.detail || `HTTP ${r.status}`);
+        }
+        return r.json();
+      })
+      .then(() => {
+        setToast(`Approved · ${current.id.slice(0, 16)}…`);
+        setReloadKey(k => k + 1);
+      })
+      .catch(e => setToast(`Approve failed: ${e.message}`));
+  };
+
+  const confirmReject = ({ reason, note }) => {
+    setRejectOpen(false);
+    if (!isLive || !current) {
+      setToast(`Rejected · ${selectedRow.slice(0, 16)}… (mock)`);
+      return;
+    }
+    _odrsPost(`/api/v1/drs/requests/${current.id}/reject/`, {
+      approver: "operator", reason: reason ? `${reason} — ${note}` : note,
+    })
+      .then(async r => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.detail || `HTTP ${r.status}`);
+        }
+        return r.json();
+      })
+      .then(() => {
+        setToast(`Rejected · ${current.id.slice(0, 16)}…`);
+        setReloadKey(k => k + 1);
+      })
+      .catch(e => setToast(`Reject failed: ${e.message}`));
+  };
+
+  const eyebrowSuffix = dataSource === "live" ? " · LIVE"
+    : dataSource === "live-empty" ? " · live · queue empty"
+    : "";
+
+  return (
+    <div className="page" style={{paddingBottom:0}}>
+      <PageHeader
+        eyebrow={"DATA REQUESTS · NSR UNIT INBOX" + eyebrowSuffix}
+        title={<>Data requests <Chip>{rows.length}</Chip></>}
+        sub="Triage incoming requests under each active DSA. Approve, reject or hold for clarification."
+        right={<>
+          <button className="btn btn-primary" onClick={onNewRequest}>
+            <Icon name="plus" size={14}/> New request
+          </button>
+        </>}
+      />
+
+      {/* Status filter strip */}
+      <div className="card" style={{padding:"14px 20px", marginBottom:16}}>
+        <div className="row gap-3" style={{flexWrap:"wrap"}}>
+          <span className="t-cap" style={{fontWeight:600}}>STATUS</span>
+          {filterCounts.map(f => {
+            const active = statusFilter === f.id;
+            return (
+              <button
+                key={f.id}
+                className={`chip-btn ${active ? "active" : ""}`}
+                onClick={() => setStatusFilter(f.id)}
+                style={{
+                  display:"inline-flex", alignItems:"center", gap:6,
+                  padding:"6px 10px", borderRadius:8, fontSize:13, fontWeight:500,
+                  border: active ? "1px solid var(--accent-data)" : "1px solid var(--neutral-300)",
+                  background: active ? "var(--accent-data-bg)" : "white",
+                  color: active ? "var(--accent-data)" : "var(--neutral-800)",
+                  cursor:"pointer",
+                }}>
+                {f.label}
+                <span style={{
+                  marginLeft:4, padding:"1px 6px", borderRadius:10, fontSize:11,
+                  background: active ? "var(--accent-data)" : "var(--neutral-200)",
+                  color: active ? "white" : "var(--neutral-700)",
+                }}>{f.count}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* List + detail */}
+      <div style={{display:"grid", gridTemplateColumns:"1fr 380px", gap:16}}>
+        <div className="card">
+          <div className="card-toolbar">
+            <strong className="t-bodysm">{rows.length} requests</strong>
+            <div style={{flex:1}}/>
+            <span className="t-cap">Approve/reject actions are scoped by PartnerScope ABAC.</span>
+          </div>
+
+          <div style={{display:"grid", gridTemplateColumns:"1fr 150px 110px 120px 130px",
+            borderBottom:"1px solid var(--neutral-200)", background:"var(--neutral-50)",
+            fontSize:11, fontWeight:600, letterSpacing:"0.06em",
+            textTransform:"uppercase", color:"var(--neutral-700)"}}>
+            <div style={{padding:"10px 16px"}}>Request</div>
+            <div style={{padding:"10px 8px"}}>Status</div>
+            <div style={{padding:"10px 8px", textAlign:"right"}}>Rows</div>
+            <div style={{padding:"10px 8px"}}>Submitted</div>
+            <div style={{padding:"10px 8px"}}>Requester</div>
+          </div>
+
+          {rows.map(r => {
+            const active = selectedRow === r.id;
+            const st = ODRS_STATUSES[r.status] || ODRS_STATUSES.draft;
+            return (
+              <div
+                key={r.id}
+                onClick={() => setSelectedRow(r.id)}
+                style={{
+                  display:"grid", gridTemplateColumns:"1fr 150px 110px 120px 130px",
+                  borderBottom:"1px solid var(--neutral-200)",
+                  background: active ? "var(--accent-data-bg)" : "white",
+                  cursor:"pointer", alignItems:"center",
+                }}>
+                <div style={{padding:"12px 16px"}}>
+                  <div className="t-mono" style={{fontSize:12, color:"var(--neutral-900)"}}>{r.id}</div>
+                  <div className="t-bodysm muted" style={{marginTop:2}}>{r.dsa_reference || `DSA ${r.dsa || "—"}`}</div>
+                </div>
+                <div style={{padding:"12px 8px"}}>
+                  <Chip size="sm" tone={st.tone} icon={st.icon}>{st.label}</Chip>
+                </div>
+                <div style={{padding:"12px 8px", textAlign:"right", fontFamily:"monospace", fontSize:12,
+                             color: r.row_count_delivered ? "var(--neutral-900)" : "var(--neutral-400)"}}>
+                  {r.row_count_delivered != null ? r.row_count_delivered.toLocaleString() : "—"}
+                </div>
+                <div style={{padding:"12px 8px", fontSize:12, color:"var(--neutral-700)"}}>
+                  {r.submitted_at || "—"}
+                </div>
+                <div style={{padding:"12px 8px", fontSize:12, color:"var(--neutral-700)"}}>
+                  {r.requester || "—"}
+                </div>
+              </div>
+            );
+          })}
+
+          {rows.length === 0 && (
+            <div style={{padding:48, textAlign:"center", color:"var(--neutral-500)"}}>
+              <Icon name="inbox" size={32} color="var(--neutral-300)"/>
+              <div className="t-bodysm mt-2">No requests match this filter.</div>
+            </div>
+          )}
+        </div>
+
+        {/* Detail rail */}
+        {current && (
+          <div className="col gap-3">
+            <div className="card" style={{borderTop:"3px solid var(--accent-data)"}}>
+              <div className="card-header" style={{padding:"12px 16px"}}>
+                <div>
+                  <div className="t-cap"><Icon name="filter" size={11}/> REQUEST DETAIL</div>
+                  <h3 className="t-h3" style={{margin:"2px 0 0", fontFamily:"monospace", fontSize:13}}>{current.id}</h3>
+                </div>
+                <Chip tone={(ODRS_STATUSES[current.status] || ODRS_STATUSES.draft).tone}>
+                  {(ODRS_STATUSES[current.status] || ODRS_STATUSES.draft).label}
+                </Chip>
+              </div>
+              <div style={{padding:16}}>
+                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:6}}>REQUESTER</div>
+                <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>{current.requester || "—"}</div>
+
+                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>DSA</div>
+                <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>{current.dsa_reference || `DSA ${current.dsa || "—"}`}</div>
+
+                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>FIELDS REQUESTED</div>
+                <div className="row-wrap" style={{display:"flex", flexWrap:"wrap", gap:6}}>
+                  {(current.request_payload.fields || []).length === 0
+                    ? <span className="t-bodysm muted">— none —</span>
+                    : current.request_payload.fields.map(f => (
+                      <Chip key={f} size="sm" tone="programme">{f}</Chip>
+                    ))}
+                </div>
+
+                {current.request_payload.sub_region_codes && (
+                  <>
+                    <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>GEOGRAPHY</div>
+                    <div className="row-wrap" style={{display:"flex", flexWrap:"wrap", gap:6}}>
+                      {current.request_payload.sub_region_codes.map(s => (
+                        <Chip key={s} size="sm" tone="data">{s}</Chip>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {current.request_payload.max_rows && (
+                  <>
+                    <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>ROW CAP</div>
+                    <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>{Number(current.request_payload.max_rows).toLocaleString()} rows</div>
+                  </>
+                )}
+
+                {current.decision_reason && (
+                  <>
+                    <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>DECISION REASON</div>
+                    <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>{current.decision_reason}</div>
+                  </>
+                )}
+
+                {current.approver && (
+                  <>
+                    <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>DECIDED BY</div>
+                    <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>{current.approver} · {current.decided_at || "—"}</div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {current.status === "submitted" && (
+              <div className="card" style={{padding:16}}>
+                <div className="t-cap" style={{fontWeight:600, marginBottom:8}}>OPERATOR ACTIONS</div>
+                <div className="row gap-2" style={{flexWrap:"wrap"}}>
+                  <button className="btn btn-success" onClick={() => setApproveOpen(true)}>
+                    <Icon name="check" size={14}/> Approve
+                  </button>
+                  <button className="btn btn-danger" onClick={() => setRejectOpen(true)}>
+                    <Icon name="x" size={14}/> Reject
+                  </button>
+                </div>
+                <p className="t-cap" style={{marginTop:8, color:"var(--neutral-600)"}}>
+                  Approver cannot be the original requester (AC-DRS-DUAL-ACTOR).
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <ReasonModal open={approveOpen} title="Approve data request" intent="success"
+        reasonOptions={["DSA scope match", "Justification confirmed",
+                        "Volume within DSA budget", "Routine renewal"]}
+        recordLabel={current?.id}
+        onClose={() => setApproveOpen(false)} onConfirm={confirmApprove}/>
+
+      <ReasonModal open={rejectOpen} title="Reject data request" intent="danger"
+        reasonOptions={ODRS_REJECT_REASONS}
+        recordLabel={current?.id}
+        onClose={() => setRejectOpen(false)} onConfirm={confirmReject}/>
+
+      {toast && <Toast message={toast} onDone={() => setToast("")}/>}
+    </div>
+  );
+};
 
 const STEPS = [
   { id: "scope",    label: "Scope",          icon: "target" },
@@ -67,7 +471,24 @@ const PREVIEW_ROWS = [
 // `onExit` is set when called from a host screen that owns its
 // own back-navigation (e.g., the partner portal's list ↔ builder
 // toggle in PartnerDRSScreen).
+// US-S14-002 — DRSScreen is a thin router. Operators land on the
+// list view (OperatorDRSList) by default and reach the wizard via
+// "New request". Partner invocation (role="partner") still mounts
+// the wizard directly — partners have their own list elsewhere in
+// PartnerDRSScreen.
 const DRSScreen = ({ role = "operator", onExit } = {}) => {
+  const isPartner = role === "partner";
+  const [view, setView] = useStateDRS(isPartner ? "build" : "list");
+  if (view === "list" && !isPartner) {
+    return <OperatorDRSList onNewRequest={() => setView("build")}/>;
+  }
+  return <DRSWizard
+    role={role}
+    onExit={onExit || (isPartner ? undefined : () => setView("list"))}
+  />;
+};
+
+const DRSWizard = ({ role = "operator", onExit } = {}) => {
   const isPartner = role === "partner";
   const [step, setStep] = useStateDRS("build");
   const [selectedFields, setSel] = useStateDRS(new Set(["registry_id","subregion","district","parish","household_size","pmt_band","roof_material"]));
