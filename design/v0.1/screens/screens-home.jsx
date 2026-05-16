@@ -1,7 +1,40 @@
 /* global React, Icon, Chip, KPI, PageHeader */
 // NSR MIS — Home (role-aware dashboard) + Kit page
 
-const { useState: useStateHome } = React;
+const { useState: useStateHome, useEffect: useEffectHome } = React;
+
+
+// Map a KPI's `title` to the field on the dashboard payload it
+// should read. Wiring a new KPI to live data = add an entry here.
+// Falls back to the hardcoded mock value when the field is missing
+// from the payload (or when the API call hasn't returned yet).
+const HOME_KPI_LIVE_MAP = {
+  // nsr-unit
+  "DIH review queue": "stages_pending_promotion",
+  "Bulk batches awaiting dual-approval": null,  // no backend signal yet
+  "Partner DSAs expiring in 30d":         null,
+  "Fast-track auto-promote":              null,
+  // cdo
+  "UPD review queue":     "change_requests_pending",
+  "GRM L2 cases":         "grievances_l2_open",
+  "Programme referrals":  null,
+  "Avg approval time (UPD)": null,
+  // parish
+  "Captures today":          null,
+  "Drafts about to expire":  null,
+  "GRM L1 cases (my parish)": "grievances_open",
+  "Sync queue (CAPI)":       null,
+  // dpo
+  "Anomaly alerts (US-103)": null,
+  "Rows shipped 7d":         null,
+  "Erasure requests":        null,
+  "DPIA review tasks":       null,
+  // partner-analyst
+  "Delivered (30d)":         "data_requests_delivered_7d",
+  "Pending approval":        "data_requests_pending_approval",
+  "Bundles expiring 7d":     null,
+  "Active DSA":              null,
+};
 
 /* ============================================================
    ROLE config
@@ -118,10 +151,47 @@ const ROLES = Object.keys(ROLE_CONTENT);
    ============================================================ */
 const HomeScreen = ({ role, onNavigate }) => {
   const r = ROLE_CONTENT[role] || ROLE_CONTENT["nsr-unit"];
+
+  // US-S12-001 — overlay live KPI counts from
+  // /api/v1/rpt/dashboards/operator-kpis/ onto the role's mock cards.
+  // Missing fetch (no backend / unauthenticated) leaves the mock
+  // values intact so the design preview still tells the visual story.
+  const [liveKpis, setLiveKpis] = useStateHome(null);
+  useEffectHome(() => {
+    let cancelled = false;
+    fetch("/api/v1/rpt/dashboards/operator-kpis/", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(rsp => rsp.ok ? rsp.json() : Promise.reject(rsp.status))
+      .then(data => { if (!cancelled) setLiveKpis(data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // Project the role's KPI list, replacing `value` with the live
+  // count when one is available, and stripping the misleading
+  // spark/trend lines (the live count is a single point — sparks
+  // come back when /api/v1/rpt/dashboards/comparative/ wires in).
+  const kpis = r.kpis.map(k => {
+    const fieldName = HOME_KPI_LIVE_MAP[k.title];
+    if (liveKpis && fieldName && liveKpis[fieldName] != null) {
+      return {
+        ...k,
+        value: String(liveKpis[fieldName]),
+        spark: undefined,
+        trend: undefined,
+        trendValue: undefined,
+        foot: `${k.foot} · live`,
+      };
+    }
+    return k;
+  });
+
   return (
     <div className="page">
       <PageHeader
-        eyebrow="HOME"
+        eyebrow={liveKpis ? "HOME · LIVE" : "HOME"}
         title={<span>Good afternoon, <span style={{color:'var(--primary-900)'}}>{r.person.split(' ')[0]}</span></span>}
         sub={<>Signed in as {r.name}. Scope: {r.org}. Today is Thursday, 14 May 2026.</>}
         right={<>
@@ -131,7 +201,7 @@ const HomeScreen = ({ role, onNavigate }) => {
       />
 
       <div className="grid grid-4">
-        {r.kpis.map((k, i) => <KPI key={i} {...k}/>)}
+        {kpis.map((k, i) => <KPI key={i} {...k}/>)}
       </div>
 
       <div className="grid grid-2 mt-5">
@@ -172,13 +242,25 @@ const HomeScreen = ({ role, onNavigate }) => {
       <div className="card mt-5">
         <div className="card-header">
           <h3 className="t-h3" style={{margin:0}}>Across the registry</h3>
-          <span className="t-cap">Refreshed 14:35 EAT · poll 60s</span>
+          <span className="t-cap">{liveKpis ? "live (one-shot fetch)" : "Refreshed 14:35 EAT · poll 60s"}</span>
         </div>
         <div className="grid grid-4" style={{padding:20}}>
-          <RegistryStat label="Total households (Registered)" value="9,847,221" sub="of 12.1M target (81.4%)"/>
-          <RegistryStat label="Provisional, pending promotion" value="124,309" sub="walk-in 38k · bulk 86k"/>
-          <RegistryStat label="Confirmed individuals" value="48,116,802" sub="avg HH size 4.89"/>
-          <RegistryStat label="Connectors active (7d)" value="11 / 14" sub="2 paused · 1 quarantined"/>
+          <RegistryStat
+            label="Total households (Registered)"
+            value={liveKpis ? liveKpis.households_total.toLocaleString() : "9,847,221"}
+            sub={liveKpis ? "in your ABAC scope" : "of 12.1M target (81.4%)"}/>
+          <RegistryStat
+            label="Provisional, pending promotion"
+            value={liveKpis ? liveKpis.stages_pending_promotion.toLocaleString() : "124,309"}
+            sub={liveKpis ? `quality-fail ${liveKpis.stages_quality_failed} · ddup ${liveKpis.stages_ddup_review} · idv ${liveKpis.stages_idv_pending}` : "walk-in 38k · bulk 86k"}/>
+          <RegistryStat
+            label={liveKpis ? "Households with PMT score" : "Confirmed individuals"}
+            value={liveKpis ? liveKpis.households_with_pmt.toLocaleString() : "48,116,802"}
+            sub={liveKpis ? "ready for programme eligibility" : "avg HH size 4.89"}/>
+          <RegistryStat
+            label={liveKpis ? "Operator queues" : "Connectors active (7d)"}
+            value={liveKpis ? `UPD ${liveKpis.change_requests_pending} · GRM ${liveKpis.grievances_open}` : "11 / 14"}
+            sub={liveKpis ? `DRS ${liveKpis.data_requests_pending_approval} pending` : "2 paused · 1 quarantined"}/>
         </div>
       </div>
 

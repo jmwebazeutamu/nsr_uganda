@@ -1,5 +1,6 @@
 from django.urls import path
 
+from .dashboard_views import OperatorKpisView
 from .views import (
     ComparativeMetric,
     GrievancesByCategory,
@@ -48,4 +49,7 @@ urlpatterns = [
     path("dashboards/comparative/",
          ComparativeMetric.as_view(),
          name="rpt-comparative"),
+    path("dashboards/operator-kpis/",
+         OperatorKpisView.as_view(),
+         name="rpt-operator-kpis"),
 ]
