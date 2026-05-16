@@ -631,3 +631,229 @@ class TestPreviewEndpoint:
         r = client.post(url, {"sample_size": 50, "record_type": "alien"},
                         format="json")
         assert r.status_code == 400
+
+
+# --- DQA-5 / US-076: write endpoints + role gate ----------------------------
+
+class TestWriteEndpoints:
+    """ModelViewSet + role-gated create/update + lifecycle action endpoints.
+
+    Layout per brief:
+      POST   /api/v1/dqa/rules/                     create draft
+      PUT    /api/v1/dqa/rules/{id}/                update draft
+      POST   /api/v1/dqa/rules/{id}/submit-for-approval/
+      POST   /api/v1/dqa/rules/{id}/approve/  { note }
+      POST   /api/v1/dqa/rules/{id}/reject/   { reason }
+      POST   /api/v1/dqa/rules/{id}/retire/
+    """
+
+    def _client(self, user):
+        from rest_framework.test import APIClient
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c
+
+    def _make_author(self, django_user_model, username="dqa-author"):
+        from django.contrib.auth.models import Group
+        user = django_user_model.objects.create_user(username=username, password="p")
+        group, _ = Group.objects.get_or_create(name="dqa_author")
+        user.groups.add(group)
+        return user
+
+    def test_non_author_cannot_create(self, db, django_user_model):
+        # A logged-in user without the dqa_author group: 403 on create.
+        outsider = django_user_model.objects.create_user(
+            username="outsider", password="p",
+        )
+        r = self._client(outsider).post("/api/v1/dqa/rules/", {
+            "rule_id": "NEW-RULE", "version": 1,
+            "description": "x", "severity": "blocking",
+            "expression": {"field": "surname", "op": "not_null"},
+            "error_message_template": "x",
+            "applicability_filter": {"entity": "member"},
+            "author": "outsider",
+        }, format="json")
+        assert r.status_code == 403
+
+    def test_author_can_create_draft(self, db, django_user_model):
+        author = self._make_author(django_user_model, "alice")
+        r = self._client(author).post("/api/v1/dqa/rules/", {
+            "rule_id": "NEW-RULE", "version": 1,
+            "description": "x", "severity": "blocking",
+            "expression": {"field": "surname", "op": "not_null"},
+            "error_message_template": "x",
+            "applicability_filter": {"entity": "member"},
+            "author": "alice",
+        }, format="json")
+        assert r.status_code == 201, r.data
+        assert r.data["status"] == "draft"
+
+    def test_submit_endpoint_advances_to_pending(
+        self, db, django_user_model, draft_rule,
+    ):
+        author = self._make_author(django_user_model, "alice")
+        url = f"/api/v1/dqa/rules/{draft_rule.id}/submit-for-approval/"
+        r = self._client(author).post(url, {}, format="json")
+        assert r.status_code == 200
+        draft_rule.refresh_from_db()
+        assert draft_rule.status == "pending_approval"
+        assert draft_rule.submitted_at is not None
+
+    def test_approve_endpoint_requires_note(
+        self, db, django_user_model, draft_rule,
+    ):
+        submit_for_approval(draft_rule)
+        approver = self._make_author(django_user_model, "bob")
+        url = f"/api/v1/dqa/rules/{draft_rule.id}/approve/"
+        # Blank note → 400.
+        r = self._client(approver).post(url, {"note": ""}, format="json")
+        assert r.status_code == 400
+        # Good note → 200 + ACTIVE.
+        r = self._client(approver).post(
+            url, {"note": "matches AC-MANDATORY"}, format="json",
+        )
+        assert r.status_code == 200
+        draft_rule.refresh_from_db()
+        assert draft_rule.status == "active"
+        assert draft_rule.approval_note == "matches AC-MANDATORY"
+
+    def test_reject_endpoint_requires_reason(
+        self, db, django_user_model, draft_rule,
+    ):
+        submit_for_approval(draft_rule)
+        approver = self._make_author(django_user_model, "bob")
+        url = f"/api/v1/dqa/rules/{draft_rule.id}/reject/"
+        r = self._client(approver).post(url, {"reason": ""}, format="json")
+        assert r.status_code == 400
+        r = self._client(approver).post(
+            url, {"reason": "conflicts with X"}, format="json",
+        )
+        assert r.status_code == 200
+        draft_rule.refresh_from_db()
+        assert draft_rule.status == "rejected"
+        assert draft_rule.rejection_reason == "conflicts with X"
+
+    def test_approve_endpoint_blocks_self_approval(
+        self, db, django_user_model, draft_rule,
+    ):
+        submit_for_approval(draft_rule)
+        # alice is the rule's author per the fixture.
+        self_approver = self._make_author(django_user_model, "alice")
+        url = f"/api/v1/dqa/rules/{draft_rule.id}/approve/"
+        r = self._client(self_approver).post(
+            url, {"note": "trying to self-approve"}, format="json",
+        )
+        assert r.status_code == 400
+        assert "cannot approve" in str(r.data).lower()
+
+    def test_retire_endpoint_works_on_active(
+        self, db, django_user_model, draft_rule,
+    ):
+        submit_for_approval(draft_rule)
+        approver = self._make_author(django_user_model, "bob")
+        self._client(approver).post(
+            f"/api/v1/dqa/rules/{draft_rule.id}/approve/",
+            {"note": "ok"}, format="json",
+        )
+        r = self._client(approver).post(
+            f"/api/v1/dqa/rules/{draft_rule.id}/retire/", {}, format="json",
+        )
+        assert r.status_code == 200
+        draft_rule.refresh_from_db()
+        assert draft_rule.status == "retired"
+
+    def test_endpoint_actions_emit_audit_rows(
+        self, db, django_user_model, draft_rule,
+    ):
+        approver = self._make_author(django_user_model, "bob")
+        before = AuditEvent.objects.filter(entity_type="dqa.rule").count()
+        # submit + approve via the REST endpoints
+        self._client(self._make_author(django_user_model, "alice")).post(
+            f"/api/v1/dqa/rules/{draft_rule.id}/submit-for-approval/",
+            {}, format="json",
+        )
+        self._client(approver).post(
+            f"/api/v1/dqa/rules/{draft_rule.id}/approve/",
+            {"note": "good"}, format="json",
+        )
+        after = AuditEvent.objects.filter(entity_type="dqa.rule").count()
+        assert after == before + 2
+
+
+# --- DQA-5 admin smoke tests ------------------------------------------------
+
+class TestRuleEditorAdminSmoke:
+    """The change_form view should render the v2 Rule Editor panels
+    (preview, decisions, version history) when DQA_RULE_EDITOR_V2 is
+    on. Cheap structural assertions only — exhaustive UI testing
+    happens during the manual sanity check listed in the Definition
+    of Done."""
+
+    def _staff_client(self, db, django_user_model):
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="dqa-staff", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        return c
+
+    def test_change_form_renders_v2_panels(
+        self, db, django_user_model, draft_rule, settings,
+    ):
+        settings.DQA_RULE_EDITOR_V2 = True
+        c = self._staff_client(db, django_user_model)
+        r = c.get(f"/admin/dqa/dqarule/{draft_rule.id}/change/")
+        assert r.status_code == 200
+        body = r.content.decode()
+        # The three v2 panels are present, identified by the marker ids
+        # the template sets.
+        assert 'id="dqa-preview-panel"' in body
+        assert 'id="dqa-decisions-panel"' in body
+        assert 'id="dqa-history-panel"' in body
+        # And the wizard fields show in the admin form fieldset.
+        assert "wizard_field" in body
+
+    def test_change_form_omits_v2_panels_when_flag_off(
+        self, db, django_user_model, draft_rule, settings,
+    ):
+        settings.DQA_RULE_EDITOR_V2 = False
+        c = self._staff_client(db, django_user_model)
+        r = c.get(f"/admin/dqa/dqarule/{draft_rule.id}/change/")
+        assert r.status_code == 200
+        body = r.content.decode()
+        assert 'id="dqa-preview-panel"' not in body
+        assert 'id="dqa-history-panel"' not in body
+
+    def test_version_history_includes_unified_diff(
+        self, db, django_user_model, settings,
+    ):
+        # Two versions of the same rule_id; v2's expression differs
+        # → unified diff lands in the history pane.
+        settings.DQA_RULE_EDITOR_V2 = True
+        v1 = DqaRule.objects.create(
+            rule_id="HIST-1", version=1,
+            description="v1", severity=Severity.BLOCKING,
+            expression={"field": "surname", "op": "not_null"},
+            error_message_template="x", author="alice",
+            applicability_filter={"entity": "member"},
+            effective_from=date(2026, 1, 1),
+        )
+        v2 = DqaRule.objects.create(
+            rule_id="HIST-1", version=2,
+            description="v2", severity=Severity.BLOCKING,
+            expression={"field": "first_name", "op": "not_null"},
+            error_message_template="x", author="alice",
+            applicability_filter={"entity": "member"},
+            effective_from=date(2026, 2, 1),
+        )
+        c = self._staff_client(db, django_user_model)
+        r = c.get(f"/admin/dqa/dqarule/{v2.id}/change/")
+        body = r.content.decode()
+        assert "dqa-diff" in body
+        # diff markers showing the field swap
+        assert "- " in body and "+ " in body
+        # Both versions present in the history table
+        assert "v1" in body and "v2" in body
+        del v1  # used only as a fixture setup row

@@ -1,12 +1,37 @@
 import random
 
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
-from rest_framework import serializers, status, viewsets
+from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from .engine import evaluate
 from .models import DqaResult, DqaRule, DqaRulePreviewRun
+from .services import ApprovalError, approve, reject, retire, submit_for_approval
+
+
+# US-076 — author role gate. Create/update on the Rule endpoint is
+# restricted to members of the "dqa_author" Django group (or
+# superusers, for ops). Read + lifecycle actions remain available to
+# any authenticated operator; the service-layer guards (cannot self-
+# approve, cannot rule-jump states) carry the remaining authorisation.
+class IsDqaAuthor(permissions.BasePermission):
+    message = "Only DQA Authors can create or edit rules."
+
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return False
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        # Action endpoints (submit/approve/reject/retire) are not
+        # "write the rule" — they're transitions, gated by services.py.
+        if getattr(view, "action", None) in (
+            "submit_for_approval", "approve", "reject", "retire", "preview",
+        ):
+            return True
+        if request.user.is_superuser:
+            return True
+        return request.user.groups.filter(name="dqa_author").exists()
 
 
 class DqaRuleSerializer(serializers.ModelSerializer):
@@ -59,15 +84,29 @@ def _preview_queryset(record_type: str):
     return None, None
 
 
+class _NoteRequest(serializers.Serializer):
+    note = serializers.CharField()
+
+
+class _ReasonRequest(serializers.Serializer):
+    reason = serializers.CharField()
+
+
 @extend_schema_view(
     list=extend_schema(tags=["dqa"], summary="List DQA rules"),
     retrieve=extend_schema(tags=["dqa"], summary="Retrieve a DQA rule"),
+    create=extend_schema(tags=["dqa"], summary="Create a DRAFT rule (DQA Author only)"),
+    update=extend_schema(tags=["dqa"], summary="Update a DRAFT rule (DQA Author only)"),
+    partial_update=extend_schema(tags=["dqa"], summary="Patch a DRAFT rule (DQA Author only)"),
 )
-class DqaRuleViewSet(viewsets.ReadOnlyModelViewSet):
+class DqaRuleViewSet(viewsets.ModelViewSet):
     queryset = DqaRule.objects.all().order_by("rule_id", "-version")
     serializer_class = DqaRuleSerializer
     filterset_fields = ["status", "severity", "rule_id"]
-    http_method_names = ["get", "post", "head", "options"]
+    permission_classes = [IsDqaAuthor]
+    # DELETE intentionally absent — rules are retired, not deleted, per
+    # SAD §4.2 (rule history is part of the audit trail).
+    http_method_names = ["get", "post", "put", "patch", "head", "options"]
 
     @extend_schema(
         tags=["dqa"],
@@ -128,6 +167,103 @@ class DqaRuleViewSet(viewsets.ReadOnlyModelViewSet):
             "fail_count": fail_count,
             "sample_failed_record_ids": run.sample_failed_record_ids,
         })
+
+    # --- DQA-5: lifecycle action endpoints ------------------------------
+    #
+    # Each maps 1:1 onto a service function. Each action audits via the
+    # service layer (see apps/dqa/services.py). Service-raised
+    # ApprovalError → 400 with the message so the React Rule Editor can
+    # surface it verbatim.
+
+    @extend_schema(
+        tags=["dqa"],
+        summary="Submit a DRAFT rule for approval",
+        request=None,
+        responses={200: DqaRuleSerializer,
+                   400: OpenApiResponse(description="bad state")},
+    )
+    @action(detail=True, methods=["post"], url_path="submit-for-approval")
+    def submit_for_approval(self, request, pk=None):
+        rule = self.get_object()
+        actor = getattr(request.user, "username", "") or "system"
+        try:
+            submit_for_approval(rule, actor=actor)
+        except ApprovalError as e:
+            return Response({"detail": str(e)},
+                            status=status.HTTP_400_BAD_REQUEST)
+        rule.refresh_from_db()
+        return Response(self.get_serializer(rule).data)
+
+    @extend_schema(
+        tags=["dqa"],
+        summary="Approve a PENDING rule (note required)",
+        request=_NoteRequest,
+        responses={200: DqaRuleSerializer,
+                   400: OpenApiResponse(
+                       description="bad state, missing note, or self-approve",
+                   )},
+    )
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
+        rule = self.get_object()
+        ser = _NoteRequest(data=request.data)
+        ser.is_valid(raise_exception=True)
+        approver = getattr(request.user, "username", "") or "system"
+        try:
+            approve(
+                rule, approver=approver,
+                note=ser.validated_data["note"], actor=approver,
+            )
+        except ApprovalError as e:
+            return Response({"detail": str(e)},
+                            status=status.HTTP_400_BAD_REQUEST)
+        rule.refresh_from_db()
+        return Response(self.get_serializer(rule).data)
+
+    @extend_schema(
+        tags=["dqa"],
+        summary="Reject a PENDING rule (reason required)",
+        request=_ReasonRequest,
+        responses={200: DqaRuleSerializer,
+                   400: OpenApiResponse(
+                       description="bad state, missing reason, or self-reject",
+                   )},
+    )
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, pk=None):
+        rule = self.get_object()
+        ser = _ReasonRequest(data=request.data)
+        ser.is_valid(raise_exception=True)
+        approver = getattr(request.user, "username", "") or "system"
+        try:
+            reject(
+                rule, approver=approver,
+                reason=ser.validated_data["reason"], actor=approver,
+            )
+        except ApprovalError as e:
+            return Response({"detail": str(e)},
+                            status=status.HTTP_400_BAD_REQUEST)
+        rule.refresh_from_db()
+        return Response(self.get_serializer(rule).data)
+
+    @extend_schema(
+        tags=["dqa"],
+        summary="Retire an ACTIVE rule",
+        request=None,
+        responses={200: DqaRuleSerializer,
+                   400: OpenApiResponse(description="bad state")},
+    )
+    @action(detail=True, methods=["post"], url_path="retire")
+    def retire(self, request, pk=None):
+        rule = self.get_object()
+        actor = getattr(request.user, "username", "") or "system"
+        try:
+            retire(rule, actor=actor)
+        except ApprovalError as e:
+            return Response({"detail": str(e)},
+                            status=status.HTTP_400_BAD_REQUEST)
+        rule.refresh_from_db()
+        return Response(self.get_serializer(rule).data)
 
 
 @extend_schema_view(

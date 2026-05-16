@@ -25,6 +25,11 @@ SECRET_KEY = env("DJANGO_SECRET_KEY", default="dev-only-replace-before-deploy")
 DEBUG = env("DEBUG")
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
 
+# US-076 / DQA-5 — feature flag for the form-based Rule Editor admin
+# UI. Defaults: True in dev (where DEBUG=True), False elsewhere so
+# the prod rollout has an explicit env switch (DQA_RULE_EDITOR_V2=1).
+DQA_RULE_EDITOR_V2 = env.bool("DQA_RULE_EDITOR_V2", default=DEBUG)
+
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
