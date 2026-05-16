@@ -60,6 +60,22 @@ class GrievanceViewSet(
     serializer_class = GrievanceSerializer
     filterset_fields = ["status", "tier", "category", "assigned_to",
                         "household_id"]
+
+    def get_queryset(self):
+        # US-S15-003 — optional ?sub_region_code= drill-down for the
+        # home queue panel. household_id is a CharField on Grievance
+        # (the grievance can open before a confirmed household exists),
+        # so join through Household by IN-subquery.
+        qs = super().get_queryset()
+        sr = self.request.query_params.get("sub_region_code")
+        if sr:
+            from apps.data_management.models import Household
+            hh_ids = list(
+                Household.objects.filter(sub_region_code=sr)
+                                  .values_list("id", flat=True),
+            )
+            qs = qs.filter(household_id__in=hh_ids)
+        return qs
     http_method_names = ["get", "post", "head", "options"]
 
     def create(self, request, *args, **kwargs):

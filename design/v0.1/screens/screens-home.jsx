@@ -69,22 +69,30 @@ const _drsItem = (dr) => ({
   age: _ago(dr.created_at),
 });
 
-// Map by queue title → { url, projector, target (nav screen) }.
+// Map by queue title → { url, projector, target (nav screen),
+// geographic }. `geographic: true` means the panel honours the
+// home-screen region drill-down (US-S15-003) — the queue's list
+// endpoint accepts ?sub_region_code= and joins through Household.
+// Partner-DRS panels are partner-side ABAC, so they stay national
+// regardless of the operator's region selection.
 const HOME_QUEUE_LIVE_MAP = {
   "Pending DIH promotions": {
     url: "/api/v1/dih/stage-records/?state=pending_promotion&page_size=4",
     projector: _stageItem,
     target: "dih",
+    geographic: true,
   },
   "Pending UPD reviews": {
     url: "/api/v1/upd/change-requests/?status=pending_approval&page_size=4",
     projector: _changeRequestItem,
     target: "upd",
+    geographic: true,
   },
   "GRM L2 cases": {
     url: "/api/v1/grm/grievances/?tier=L2&page_size=4",
     projector: _grievanceItem,
     target: "grm",
+    geographic: true,
   },
   "Pending approval": {
     url: "/api/v1/drs/requests/mine/?status=submitted&page_size=4",
@@ -318,6 +326,10 @@ const HomeScreen = ({ role, onNavigate }) => {
   // US-S13-002 — per-queue live item fetch. State: titles → list
   // of projected items (or null while loading). Each queue's title
   // is its key. Titles not in HOME_QUEUE_LIVE_MAP stay mock.
+  //
+  // US-S15-003 — region drill-down also narrows geographic queues.
+  // Refetches when `region` changes; partner-DRS queues skip the
+  // filter (their endpoint is partner-side ABAC).
   const [liveQueues, setLiveQueues] = useStateHome({});
   useEffectHome(() => {
     let cancelled = false;
@@ -327,7 +339,10 @@ const HomeScreen = ({ role, onNavigate }) => {
                            .filter(t => HOME_QUEUE_LIVE_MAP[t]);
     titles.forEach(title => {
       const cfg = HOME_QUEUE_LIVE_MAP[title];
-      fetch(cfg.url, {
+      const url = (region && cfg.geographic)
+        ? `${cfg.url}&sub_region_code=${encodeURIComponent(region)}`
+        : cfg.url;
+      fetch(url, {
         credentials: "same-origin",
         headers: { Accept: "application/json" },
       })
@@ -340,7 +355,7 @@ const HomeScreen = ({ role, onNavigate }) => {
         .catch(() => {});
     });
     return () => { cancelled = true; };
-  }, [r.queues]);
+  }, [r.queues, region]);
 
   const queues = r.queues.map(q => {
     const live = liveQueues[q.title];

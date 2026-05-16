@@ -77,6 +77,29 @@ class ChangeRequestViewSet(
     ]
     http_method_names = ["get", "post", "head", "options"]
 
+    def get_queryset(self):
+        # US-S15-003 — optional ?sub_region_code= drill-down.
+        # ChangeRequest stores the subject in (entity_type, entity_id);
+        # only HOUSEHOLD-typed rows have a meaningful sub-region join.
+        # Member-level CRs are excluded here (their entity_id is a
+        # Member id, not a Household id) — same trade-off taken in
+        # _count_change_requests (US-S14-004).
+        qs = super().get_queryset()
+        sr = self.request.query_params.get("sub_region_code")
+        if sr:
+            from apps.data_management.models import Household
+
+            from .models import EntityType
+            hh_ids = list(
+                Household.objects.filter(sub_region_code=sr)
+                                  .values_list("id", flat=True),
+            )
+            qs = qs.filter(
+                entity_type=EntityType.HOUSEHOLD,
+                entity_id__in=hh_ids,
+            )
+        return qs
+
     @extend_schema(
         tags=["upd"],
         summary="Submit a DRAFT change request for approval",

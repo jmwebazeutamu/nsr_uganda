@@ -936,3 +936,96 @@ class TestOperatorKpisRegionDrillDown:
         ).order_by("-occurred_at").first()
         assert ev is not None
         assert f"region={buganda_code}" in (ev.reason or "")
+
+
+class TestRegionDrillDownQueuePanels:
+    """US-S15-003 — the home queue panels honour ?sub_region_code= on
+    DIH stages, UPD change-requests, and GRM grievances. Verifies the
+    custom get_queryset overrides actually narrow the result set.
+    """
+
+    def test_grm_grievances_narrow_by_sub_region(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        from apps.grievance.models import Category, Grievance, Tier
+        # One grievance per sub-region.
+        for sr_key, hh in households.items():
+            Grievance.objects.create(
+                category=Category.DATA_CORRECTION,
+                description=f"grievance for {sr_key}",
+                household_id=hh.id, tier=Tier.L1_PARISH_CHIEF,
+                reporter_name="Test",
+            )
+        su = django_user_model.objects.create_user(
+            username="grm-rgn", password="p", is_superuser=True,
+        )
+        buganda_code = two_sub_regions["SR-BUGANDA"]["sr"].code
+        r = _client_for(su).get(
+            f"/api/v1/grm/grievances/?sub_region_code={buganda_code}",
+        )
+        assert r.status_code == 200
+        ids = {row["household_id"] for row in r.data["results"]}
+        assert ids == {households["SR-BUGANDA"].id}
+
+    def test_upd_change_requests_narrow_by_sub_region(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        from apps.update_workflow.models import (
+            ChangeRequest,
+            ChangeType,
+            EntityType,
+            SourceChannel,
+        )
+        for _sr_key, hh in households.items():
+            ChangeRequest.objects.create(
+                entity_type=EntityType.HOUSEHOLD, entity_id=hh.id,
+                change_type=ChangeType.CORRECTION,
+                source_channel=SourceChannel.WEB,
+                requester="op", changes={"field": "x"},
+                required_role="CDO",
+            )
+        su = django_user_model.objects.create_user(
+            username="upd-rgn", password="p", is_superuser=True,
+        )
+        karamoja_code = two_sub_regions["SR-KARAMOJA"]["sr"].code
+        r = _client_for(su).get(
+            f"/api/v1/upd/change-requests/?sub_region_code={karamoja_code}",
+        )
+        assert r.status_code == 200
+        ids = {row["entity_id"] for row in r.data["results"]}
+        assert ids == {households["SR-KARAMOJA"].id}
+
+    def test_dih_stage_records_narrow_by_sub_region(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        from apps.ingestion_hub.models import (
+            Connector,
+            ConnectorRun,
+            SourceSystem,
+            StageRecord,
+            StageRecordState,
+        )
+        ss = SourceSystem.objects.create(
+            code="TEST", name="Test source", kind="bulk",
+        )
+        conn = Connector.objects.create(
+            source_system=ss, name="t", config={}, is_active=True,
+        )
+        run = ConnectorRun.objects.create(connector=conn, status="success")
+        for hh in households.values():
+            StageRecord.objects.create(
+                connector_run=run,
+                provisional_registry_id=hh.id,
+                canonical_payload={},
+                state=StageRecordState.PENDING_PROMOTION,
+            )
+        su = django_user_model.objects.create_user(
+            username="dih-rgn", password="p", is_superuser=True,
+        )
+        buganda_code = two_sub_regions["SR-BUGANDA"]["sr"].code
+        r = _client_for(su).get(
+            f"/api/v1/dih/stage-records/?sub_region_code={buganda_code}",
+        )
+        assert r.status_code == 200
+        ids = {row["provisional_registry_id"] for row in r.data["results"]}
+        assert ids == {households["SR-BUGANDA"].id}

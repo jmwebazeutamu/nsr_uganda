@@ -115,6 +115,23 @@ class StageRecordViewSet(
     serializer_class = StageRecordSerializer
     filterset_fields = ["state"]
 
+    def get_queryset(self):
+        # US-S15-003 — optional ?sub_region_code= drill-down. Used by
+        # the home dashboard queue panel when an operator narrows to
+        # a region. Pre-promotion stages reference a Household by
+        # provisional_registry_id, so we IN-subquery into the matching
+        # Household IDs.
+        qs = super().get_queryset()
+        sr = self.request.query_params.get("sub_region_code")
+        if sr:
+            from apps.data_management.models import Household
+            hh_ids = list(
+                Household.objects.filter(sub_region_code=sr)
+                                  .values_list("id", flat=True),
+            )
+            qs = qs.filter(provisional_registry_id__in=hh_ids)
+        return qs
+
     @extend_schema(
         tags=["dih"],
         summary="Promote a stage record into the registry",
