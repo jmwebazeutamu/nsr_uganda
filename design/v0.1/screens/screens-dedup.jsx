@@ -345,14 +345,40 @@ const DedupScreen = () => {
           </button>
         </>}>
         <div className="col gap-3">
-          <p style={{margin:0}}>You are about to merge two records. This action is reversible only via an NSR Unit Coordinator override (AC-DDUP-REVERSE).</p>
-          <div style={{display:'grid', gridTemplateColumns:'120px 1fr', rowGap:6, columnGap:12, fontSize:13}}>
-            <div className="muted">Surviving ID</div><div className="t-mono">01HXY7K3B2N9PVQE4M6FZRWS18</div>
-            <div className="muted">Archived ID</div><div className="t-mono">01HZ9NK2P5M3QFB7K6FZRWS22</div>
-            <div className="muted">Fields from A</div><div>{activePair.fields.filter(f => (f.fixed || choice[f.key]) === 'A').length}</div>
-            <div className="muted">Fields from B</div><div>{activePair.fields.filter(f => (f.fixed || choice[f.key]) === 'B').length}</div>
-            <div className="muted">Combined (list)</div><div>{activePair.fields.filter(f => (f.fixed || choice[f.key]) === 'Both').length}</div>
-          </div>
+          <p style={{margin:0}}>You are about to merge two records. This action is reversible by an NSR Unit Coordinator within the 30-day window below (AC-DDUP-REVERSE).</p>
+          {(() => {
+            // US-S15-001 — show concrete reverse-until date so the
+            // operator sees the safety net before clicking Confirm.
+            // 30-day window matches apps.ddup.services.merge_member_pair
+            // (which writes reverse_window_until = now + 30 days).
+            const until = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+            const fmt = until.toISOString().slice(0, 10);
+            // Resolve surviving/archived IDs from live data when
+            // available; fall back to the historical mock ULIDs so
+            // the design preview still tells the visual story.
+            const aCount = activePair.fields.filter(f => (f.fixed || choice[f.key]) === 'A').length;
+            const bCount = activePair.fields.filter(f => (f.fixed || choice[f.key]) === 'B').length;
+            const survivorId = livePair
+              ? (bCount > aCount ? livePair._memberB.id : livePair._memberA.id)
+              : "01HXY7K3B2N9PVQE4M6FZRWS18";
+            const archivedId = livePair
+              ? (bCount > aCount ? livePair._memberA.id : livePair._memberB.id)
+              : "01HZ9NK2P5M3QFB7K6FZRWS22";
+            return (
+              <div style={{display:'grid', gridTemplateColumns:'140px 1fr', rowGap:6, columnGap:12, fontSize:13}}>
+                <div className="muted">Surviving ID</div><div className="t-mono">{survivorId}</div>
+                <div className="muted">Archived ID</div><div className="t-mono">{archivedId}</div>
+                <div className="muted">Reversible until</div>
+                <div>
+                  <strong>{fmt}</strong>{" "}
+                  <span className="muted">(30-day window · NSR Unit override required after)</span>
+                </div>
+                <div className="muted">Fields from A</div><div>{aCount}</div>
+                <div className="muted">Fields from B</div><div>{bCount}</div>
+                <div className="muted">Combined (list)</div><div>{activePair.fields.filter(f => (f.fixed || choice[f.key]) === 'Both').length}</div>
+              </div>
+            );
+          })()}
           <div className="tint-update" style={{padding:12, borderRadius:6, borderLeft:'3px solid var(--accent-update)'}}>
             <div className="row gap-2"><Icon name="info" size={14} color="var(--accent-update)"/><strong className="t-bodysm">Downstream effects</strong></div>
             <ul className="t-bodysm" style={{margin:'6px 0 0', paddingLeft:20, color:'var(--neutral-700)'}}>
