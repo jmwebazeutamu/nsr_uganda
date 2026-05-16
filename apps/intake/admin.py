@@ -280,6 +280,26 @@ def _validate_expression_view(request):
     return JsonResponse({"ok": True, "result": bool(result)})
 
 
+# --- US-117d / US-118 — shared FormVersion resolver ------------------------
+
+def _resolve_form_version(form_version_id: str, *, prefetch: tuple = ()):
+    """Look up a FormVersion by ULID (the primary key) OR by version
+    number when the path arg is all digits. Lets `/preview/1/` and
+    `/preview/01KRRW…/` both resolve to FormVersion v1, which is the
+    discoverable URL an operator types when they look at the
+    changelist and see "v1".
+
+    Returns the FormVersion row or None.
+    """
+    qs = FormVersion.objects.all()
+    for prefetch_path in prefetch:
+        qs = qs.prefetch_related(prefetch_path)
+    fv = qs.filter(pk=form_version_id).first()
+    if fv is None and form_version_id.isdigit():
+        fv = qs.filter(version=int(form_version_id)).first()
+    return fv
+
+
 # --- US-118 XLSForm download -----------------------------------------------
 
 def _export_xlsform_view(request, form_version_id):
@@ -292,7 +312,7 @@ def _export_xlsform_view(request, form_version_id):
     from django.http import Http404, HttpResponse
 
     from .xlsform_export import export_to_xlsx
-    fv = FormVersion.objects.filter(pk=form_version_id).first()
+    fv = _resolve_form_version(form_version_id)
     if fv is None:
         raise Http404("FormVersion not found")
     payload = export_to_xlsx(fv)
@@ -319,11 +339,9 @@ def _preview_form_view(request, form_version_id):
     from django.http import Http404
     from django.shortcuts import render
 
-    fv = (
-        FormVersion.objects
-        .prefetch_related("sections__questions__choice_list_ref__options")
-        .filter(pk=form_version_id)
-        .first()
+    fv = _resolve_form_version(
+        form_version_id,
+        prefetch=("sections__questions__choice_list_ref__options",),
     )
     if fv is None:
         raise Http404("FormVersion not found")

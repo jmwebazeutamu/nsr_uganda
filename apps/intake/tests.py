@@ -929,3 +929,35 @@ class TestFormVersionPreview:
         # The action bar in change_form template wires the two links.
         assert "Preview form" in body
         assert "Download XLSForm" in body
+
+    def test_preview_accepts_version_number_as_fallback(
+        self, _seeded_form, db, django_user_model,
+    ):
+        """`/preview/<version>/` works as a fallback for operators
+        who type the URL by hand — FormVersion has ULID primary
+        keys, but `1` is what they see on the changelist."""
+        c = self._staff_client(db, django_user_model)
+        # _seeded_form has version=4000; lookup by version number
+        # resolves to the same row.
+        r = c.get(
+            f"/admin/intake/formversion/_us117b/preview/{_seeded_form.version}/",
+        )
+        assert r.status_code == 200
+        body = r.content.decode()
+        assert "Identification" in body
+
+    def test_preview_404_on_unknown_id(self, db, django_user_model):
+        c = self._staff_client(db, django_user_model)
+        r = c.get("/admin/intake/formversion/_us117b/preview/999999/")
+        assert r.status_code == 404
+
+    def test_export_accepts_version_number_as_fallback(
+        self, _seeded_form, db, django_user_model,
+    ):
+        """Same fallback for the US-118 download URL."""
+        c = self._staff_client(db, django_user_model)
+        r = c.get(
+            f"/admin/intake/formversion/_us118/export-xlsform/{_seeded_form.version}/",
+        )
+        assert r.status_code == 200
+        assert r.content[:2] == b"PK"
