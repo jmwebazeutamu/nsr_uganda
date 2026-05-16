@@ -248,6 +248,29 @@ const PartnerDRSScreen = () => {
     [allRequests],
   );
 
+  // US-S16-002 — partner-side reciprocal of the operator's
+  // turnaround metric (US-S15-002). For partners "decision
+  // turnaround" is the whole submitted → delivered window, not
+  // just the operator's decide time, because that's what the
+  // partner actually waits for. Computed off delivered requests
+  // only; rejected ones aren't a wait, they're a dead end.
+  // Hidden below n=3 sample size.
+  const deliveryTurnaround = useMemoPDrs(() => {
+    const delivered = allRequests.filter(
+      r => r.status === "delivered" && r.submitted_at && r.delivered_at,
+    );
+    if (delivered.length < 3) return null;
+    const deltas = delivered.map(r => {
+      const ms = Date.parse(r.delivered_at) - Date.parse(r.submitted_at);
+      return Number.isFinite(ms) && ms > 0 ? ms : null;
+    }).filter(v => v != null);
+    if (deltas.length < 3) return null;
+    const meanMs = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+    const hours = meanMs / (60 * 60 * 1000);
+    if (hours < 24) return { label: `typical wait ${hours.toFixed(1)}h`, n: deltas.length };
+    return { label: `typical wait ${(hours / 24).toFixed(1)}d`, n: deltas.length };
+  }, [allRequests]);
+
   if (mode === "build") {
     // BUG-S11-002b — the partner builder is now the SAME component
     // operators use (screens-drs.jsx DRSScreen) parameterised with
@@ -281,7 +304,10 @@ const PartnerDRSScreen = () => {
         style={{display:"none"}}
         onChange={onFileChosen}/>
       <PageHeader
-        eyebrow={dataSource === "live" ? "PARTNER DRS PORTAL · LIVE" : "PARTNER DRS PORTAL · US-S9-005"}
+        eyebrow={
+          (dataSource === "live" ? "PARTNER DRS PORTAL · LIVE" : "PARTNER DRS PORTAL · US-S9-005")
+          + (deliveryTurnaround ? ` · ${deliveryTurnaround.label} (n=${deliveryTurnaround.n})` : "")
+        }
         title={<>My data requests <Chip>{rows.length}</Chip></>}
         sub="Bulk-extract requests under your active DSA. Pending submissions go through NSR Unit approval before download."
         right={<>
