@@ -68,7 +68,13 @@ class ChangeRequestViewSet(
     audit_entity_type = "change_request"
     queryset = ChangeRequest.objects.all().order_by("-created_at")
     serializer_class = ChangeRequestSerializer
-    filterset_fields = ["status", "change_type", "pmt_relevant", "entity_type"]
+    filterset_fields = [
+        "status", "change_type", "pmt_relevant", "entity_type",
+        # entity_id added in US-S12-003 so the React household-detail
+        # Updates tab can fetch a single household's change-request
+        # history in one round-trip.
+        "entity_id",
+    ]
     http_method_names = ["get", "post", "head", "options"]
 
     @extend_schema(

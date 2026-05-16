@@ -301,8 +301,8 @@ const HouseholdScreen = ({ householdId, onNavigate } = {}) => {
         {tab === "Food & Shocks" && <FoodShocksTab hh={hh}/>}
         {tab === "Programmes" && <ProgrammesTab hh={hh}/>}
         {tab === "Consent" && <ConsentTab hh={hh}/>}
-        {tab === "Updates history" && <UpdatesTab live={dataSource === "live"}/>}
-        {tab === "Audit" && <AuditTab live={dataSource === "live"}/>}
+        {tab === "Updates history" && <UpdatesTab live={dataSource === "live"} householdId={hh.registry_id} onNavigate={onNavigate}/>}
+        {tab === "Audit" && <AuditTab live={dataSource === "live"} householdId={hh.registry_id}/>}
         {tab === "Grievances" && <EmptyTab name={tab}/>}
       </div>
     </div>
@@ -352,15 +352,67 @@ const RosterTab = ({ hh, live }) => (
   </table>
 );
 
-const UpdatesTab = ({ live }) => (
-  <div style={{padding:'16px 20px'}}>
-    <div className="t-h3">Updates history</div>
-    {live ? (
-      <p className="muted t-bodysm">
-        Wiring to <code>/api/v1/upd/change-requests/?household_id={"{id}"}</code> deferred —
-        see UPD reviewer (<a href="#">screens-upd.jsx</a>) for the per-change-request detail.
-      </p>
-    ) : (
+const UpdatesTab = ({ live, householdId, onNavigate }) => {
+  // US-S12-003: when householdId is provided + live mode, fetch the
+  // change-request history for this entity. Click a row to open the
+  // UPD reviewer (already wired in S9-004 to receive a CR id).
+  const [crs, setCrs] = useStateHH(null);
+  const [err, setErr] = useStateHH(null);
+  useEffectHH(() => {
+    if (!live || !householdId) return undefined;
+    let cancelled = false;
+    fetch(
+      `/api/v1/upd/change-requests/?entity_id=${encodeURIComponent(householdId)}&page_size=100`,
+      { credentials: "same-origin", headers: { Accept: "application/json" } },
+    )
+      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then(data => { if (!cancelled) setCrs((data.results || data).slice()); })
+      .catch(e => !cancelled && setErr(String(e)));
+    return () => { cancelled = true; };
+  }, [live, householdId]);
+
+  if (live) {
+    return (
+      <div style={{padding:"16px 20px"}}>
+        <div className="t-h3">Updates history</div>
+        {err && <div className="muted t-bodysm">Couldn't load: {err}</div>}
+        {!crs && !err && <div className="muted t-bodysm">Loading…</div>}
+        {crs && crs.length === 0 && (
+          <div className="muted t-bodysm">No change requests recorded against this household.</div>
+        )}
+        {crs && crs.length > 0 && (
+          <table className="data-table">
+            <thead>
+              <tr><th>When</th><th>Change type</th><th>Status</th>
+                <th>PMT?</th><th>Requester</th><th>Approver</th><th></th></tr>
+            </thead>
+            <tbody>
+              {crs.map(cr => (
+                <tr key={cr.id}>
+                  <td className="t-cap">{(cr.decided_at || cr.created_at || "").slice(0, 19).replace("T", " ")}</td>
+                  <td>{cr.change_type}</td>
+                  <td><Chip size="sm">{cr.status}</Chip></td>
+                  <td>{cr.pmt_relevant ? <Chip size="sm" tone="eligibility">yes</Chip> : <span className="muted">—</span>}</td>
+                  <td className="t-bodysm">{cr.requester || <span className="muted">—</span>}</td>
+                  <td className="t-bodysm">{cr.approver || <span className="muted">—</span>}</td>
+                  <td>
+                    <button className="btn btn-sm"
+                      onClick={() => onNavigate?.("upd", { changeRequestId: cr.id })}>
+                      Open
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    );
+  }
+  // Mock fallback.
+  return (
+    <div style={{padding:"16px 20px"}}>
+      <div className="t-h3">Updates history</div>
       <table className="data-table">
         <thead>
           <tr><th>When</th><th>Field</th><th>Old</th><th>New</th><th>By</th><th>Status</th></tr>
@@ -387,23 +439,87 @@ const UpdatesTab = ({ live }) => (
           </tr>
         </tbody>
       </table>
-    )}
-  </div>
-);
+    </div>
+  );
+};
 
-const AuditTab = ({ live }) => (
-  <div style={{padding:'16px 20px'}}>
-    <div className="t-h3">Audit chain</div>
-    <p className="t-cap muted">Every read and write of personal data writes an
-       AuditEvent. The hash chain renders here for support; tampering is
-       detectable.</p>
-    {live ? (
-      <p className="muted t-bodysm">
-        Wiring to <code>/api/v1/security/audit-events/?entity_id={"{id}"}</code>
-        deferred — Django admin at <code>/admin/security/auditevent/</code> shows
-        the live chain today.
-      </p>
-    ) : (
+const AuditTab = ({ live, householdId }) => {
+  // US-S12-002: when householdId is provided + live mode, fetch the
+  // event chain for this entity. Mock mode keeps the original two
+  // hardcoded rows for design-preview parity.
+  const [events, setEvents] = useStateHH(null);
+  const [err, setErr] = useStateHH(null);
+  useEffectHH(() => {
+    if (!live || !householdId) return undefined;
+    let cancelled = false;
+    fetch(
+      `/api/v1/security/audit-events/?entity_id=${encodeURIComponent(householdId)}&page_size=200`,
+      { credentials: "same-origin", headers: { Accept: "application/json" } },
+    )
+      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then(data => {
+        if (cancelled) return;
+        setEvents((data.results || data).slice());
+      })
+      .catch(e => !cancelled && setErr(String(e)));
+    return () => { cancelled = true; };
+  }, [live, householdId]);
+
+  if (live) {
+    return (
+      <div style={{padding:"16px 20px"}}>
+        <div className="t-h3">Audit chain</div>
+        <p className="t-cap muted">
+          Every read and write of personal data writes an AuditEvent.
+          The hash chain renders here for support; tampering is detectable.
+        </p>
+        {err && <div className="muted t-bodysm">Couldn't load: {err}</div>}
+        {!events && !err && <div className="muted t-bodysm">Loading…</div>}
+        {events && events.length === 0 && (
+          <div className="muted t-bodysm">No audit events recorded for this household yet.</div>
+        )}
+        {events && events.length > 0 && (
+          <>
+            <p className="t-bodysm muted">
+              <strong>{events.length}</strong> event(s) on this household.
+            </p>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>When</th><th>Actor</th><th>Action</th>
+                  <th>Entity</th><th>Reason</th><th>Self hash (hex)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {events.map(e => (
+                  <tr key={e.id}>
+                    <td className="t-cap">{e.occurred_at?.slice(0, 19).replace("T", " ") || "—"}</td>
+                    <td>{e.actor_id || "—"} <span className="muted">({e.actor_kind})</span></td>
+                    <td>{e.action}</td>
+                    <td>
+                      {e.entity_type}<span className="muted">:</span>
+                      <span className="t-mono" style={{fontSize:11}}>{(e.entity_id || "").slice(0, 8)}…</span>
+                    </td>
+                    <td className="t-bodysm">{e.reason || <span className="muted">—</span>}</td>
+                    <td className="t-mono" style={{fontSize:11}}>
+                      {e.self_hash ? `${e.self_hash.slice(0, 8)}…${e.self_hash.slice(-4)}` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+      </div>
+    );
+  }
+  // Mock fallback for design preview.
+  return (
+    <div style={{padding:"16px 20px"}}>
+      <div className="t-h3">Audit chain</div>
+      <p className="t-cap muted">Every read and write of personal data writes an
+         AuditEvent. The hash chain renders here for support; tampering is
+         detectable.</p>
       <table className="data-table">
         <thead>
           <tr><th>When</th><th>Actor</th><th>Action</th><th>Entity</th><th>Self hash (hex)</th></tr>
@@ -421,9 +537,9 @@ const AuditTab = ({ live }) => (
           </tr>
         </tbody>
       </table>
-    )}
-  </div>
-);
+    </div>
+  );
+};
 
 // ──────────────────────────────────────────────────────────────────
 // Tab renderers backed by source_payload (US-S11-020). Each one

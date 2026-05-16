@@ -32,4 +32,6 @@ class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
 
     queryset = AuditEvent.objects.all().order_by("-occurred_at")
     serializer_class = AuditEventSerializer
-    filterset_fields = ["action", "entity_type", "actor_kind"]
+    # entity_id added in US-S12-002 so the React household-detail
+    # Audit tab can fetch a single entity's chain in one round-trip.
+    filterset_fields = ["action", "entity_type", "actor_kind", "entity_id"]
