@@ -273,3 +273,100 @@ class TestAuditChainVerifier:
         from nsr_mis.celery import app
         tasks = {entry["task"] for entry in app.conf.beat_schedule.values()}
         assert "apps.security.tasks.verify_audit_chain_task" in tasks
+
+
+class TestChainBreakAlerts:
+    """US-S18-004 — on chain_integrity_break, the task notifies the DPO
+    out-of-band via Slack webhook (preferred) and/or email. Both
+    channels default to no-op when their respective env settings
+    aren't configured, so dev/CI doesn't accidentally fire.
+    """
+
+    def _seed_breaks(self):
+        """Build a synthetic break report so tests don't depend on the
+        Postgres trigger (this suite stays SQLite-friendly)."""
+        from apps.security.integrity import ChainBreak, ChainReport
+        return ChainReport(
+            ok=False, mode="verified", rows_scanned=42,
+            breaks=[ChainBreak(
+                event_id="01TESTBREAK00000000000000",
+                expected_prev_hash=None, actual_prev_hash=b"\x00" * 32,
+                occurred_at="2026-05-15T10:00:00+00:00",
+            )],
+        )
+
+    def test_notify_is_noop_when_no_env(self, db, settings):
+        from apps.security.tasks import _notify_chain_break
+        settings.SLACK_WEBHOOK_URL = ""
+        settings.DPO_EMAIL = ""
+        report = self._seed_breaks()
+        # No webhook + no email → returns False/False. Doesn't raise.
+        result = _notify_chain_break(report)
+        assert result["slack_sent"] is False
+        assert result["email_sent"] is False
+
+    def test_notify_sends_to_slack_when_url_set(self, db, settings):
+        from unittest.mock import patch
+
+        from apps.security.tasks import _notify_chain_break
+        settings.SLACK_WEBHOOK_URL = "https://hooks.slack.example/T/B/X"
+        settings.DPO_EMAIL = ""
+        report = self._seed_breaks()
+        with patch("apps.security.tasks.requests.post") as mock_post:
+            mock_post.return_value.status_code = 200
+            result = _notify_chain_break(report)
+        assert result["slack_sent"] is True
+        assert mock_post.called
+        call_args = mock_post.call_args
+        assert call_args.args[0] == "https://hooks.slack.example/T/B/X"
+        body_text = str(call_args.kwargs.get("json") or {})
+        assert "1 break" in body_text or "chain_integrity_break" in body_text
+
+    def test_notify_emails_dpo_when_address_set(self, db, settings):
+        from unittest.mock import patch
+
+        from apps.security.tasks import _notify_chain_break
+        settings.SLACK_WEBHOOK_URL = ""
+        settings.DPO_EMAIL = "dpo@example.org"
+        report = self._seed_breaks()
+        with patch("apps.security.tasks.send_mail", return_value=1) as mock_send:
+            result = _notify_chain_break(report)
+        assert result["email_sent"] is True
+        # send_mail(subject, message, from_email, recipient_list)
+        args = mock_send.call_args.args
+        kwargs = mock_send.call_args.kwargs
+        recipients = args[3] if len(args) >= 4 else kwargs.get("recipient_list")
+        assert "dpo@example.org" in recipients
+
+    def test_notify_swallows_slack_failure(self, db, settings):
+        """A flaky webhook shouldn't crash the celery task or hide the
+        audit row that was already written."""
+        from unittest.mock import patch
+
+        from apps.security.tasks import _notify_chain_break
+        settings.SLACK_WEBHOOK_URL = "https://hooks.slack.example/T/B/X"
+        settings.DPO_EMAIL = ""
+        report = self._seed_breaks()
+        with patch(
+            "apps.security.tasks.requests.post",
+            side_effect=RuntimeError("network down"),
+        ) as mock_post:
+            result = _notify_chain_break(report)
+        assert result["slack_sent"] is False
+        assert mock_post.called
+
+    def test_task_skips_notify_on_no_chain(self, db, settings):
+        """On a SQLite/no-trigger backend the task short-circuits
+        before alerting anything."""
+        from unittest.mock import patch
+
+        from apps.security.audit import emit
+        from apps.security.models import AuditEvent
+        from apps.security.tasks import verify_audit_chain_task
+        settings.SLACK_WEBHOOK_URL = "https://hooks.slack.example/T/B/X"
+        AuditEvent.objects.all().delete()
+        emit("create", "test", "id-1", actor="alice")
+        with patch("apps.security.tasks._notify_chain_break") as mock_notify:
+            result = verify_audit_chain_task()
+        assert result["mode"] == "no_chain"
+        assert not mock_notify.called

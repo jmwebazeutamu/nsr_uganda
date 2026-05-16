@@ -177,3 +177,16 @@ CELERY_TASK_ALWAYS_EAGER = env("CELERY_TASK_ALWAYS_EAGER", default=True)
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_TIMEZONE = "Africa/Kampala"
 CELERY_TASK_SERIALIZER = "json"
+
+# --- Chain-break alert channels (US-S18-004) ------------------------------
+# Both default to empty so dev/CI never fires; set via environment to
+# enable production alerting. The Celery audit-chain task
+# (apps.security.tasks.verify_audit_chain_task) reads these on each
+# beat — no service restart needed to roll out / pause alerting.
+#
+# SLACK_WEBHOOK_URL accepts any Slack incoming-webhook HTTPS URL.
+# DPO_EMAIL goes through Django's email backend (configure
+# EMAIL_BACKEND + SMTP creds for real delivery; defaults to
+# console output in dev).
+SLACK_WEBHOOK_URL = env("SLACK_WEBHOOK_URL", default="")
+DPO_EMAIL = env("DPO_EMAIL", default="")
