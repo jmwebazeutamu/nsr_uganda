@@ -522,6 +522,51 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
   const next = () => setStep(STEPS[Math.min(stepIdx + 1, STEPS.length - 1)].id);
   const prev = () => setStep(STEPS[Math.max(stepIdx - 1, 0)].id);
 
+  // US-S18-003 — DSA-driven field disabling. Fetch the role-aware
+  // schema from /api/v1/drs/requests/builder-schema/ (BUG-S11-002a)
+  // and overlay its `disabled` / `disabled_reason` flags on the
+  // hardcoded FIELDS mock. Backend returns dotted keys
+  // ("member.nin_value"); mock uses flat names ("nin_value"). Match
+  // by trailing segment so the overlay works without renaming the
+  // mock catalogue. Fetch failure (file:// preview, no auth, no
+  // active DSA) leaves the static mock in place.
+  const [schema, setSchema] = useStateDRS(null);
+  React.useEffect(() => {
+    let cancelled = false;
+    fetch("/api/v1/drs/requests/builder-schema/", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then(data => { if (!cancelled) setSchema(data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // Compose the effective FIELDS list: when schema is loaded, copy
+  // the mock tuple and replace [disabled, reason] with the backend's
+  // verdict for matching keys. The contract guarantee (ADR-0007 / BUG-
+  // S11-002a) is that the top-level shape is invariant across roles,
+  // so we can rely on `disabled` + `disabled_reason` being present.
+  const effectiveFields = React.useMemo(() => {
+    if (!schema || !schema.fields) return FIELDS;
+    const byKey = {};
+    for (const f of schema.fields) {
+      const tail = (f.key || "").split(".").pop();
+      if (tail) byKey[tail] = f;
+    }
+    return FIELDS.map(tuple => {
+      const [group, name, sens, mockDisabled, mockReason] = tuple;
+      const live = byKey[name];
+      if (!live) return tuple;
+      return [
+        group, name, sens,
+        Boolean(live.disabled),
+        live.disabled_reason || mockReason || "",
+      ];
+    });
+  }, [schema]);
+
   const toggleField = (name, disabled, reason) => {
     if (disabled) return;
     const next = new Set(selectedFields);
@@ -532,9 +577,11 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
   return (
     <div className="page" style={{paddingBottom:0}}>
       <PageHeader
-        eyebrow={isPartner
-          ? "PARTNER DRS · NEW REQUEST · BUG-S11-002b"
-          : "DATA REQUESTS · US-097, US-098"}
+        eyebrow={
+          (isPartner ? "PARTNER DRS · NEW REQUEST" : "DATA REQUESTS")
+          + (schema?.dsa_reference ? ` · DSA ${schema.dsa_reference}` : "")
+          + (schema ? " · LIVE SCHEMA" : "")
+        }
         title={isPartner ? "Build data request" : "DRS query builder"}
         sub={isPartner
           ? <>Requester: you · Active DSA <span className="t-mono">DSA-PDM-2026-01</span> · valid through 31 Dec 2026</>
@@ -577,7 +624,7 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
 
       {step === 'scope' && <ScopeStep/>}
       {step === 'build' && <BuildStep/>}
-      {step === 'fields' && <FieldStep selected={selectedFields} onToggle={toggleField}/>}
+      {step === 'fields' && <FieldStep selected={selectedFields} onToggle={toggleField} fields={effectiveFields}/>}
       {step === 'preview' && <PreviewStep selected={selectedFields}/>}
       {step === 'delivery' && <DeliveryStep/>}
       {step === 'submit' && <SubmitStep onSubmit={() => setSubmitOpen(true)} selected={selectedFields}/>}
@@ -603,7 +650,7 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
           <div style={{display:'grid', gridTemplateColumns:'130px 1fr', rowGap:6, fontSize:13}}>
             <div className="muted">Entity</div><div>Household</div>
             <div className="muted">Filters</div><div>3 rows (AND) · Karamoja + West Nile · Poorest 40% · updated since 1 Apr</div>
-            <div className="muted">Fields</div><div>{selectedFields.size} of {FIELDS.length} (8 sensitive disabled)</div>
+            <div className="muted">Fields</div><div>{selectedFields.size} of {effectiveFields.length} ({effectiveFields.filter(f => f[3]).length} disabled by DSA)</div>
             <div className="muted">Match estimate</div><div>~47,233 rows</div>
             <div className="muted">DSA budget</div><div>1.8M / 2.5M rows for May 2026</div>
             <div className="muted">Delivery</div><div>Excel · password-protected · 7-day TTL</div>
@@ -773,15 +820,19 @@ const DSACard = () => (
 /* ============================================================
    Step 3 — Field Selector
    ============================================================ */
-const FieldStep = ({ selected, onToggle }) => {
-  const groups = FIELDS.reduce((acc, f) => { (acc[f[0]] = acc[f[0]] || []).push(f); return acc; }, {});
+const FieldStep = ({ selected, onToggle, fields }) => {
+  // `fields` is the effective catalogue: DSA-overlaid when the
+  // builder-schema fetch succeeded, otherwise the mock FIELDS
+  // (US-S18-003). Falls back to the module constant defensively.
+  const list = fields || FIELDS;
+  const groups = list.reduce((acc, f) => { (acc[f[0]] = acc[f[0]] || []).push(f); return acc; }, {});
   return (
     <div style={{display:'grid', gridTemplateColumns:'1fr 320px', gap:16}}>
       <div className="card">
         <div className="card-header">
           <div>
             <h3 className="t-h3" style={{margin:0}}>Field selector</h3>
-            <div className="t-cap">{selected.size} selected · {FIELDS.filter(f => f[3]).length} sensitive fields disabled</div>
+            <div className="t-cap">{selected.size} selected · {list.filter(f => f[3]).length} sensitive fields disabled</div>
           </div>
           <div className="row gap-2">
             <button className="btn btn-sm">Select all available</button>
