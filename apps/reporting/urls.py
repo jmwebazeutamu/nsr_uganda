@@ -3,6 +3,7 @@ from django.urls import path
 from .dashboard_views import OperatorKpisView
 from .views import (
     ComparativeMetric,
+    DqaViolationsByRule,
     GrievancesByCategory,
     HouseholdsByPmtBand,
     HouseholdsBySubRegion,
@@ -52,4 +53,7 @@ urlpatterns = [
     path("dashboards/operator-kpis/",
          OperatorKpisView.as_view(),
          name="rpt-operator-kpis"),
+    path("dashboards/dqa-violations/",
+         DqaViolationsByRule.as_view(),
+         name="rpt-dqa-violations"),
 ]
