@@ -115,3 +115,61 @@ class TestNonPersonalDataDoesNotEmit:
         assert r.status_code == 200
         # Reference data isn't personal — no AuditEvent row.
         assert AuditEvent.objects.count() == before
+
+
+class TestAuditReasonEnrichment:
+    """US-S16-001 — scope-narrowing query params + pagination knobs
+    surface into AuditEvent.reason so DPO sampling has structured
+    context."""
+
+    def test_sub_region_code_recorded_when_provided(
+        self, auth_client, household,
+    ):
+        client, _ = auth_client
+        sr_code = household.sub_region.code
+        r = client.get(
+            f"/api/v1/data-management/households/?sub_region_code={sr_code}",
+        )
+        assert r.status_code == 200
+        ev = AuditEvent.objects.filter(
+            action="list_read", entity_type="household",
+        ).order_by("-occurred_at").first()
+        assert ev is not None
+        assert f"sub_region_code={sr_code}" in ev.reason
+
+    def test_page_size_recorded_when_provided(self, auth_client, household):
+        client, _ = auth_client
+        r = client.get(
+            "/api/v1/data-management/households/?page_size=4",
+        )
+        assert r.status_code == 200
+        ev = AuditEvent.objects.filter(
+            action="list_read", entity_type="household",
+        ).order_by("-occurred_at").first()
+        assert ev is not None
+        assert "page_size=4" in ev.reason
+
+    def test_no_reason_when_no_relevant_params(self, auth_client, household):
+        # Plain list without scope/pagination knobs leaves reason empty.
+        client, _ = auth_client
+        r = client.get("/api/v1/data-management/households/")
+        assert r.status_code == 200
+        ev = AuditEvent.objects.filter(
+            action="list_read", entity_type="household",
+        ).order_by("-occurred_at").first()
+        assert ev is not None
+        assert ev.reason == ""
+
+    def test_retrieve_records_no_query_params_typically(
+        self, auth_client, household,
+    ):
+        # /households/{id}/ doesn't usually carry the narrowing keys —
+        # confirm we don't accidentally inject something.
+        client, _ = auth_client
+        r = client.get(f"/api/v1/data-management/households/{household.id}/")
+        assert r.status_code == 200
+        ev = AuditEvent.objects.filter(
+            action="read", entity_type="household", entity_id=household.id,
+        ).order_by("-occurred_at").first()
+        assert ev is not None
+        assert ev.reason == ""

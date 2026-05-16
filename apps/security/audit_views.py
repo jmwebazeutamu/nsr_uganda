@@ -27,6 +27,34 @@ def _client_ip(request) -> str | None:
     return forwarded or request.META.get("REMOTE_ADDR")
 
 
+# US-S16-001 — query params we lift into AuditEvent.reason so DPO
+# anomaly sampling has structured context without re-parsing URLs.
+# Kept narrow: scope-narrowing filters (sub_region_code, household_id,
+# entity_id) + the pagination knobs page/page_size. Add a param here
+# only when the DPO has a reason to sample on it.
+_AUDIT_REASON_QUERY_KEYS = (
+    "sub_region_code",
+    "household_id",
+    "entity_id",
+    "page",
+    "page_size",
+)
+
+
+def _build_reason(request) -> str:
+    """Project the subset of request.query_params we want in the
+    AuditEvent.reason string. Returns "" when none of the keys are
+    present (audit row stays clean for the common case)."""
+    if not hasattr(request, "query_params"):
+        return ""
+    parts = []
+    for k in _AUDIT_REASON_QUERY_KEYS:
+        v = request.query_params.get(k)
+        if v:
+            parts.append(f"{k}={v}")
+    return " ".join(parts)
+
+
 class AuditReadMixin:
     """Apply to DRF ReadOnlyModelViewSet / ModelViewSet subclasses that
     expose personal data. Emits action='read' on retrieve and
@@ -75,6 +103,7 @@ class AuditReadMixin:
             entity_id=entity_id,
             actor=actor,
             actor_kind="user",
+            reason=_build_reason(request),
             ip_address=_client_ip(request),
             user_agent=request.META.get("HTTP_USER_AGENT", ""),
         )
