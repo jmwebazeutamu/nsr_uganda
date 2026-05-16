@@ -501,3 +501,83 @@ class TestQuestionnaireBuilderUI:
             content_type="application/json",
         )
         assert r.status_code == 400
+
+
+# --- US-120: legacy questionnaire import -----------------------------------
+
+class TestLegacyQuestionnaireImport:
+    """The scripts/import_legacy_questionnaire.py end-to-end check.
+
+    Reads k-forms/build_nsr_xlsform.py via exec (Workbook.save
+    monkey-patched no-op) and builds FormVersion v1. Re-running is
+    idempotent — section/question rows upsert on natural keys.
+    """
+
+    @pytest.fixture
+    def _seed_choice_lists(self, db):
+        """Migration-applied seed isn't visible in TransactionTestCase-style
+        tests — call into the migration data loader directly here so the
+        importer's ChoiceList look-ups resolve."""
+        import json
+        from datetime import date as _d
+        from pathlib import Path
+
+        from apps.reference_data.models import ChoiceList, ChoiceOption
+        path = (
+            Path(__file__).resolve().parent.parent / "reference_data"
+            / "seeds" / "choice_lists_v1.json"
+        )
+        for name, options in json.loads(path.read_text()).items():
+            cl, _ = ChoiceList.objects.get_or_create(
+                list_name=name, version=1,
+                defaults={"effective_from": _d(2026, 1, 1),
+                          "status": "active",
+                          "author": "system-migration",
+                          "approved_by": "system-migration"},
+            )
+            for so, opt in enumerate(options, start=1):
+                ChoiceOption.objects.get_or_create(
+                    choice_list=cl, code=opt["code"], language="en",
+                    defaults={"label": opt["label"], "sort_order": so},
+                )
+
+    def test_import_creates_form_version_one(self, _seed_choice_lists):
+        from scripts.import_legacy_questionnaire import main
+
+        from apps.intake.models import FormVersion
+        result = main()
+        fv = FormVersion.objects.get(version=1)
+        assert fv.id == result["form_version_id"]
+        assert fv.status == "active"
+        assert fv.is_active is True
+        # At least the 9 top-level sections we know about land.
+        assert fv.sections.count() >= 9
+
+    def test_import_links_choice_list_refs(self, _seed_choice_lists):
+        from scripts.import_legacy_questionnaire import main
+
+        from apps.intake.models import FormQuestion
+        main()
+        # The legacy script names the C2 column `c2_relationship`.
+        q = FormQuestion.objects.filter(name="c2_relationship").first()
+        assert q is not None, "c2_relationship question not imported"
+        assert q.choice_list_ref is not None
+        assert q.choice_list_ref.list_name == "relationship"
+        # And confirm at least one select_one question landed with a
+        # resolved ChoiceList ref overall.
+        with_refs = FormQuestion.objects.filter(
+            choice_list_ref__isnull=False,
+        ).count()
+        assert with_refs >= 20  # legacy form has dozens of selects
+
+    def test_import_is_idempotent(self, _seed_choice_lists):
+        from scripts.import_legacy_questionnaire import main
+
+        from apps.intake.models import FormQuestion, FormSection
+        main()
+        sections_before = FormSection.objects.count()
+        questions_before = FormQuestion.objects.count()
+        main()
+        # Re-run upserts — no duplicates.
+        assert FormSection.objects.count() == sections_before
+        assert FormQuestion.objects.count() == questions_before
