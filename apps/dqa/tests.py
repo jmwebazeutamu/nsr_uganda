@@ -481,3 +481,153 @@ class TestWithinPolygon:
         }
         with pytest.raises(DSLError, match="polygon"):
             evaluate_expression(expr, {"gps": {"lat": 1, "lng": 1}})
+
+
+# --- DQA-4 / US-077: preview endpoint + DqaRulePreviewRun -------------------
+
+class TestPreviewEndpoint:
+    """POST /api/v1/dqa/rules/{id}/preview/ with
+    {sample_size, record_type}. Returns counts + up to 10 failed IDs.
+    Never returns record values. Persists a DqaRulePreviewRun row."""
+
+    URL_FMT = "/api/v1/dqa/rules/{id}/preview/"
+
+    @pytest.fixture
+    def _client(self, db, django_user_model):
+        from rest_framework.test import APIClient
+        u = django_user_model.objects.create_user(
+            username="dqa-prev", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        return c, u
+
+    @pytest.fixture
+    def _members(self, db):
+        # Seed 12 members; surname missing on 4 → 4 expected failures.
+        from datetime import date as _d
+
+        from apps.data_management.models import Household, Member
+        from apps.reference_data.models import GeographicUnit
+        nodes = {}
+        for level, key, parent in [
+            ("region", "r", None), ("sub_region", "sr", "r"),
+            ("district", "d", "sr"), ("county", "c", "d"),
+            ("sub_county", "sc", "c"), ("parish", "p", "sc"),
+            ("village", "v", "p"),
+        ]:
+            nodes[key] = GeographicUnit.objects.create(
+                level=level, code=f"PRV-{key.upper()}", name=key,
+                parent=nodes.get(parent), effective_from=_d(2026, 1, 1),
+            )
+        hh = Household.objects.create(
+            region=nodes["r"], sub_region=nodes["sr"],
+            district=nodes["d"], county=nodes["c"],
+            sub_county=nodes["sc"], parish=nodes["p"],
+            village=nodes["v"], urban_rural="rural",
+        )
+        out = []
+        for i in range(12):
+            out.append(Member.objects.create(
+                household=hh, line_number=i + 1,
+                surname="" if i % 3 == 0 else f"S{i}",
+                first_name=f"F{i}", sex="M",
+            ))
+        return out
+
+    def test_returns_counts_and_ids(self, _client, _members, draft_rule):
+        client, _ = _client
+        url = self.URL_FMT.format(id=draft_rule.id)
+        r = client.post(url, {"sample_size": 50, "record_type": "member"},
+                        format="json")
+        assert r.status_code == 200, r.data
+        assert "pass_count" in r.data
+        assert "fail_count" in r.data
+        assert "sample_failed_record_ids" in r.data
+        # 4 of 12 fail surname not_null.
+        assert r.data["pass_count"] + r.data["fail_count"] == 12
+        assert r.data["fail_count"] == 4
+        # IDs only, no values.
+        for rid in r.data["sample_failed_record_ids"]:
+            assert isinstance(rid, str) and len(rid) > 0
+
+    def test_never_returns_record_values(
+        self, _client, _members, draft_rule,
+    ):
+        client, _ = _client
+        url = self.URL_FMT.format(id=draft_rule.id)
+        r = client.post(url, {"sample_size": 50, "record_type": "member"},
+                        format="json")
+        assert r.status_code == 200
+        # Response must NOT contain anything that looks like a name
+        # or NIN — only IDs and counts. Cheap structural check.
+        forbidden_keys = {"surname", "first_name", "nin_value", "telephone_1", "data"}
+        assert forbidden_keys.isdisjoint(r.data.keys())
+        # And the failed IDs list must not contain any rendered records.
+        for v in r.data["sample_failed_record_ids"]:
+            assert not isinstance(v, dict)
+
+    def test_sample_ids_capped_at_10(self, _client, draft_rule):
+        # 15 failing rows; preview must cap returned IDs at 10.
+        from datetime import date as _d
+
+        from apps.data_management.models import Household, Member
+        from apps.reference_data.models import GeographicUnit
+        nodes = {}
+        for level, key, parent in [
+            ("region", "r", None), ("sub_region", "sr", "r"),
+            ("district", "d", "sr"), ("county", "c", "d"),
+            ("sub_county", "sc", "c"), ("parish", "p", "sc"),
+            ("village", "v", "p"),
+        ]:
+            nodes[key] = GeographicUnit.objects.create(
+                level=level, code=f"CAP-{key.upper()}", name=key,
+                parent=nodes.get(parent), effective_from=_d(2026, 1, 1),
+            )
+        hh = Household.objects.create(
+            region=nodes["r"], sub_region=nodes["sr"],
+            district=nodes["d"], county=nodes["c"],
+            sub_county=nodes["sc"], parish=nodes["p"],
+            village=nodes["v"], urban_rural="rural",
+        )
+        for i in range(15):
+            Member.objects.create(
+                household=hh, line_number=i + 1,
+                surname="", first_name=f"F{i}", sex="M",
+            )
+        client, _ = _client
+        url = self.URL_FMT.format(id=draft_rule.id)
+        r = client.post(url, {"sample_size": 50, "record_type": "member"},
+                        format="json")
+        assert r.status_code == 200
+        assert r.data["fail_count"] == 15
+        assert len(r.data["sample_failed_record_ids"]) == 10
+
+    def test_persists_a_preview_run_row(
+        self, _client, _members, draft_rule,
+    ):
+        from apps.dqa.models import DqaRulePreviewRun
+        client, u = _client
+        url = self.URL_FMT.format(id=draft_rule.id)
+        before = DqaRulePreviewRun.objects.count()
+        r = client.post(url, {"sample_size": 50, "record_type": "member"},
+                        format="json")
+        assert r.status_code == 200
+        after = DqaRulePreviewRun.objects.count()
+        assert after == before + 1
+        run = DqaRulePreviewRun.objects.order_by("-executed_at").first()
+        assert run.rule_id == draft_rule.id
+        assert run.executed_by == u.username
+        assert run.pass_count == 8
+        assert run.fail_count == 4
+        assert isinstance(run.sample_failed_record_ids, list)
+        assert len(run.sample_failed_record_ids) == 4
+
+    def test_rejects_unknown_record_type(
+        self, _client, _members, draft_rule,
+    ):
+        client, _ = _client
+        url = self.URL_FMT.format(id=draft_rule.id)
+        r = client.post(url, {"sample_size": 50, "record_type": "alien"},
+                        format="json")
+        assert r.status_code == 400
