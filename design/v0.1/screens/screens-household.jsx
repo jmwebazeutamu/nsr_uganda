@@ -46,7 +46,7 @@ class HouseholdErrorBoundary extends React.Component {
 
 const { useState: useStateHH, useEffect: useEffectHH, useMemo: useMemoHH } = React;
 
-const TABS = [
+const HH_TABS = [
   "Overview", "Roster", "Health & Disability", "Education", "Employment",
   "Housing & Assets", "Food & Shocks", "Updates history", "Grievances",
   "Programmes", "Consent", "Audit",
@@ -204,14 +204,12 @@ const HouseholdScreen = ({ householdId, onNavigate } = {}) => {
         eyebrow={`HOUSEHOLD DETAIL · ${hh.registry_id}`}
         title={hh.head_name + (dataSource === "live" ? "  (live)" : dataSource === "mock" ? "  (mock)" : "")}
         sub={`${hh.village}, ${hh.parish}, ${hh.sub_county}, ${hh.district} · ${hh.sub_region} / ${hh.region}`}
-      />
-      {onNavigate && (
-        <div style={{marginTop: -8, marginBottom: 12}}>
+        right={onNavigate ? (
           <button className="btn" onClick={() => onNavigate("registry")}>
-            ← Back to Registry
+            <Icon name="chevronLeft" size={14}/> Back to Registry
           </button>
-        </div>
-      )}
+        ) : null}
+      />
 
       <div className="card mt-3">
         <div className="row gap-6" style={{flexWrap:'wrap', padding: '16px 20px'}}>
@@ -259,7 +257,7 @@ const HouseholdScreen = ({ householdId, onNavigate } = {}) => {
       </div>
 
       <div className="tablist mt-4" role="tablist" aria-label="Household sections">
-        {TABS.map(t => (
+        {HH_TABS.map(t => (
           <button key={t} role="tab" aria-selected={t === tab}
                   className={t === tab ? "tab tab--active" : "tab"}
                   onClick={() => setTab(t)}>{t}</button>
