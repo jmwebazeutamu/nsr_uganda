@@ -1,0 +1,1574 @@
+{
+  "yes_no": [
+    {
+      "code": "1",
+      "label": "Yes"
+    },
+    {
+      "code": "2",
+      "label": "No"
+    }
+  ],
+  "yes_no_dk": [
+    {
+      "code": "1",
+      "label": "Yes"
+    },
+    {
+      "code": "2",
+      "label": "No"
+    },
+    {
+      "code": "8",
+      "label": "Don't know"
+    }
+  ],
+  "yes_no_dk_ref": [
+    {
+      "code": "1",
+      "label": "Yes"
+    },
+    {
+      "code": "2",
+      "label": "No"
+    },
+    {
+      "code": "8",
+      "label": "Don't know"
+    },
+    {
+      "code": "9",
+      "label": "Refused"
+    }
+  ],
+  "rural_urban": [
+    {
+      "code": "1",
+      "label": "Urban"
+    },
+    {
+      "code": "2",
+      "label": "Rural"
+    }
+  ],
+  "interview_result": [
+    {
+      "code": "1",
+      "label": "Completed"
+    },
+    {
+      "code": "2",
+      "label": "Not completed"
+    },
+    {
+      "code": "3",
+      "label": "Refused"
+    },
+    {
+      "code": "4",
+      "label": "Not at home"
+    },
+    {
+      "code": "96",
+      "label": "Other"
+    }
+  ],
+  "relationship": [
+    {
+      "code": "01",
+      "label": "Head"
+    },
+    {
+      "code": "02",
+      "label": "Spouse/Partner"
+    },
+    {
+      "code": "03",
+      "label": "Co-wife"
+    },
+    {
+      "code": "04",
+      "label": "Son/Daughter"
+    },
+    {
+      "code": "05",
+      "label": "Adopted/Foster/Stepchild"
+    },
+    {
+      "code": "06",
+      "label": "Aunt/Uncle"
+    },
+    {
+      "code": "07",
+      "label": "Niece/Nephew"
+    },
+    {
+      "code": "08",
+      "label": "Brother/Sister"
+    },
+    {
+      "code": "09",
+      "label": "Son or daughter in law"
+    },
+    {
+      "code": "10",
+      "label": "Grandchild"
+    },
+    {
+      "code": "11",
+      "label": "Parent"
+    },
+    {
+      "code": "12",
+      "label": "Step parent"
+    },
+    {
+      "code": "13",
+      "label": "Parent in law"
+    },
+    {
+      "code": "14",
+      "label": "Other relative"
+    },
+    {
+      "code": "15",
+      "label": "Not related"
+    }
+  ],
+  "marital_status": [
+    {
+      "code": "11",
+      "label": "Married - Christian"
+    },
+    {
+      "code": "12",
+      "label": "Married - Islamic"
+    },
+    {
+      "code": "13",
+      "label": "Married - Civil"
+    },
+    {
+      "code": "14",
+      "label": "Married - Hindu"
+    },
+    {
+      "code": "15",
+      "label": "Married - Customary"
+    },
+    {
+      "code": "16",
+      "label": "Living together/Cohabiting"
+    },
+    {
+      "code": "17",
+      "label": "Separated"
+    },
+    {
+      "code": "18",
+      "label": "Divorced"
+    },
+    {
+      "code": "19",
+      "label": "Widowed"
+    },
+    {
+      "code": "20",
+      "label": "Never married"
+    },
+    {
+      "code": "98",
+      "label": "Don't know"
+    }
+  ],
+  "sex": [
+    {
+      "code": "1",
+      "label": "Male"
+    },
+    {
+      "code": "2",
+      "label": "Female"
+    }
+  ],
+  "birth_certificate": [
+    {
+      "code": "1",
+      "label": "Yes, long certificate"
+    },
+    {
+      "code": "2",
+      "label": "Yes, short certificate"
+    },
+    {
+      "code": "3",
+      "label": "No but with notification record"
+    },
+    {
+      "code": "4",
+      "label": "Registered with VHT"
+    },
+    {
+      "code": "5",
+      "label": "No"
+    },
+    {
+      "code": "8",
+      "label": "Don't know"
+    }
+  ],
+  "nin_status": [
+    {
+      "code": "1",
+      "label": "Yes, has card"
+    },
+    {
+      "code": "2",
+      "label": "Yes, lost"
+    },
+    {
+      "code": "3",
+      "label": "Not issued"
+    },
+    {
+      "code": "4",
+      "label": "No"
+    },
+    {
+      "code": "8",
+      "label": "Don't know"
+    }
+  ],
+  "nationality": [
+    {
+      "code": "1",
+      "label": "Ugandan"
+    },
+    {
+      "code": "2",
+      "label": "Kenyan"
+    },
+    {
+      "code": "3",
+      "label": "Rwandese"
+    },
+    {
+      "code": "4",
+      "label": "Tanzanian"
+    },
+    {
+      "code": "5",
+      "label": "DRC"
+    },
+    {
+      "code": "6",
+      "label": "Burundian"
+    },
+    {
+      "code": "7",
+      "label": "South Sudanese"
+    },
+    {
+      "code": "8",
+      "label": "Ethiopian"
+    },
+    {
+      "code": "9",
+      "label": "Somali"
+    },
+    {
+      "code": "10",
+      "label": "Eritrean"
+    },
+    {
+      "code": "11",
+      "label": "Other"
+    }
+  ],
+  "residency_status": [
+    {
+      "code": "01",
+      "label": "Resident"
+    },
+    {
+      "code": "02",
+      "label": "Displaced (IDP)"
+    },
+    {
+      "code": "03",
+      "label": "Asylum Seeker"
+    },
+    {
+      "code": "04",
+      "label": "Refugee"
+    },
+    {
+      "code": "05",
+      "label": "Returnee"
+    },
+    {
+      "code": "06",
+      "label": "Repatriated"
+    }
+  ],
+  "id_documents": [
+    {
+      "code": "01",
+      "label": "No identity document"
+    },
+    {
+      "code": "05",
+      "label": "Passport"
+    },
+    {
+      "code": "06",
+      "label": "Voting card"
+    },
+    {
+      "code": "07",
+      "label": "Alien card"
+    },
+    {
+      "code": "08",
+      "label": "Residential permit"
+    },
+    {
+      "code": "09",
+      "label": "Driving license"
+    },
+    {
+      "code": "10",
+      "label": "Other"
+    }
+  ],
+  "chronic_illness": [
+    {
+      "code": "1",
+      "label": "Tuberculosis"
+    },
+    {
+      "code": "2",
+      "label": "Respiratory diseases"
+    },
+    {
+      "code": "3",
+      "label": "Schistosomiasis"
+    },
+    {
+      "code": "4",
+      "label": "HIV/AIDS"
+    },
+    {
+      "code": "5",
+      "label": "Diabetes"
+    },
+    {
+      "code": "6",
+      "label": "Hypertension"
+    },
+    {
+      "code": "7",
+      "label": "Cancer"
+    },
+    {
+      "code": "8",
+      "label": "Hepatitis"
+    }
+  ],
+  "difficulty": [
+    {
+      "code": "01",
+      "label": "No, no difficulty"
+    },
+    {
+      "code": "02",
+      "label": "Yes, some difficulty"
+    },
+    {
+      "code": "03",
+      "label": "Yes, a lot of difficulty"
+    },
+    {
+      "code": "04",
+      "label": "Cannot do at all"
+    }
+  ],
+  "literacy": [
+    {
+      "code": "1",
+      "label": "Unable to read and write"
+    },
+    {
+      "code": "2",
+      "label": "Able to read only"
+    },
+    {
+      "code": "3",
+      "label": "Able to read and write"
+    },
+    {
+      "code": "4",
+      "label": "Uses Braille"
+    }
+  ],
+  "never_school_reason": [
+    {
+      "code": "01",
+      "label": "Work"
+    },
+    {
+      "code": "02",
+      "label": "Too expensive"
+    },
+    {
+      "code": "03",
+      "label": "Too far"
+    },
+    {
+      "code": "04",
+      "label": "Not useful"
+    },
+    {
+      "code": "05",
+      "label": "Married"
+    },
+    {
+      "code": "06",
+      "label": "Religious"
+    },
+    {
+      "code": "07",
+      "label": "Too young"
+    },
+    {
+      "code": "08",
+      "label": "Disabled"
+    },
+    {
+      "code": "96",
+      "label": "Other"
+    },
+    {
+      "code": "98",
+      "label": "Don't know"
+    }
+  ],
+  "education_level": [
+    {
+      "code": "01",
+      "label": "Baby class"
+    },
+    {
+      "code": "02",
+      "label": "Middle class"
+    },
+    {
+      "code": "03",
+      "label": "Top class"
+    },
+    {
+      "code": "04",
+      "label": "P1"
+    },
+    {
+      "code": "05",
+      "label": "P2"
+    },
+    {
+      "code": "06",
+      "label": "P3"
+    },
+    {
+      "code": "07",
+      "label": "P4"
+    },
+    {
+      "code": "08",
+      "label": "P5"
+    },
+    {
+      "code": "09",
+      "label": "P6"
+    },
+    {
+      "code": "10",
+      "label": "P7"
+    },
+    {
+      "code": "11",
+      "label": "S1"
+    },
+    {
+      "code": "12",
+      "label": "S2"
+    },
+    {
+      "code": "13",
+      "label": "S3"
+    },
+    {
+      "code": "14",
+      "label": "S4"
+    },
+    {
+      "code": "15",
+      "label": "S5"
+    },
+    {
+      "code": "16",
+      "label": "S6"
+    },
+    {
+      "code": "17",
+      "label": "Professional Certificate"
+    },
+    {
+      "code": "18",
+      "label": "Diploma"
+    },
+    {
+      "code": "19",
+      "label": "First Degree"
+    },
+    {
+      "code": "20",
+      "label": "Post Graduate Certificate"
+    },
+    {
+      "code": "21",
+      "label": "Post Graduate Diploma"
+    },
+    {
+      "code": "22",
+      "label": "Master's Degree"
+    },
+    {
+      "code": "23",
+      "label": "PhD"
+    },
+    {
+      "code": "96",
+      "label": "Other"
+    }
+  ],
+  "stopped_school_reason": [
+    {
+      "code": "01",
+      "label": "Lack of school facilities"
+    },
+    {
+      "code": "02",
+      "label": "Lack of financial resources"
+    },
+    {
+      "code": "03",
+      "label": "Shortage of school places"
+    },
+    {
+      "code": "04",
+      "label": "Distance from school"
+    },
+    {
+      "code": "05",
+      "label": "Illness/Injury"
+    },
+    {
+      "code": "06",
+      "label": "Disability"
+    },
+    {
+      "code": "07",
+      "label": "Paid work"
+    },
+    {
+      "code": "08",
+      "label": "Domestic work (unpaid)"
+    },
+    {
+      "code": "09",
+      "label": "Pregnancy"
+    },
+    {
+      "code": "10",
+      "label": "Marriage"
+    },
+    {
+      "code": "11",
+      "label": "Education is not considered useful"
+    },
+    {
+      "code": "12",
+      "label": "Completed"
+    },
+    {
+      "code": "96",
+      "label": "Other"
+    }
+  ],
+  "main_job": [
+    {
+      "code": "01",
+      "label": "Employee for wage, salary, commission or in-kind payment"
+    },
+    {
+      "code": "02",
+      "label": "Own account on a farm owned/rented by household member"
+    },
+    {
+      "code": "03",
+      "label": "Own account or business enterprise belonging to household member"
+    },
+    {
+      "code": "04",
+      "label": "Unpaid work"
+    },
+    {
+      "code": "05",
+      "label": "No work"
+    }
+  ],
+  "work_frequency": [
+    {
+      "code": "01",
+      "label": "Full time - permanent work"
+    },
+    {
+      "code": "02",
+      "label": "Part time - permanent work"
+    },
+    {
+      "code": "03",
+      "label": "Full time - seasonal work"
+    },
+    {
+      "code": "04",
+      "label": "Part time - seasonal work"
+    },
+    {
+      "code": "05",
+      "label": "Occasionally"
+    }
+  ],
+  "work_sector": [
+    {
+      "code": "01",
+      "label": "Agriculture, forestry and fishing"
+    },
+    {
+      "code": "02",
+      "label": "Mining and quarrying"
+    },
+    {
+      "code": "03",
+      "label": "Manufacturing"
+    },
+    {
+      "code": "04",
+      "label": "Electricity, gas, steam and air conditioning supply"
+    },
+    {
+      "code": "05",
+      "label": "Water supply; sewage, waste management and remediation"
+    },
+    {
+      "code": "06",
+      "label": "Construction"
+    },
+    {
+      "code": "07",
+      "label": "Wholesale and retail trade; repair of motor vehicles and motorcycles"
+    },
+    {
+      "code": "08",
+      "label": "Transportation and storage"
+    },
+    {
+      "code": "09",
+      "label": "Accommodation and food service activities"
+    },
+    {
+      "code": "10",
+      "label": "Information and communication"
+    },
+    {
+      "code": "11",
+      "label": "Financial and insurance activities"
+    },
+    {
+      "code": "12",
+      "label": "Real estate activities"
+    },
+    {
+      "code": "13",
+      "label": "Professional, scientific and technical activities"
+    },
+    {
+      "code": "14",
+      "label": "Administrative and support service activities"
+    },
+    {
+      "code": "15",
+      "label": "Public administration and defense; compulsory social security"
+    },
+    {
+      "code": "16",
+      "label": "Education"
+    },
+    {
+      "code": "17",
+      "label": "Human health and social work activities"
+    },
+    {
+      "code": "18",
+      "label": "Arts, entertainment and recreation"
+    },
+    {
+      "code": "19",
+      "label": "Other service activities"
+    },
+    {
+      "code": "20",
+      "label": "Activities of households as employers/own use"
+    },
+    {
+      "code": "21",
+      "label": "Activities of extraterritorial organizations and bodies"
+    },
+    {
+      "code": "96",
+      "label": "Other"
+    }
+  ],
+  "work_status": [
+    {
+      "code": "01",
+      "label": "Employers in corporations"
+    },
+    {
+      "code": "02",
+      "label": "Employers in household market enterprises"
+    },
+    {
+      "code": "03",
+      "label": "Owner-operators of corporations without employees"
+    },
+    {
+      "code": "04",
+      "label": "Own-account workers in household market enterprises without employees"
+    },
+    {
+      "code": "05",
+      "label": "Dependent contractors"
+    },
+    {
+      "code": "06",
+      "label": "Permanent employees"
+    },
+    {
+      "code": "07",
+      "label": "Fixed-term employees"
+    },
+    {
+      "code": "08",
+      "label": "Short-term and casual employees"
+    },
+    {
+      "code": "09",
+      "label": "Paid apprentices, trainees and interns"
+    },
+    {
+      "code": "10",
+      "label": "Contributing family workers"
+    }
+  ],
+  "not_working_reason": [
+    {
+      "code": "01",
+      "label": "No job available"
+    },
+    {
+      "code": "02",
+      "label": "Age too old/too young"
+    },
+    {
+      "code": "03",
+      "label": "Student"
+    },
+    {
+      "code": "04",
+      "label": "Illness/injury"
+    },
+    {
+      "code": "05",
+      "label": "Disability"
+    },
+    {
+      "code": "06",
+      "label": "Not looking for a job"
+    },
+    {
+      "code": "07",
+      "label": "Available jobs do not match my skills"
+    },
+    {
+      "code": "96",
+      "label": "Other"
+    }
+  ],
+  "gov_programme": [
+    {
+      "code": "A",
+      "label": "Parish Development Model (PDM)"
+    },
+    {
+      "code": "B",
+      "label": "Operation Wealth Creation (OWC)"
+    },
+    {
+      "code": "C",
+      "label": "Youth Livelihood Programme (YLP)"
+    },
+    {
+      "code": "D",
+      "label": "Uganda Women's Entrepreneurs Programme (UWEP)"
+    },
+    {
+      "code": "E",
+      "label": "Northern Uganda Social Action Fund (NUSAF)"
+    },
+    {
+      "code": "F",
+      "label": "National Agricultural Advisory Services (NAADS)"
+    },
+    {
+      "code": "G",
+      "label": "Emyooga"
+    },
+    {
+      "code": "H",
+      "label": "Older Persons Grant (SEGOP)"
+    },
+    {
+      "code": "I",
+      "label": "Other"
+    }
+  ],
+  "savings_place": [
+    {
+      "code": "1",
+      "label": "Commercial Banks"
+    },
+    {
+      "code": "2",
+      "label": "Microfinance"
+    },
+    {
+      "code": "3",
+      "label": "Saving and credit cooperatives"
+    },
+    {
+      "code": "4",
+      "label": "Mobile wallet"
+    },
+    {
+      "code": "6",
+      "label": "Home"
+    },
+    {
+      "code": "8",
+      "label": "Other"
+    }
+  ],
+  "tenure": [
+    {
+      "code": "11",
+      "label": "Owner occupied"
+    },
+    {
+      "code": "12",
+      "label": "Free - public"
+    },
+    {
+      "code": "13",
+      "label": "Free - private"
+    },
+    {
+      "code": "14",
+      "label": "Subsidized public"
+    },
+    {
+      "code": "15",
+      "label": "Subsidized private"
+    },
+    {
+      "code": "16",
+      "label": "Rented - public"
+    },
+    {
+      "code": "17",
+      "label": "Rented - private"
+    }
+  ],
+  "dwelling_type": [
+    {
+      "code": "11",
+      "label": "Detached house (Bungalow)"
+    },
+    {
+      "code": "12",
+      "label": "Semi-detached house"
+    },
+    {
+      "code": "13",
+      "label": "Apartment/Condominium"
+    },
+    {
+      "code": "14",
+      "label": "Room(s) of a main house"
+    },
+    {
+      "code": "15",
+      "label": "Servants quarters"
+    },
+    {
+      "code": "16",
+      "label": "Tenement (Muzigo)"
+    },
+    {
+      "code": "17",
+      "label": "Hut"
+    },
+    {
+      "code": "18",
+      "label": "Garage"
+    },
+    {
+      "code": "19",
+      "label": "Go down/Basement"
+    },
+    {
+      "code": "20",
+      "label": "Store"
+    },
+    {
+      "code": "21",
+      "label": "Uniport"
+    },
+    {
+      "code": "22",
+      "label": "Flat/Multi-storey"
+    }
+  ],
+  "roof_material": [
+    {
+      "code": "11",
+      "label": "Iron sheets"
+    },
+    {
+      "code": "12",
+      "label": "Tiles"
+    },
+    {
+      "code": "13",
+      "label": "Asbestos"
+    },
+    {
+      "code": "14",
+      "label": "Concrete"
+    },
+    {
+      "code": "15",
+      "label": "Tins"
+    },
+    {
+      "code": "16",
+      "label": "Thatch/Dry leaves"
+    },
+    {
+      "code": "17",
+      "label": "Tarpaulin"
+    },
+    {
+      "code": "18",
+      "label": "Wood"
+    }
+  ],
+  "wall_material": [
+    {
+      "code": "11",
+      "label": "Concrete/Stones"
+    },
+    {
+      "code": "12",
+      "label": "Cement Blocks"
+    },
+    {
+      "code": "13",
+      "label": "Burnt bricks with mud/cement"
+    },
+    {
+      "code": "14",
+      "label": "Unburnt bricks with Cement"
+    },
+    {
+      "code": "15",
+      "label": "Unburnt bricks with mud"
+    },
+    {
+      "code": "16",
+      "label": "Wood"
+    },
+    {
+      "code": "17",
+      "label": "Mud and Pole"
+    },
+    {
+      "code": "18",
+      "label": "Tin"
+    },
+    {
+      "code": "19",
+      "label": "Iron sheets"
+    },
+    {
+      "code": "20",
+      "label": "Tarpaulin"
+    },
+    {
+      "code": "21",
+      "label": "Thatch/Dry leaves/Papyrus"
+    },
+    {
+      "code": "22",
+      "label": "Stabilised bricks"
+    },
+    {
+      "code": "23",
+      "label": "Stones with soil"
+    },
+    {
+      "code": "24",
+      "label": "Stones with cement"
+    }
+  ],
+  "floor_material": [
+    {
+      "code": "11",
+      "label": "Concrete"
+    },
+    {
+      "code": "12",
+      "label": "Brick"
+    },
+    {
+      "code": "13",
+      "label": "Stone"
+    },
+    {
+      "code": "14",
+      "label": "Cement screed"
+    },
+    {
+      "code": "15",
+      "label": "Rammed earth"
+    },
+    {
+      "code": "16",
+      "label": "Wood"
+    },
+    {
+      "code": "17",
+      "label": "Tiles"
+    },
+    {
+      "code": "18",
+      "label": "Cowdung screed"
+    },
+    {
+      "code": "19",
+      "label": "Terrazzo/epoxy"
+    }
+  ],
+  "cooking_fuel": [
+    {
+      "code": "00",
+      "label": "Does not cook at all"
+    },
+    {
+      "code": "01",
+      "label": "Solar cooker"
+    },
+    {
+      "code": "02",
+      "label": "Electric stove"
+    },
+    {
+      "code": "03",
+      "label": "Biogas stove"
+    },
+    {
+      "code": "04",
+      "label": "LPG/cooking gas stove"
+    },
+    {
+      "code": "05",
+      "label": "Manufactured solid fuel stove"
+    },
+    {
+      "code": "06",
+      "label": "Traditional solid fuel stove"
+    },
+    {
+      "code": "07",
+      "label": "Liquid fuel stove"
+    },
+    {
+      "code": "08",
+      "label": "Moveable firepan"
+    },
+    {
+      "code": "09",
+      "label": "Three stone stove/open fire"
+    },
+    {
+      "code": "96",
+      "label": "Other"
+    }
+  ],
+  "lighting_source": [
+    {
+      "code": "01",
+      "label": "Electricity (grid and mini grid)"
+    },
+    {
+      "code": "02",
+      "label": "Electricity solar home system"
+    },
+    {
+      "code": "03",
+      "label": "Solar-powered lantern/solar kits or flashlight"
+    },
+    {
+      "code": "04",
+      "label": "Rechargeable flashlight/mobile torch/lantern"
+    },
+    {
+      "code": "05",
+      "label": "Dry battery cells/battery powered flashlight/torch/lantern"
+    },
+    {
+      "code": "06",
+      "label": "Biogas lamp"
+    },
+    {
+      "code": "07",
+      "label": "LPG lamp"
+    },
+    {
+      "code": "08",
+      "label": "Gasoline lamp"
+    },
+    {
+      "code": "09",
+      "label": "Kerosene/paraffin lamp/tadooba"
+    },
+    {
+      "code": "11",
+      "label": "Candle"
+    },
+    {
+      "code": "12",
+      "label": "Open fire"
+    }
+  ],
+  "water_source": [
+    {
+      "code": "10",
+      "label": "Piped water into dwelling"
+    },
+    {
+      "code": "11",
+      "label": "Piped water to the yard"
+    },
+    {
+      "code": "12",
+      "label": "Piped to neighbour"
+    },
+    {
+      "code": "13",
+      "label": "Public tap"
+    },
+    {
+      "code": "14",
+      "label": "Borehole in yard/plot"
+    },
+    {
+      "code": "15",
+      "label": "Public borehole"
+    },
+    {
+      "code": "16",
+      "label": "Protected well/spring"
+    },
+    {
+      "code": "17",
+      "label": "Unprotected well/spring"
+    },
+    {
+      "code": "18",
+      "label": "River/stream/lake"
+    },
+    {
+      "code": "19",
+      "label": "Vendor"
+    },
+    {
+      "code": "20",
+      "label": "Tanker Truck"
+    },
+    {
+      "code": "21",
+      "label": "Gravity Flow Scheme"
+    },
+    {
+      "code": "22",
+      "label": "Rain water"
+    },
+    {
+      "code": "23",
+      "label": "Bottled water"
+    }
+  ],
+  "toilet_type": [
+    {
+      "code": "10",
+      "label": "Flush Toilet"
+    },
+    {
+      "code": "11",
+      "label": "VIP Latrine"
+    },
+    {
+      "code": "12",
+      "label": "Covered Pit Latrine with a slab"
+    },
+    {
+      "code": "13",
+      "label": "Covered Pit Latrine without a slab"
+    },
+    {
+      "code": "14",
+      "label": "Uncovered Pit Latrine with a slab"
+    },
+    {
+      "code": "15",
+      "label": "Uncovered Pit Latrine without a slab"
+    },
+    {
+      "code": "16",
+      "label": "Ecosan compost toilet"
+    },
+    {
+      "code": "17",
+      "label": "No facility/bush/polythene bags/bucket/etc."
+    }
+  ],
+  "waste_disposal": [
+    {
+      "code": "11",
+      "label": "Dispose in garden, do not burn or bury"
+    },
+    {
+      "code": "12",
+      "label": "Burn solid waste"
+    },
+    {
+      "code": "13",
+      "label": "Rubbish pit (burn/bury)"
+    },
+    {
+      "code": "14",
+      "label": "Local dump supervised by urban authorities"
+    },
+    {
+      "code": "15",
+      "label": "Local dump not supervised by urban authorities"
+    },
+    {
+      "code": "16",
+      "label": "Collected by waste vendor"
+    },
+    {
+      "code": "17",
+      "label": "Dispose into river/sea/stream/pond"
+    },
+    {
+      "code": "18",
+      "label": "Bush"
+    },
+    {
+      "code": "96",
+      "label": "Other arrangements"
+    }
+  ],
+  "livelihood_source": [
+    {
+      "code": "11",
+      "label": "Subsistence farming"
+    },
+    {
+      "code": "12",
+      "label": "Commercial Farming"
+    },
+    {
+      "code": "13",
+      "label": "Employment income (Salaried)"
+    },
+    {
+      "code": "14",
+      "label": "Business Enterprise"
+    },
+    {
+      "code": "15",
+      "label": "Cottage Industry"
+    },
+    {
+      "code": "16",
+      "label": "Property Income"
+    },
+    {
+      "code": "17",
+      "label": "Family/Friends/Relatives"
+    },
+    {
+      "code": "18",
+      "label": "Institutional or Program Support"
+    },
+    {
+      "code": "19",
+      "label": "Sale of Assets"
+    },
+    {
+      "code": "96",
+      "label": "Other"
+    }
+  ],
+  "ag_activity": [
+    {
+      "code": "1",
+      "label": "Yes within EA"
+    },
+    {
+      "code": "2",
+      "label": "Yes, outside EA but within Parish"
+    },
+    {
+      "code": "3",
+      "label": "Yes, outside Parish but within District/City"
+    },
+    {
+      "code": "4",
+      "label": "Yes, outside District/City"
+    },
+    {
+      "code": "5",
+      "label": "No"
+    }
+  ],
+  "ag_purpose": [
+    {
+      "code": "1",
+      "label": "Mainly for sale"
+    },
+    {
+      "code": "2",
+      "label": "Only Home Consumption"
+    },
+    {
+      "code": "3",
+      "label": "Mainly home Consumption"
+    },
+    {
+      "code": "6",
+      "label": "Others"
+    }
+  ],
+  "land_ownership": [
+    {
+      "code": "1",
+      "label": "Yes, Alone"
+    },
+    {
+      "code": "2",
+      "label": "Yes, Jointly"
+    },
+    {
+      "code": "3",
+      "label": "Yes, both alone and jointly"
+    },
+    {
+      "code": "4",
+      "label": "Doesn't own"
+    }
+  ],
+  "title_deed": [
+    {
+      "code": "1",
+      "label": "Yes, Alone"
+    },
+    {
+      "code": "2",
+      "label": "Yes, Jointly"
+    },
+    {
+      "code": "3",
+      "label": "Yes, both alone and jointly"
+    },
+    {
+      "code": "4",
+      "label": "No title deed/certificate"
+    },
+    {
+      "code": "8",
+      "label": "Don't know"
+    }
+  ],
+  "shock_livelihood": [
+    {
+      "code": "01",
+      "label": "Crops"
+    },
+    {
+      "code": "02",
+      "label": "Livestock"
+    },
+    {
+      "code": "03",
+      "label": "Labour/employment"
+    },
+    {
+      "code": "04",
+      "label": "Other"
+    }
+  ],
+  "shock_type": [
+    {
+      "code": "01",
+      "label": "Pest infestation"
+    },
+    {
+      "code": "02",
+      "label": "Rain storm"
+    },
+    {
+      "code": "03",
+      "label": "Drought"
+    },
+    {
+      "code": "04",
+      "label": "Wind Storm"
+    },
+    {
+      "code": "05",
+      "label": "Flood"
+    },
+    {
+      "code": "06",
+      "label": "Bush/House fire"
+    },
+    {
+      "code": "07",
+      "label": "High food prices"
+    },
+    {
+      "code": "08",
+      "label": "Loss of income/employment"
+    },
+    {
+      "code": "09",
+      "label": "Loss of the breadwinner"
+    },
+    {
+      "code": "10",
+      "label": "Other"
+    }
+  ],
+  "severity": [
+    {
+      "code": "1",
+      "label": "Very severe"
+    },
+    {
+      "code": "2",
+      "label": "Severe"
+    },
+    {
+      "code": "3",
+      "label": "Mild/moderate"
+    }
+  ],
+  "coping_frequency": [
+    {
+      "code": "1",
+      "label": "Yes, frequently"
+    },
+    {
+      "code": "2",
+      "label": "Only during the dry/lean period"
+    },
+    {
+      "code": "3",
+      "label": "Occasionally"
+    },
+    {
+      "code": "4",
+      "label": "Never"
+    }
+  ],
+  "asset_type": [
+    {
+      "code": "radio",
+      "label": "Radio"
+    },
+    {
+      "code": "tv",
+      "label": "Television"
+    },
+    {
+      "code": "phone",
+      "label": "Mobile phone"
+    },
+    {
+      "code": "bicycle",
+      "label": "Bicycle"
+    },
+    {
+      "code": "motorcycle",
+      "label": "Motorcycle"
+    },
+    {
+      "code": "car",
+      "label": "Car/truck"
+    },
+    {
+      "code": "bed",
+      "label": "Bed"
+    },
+    {
+      "code": "mattress",
+      "label": "Mattress"
+    },
+    {
+      "code": "solar",
+      "label": "Solar panel/system"
+    },
+    {
+      "code": "livestock",
+      "label": "Livestock"
+    },
+    {
+      "code": "other",
+      "label": "Other asset"
+    }
+  ]
+}
