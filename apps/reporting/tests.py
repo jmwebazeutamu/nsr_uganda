@@ -1029,3 +1029,167 @@ class TestRegionDrillDownQueuePanels:
         assert r.status_code == 200
         ids = {row["provisional_registry_id"] for row in r.data["results"]}
         assert ids == {households["SR-BUGANDA"].id}
+
+
+# --- US-082b: DQA rule-violations dashboard --------------------------------
+
+class TestDqaViolationsDashboard:
+    """GET /api/v1/rpt/dashboards/dqa-violations/ aggregates DqaResult
+    rows (failures only) by rule + severity. Path A — live aggregation
+    per the US-082 ticket recommendation; Path B (Celery materialised)
+    deferred until telemetry shows we need it."""
+
+    URL = "/api/v1/rpt/dashboards/dqa-violations/"
+
+    @pytest.fixture
+    def seeded_rules(self, db):
+        from datetime import date as _d
+
+        from apps.dqa.models import DqaRule, RuleStatus, Severity
+        r1 = DqaRule.objects.create(
+            rule_id="AC-MEM-SURNAME", version=1,
+            description="surname required", severity=Severity.BLOCKING,
+            applicability_filter={"entity": "member"},
+            expression={"field": "surname", "op": "not_null"},
+            error_message_template="missing",
+            status=RuleStatus.ACTIVE,
+            effective_from=_d(2026, 1, 1),
+            author="alice", approved_by="bob",
+        )
+        r2 = DqaRule.objects.create(
+            rule_id="AC-NIN-FMT", version=1,
+            description="nin format", severity=Severity.WARNING,
+            applicability_filter={"entity": "member"},
+            expression={"field": "nin", "op": "regex",
+                        "value": r"^(CM|CF)[A-Z0-9]{12}$"},
+            error_message_template="bad nin",
+            status=RuleStatus.ACTIVE,
+            effective_from=_d(2026, 1, 1),
+            author="alice", approved_by="bob",
+        )
+        return {"r1": r1, "r2": r2}
+
+    def _seed_results(self, db, households, two_sub_regions, seeded_rules):
+        """8 failures: 5 for r1 (3 in BUGANDA, 2 in KARAMOJA) +
+        3 for r2 (all BUGANDA). Lets us test both the top-N ordering
+        and the sub_region_code drill-down."""
+        from apps.dqa.models import DqaResult
+        buganda_hh = households["SR-BUGANDA"]
+        karamoja_hh = households["SR-KARAMOJA"]
+        for i in range(3):
+            DqaResult.objects.create(
+                rule=seeded_rules["r1"], record_type="member",
+                record_id=f"{buganda_hh.id}:{i + 1}",
+                passed=False, severity="blocking", reason="missing",
+            )
+        for i in range(2):
+            DqaResult.objects.create(
+                rule=seeded_rules["r1"], record_type="member",
+                record_id=f"{karamoja_hh.id}:{i + 1}",
+                passed=False, severity="blocking", reason="missing",
+            )
+        for i in range(3):
+            DqaResult.objects.create(
+                rule=seeded_rules["r2"], record_type="member",
+                record_id=f"{buganda_hh.id}:{i + 1}",
+                passed=False, severity="warning", reason="bad nin",
+            )
+
+    def test_superuser_sees_all_rules_ordered_by_fail_count(
+        self, db, households, two_sub_regions, seeded_rules, django_user_model,
+    ):
+        self._seed_results(db, households, two_sub_regions, seeded_rules)
+        su = django_user_model.objects.create_user(
+            username="viol-su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(self.URL)
+        assert r.status_code == 200
+        # r1 = 5 fails, r2 = 3 fails → r1 first.
+        rule_ids = [row["rule_id"] for row in r.data]
+        assert rule_ids == ["AC-MEM-SURNAME", "AC-NIN-FMT"]
+        first = r.data[0]
+        assert first["fail_count"] == 5
+        assert first["severity"] == "blocking"
+        assert "last_seen_at" in first
+
+    def test_severity_filter_narrows(
+        self, db, households, two_sub_regions, seeded_rules, django_user_model,
+    ):
+        self._seed_results(db, households, two_sub_regions, seeded_rules)
+        su = django_user_model.objects.create_user(
+            username="viol-sev", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(self.URL + "?severity=warning")
+        assert r.status_code == 200
+        assert len(r.data) == 1
+        assert r.data[0]["rule_id"] == "AC-NIN-FMT"
+        assert r.data[0]["fail_count"] == 3
+
+    def test_sub_region_code_drill_down(
+        self, db, households, two_sub_regions, seeded_rules, django_user_model,
+    ):
+        self._seed_results(db, households, two_sub_regions, seeded_rules)
+        su = django_user_model.objects.create_user(
+            username="viol-rgn", password="p", is_superuser=True,
+        )
+        karamoja_code = two_sub_regions["SR-KARAMOJA"]["sr"].code
+        r = _client_for(su).get(self.URL + f"?sub_region_code={karamoja_code}")
+        assert r.status_code == 200
+        # Only r1 has Karamoja fails, and only 2 of them.
+        assert len(r.data) == 1
+        assert r.data[0]["rule_id"] == "AC-MEM-SURNAME"
+        assert r.data[0]["fail_count"] == 2
+
+    def test_sub_region_operator_sees_only_their_bucket(
+        self, db, households, two_sub_regions, seeded_rules, django_user_model,
+    ):
+        self._seed_results(db, households, two_sub_regions, seeded_rules)
+        u = django_user_model.objects.create_user(username="viol-op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get(self.URL)
+        assert r.status_code == 200
+        # Buganda has 3 r1 fails + 3 r2 fails = both rules visible.
+        by_rule = {row["rule_id"]: row["fail_count"] for row in r.data}
+        assert by_rule == {"AC-MEM-SURNAME": 3, "AC-NIN-FMT": 3}
+
+    def test_out_of_scope_region_returns_empty(
+        self, db, households, two_sub_regions, seeded_rules, django_user_model,
+    ):
+        self._seed_results(db, households, two_sub_regions, seeded_rules)
+        u = django_user_model.objects.create_user(username="viol-op2", password="p")
+        # Buganda-scoped op asks for Karamoja → empty.
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        karamoja_code = two_sub_regions["SR-KARAMOJA"]["sr"].code
+        r = _client_for(u).get(self.URL + f"?sub_region_code={karamoja_code}")
+        assert r.status_code == 200
+        assert r.data == []
+
+    def test_unscoped_user_sees_empty(
+        self, db, households, two_sub_regions, seeded_rules, django_user_model,
+    ):
+        self._seed_results(db, households, two_sub_regions, seeded_rules)
+        u = django_user_model.objects.create_user(username="viol-ghost", password="p")
+        # No OperatorScope row → no codes → no household_ids match.
+        r = _client_for(u).get(self.URL)
+        assert r.status_code == 200
+        assert r.data == []
+
+    def test_emits_audit_event(
+        self, db, households, two_sub_regions, seeded_rules, django_user_model,
+    ):
+        self._seed_results(db, households, two_sub_regions, seeded_rules)
+        su = django_user_model.objects.create_user(
+            username="viol-aud", password="p", is_superuser=True,
+        )
+        _client_for(su).get(self.URL)
+        ev = AuditEvent.objects.filter(
+            entity_type="rpt_dashboard", entity_id="dqa_violations",
+        ).order_by("-occurred_at").first()
+        assert ev is not None
+        assert ev.action == "dashboard_read"

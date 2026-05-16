@@ -300,15 +300,32 @@ def _first_member_nin(payload: dict) -> str | None:
     return None
 
 
-def _evaluate_dqa(payload: dict) -> dict:
+def _evaluate_dqa(payload: dict, *, stage_id: str = "") -> dict:
     """Run all ACTIVE DQA rules against the household-level dict and against
     each member dict. Returns a summary keyed by severity, suitable for
-    storing in StageRecord.dqa_summary."""
+    storing in StageRecord.dqa_summary.
+
+    Side effect (US-082a): writes one DqaResult row per failed evaluation
+    so the violations dashboard can aggregate. Passes are NOT persisted —
+    the table would otherwise grow at intake rate × every active rule.
+    `info` severity is dropped by default; set
+    settings.DQA_PERSIST_INFO_FAILURES=True to include them. `stage_id`
+    is the provisional registry id of the originating StageRecord; when
+    empty, the function falls back to the old synthetic ids so the
+    summary stays compatible with anything that doesn't have a stage
+    (e.g. preview-style ad-hoc evaluations).
+    """
+    from django.conf import settings as _settings
+
+    from apps.dqa.models import DqaResult
+
     summary: dict[str, list[dict]] = {"blocking": [], "warning": [], "info": []}
     payload = payload or {}
     members = payload.get("members") or []
+    persist_info = bool(getattr(_settings, "DQA_PERSIST_INFO_FAILURES", False))
+    rows_to_write: list[DqaResult] = []
 
-    def _record(evaluations, *, record_id: str) -> None:
+    def _record(evaluations, *, record_id: str, record_type: str) -> None:
         for ev in evaluations:
             if ev.passed:
                 continue
@@ -318,14 +335,31 @@ def _evaluate_dqa(payload: dict) -> dict:
                 "record_id": record_id,
                 "reason": ev.reason,
             })
+            if ev.rule.severity == "info" and not persist_info:
+                continue
+            rows_to_write.append(DqaResult(
+                rule=ev.rule, record_type=record_type, record_id=record_id,
+                passed=False, severity=ev.rule.severity, reason=ev.reason,
+            ))
 
     hh_payload = {k: v for k, v in payload.items() if k != "members"}
-    _record(dqa_evaluate_all(hh_payload, record_type="household", record_id="staged"),
-            record_id="staged")
+    hh_record_id = stage_id or "staged"
+    _record(
+        dqa_evaluate_all(hh_payload, record_type="household", record_id=hh_record_id),
+        record_id=hh_record_id, record_type="household",
+    )
     for m in members:
         line = str((m or {}).get("line_number", ""))
-        _record(dqa_evaluate_all(m or {}, record_type="member", record_id=f"line-{line}"),
-                record_id=f"line-{line}")
+        member_record_id = (
+            f"{stage_id}:{line}" if stage_id else f"line-{line}"
+        )
+        _record(
+            dqa_evaluate_all(m or {}, record_type="member", record_id=member_record_id),
+            record_id=member_record_id, record_type="member",
+        )
+
+    if rows_to_write:
+        DqaResult.objects.bulk_create(rows_to_write, batch_size=100)
 
     return {
         "blocking_failures": summary["blocking"],
@@ -371,8 +405,10 @@ def process_stage_record(
 
     payload = stage.canonical_payload or {}
 
-    # 1. DQA — runs over household-level + each member.
-    dqa_summary = _evaluate_dqa(payload)
+    # 1. DQA — runs over household-level + each member. Stage id flows
+    # into the DqaResult record_ids so the violations dashboard can
+    # aggregate by rule and trace back to the originating stage.
+    dqa_summary = _evaluate_dqa(payload, stage_id=stage.provisional_registry_id)
     stage.dqa_summary = dqa_summary
 
     if dqa_summary["blocking_failures"]:

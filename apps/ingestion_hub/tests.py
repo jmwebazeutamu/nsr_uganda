@@ -262,6 +262,106 @@ class TestProcessOrchestrator:
         assert stage.state == StageRecordState.QUALITY_FAILED
         assert stage.dqa_summary["blocking_failures"]
 
+    # --- US-082a -----------------------------------------------------
+    def test_dqa_failure_writes_dqaresult_row(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        """A staged record that fails one rule writes exactly one
+        DqaResult row, with record_type/record_id pointing at the
+        member that failed."""
+        from apps.dqa.models import DqaResult
+        payload = _payload(geo_codes)
+        payload["members"][0]["surname"] = ""  # one member fails
+        stage = _make_stage(connector, geo_codes, payload=payload)
+        before = DqaResult.objects.count()
+        process_stage_record(stage, actor="orch")
+        after = DqaResult.objects.count()
+        assert after == before + 1
+        row = DqaResult.objects.filter(
+            rule=dqa_blocking_name_rule, passed=False,
+        ).order_by("-executed_at").first()
+        assert row is not None
+        assert row.record_type == "member"
+        # record_id = "{provisional_registry_id}:{line_number}"
+        assert row.record_id == f"{stage.provisional_registry_id}:1"
+        assert row.severity == "blocking"
+
+    def test_dqa_multiple_failures_each_get_a_row(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        from apps.dqa.models import DqaResult
+        payload = _payload(geo_codes)
+        # Both members fail the surname rule.
+        payload["members"][0]["surname"] = ""
+        payload["members"][1]["surname"] = ""
+        stage = _make_stage(connector, geo_codes, payload=payload)
+        before = DqaResult.objects.count()
+        process_stage_record(stage, actor="orch")
+        after = DqaResult.objects.count()
+        assert after == before + 2
+        # One row per failed member.
+        ids = set(DqaResult.objects.filter(rule=dqa_blocking_name_rule)
+                  .values_list("record_id", flat=True))
+        assert ids == {
+            f"{stage.provisional_registry_id}:1",
+            f"{stage.provisional_registry_id}:2",
+        }
+
+    def test_dqa_passing_record_writes_zero_rows(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        """The whole point of US-082a's failures-only policy: passes
+        do not bloat the table."""
+        from apps.dqa.models import DqaResult
+        payload = _payload(geo_codes)  # both members have surnames
+        stage = _make_stage(connector, geo_codes, payload=payload)
+        before = DqaResult.objects.count()
+        process_stage_record(stage, actor="orch")
+        assert DqaResult.objects.count() == before
+
+    def test_dqa_info_severity_skipped_by_default(
+        self, connector, geo_codes,
+    ):
+        """`info` failures are dropped unless DQA_PERSIST_INFO_FAILURES
+        is True. The dashboard cares about blocking + warning."""
+        from apps.dqa.models import DqaResult
+        DqaRule.objects.create(
+            rule_id="TEST-INFO-RULE", version=1,
+            description="info severity, member always fails",
+            severity=Severity.INFO,
+            applicability_filter={"entity": "member"},
+            expression={"field": "phone_optional", "op": "not_null"},
+            error_message_template="phone missing",
+            status=RuleStatus.ACTIVE,
+            author="a", approved_by="b",
+        )
+        stage = _make_stage(connector, geo_codes)
+        before = DqaResult.objects.count()
+        process_stage_record(stage, actor="orch")
+        # Two members fail "info" → both skipped → zero rows written.
+        assert DqaResult.objects.count() == before
+
+    def test_dqa_info_severity_persisted_when_flag_on(
+        self, connector, geo_codes, settings,
+    ):
+        from apps.dqa.models import DqaResult
+        settings.DQA_PERSIST_INFO_FAILURES = True
+        DqaRule.objects.create(
+            rule_id="TEST-INFO-RULE-2", version=1,
+            description="info severity flagged",
+            severity=Severity.INFO,
+            applicability_filter={"entity": "member"},
+            expression={"field": "phone_optional", "op": "not_null"},
+            error_message_template="phone missing",
+            status=RuleStatus.ACTIVE,
+            author="a", approved_by="b",
+        )
+        stage = _make_stage(connector, geo_codes)
+        before = DqaResult.objects.count()
+        process_stage_record(stage, actor="orch")
+        # Two members, both info-failing — two rows.
+        assert DqaResult.objects.count() == before + 2
+
     def test_idv_service_unavailable_routes_to_idv_pending(self, connector, geo_codes,
                                                            dqa_blocking_name_rule):
         payload = _payload(geo_codes)

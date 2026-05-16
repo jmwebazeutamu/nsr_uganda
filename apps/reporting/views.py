@@ -25,6 +25,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.data_management.models import Household
+from apps.dqa.models import DqaResult
 from apps.grievance.models import Grievance, GrievanceStatus
 from apps.security.abac import scope_q_for_field
 from apps.security.audit import emit as emit_audit
@@ -652,3 +653,124 @@ class OpenGrievancesByTier(APIView):
         out = [{"key": r["tier"], "count": r["count"]} for r in rows]
         _audit_dashboard_read(request, "open_grievances_by_tier", len(out))
         return _render(request, out, "open-grievances-by-tier")
+
+
+class DqaViolationsByRule(APIView):
+    """US-082b — DQA rule-violations dashboard.
+
+    Aggregates `DqaResult` failure rows (the table populated by
+    US-082a's DIH-inline writer) grouped by rule, sorted by
+    fail_count descending. Surfaces "which rules fail most often"
+    so the System Admin can target enumerator training at the
+    questions that cause the most pain.
+
+    Query params:
+        window=7d|30d|all          (default 7d)
+        severity=blocking|warning|info|all  (default all)
+        sub_region_code=<code>     (optional drill-down via the
+                                    Household join — same pattern
+                                    as US-S15-003 queue panels)
+
+    ABAC: failure rows are scoped via the originating Household's
+    sub_region_code. DqaResult.record_id stores either:
+      - household ULID (record_type=household), or
+      - "<household_ulid>:<line>" (record_type=member).
+    Both forms start with the household's ULID, so a prefix match
+    against `Household` IDs in scope filters correctly. Orphan
+    failures (from `_evaluate_dqa` calls without a stage_id —
+    legacy "staged" / "line-N" ids) are invisible to scoped
+    operators by construction.
+
+    Response: [{rule_id, rule_label, severity, fail_count,
+                last_seen_at}, ...] sorted by fail_count desc.
+    """
+
+    def get(self, request):
+        from datetime import timedelta
+
+        from django.db.models import Max
+        from django.utils import timezone
+
+        from apps.security.abac import _scoped_codes
+
+        # --- query params ---
+        window = request.query_params.get("window", "7d")
+        severity = request.query_params.get("severity", "all").lower()
+        sub_region_code = (request.query_params.get("sub_region_code") or "").strip()
+
+        # --- time window ---
+        base = DqaResult.objects.filter(passed=False)
+        if window != "all":
+            try:
+                days = int(window.rstrip("d"))
+            except ValueError:
+                days = 7
+            since = timezone.now() - timedelta(days=days)
+            base = base.filter(executed_at__gte=since)
+
+        # --- severity filter ---
+        if severity in ("blocking", "warning", "info"):
+            base = base.filter(severity=severity)
+
+        # --- ABAC + optional drill-down ---
+        codes = _scoped_codes(request.user)
+        if codes is not None:
+            if not codes:
+                base = base.none()
+            else:
+                if sub_region_code:
+                    if sub_region_code not in codes:
+                        return _render(request, [], "dqa-violations")
+                    code_list = [sub_region_code]
+                else:
+                    code_list = codes
+                household_ids = list(
+                    Household.objects.filter(sub_region_code__in=code_list)
+                    .values_list("id", flat=True),
+                )
+                if not household_ids:
+                    return _render(request, [], "dqa-violations")
+                # record_id is either the household ULID exactly
+                # (record_type=household) OR "<hh>:<line>"
+                # (record_type=member). startswith covers both.
+                # Use a precomputed prefix list to keep this a
+                # single SQL IN-vs-LIKE pass — SQLite doesn't have
+                # array-prefix matching so we expand member-prefix
+                # IDs as <hh_id>: + LIKE, but for the test set
+                # (≤2 sub-regions) the IN clause on a derived
+                # member-id-prefix list is fine.
+                from django.db.models import Q
+                q = Q(record_id__in=household_ids)
+                for hh in household_ids:
+                    q |= Q(record_id__startswith=f"{hh}:")
+                base = base.filter(q)
+        elif sub_region_code:
+            # Superuser drilling down: narrow without short-circuit.
+            hh_ids = list(
+                Household.objects.filter(sub_region_code=sub_region_code)
+                .values_list("id", flat=True),
+            )
+            if not hh_ids:
+                return _render(request, [], "dqa-violations")
+            from django.db.models import Q
+            q = Q(record_id__in=hh_ids)
+            for hh in hh_ids:
+                q |= Q(record_id__startswith=f"{hh}:")
+            base = base.filter(q)
+
+        # --- aggregate ---
+        rows = list(
+            base.values("rule_id", "rule__rule_id",
+                        "rule__description", "rule__severity")
+                .annotate(fail_count=Count("id"), last_seen_at=Max("executed_at"))
+                .order_by("-fail_count", "rule__rule_id"),
+        )
+        out = [{
+            "rule_id": r["rule__rule_id"],
+            "rule_label": r["rule__description"],
+            "severity": r["rule__severity"],
+            "fail_count": r["fail_count"],
+            "last_seen_at": r["last_seen_at"],
+        } for r in rows]
+        _audit_dashboard_read(request, "dqa_violations", len(out))
+        return _render(request, out, "dqa-violations")
