@@ -203,6 +203,42 @@ def _kobo_member_to_canonical(raw: dict, line_number: int) -> dict:
         # will hash/encrypt; we just pass the raw string here.
         "nin": (m.get("c9_nin") or "").strip().upper()
                 if (m.get("c8_nin_status") or "").strip() == "1" else "",
+        # ────────────────────────────────────────────────────────────
+        # Detail blocks (US-S11-020) — per-member sections from the
+        # questionnaire so the household-detail screen can render
+        # Health / Disability, Education, Employment tabs from the
+        # canonical_payload without inventing new tables yet. Each
+        # section retains the raw form code; the React side maps it
+        # to a human label when rendering.
+        # ────────────────────────────────────────────────────────────
+        "health": {
+            "chronic_illness": m.get("d1_chronic_illness", ""),
+            "seeing":         m.get("d3_seeing", ""),
+            "hearing":        m.get("d4_hearing", ""),
+            "walking":        m.get("d5_walking", ""),
+            "remembering":    m.get("d6_remembering", ""),
+            "self_care":      m.get("d7_self_care", ""),
+            "communicating":  m.get("d8_communicating", ""),
+        },
+        "education": {
+            "literacy":             m.get("e1_literacy", ""),
+            "ever_school":          m.get("e2_ever_school", ""),
+            "never_school_reason":  m.get("e3_never_school_reason", ""),
+            "highest_grade":        m.get("e4_highest_grade", ""),
+            "currently_attending":  m.get("e5_currently_attending", ""),
+        },
+        "employment": {
+            "main_job":              m.get("f1_main_job", ""),
+            "work_frequency":        m.get("f2_work_frequency", ""),
+            "work_sector":           m.get("f3_work_sector", ""),
+            "work_status":           m.get("f4_work_status", ""),
+            "not_working_reason":    m.get("f5_not_working_reason", ""),
+            "gov_program_beneficiary": m.get("f6_gov_program_beneficiary", ""),
+            "programmes":            m.get("f7_programmes", ""),
+            "currently_benefiting":  m.get("f8_currently_benefiting", ""),
+            "made_savings":          m.get("f9_made_savings", ""),
+            "savings_place":         m.get("f10_savings_place", ""),
+        },
         # Lineage so the audit chain can trace any field back to the
         # original Kobo question code.
         "_source_keys": {
@@ -212,6 +248,107 @@ def _kobo_member_to_canonical(raw: dict, line_number: int) -> dict:
         },
     }
     return canonical
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Household-level questionnaire blocks (US-S11-020)
+#
+# Mapped from the questionnaire's g* (housing/assets), h* (agriculture),
+# i* (food security + 7-day food consumption), k* (shocks), l* (coping).
+# Kept as flat dicts keyed by the form's question codes so the React
+# detail screen can render them without re-querying the raw landing.
+# ──────────────────────────────────────────────────────────────────────
+
+def _kobo_housing_block(raw: dict) -> dict:
+    return {
+        "tenure":              raw.get("g1_tenure", ""),
+        "dwelling_type":       raw.get("g2_dwelling_type", ""),
+        "rooms_total":         _to_int(raw.get("g3_rooms_total")),
+        "rooms_sleeping":      _to_int(raw.get("g4_rooms_sleeping")),
+        "roof_material":       raw.get("g5_roof_material", ""),
+        "wall_material":       raw.get("g6_wall_material", ""),
+        "floor_material":      raw.get("g7_floor_material", ""),
+        "cooking_fuel":        raw.get("g8_cooking_fuel", ""),
+        "lighting_source":     raw.get("g9_lighting_source", ""),
+        "water_source":        raw.get("g10_water_source", ""),
+        "toilet_type":         raw.get("g11_toilet_type", ""),
+        "share_toilet":        raw.get("g12_share_toilet", ""),
+        "share_toilet_households": _to_int(raw.get("g13_share_toilet_households")),
+        "waste_disposal":      raw.get("g14_waste_disposal", ""),
+        "assets_owned":        raw.get("g15_assets_owned", ""),  # space-separated codes
+        "asset_counts": {
+            "mattress": _to_int(raw.get("g15_count_mattress")),
+            "solar":    _to_int(raw.get("g15_count_solar")),
+            "bed":      _to_int(raw.get("g15_count_bed")),
+            "tv":       _to_int(raw.get("g15_count_tv")),
+            "bicycle":  _to_int(raw.get("g15_count_bicycle")),
+            "phone":    _to_int(raw.get("g15_count_phone")),
+        },
+        "livelihood_source":   raw.get("g16_livelihood_source", ""),
+    }
+
+
+def _kobo_agriculture_block(raw: dict) -> dict:
+    return {
+        "crop_production":   raw.get("h1_crop_production", ""),
+        "livestock":         raw.get("h2_livestock", ""),
+        "livestock_counts":  raw.get("h3_livestock_counts", ""),  # free-text "goats=3; chicken=8"
+        "ag_purpose":        raw.get("h4_ag_purpose", ""),
+        "crops_grown":       raw.get("h5_crops_grown", ""),       # comma-list
+        "land_ownership":    raw.get("h6_land_ownership", ""),
+    }
+
+
+def _kobo_food_security_block(raw: dict) -> dict:
+    """FIES 8-item module + 7-day food consumption (HDDS-style).
+    The form codes are preserved; the React side renders them with
+    the questionnaire labels."""
+    fies_keys = ("i1_fies", "i2_fies", "i3_fies", "i4_fies",
+                 "i5_fies", "i6_fies", "i7_fies", "i8_fies")
+    # Each food group has days (i9 = staples through i17 = condiments)
+    # plus primary/secondary source codes + yesterday flag.
+    groups = [
+        ("staples",        "i9"),
+        ("pulses_nuts",    "i10"),
+        ("milk_dairy",     "i11"),
+        ("meat_fish_eggs", "i12"),
+        ("vegetables",     "i13"),
+        ("fruits",         "i14"),
+        ("oils_fats",      "i15"),
+        ("sugar_sweets",   "i16"),
+        ("condiments",     "i17"),
+    ]
+    food_groups = {}
+    for label, prefix in groups:
+        food_groups[label] = {
+            "days":              _to_int(raw.get(f"{prefix}_{label}_days")),
+            "source_primary":    raw.get(f"{prefix}_{label}_source_primary", ""),
+            "source_secondary":  raw.get(f"{prefix}_{label}_source_secondary", ""),
+            "yesterday":         raw.get(f"{prefix}_{label}_yesterday", ""),
+        }
+    return {
+        "fies": {k: raw.get(k, "") for k in fies_keys},
+        "food_groups": food_groups,
+    }
+
+
+def _kobo_shocks_coping_block(raw: dict) -> dict:
+    """Shock affected flag + per-strategy coping responses. The form
+    codes are 1-4 (always/often/sometimes/never) on each strategy."""
+    coping_keys = [
+        # l01* — financial / asset coping
+        "l01a_casual_labor", "l01b_sell_assets", "l01c_borrow_money",
+        "l01d_assistance_friends", "l01e_assistance_agencies", "l01f_remittances",
+        "l01g_sand_gravel", "l01h_relocate", "l01i_begging",
+        # l02* — food coping
+        "l02a_less_preferred_food", "l02b_borrow_food_money", "l02c_reduce_portions",
+        "l02d_reduce_meals", "l02e_restrict_adults", "l02f_day_without_eating",
+        "l02g_wild_food", "l02h_merge_households", "l02i_begging",
+    ]
+    return {
+        "shock_affected": raw.get("k01_shock_affected", ""),
+        "coping": {k: raw.get(k, "") for k in coping_keys},
+    }
 
 
 def _to_int(value) -> int | None:
@@ -338,6 +475,30 @@ def kobo_to_canonical(raw: dict) -> dict:
 
     canonical: dict = {
         "geographic": geographic,
+        # Household-level questionnaire blocks (US-S11-020) — surface
+        # the form's g*/h*/i*/k*/l* sections so the household-detail
+        # screen renders them under their tabs without inventing new
+        # detail tables. These don't drive DQA / promotion today (the
+        # canonical pipeline only looks at geo + members) but they
+        # propagate through the audit chain on RawLanding + StageRecord.
+        "housing":       _kobo_housing_block(raw),
+        "agriculture":   _kobo_agriculture_block(raw),
+        "food_security": _kobo_food_security_block(raw),
+        "shocks_coping": _kobo_shocks_coping_block(raw),
+        "interview": {
+            # Form-level metadata an operator might want at a glance.
+            "respondent_name":   raw.get("b1_respondent_name", ""),
+            "respondent_phone":  raw.get("b2_telephone_number", ""),
+            "head_name":         raw.get("b4_head_name", ""),
+            "interview_result":  raw.get("b5_interview_result", ""),
+            "consent":           raw.get("consent", ""),
+            "hh_size":           _to_int(raw.get("hh_size")),
+            "interviewer":       raw.get("a13_interviewer_name_code", ""),
+            "supervisor":        raw.get("a14_parish_supervisor_name_code", ""),
+            "deviceid":          raw.get("deviceid", ""),
+            "start":             raw.get("start", ""),
+            "end":               raw.get("end", ""),
+        },
         "urban_rural": urban_rural,
         "address_narrative": (raw.get("b3_address") or "").strip(),
         "gps_lat": lat,

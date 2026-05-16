@@ -128,8 +128,35 @@ const _hhApiToView = (h) => {
       nin_status: m.nin_status || "",
       telephone_1: m.telephone_1 || "",
     })),
+    // source_payload (US-S11-020) carries the canonical_payload of
+    // the upstream StageRecord — surfaces questionnaire blocks
+    // (housing, education, food security, etc.) that aren't on the
+    // Household model itself. Members in source_payload still carry
+    // their per-member detail blocks (health, education, employment).
+    source: h.source_payload || null,
   };
 };
+
+
+// Resolve a code from the questionnaire to a label. Forms encode
+// answers as numeric strings ("01", "11", "16"); the React side
+// renders them with light human labels for the most operationally-
+// relevant fields. Codes not in the dictionary fall back to "code X".
+const KOBO_LABELS = {
+  c4_sex:           { "1": "Male", "2": "Female" },
+  // Roof / wall / floor / cooking fuel / lighting / water / toilet
+  // labels follow the UBOS questionnaire codes. Operators will
+  // recognize them; full lookup tables ship with REF-DATA later.
+  d1_chronic:       { "1": "Yes", "2": "No", "8": "Don't know" },
+  d_disability:     { "01": "No difficulty", "02": "Some difficulty",
+                      "03": "A lot of difficulty", "04": "Cannot do at all" },
+  e_literacy:       { "1": "Reads + writes", "2": "Reads only", "3": "Neither" },
+  e_attendance:     { "1": "Yes", "2": "No" },
+  yes_no:           { "1": "Yes", "2": "No" },
+  shock_affected:   { "1": "Yes", "2": "No" },
+  coping_level:     { "1": "Always", "2": "Often", "3": "Sometimes", "4": "Never" },
+};
+const _lbl = (dict, code) => (dict[String(code)] || (code ? `code ${code}` : "—"));
 
 
 const HouseholdScreen = ({ householdId, onNavigate } = {}) => {
@@ -267,11 +294,16 @@ const HouseholdScreen = ({ householdId, onNavigate } = {}) => {
       <div className="card mt-3" style={{minHeight: 280}}>
         {tab === "Overview" && <OverviewTab hh={hh} live={dataSource === "live"}/>}
         {tab === "Roster" && <RosterTab hh={hh} live={dataSource === "live"}/>}
+        {tab === "Health & Disability" && <HealthTab hh={hh}/>}
+        {tab === "Education" && <EducationTab hh={hh}/>}
+        {tab === "Employment" && <EmploymentTab hh={hh}/>}
+        {tab === "Housing & Assets" && <HousingTab hh={hh}/>}
+        {tab === "Food & Shocks" && <FoodShocksTab hh={hh}/>}
+        {tab === "Programmes" && <ProgrammesTab hh={hh}/>}
+        {tab === "Consent" && <ConsentTab hh={hh}/>}
         {tab === "Updates history" && <UpdatesTab live={dataSource === "live"}/>}
         {tab === "Audit" && <AuditTab live={dataSource === "live"}/>}
-        {!["Overview", "Roster", "Updates history", "Audit"].includes(tab) && (
-          <EmptyTab name={tab}/>
-        )}
+        {tab === "Grievances" && <EmptyTab name={tab}/>}
       </div>
     </div>
   );
@@ -392,6 +424,281 @@ const AuditTab = ({ live }) => (
     )}
   </div>
 );
+
+// ──────────────────────────────────────────────────────────────────
+// Tab renderers backed by source_payload (US-S11-020). Each one
+// gracefully degrades to a placeholder if the questionnaire block
+// is missing (e.g., the household came in via walk-in CAPI not Kobo).
+// ──────────────────────────────────────────────────────────────────
+
+const _SourceMissing = ({ section }) => (
+  <div className="empty-state" style={{padding:"24px 20px"}}>
+    <div className="t-h3">{section}</div>
+    <p className="muted">
+      No questionnaire payload attached to this household — likely a
+      walk-in CAPI record. The {section.toLowerCase()} section ships
+      when the matching collector lands.
+    </p>
+  </div>
+);
+
+const _DataTable = ({ rows }) => (
+  <table className="data-table">
+    <thead><tr><th>Field</th><th>Value</th></tr></thead>
+    <tbody>
+      {rows.map(([k, v], i) => (
+        <tr key={i}>
+          <td className="muted">{k}</td>
+          <td>{(v === "" || v == null) ? <span className="muted">—</span> : v}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+);
+
+const HealthTab = ({ hh }) => {
+  if (!hh.source) return <_SourceMissing section="Health & Disability"/>;
+  const members = (hh.source.members || []).filter(m => m.health);
+  if (members.length === 0) return <_SourceMissing section="Health & Disability"/>;
+  return (
+    <div style={{padding:"16px 20px"}}>
+      <div className="t-h3">Health &amp; Disability — per member</div>
+      <table className="data-table">
+        <thead>
+          <tr><th>Line</th><th>Name</th><th>Chronic illness</th>
+            <th>Seeing</th><th>Hearing</th><th>Walking</th>
+            <th>Remembering</th><th>Self-care</th><th>Communicating</th></tr>
+        </thead>
+        <tbody>
+          {members.map((m, i) => (
+            <tr key={i}>
+              <td>{m.line_number}</td>
+              <td>{[m.surname, m.first_name].filter(Boolean).join(" ")}</td>
+              <td>{_lbl(KOBO_LABELS.d1_chronic, m.health.chronic_illness)}</td>
+              <td>{_lbl(KOBO_LABELS.d_disability, m.health.seeing)}</td>
+              <td>{_lbl(KOBO_LABELS.d_disability, m.health.hearing)}</td>
+              <td>{_lbl(KOBO_LABELS.d_disability, m.health.walking)}</td>
+              <td>{_lbl(KOBO_LABELS.d_disability, m.health.remembering)}</td>
+              <td>{_lbl(KOBO_LABELS.d_disability, m.health.self_care)}</td>
+              <td>{_lbl(KOBO_LABELS.d_disability, m.health.communicating)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const EducationTab = ({ hh }) => {
+  if (!hh.source) return <_SourceMissing section="Education"/>;
+  const members = (hh.source.members || []).filter(m => m.education);
+  if (members.length === 0) return <_SourceMissing section="Education"/>;
+  return (
+    <div style={{padding:"16px 20px"}}>
+      <div className="t-h3">Education — per member</div>
+      <table className="data-table">
+        <thead>
+          <tr><th>Line</th><th>Name</th><th>Literacy</th>
+            <th>Ever school</th><th>Highest grade</th>
+            <th>Currently attending</th><th>Never-school reason</th></tr>
+        </thead>
+        <tbody>
+          {members.map((m, i) => (
+            <tr key={i}>
+              <td>{m.line_number}</td>
+              <td>{[m.surname, m.first_name].filter(Boolean).join(" ")}</td>
+              <td>{_lbl(KOBO_LABELS.e_literacy, m.education.literacy)}</td>
+              <td>{_lbl(KOBO_LABELS.yes_no, m.education.ever_school)}</td>
+              <td>{m.education.highest_grade || <span className="muted">—</span>}</td>
+              <td>{_lbl(KOBO_LABELS.e_attendance, m.education.currently_attending)}</td>
+              <td>{m.education.never_school_reason || <span className="muted">—</span>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const EmploymentTab = ({ hh }) => {
+  if (!hh.source) return <_SourceMissing section="Employment"/>;
+  const members = (hh.source.members || []).filter(m => m.employment);
+  if (members.length === 0) return <_SourceMissing section="Employment"/>;
+  return (
+    <div style={{padding:"16px 20px"}}>
+      <div className="t-h3">Employment &amp; livelihoods — per member</div>
+      <table className="data-table">
+        <thead>
+          <tr><th>Line</th><th>Name</th><th>Main job</th>
+            <th>Sector</th><th>Freq</th><th>Status</th>
+            <th>Programmes</th><th>Savings</th></tr>
+        </thead>
+        <tbody>
+          {members.map((m, i) => (
+            <tr key={i}>
+              <td>{m.line_number}</td>
+              <td>{[m.surname, m.first_name].filter(Boolean).join(" ")}</td>
+              <td>{m.employment.main_job || <span className="muted">—</span>}</td>
+              <td>{m.employment.work_sector || <span className="muted">—</span>}</td>
+              <td>{m.employment.work_frequency || <span className="muted">—</span>}</td>
+              <td>{m.employment.work_status || <span className="muted">—</span>}</td>
+              <td>{m.employment.programmes || <span className="muted">—</span>}</td>
+              <td>{_lbl(KOBO_LABELS.yes_no, m.employment.made_savings)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+const HousingTab = ({ hh }) => {
+  if (!hh.source?.housing) return <_SourceMissing section="Housing & Assets"/>;
+  const h = hh.source.housing;
+  const assets = (h.assets_owned || "").split(/\s+/).filter(Boolean);
+  return (
+    <div style={{padding:"16px 20px"}}>
+      <div className="t-h3">Housing &amp; Assets</div>
+      <div className="row gap-6" style={{flexWrap:"wrap", marginTop:8}}>
+        <div style={{minWidth:280, flex:1}}>
+          <_DataTable rows={[
+            ["Tenure", h.tenure],
+            ["Dwelling type", h.dwelling_type],
+            ["Rooms (total)", h.rooms_total],
+            ["Rooms (sleeping)", h.rooms_sleeping],
+            ["Roof material", h.roof_material],
+            ["Wall material", h.wall_material],
+            ["Floor material", h.floor_material],
+            ["Cooking fuel", h.cooking_fuel],
+            ["Lighting source", h.lighting_source],
+          ]}/>
+        </div>
+        <div style={{minWidth:280, flex:1}}>
+          <_DataTable rows={[
+            ["Water source", h.water_source],
+            ["Toilet type", h.toilet_type],
+            ["Share toilet", _lbl(KOBO_LABELS.yes_no, h.share_toilet)],
+            ["Share-toilet HHs", h.share_toilet_households],
+            ["Waste disposal", h.waste_disposal],
+            ["Livelihood source", h.livelihood_source],
+          ]}/>
+        </div>
+      </div>
+      <div style={{marginTop:16}}>
+        <div className="t-cap" style={{fontWeight:600, marginBottom:6}}>ASSETS OWNED</div>
+        {assets.length === 0
+          ? <span className="muted">—</span>
+          : <div className="row-wrap" style={{display:"flex", flexWrap:"wrap", gap:6}}>
+              {assets.map(a => (
+                <Chip key={a} size="sm" tone="data">
+                  {a}{h.asset_counts[a] != null ? ` ×${h.asset_counts[a]}` : ""}
+                </Chip>
+              ))}
+            </div>}
+      </div>
+    </div>
+  );
+};
+
+const FoodShocksTab = ({ hh }) => {
+  if (!hh.source?.food_security && !hh.source?.shocks_coping) {
+    return <_SourceMissing section="Food & Shocks"/>;
+  }
+  const fs = hh.source.food_security || {};
+  const sc = hh.source.shocks_coping || {};
+  const groups = fs.food_groups || {};
+  const fiesKeys = Object.keys(fs.fies || {});
+  const fiesYes = fiesKeys.filter(k => String(fs.fies[k]) === "1").length;
+  return (
+    <div style={{padding:"16px 20px"}}>
+      <div className="t-h3">Food security &amp; shocks</div>
+
+      <div className="t-cap" style={{fontWeight:600, marginTop:12, marginBottom:6}}>
+        FOOD INSECURITY EXPERIENCE SCALE (FIES) · {fiesYes}/{fiesKeys.length} yes
+      </div>
+      <_DataTable rows={fiesKeys.map(k => [k.toUpperCase(),
+        _lbl(KOBO_LABELS.yes_no, fs.fies[k])])}/>
+
+      <div className="t-cap" style={{fontWeight:600, marginTop:16, marginBottom:6}}>7-DAY FOOD CONSUMPTION</div>
+      <table className="data-table">
+        <thead><tr><th>Group</th><th>Days</th><th>Primary source</th><th>Secondary</th></tr></thead>
+        <tbody>
+          {Object.entries(groups).map(([label, g]) => (
+            <tr key={label}>
+              <td style={{textTransform:"capitalize"}}>{label.replace(/_/g, " ")}</td>
+              <td className="num">{g.days != null ? g.days : "—"}</td>
+              <td>{g.source_primary || <span className="muted">—</span>}</td>
+              <td>{g.source_secondary || <span className="muted">—</span>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div className="t-cap" style={{fontWeight:600, marginTop:16, marginBottom:6}}>SHOCKS &amp; COPING</div>
+      <div className="row gap-2" style={{marginBottom:8}}>
+        <Chip size="sm" tone="data">Affected: {_lbl(KOBO_LABELS.shock_affected, sc.shock_affected)}</Chip>
+      </div>
+      <_DataTable rows={Object.entries(sc.coping || {}).map(([k, v]) => [
+        k.replace(/^l0[12][a-z]_/, ""),
+        _lbl(KOBO_LABELS.coping_level, v),
+      ])}/>
+    </div>
+  );
+};
+
+const ProgrammesTab = ({ hh }) => {
+  if (!hh.source) return <_SourceMissing section="Programmes"/>;
+  // Aggregate programme participation across members.
+  const beneficiaries = (hh.source.members || []).filter(
+    m => m.employment?.gov_program_beneficiary === "1",
+  );
+  return (
+    <div style={{padding:"16px 20px"}}>
+      <div className="t-h3">Government programme participation</div>
+      {beneficiaries.length === 0
+        ? <p className="muted">No member reported as a government programme beneficiary.</p>
+        : (
+          <table className="data-table">
+            <thead><tr><th>Line</th><th>Name</th><th>Programmes</th><th>Currently benefiting</th></tr></thead>
+            <tbody>
+              {beneficiaries.map((m, i) => (
+                <tr key={i}>
+                  <td>{m.line_number}</td>
+                  <td>{[m.surname, m.first_name].filter(Boolean).join(" ")}</td>
+                  <td>{m.employment.programmes || <span className="muted">—</span>}</td>
+                  <td>{_lbl(KOBO_LABELS.yes_no, m.employment.currently_benefiting)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+    </div>
+  );
+};
+
+const ConsentTab = ({ hh }) => {
+  const iv = hh.source?.interview;
+  if (!iv) return <_SourceMissing section="Consent"/>;
+  return (
+    <div style={{padding:"16px 20px"}}>
+      <div className="t-h3">Consent &amp; interview metadata</div>
+      <_DataTable rows={[
+        ["Consent recorded", _lbl(KOBO_LABELS.yes_no, iv.consent)],
+        ["Interview result", iv.interview_result],
+        ["Respondent name", iv.respondent_name],
+        ["Respondent phone", iv.respondent_phone],
+        ["Head name (form)", iv.head_name],
+        ["Household size declared", iv.hh_size],
+        ["Interviewer", iv.interviewer],
+        ["Supervisor", iv.supervisor],
+        ["Device ID", iv.deviceid],
+        ["Interview start", iv.start],
+        ["Interview end", iv.end],
+      ]}/>
+    </div>
+  );
+};
+
 
 const EmptyTab = ({ name }) => (
   <div className="empty-state" style={{padding:'24px 20px'}}>

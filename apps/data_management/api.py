@@ -40,6 +40,14 @@ class HouseholdSerializer(serializers.ModelSerializer):
     parish_name = serializers.CharField(source="parish.name", read_only=True, default="")
     village_name = serializers.CharField(source="village.name", read_only=True, default="")
     current_intake_source = serializers.CharField(read_only=True)
+    # US-S11-020 — surface the canonical_payload of the StageRecord
+    # that promoted this household so the React detail screen can
+    # render the questionnaire's housing / education / employment /
+    # food-security / shocks blocks without inventing dedicated
+    # detail tables. Returns null when no upstream StageRecord
+    # exists (e.g., walk-in CAPI households whose payload wasn't
+    # carried through the DIH pipeline).
+    source_payload = serializers.SerializerMethodField()
 
     class Meta:
         model = Household
@@ -54,7 +62,20 @@ class HouseholdSerializer(serializers.ModelSerializer):
             "current_pmt_score", "current_vulnerability_band",
             "current_intake_source",
             "is_deleted", "created_at", "updated_at", "members",
+            "source_payload",
         )
+
+    def get_source_payload(self, obj) -> dict | None:
+        """Joins back to the StageRecord that promoted this
+        household. provisional_registry_id matches Household.id by
+        construction (AC-DIH-PROMOTE-ATOMIC — same ULID is reused
+        on promotion). Returns the canonical_payload JSON or None."""
+        # Local import to avoid a circular at module-load time.
+        from apps.ingestion_hub.models import StageRecord
+        stage = StageRecord.objects.filter(
+            provisional_registry_id=obj.id,
+        ).only("canonical_payload").first()
+        return stage.canonical_payload if stage else None
 
 
 @extend_schema_view(
