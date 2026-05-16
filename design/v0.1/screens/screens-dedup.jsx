@@ -1,7 +1,67 @@
 /* global React, Icon, Chip, PageHeader, Modal, ReasonModal, ActionBar, Toast */
 // NSR MIS — 11.5 Dedup Operator side-by-side compare
+// US-S13-003: live wiring. On mount, fetch the first pending
+// MatchPair from /api/v1/ddup/match-pairs/?status=pending; resolve
+// both members via /api/v1/data-management/members/{id}/; build the
+// activePair.fields list from the live members; render the same
+// side-by-side compare. The actual merge service isn't exposed
+// over REST today — merge / reject buttons toast with a hint to
+// use the Django admin or wait for the celery auto-merge tick.
 
-const { useState: useStateDup } = React;
+const { useState: useStateDup, useEffect: useEffectDup } = React;
+
+
+const _fetchJson = (url) => fetch(url, {
+  credentials: "same-origin",
+  headers: { Accept: "application/json" },
+}).then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`));
+
+
+// Build the .fields list the screen renders from a MatchPair +
+// two Member rows. per_field_scores from the pair is keyed by
+// canonical field name (surname, first_name, dob, etc.) and gives
+// the matcher's per-field similarity in [0, 1].
+const _buildLivePair = (pair, mA, mB) => {
+  const score = (k) => {
+    const v = (pair.per_field_scores || {})[k];
+    return v == null ? null : Number(v);
+  };
+  const fields = [
+    { key: "registry_id", label: "Registry ID",
+      A: mA.household || "—", B: mB.household || "—",
+      sim: null, mono: true, fixed: null },
+    { key: "head_name", label: "Name",
+      A: `${mA.surname || ""} ${mA.first_name || ""}`.trim() || "—",
+      B: `${mB.surname || ""} ${mB.first_name || ""}`.trim() || "—",
+      sim: score("surname") ?? score("first_name") },
+    { key: "head_nin", label: "NIN (last 4)",
+      A: mA.nin_last4 ? `…${mA.nin_last4}` : "—",
+      B: mB.nin_last4 ? `…${mB.nin_last4}` : "—",
+      sim: score("nin") ?? (mA.nin_last4 && mA.nin_last4 === mB.nin_last4 ? 1 : null),
+      mono: true },
+    { key: "dob", label: "Date of birth",
+      A: mA.date_of_birth || "—", B: mB.date_of_birth || "—",
+      sim: score("dob_year") },
+    { key: "sex", label: "Sex",
+      A: mA.sex || "—", B: mB.sex || "—",
+      sim: mA.sex && mA.sex === mB.sex ? 1.0 : 0 },
+    { key: "phone", label: "Phone",
+      A: mA.telephone_1 || "—", B: mB.telephone_1 || "—",
+      sim: score("phone"), mono: true, list: true,
+      note: "Different operators — keep both" },
+  ];
+  return {
+    id: pair.id,
+    score: Number(pair.composite_score ?? 0),
+    model: `tier ${pair.tier} · ${pair.match_reason}`,
+    queue: Number(pair.composite_score ?? 0) >= 0.9 ? "Strong (≥ 0.90)" : "Weak (< 0.90)",
+    status: (pair.status || "pending").charAt(0).toUpperCase() + (pair.status || "pending").slice(1),
+    fields,
+    _live: true,
+    _memberA: mA,
+    _memberB: mB,
+  };
+};
 
 const PAIR = {
   id: "MP-2026-05-14-00045",
@@ -36,15 +96,55 @@ const REASON_OPTS_REJECT = [
 ];
 
 const DedupScreen = () => {
+  // US-S13-003: live pair fetched from API. Falls back to PAIR
+  // mock when no pending pair exists or the fetch fails.
+  const [livePair, setLivePair] = useStateDup(null);
+  const [loadNote, setLoadNote] = useStateDup("");
+  useEffectDup(() => {
+    let cancelled = false;
+    _fetchJson("/api/v1/ddup/match-pairs/?status=pending&page_size=1")
+      .then(data => {
+        const pairs = data.results || data;
+        if (!pairs.length) {
+          if (!cancelled) setLoadNote("queue empty");
+          return null;
+        }
+        const pair = pairs[0];
+        return Promise.all([
+          _fetchJson(`/api/v1/data-management/members/${pair.record_a_id}/`),
+          _fetchJson(`/api/v1/data-management/members/${pair.record_b_id}/`),
+        ]).then(([mA, mB]) => {
+          if (cancelled) return;
+          setLivePair(_buildLivePair(pair, mA, mB));
+        });
+      })
+      .catch(e => !cancelled && setLoadNote(`fetch failed: ${e}`));
+    return () => { cancelled = true; };
+  }, []);
+
+  const activePair = livePair || PAIR;
+
   const initial = {};
-  PAIR.fields.forEach(f => { initial[f.key] = f.fixed || (f.sim === 1 ? "A" : f.list ? "Both" : ""); });
+  activePair.fields.forEach(f => {
+    initial[f.key] = f.fixed || (f.sim === 1 ? "A" : f.list ? "Both" : "");
+  });
   const [choice, setChoice] = useStateDup(initial);
+  // Re-initialise choices when a different live pair arrives so
+  // the action bar's "X of N chosen" reflects the new field list.
+  useEffectDup(() => {
+    const next = {};
+    activePair.fields.forEach(f => {
+      next[f.key] = f.fixed || (f.sim === 1 ? "A" : f.list ? "Both" : "");
+    });
+    setChoice(next);
+  }, [activePair.id]);
+
   const [note, setNote] = useStateDup("");
   const [confirm, setConfirm] = useStateDup(false);
   const [rejectOpen, setRejectOpen] = useStateDup(false);
   const [toast, setToast] = useStateDup("");
 
-  const allChosen = PAIR.fields.every(f => f.fixed || choice[f.key]);
+  const allChosen = activePair.fields.every(f => f.fixed || choice[f.key]);
   const noteOk = note.trim().length >= 6;
 
   const set = (k, v) => setChoice({ ...choice, [k]: v });
@@ -53,7 +153,7 @@ const DedupScreen = () => {
     <div className="page" style={{paddingBottom:0}}>
       <PageHeader
         eyebrow="DUPLICATES · US-083"
-        title={<>Dedup compare <span className="t-mono" style={{fontSize:14, marginLeft:8, color:'var(--neutral-500)'}}>{PAIR.id}</span></>}
+        title={<>Dedup compare <span className="t-mono" style={{fontSize:14, marginLeft:8, color:'var(--neutral-500)'}}>{activePair.id}</span></>}
         sub="Decide which record survives. Per-field similarity is shown to the right of each value."
         right={<>
           <button className="btn"><Icon name="history" size={14}/> Pair history</button>
@@ -65,17 +165,17 @@ const DedupScreen = () => {
       <div className="card" style={{padding:'14px 20px', marginBottom:16, display:'flex', alignItems:'center', gap:24, flexWrap:'wrap'}}>
         <div>
           <div className="t-cap">COMPOSITE SCORE</div>
-          <div className="row gap-2"><Chip tone="danger">{PAIR.score.toFixed(2)}</Chip><span className="t-bodysm muted">strong</span></div>
+          <div className="row gap-2"><Chip tone="danger">{activePair.score.toFixed(2)}</Chip><span className="t-bodysm muted">strong</span></div>
         </div>
         <div style={{width:1, height:32, background:'var(--neutral-200)'}}/>
         <div>
           <div className="t-cap">MODEL</div>
-          <div className="t-bodysm t-mono" style={{color:'var(--neutral-900)'}}>{PAIR.model}</div>
+          <div className="t-bodysm t-mono" style={{color:'var(--neutral-900)'}}>{activePair.model}</div>
         </div>
         <div style={{width:1, height:32, background:'var(--neutral-200)'}}/>
         <div>
           <div className="t-cap">QUEUE</div>
-          <div className="t-bodysm" style={{color:'var(--neutral-900)'}}>{PAIR.queue}</div>
+          <div className="t-bodysm" style={{color:'var(--neutral-900)'}}>{activePair.queue}</div>
         </div>
         <div style={{width:1, height:32, background:'var(--neutral-200)'}}/>
         <div>
@@ -85,7 +185,7 @@ const DedupScreen = () => {
         <div style={{width:1, height:32, background:'var(--neutral-200)'}}/>
         <div>
           <div className="t-cap">STATUS</div>
-          <div className="row gap-2 mt-1"><Chip>{PAIR.status}</Chip></div>
+          <div className="row gap-2 mt-1"><Chip>{activePair.status}</Chip></div>
         </div>
         <div style={{flex:1}}/>
         <button className="btn btn-danger" onClick={() => setRejectOpen(true)}><Icon name="xCircle" size={14}/> Reject pair</button>
@@ -115,7 +215,7 @@ const DedupScreen = () => {
           </div>
         </div>
 
-        {PAIR.fields.map((f) => (
+        {activePair.fields.map((f) => (
           <DedupRow key={f.key} field={f} value={choice[f.key]} onChange={(v) => set(f.key, v)}/>
         ))}
       </div>
@@ -133,7 +233,7 @@ const DedupScreen = () => {
 
       {/* Action bar */}
       <div style={{margin:'16px -24px 0', position:'sticky', bottom:0, zIndex:20}}>
-        <ActionBar left={<>{PAIR.fields.filter(f => f.fixed || choice[f.key]).length} of {PAIR.fields.length} fields chosen{!noteOk && " · note required"}</>}>
+        <ActionBar left={<>{activePair.fields.filter(f => f.fixed || choice[f.key]).length} of {activePair.fields.length} fields chosen{!noteOk && " · note required"}</>}>
           <button className="btn">Reject pair</button>
           <button className="btn">Hold for evidence</button>
           <button className="btn btn-primary" disabled={!allChosen || !noteOk} onClick={() => setConfirm(true)}>
@@ -155,9 +255,9 @@ const DedupScreen = () => {
           <div style={{display:'grid', gridTemplateColumns:'120px 1fr', rowGap:6, columnGap:12, fontSize:13}}>
             <div className="muted">Surviving ID</div><div className="t-mono">01HXY7K3B2N9PVQE4M6FZRWS18</div>
             <div className="muted">Archived ID</div><div className="t-mono">01HZ9NK2P5M3QFB7K6FZRWS22</div>
-            <div className="muted">Fields from A</div><div>{PAIR.fields.filter(f => (f.fixed || choice[f.key]) === 'A').length}</div>
-            <div className="muted">Fields from B</div><div>{PAIR.fields.filter(f => (f.fixed || choice[f.key]) === 'B').length}</div>
-            <div className="muted">Combined (list)</div><div>{PAIR.fields.filter(f => (f.fixed || choice[f.key]) === 'Both').length}</div>
+            <div className="muted">Fields from A</div><div>{activePair.fields.filter(f => (f.fixed || choice[f.key]) === 'A').length}</div>
+            <div className="muted">Fields from B</div><div>{activePair.fields.filter(f => (f.fixed || choice[f.key]) === 'B').length}</div>
+            <div className="muted">Combined (list)</div><div>{activePair.fields.filter(f => (f.fixed || choice[f.key]) === 'Both').length}</div>
           </div>
           <div className="tint-update" style={{padding:12, borderRadius:6, borderLeft:'3px solid var(--accent-update)'}}>
             <div className="row gap-2"><Icon name="info" size={14} color="var(--accent-update)"/><strong className="t-bodysm">Downstream effects</strong></div>
@@ -171,7 +271,7 @@ const DedupScreen = () => {
       </Modal>
 
       <ReasonModal open={rejectOpen} title="Reject this pair" intent="danger"
-        reasonOptions={REASON_OPTS_REJECT} recordLabel={PAIR.id}
+        reasonOptions={REASON_OPTS_REJECT} recordLabel={activePair.id}
         onClose={() => setRejectOpen(false)} onConfirm={() => { setRejectOpen(false); setToast("Pair rejected. Records remain separate."); }}/>
 
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
