@@ -29,3 +29,20 @@ class DefaultPagination(PageNumberPagination):
     page_size = 50
     page_size_query_param = "page_size"
     max_page_size = 500
+
+
+class MemberPagination(DefaultPagination):
+    """Tighter cap on the Member endpoint specifically (US-S16-003).
+
+    Member rows carry the highest-sensitivity PII surface — encrypted
+    NIN ciphertext, NIN last4, phone, DoB, sex, GPS via household FK.
+    A 500-row pull on this endpoint is several thousand PII fields in
+    one round-trip; the DPO recommended a tighter cap. 100 rows still
+    covers legitimate consumers (a household roster fits in 100 by
+    construction — the largest known household in Uganda has 26
+    members per UBOS) while reducing enumeration blast radius 5×.
+
+    Closes ADR-0008 OI-PAG-01.
+    """
+
+    max_page_size = 100

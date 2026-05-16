@@ -149,3 +149,70 @@ class TestDefaultPagination:
         r = self._client(django_user_model).get(self.URL + "?page_size=10000")
         assert r.status_code == 200
         assert len(r.data["results"]) == 60  # all 60 rows, ≤ 500 cap
+
+
+class TestMemberPagination:
+    """US-S16-003 / ADR-0008 OI-PAG-01 closure — Member endpoint has
+    a tighter max_page_size (100) because each row carries the most
+    PII surface (NIN ciphertext, NIN last4, phone, DoB)."""
+
+    URL = "/api/v1/data-management/members/"
+
+    @pytest.fixture
+    def seed_members(self, db):
+        from datetime import date
+
+        from apps.data_management.models import Household, Member
+        from apps.reference_data.models import GeographicUnit
+        nodes = {}
+        for level, key, parent in [
+            ("region", "r", None), ("sub_region", "sr", "r"),
+            ("district", "d", "sr"), ("county", "c", "d"),
+            ("sub_county", "sc", "c"), ("parish", "p", "sc"),
+            ("village", "v", "p"),
+        ]:
+            nodes[key] = GeographicUnit.objects.create(
+                level=level, code=f"MP-{key.upper()}", name=key,
+                parent=nodes.get(parent), effective_from=date(2026, 1, 1),
+            )
+        hh = Household.objects.create(
+            region=nodes["r"], sub_region=nodes["sr"],
+            district=nodes["d"], county=nodes["c"],
+            sub_county=nodes["sc"], parish=nodes["p"],
+            village=nodes["v"], urban_rural="rural",
+        )
+        # 120 members — past the 100 cap so we can probe the clamp.
+        for i in range(120):
+            Member.objects.create(
+                household=hh, line_number=i + 1,
+                surname=f"S{i}", first_name=f"F{i}", sex="M",
+            )
+        return 120
+
+    def _client(self, django_user_model):
+        from rest_framework.test import APIClient
+        u = django_user_model.objects.create_user(
+            username="memcap", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        return c
+
+    def test_within_cap_honoured(self, seed_members, django_user_model):
+        r = self._client(django_user_model).get(self.URL + "?page_size=80")
+        assert r.status_code == 200
+        assert len(r.data["results"]) == 80
+
+    def test_at_cap_returns_cap(self, seed_members, django_user_model):
+        r = self._client(django_user_model).get(self.URL + "?page_size=100")
+        assert r.status_code == 200
+        assert len(r.data["results"]) == 100
+
+    def test_above_cap_clamps_to_100_not_500(
+        self, seed_members, django_user_model,
+    ):
+        # Ask for 500 (the DefaultPagination cap). MemberPagination
+        # should clamp to 100, not the global 500.
+        r = self._client(django_user_model).get(self.URL + "?page_size=500")
+        assert r.status_code == 200
+        assert len(r.data["results"]) == 100

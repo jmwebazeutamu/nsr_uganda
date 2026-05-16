@@ -3,6 +3,7 @@ from rest_framework import serializers, viewsets
 
 from apps.security.abac import ScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
+from apps.security.pagination import MemberPagination
 
 from .models import Household, Member
 
@@ -96,3 +97,6 @@ class MemberViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyModelV
     audit_entity_type = "member"
     queryset = Member.objects.all().order_by("household", "line_number")
     serializer_class = MemberSerializer
+    # US-S16-003 — tighter page-size cap on the highest-PII surface.
+    # DefaultPagination caps at 500; MemberPagination caps at 100.
+    pagination_class = MemberPagination
