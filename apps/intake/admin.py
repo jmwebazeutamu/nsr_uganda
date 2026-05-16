@@ -144,6 +144,13 @@ class FormVersionAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(_export_xlsform_view),
                 name="intake_us118_export_xlsform",
             ),
+            # US-117d — in-admin HTML preview (the "what does this
+            # look like to a respondent" view, NOT the editor).
+            path(
+                "_us117b/preview/<str:form_version_id>/",
+                self.admin_site.admin_view(_preview_form_view),
+                name="intake_us117b_preview_form",
+            ),
         ]
         return extra + urls
 
@@ -296,6 +303,74 @@ def _export_xlsform_view(request, form_version_id):
     filename = f"nsr_form_v{fv.version}.xlsx"
     response["Content-Disposition"] = f'attachment; filename="{filename}"'
     return response
+
+
+# --- US-117d in-admin HTML preview -----------------------------------------
+
+def _preview_form_view(request, form_version_id):
+    """Render the FormVersion as HTML — sections as cards, questions
+    as disabled form-controls with hints + required markers + an
+    annotation strip showing the relevant/constraint expressions.
+
+    The goal is "what does this questionnaire look like to a
+    respondent" — NOT the editor view (which lives at the standard
+    /change/ URL). Inputs are disabled so an admin doesn't think
+    submissions land in the registry."""
+    from django.http import Http404
+    from django.shortcuts import render
+
+    fv = (
+        FormVersion.objects
+        .prefetch_related("sections__questions__choice_list_ref__options")
+        .filter(pk=form_version_id)
+        .first()
+    )
+    if fv is None:
+        raise Http404("FormVersion not found")
+
+    sections = []
+    for section in fv.sections.order_by("order", "code"):
+        questions = []
+        for q in section.questions.order_by("order_in_section", "name"):
+            options = []
+            if q.choice_list_ref is not None:
+                options = list(
+                    q.choice_list_ref.options.filter(status="active")
+                    .order_by("sort_order", "code")
+                    .values("code", "label"),
+                )
+            questions.append({
+                "id": q.id, "name": q.name, "label": q.label,
+                "hint": q.hint, "type": q.type, "required": q.required,
+                "relevant": q.relevant_expression,
+                "constraint": q.constraint_expression,
+                "constraint_message": q.constraint_message,
+                "appearance": q.appearance,
+                "repeat_count": q.repeat_count,
+                "options": options,
+                "choice_list_name": (
+                    q.choice_list_ref.list_name if q.choice_list_ref else ""
+                ),
+            })
+        sections.append({
+            "id": section.id, "code": section.code, "name": section.name,
+            "label": section.label, "description": section.description,
+            "questions": questions,
+        })
+
+    return render(request, "admin/intake/formversion/preview.html", {
+        "form_version": fv,
+        "sections": sections,
+        "question_count": sum(len(s["questions"]) for s in sections),
+        # admin context bits so the template can fall back to the
+        # standard chrome.
+        "site_header": "Django administration",
+        "site_title": "Django site admin",
+        "has_permission": True,
+        "is_popup": False,
+        "is_nav_sidebar_enabled": True,
+        "available_apps": [],
+    })
 
 
 @admin.register(FormSection)

@@ -1,0 +1,227 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{# US-117d — HTML preview of a FormVersion. Renders sections as       #}
+{# cards and questions as disabled form-controls with their label,    #}
+{# hint, required marker, and an annotation strip showing the         #}
+{# relevant / constraint expressions. NOT an editor — inputs are      #}
+{# disabled so an admin doesn't think submissions land here.          #}
+
+{% block title %}{{ form_version.name }} v{{ form_version.version }} · preview{% endblock %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <style>
+    .fp-wrap {
+      max-width: 920px; margin: 16px auto; padding: 0 16px;
+    }
+    .fp-header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 16px 20px; margin-bottom: 18px;
+      background: var(--neutral-50, #fafafa);
+      border: 1px solid var(--neutral-300, #d1d5db); border-radius: 6px;
+    }
+    .fp-header .fp-h-meta { font-size: 13px; color: var(--neutral-700, #4b5563); }
+    .fp-header .fp-h-actions { margin-left: auto; display: flex; gap: 8px; }
+    .fp-header .fp-h-actions a {
+      display: inline-block; padding: 6px 12px; border-radius: 6px;
+      font-size: 13px; text-decoration: none;
+      border: 1px solid var(--neutral-300, #d1d5db);
+      background: white; color: var(--neutral-900, #111827);
+    }
+    .fp-header .fp-h-actions a.primary {
+      background: var(--primary-900, #1e3a8a); border-color: var(--primary-900, #1e3a8a);
+      color: white;
+    }
+    .fp-section {
+      border: 1px solid var(--neutral-300, #d1d5db); border-radius: 6px;
+      margin-bottom: 18px; overflow: hidden;
+    }
+    .fp-section-head {
+      padding: 12px 18px;
+      background: var(--neutral-100, #f3f4f6);
+      border-bottom: 1px solid var(--neutral-300, #d1d5db);
+    }
+    .fp-section-head h2 {
+      margin: 0; font-size: 15px;
+      display: flex; align-items: baseline; gap: 8px;
+    }
+    .fp-section-head .fp-sec-code {
+      color: var(--neutral-500, #6b7280);
+      font-family: ui-monospace, monospace; font-size: 12px;
+    }
+    .fp-section-head .fp-sec-count {
+      margin-left: auto;
+      font-size: 11px; color: var(--neutral-500, #6b7280);
+      font-family: ui-monospace, monospace;
+    }
+    .fp-question {
+      padding: 14px 18px; border-bottom: 1px solid var(--neutral-200, #e5e7eb);
+    }
+    .fp-question:last-child { border-bottom: none; }
+    .fp-question.structural {
+      background: var(--neutral-50, #fafafa);
+      font-family: ui-monospace, monospace; font-size: 12.5px;
+      color: var(--neutral-500, #6b7280);
+    }
+    .fp-q-label { font-weight: 500; margin-bottom: 4px; }
+    .fp-q-label .fp-required { color: var(--accent-danger, #ef4444); margin-left: 4px; }
+    .fp-q-hint {
+      font-size: 12.5px; color: var(--neutral-700, #4b5563);
+      margin-bottom: 6px;
+    }
+    .fp-q-control {
+      padding: 6px 10px; min-height: 28px;
+      border: 1px solid var(--neutral-300, #d1d5db); border-radius: 4px;
+      background: white; color: var(--neutral-500, #6b7280);
+      display: flex; align-items: center; font-size: 13px;
+    }
+    .fp-q-control input, .fp-q-control select {
+      width: 100%; border: 0; background: transparent; font: inherit;
+      color: inherit;
+    }
+    .fp-q-control input:disabled, .fp-q-control select:disabled {
+      cursor: not-allowed;
+    }
+    .fp-q-control.placeholder {
+      font-style: italic; color: var(--neutral-500, #6b7280);
+    }
+    .fp-q-annot {
+      margin-top: 6px; font-size: 11.5px; color: var(--neutral-500, #6b7280);
+      font-family: ui-monospace, monospace;
+      display: flex; flex-wrap: wrap; gap: 12px;
+    }
+    .fp-q-annot span {
+      background: var(--neutral-100, #f3f4f6); padding: 2px 6px;
+      border-radius: 3px;
+    }
+    .fp-q-annot .fp-annot-rel { background: #fef3c7; }
+    .fp-q-annot .fp-annot-con { background: #fee2e2; }
+  </style>
+{% endblock %}
+
+{% block content %}
+<div class="fp-wrap">
+
+  <div class="fp-header">
+    <div>
+      <h1 style="margin:0 0 4px;font-size:18px">{{ form_version.name }}</h1>
+      <div class="fp-h-meta">
+        v{{ form_version.version }} · status: {{ form_version.status }} ·
+        {{ sections|length }} section{{ sections|length|pluralize }} ·
+        {{ question_count }} question{{ question_count|pluralize }}
+      </div>
+    </div>
+    <div class="fp-h-actions">
+      <a href="{% url 'admin:intake_formversion_change' form_version.pk %}">← Back to editor</a>
+      <a href="{% url 'admin:intake_us118_export_xlsform' form_version.pk %}">
+        Download XLSForm
+      </a>
+      <a class="primary" href="https://ee.kobotoolbox.org/preview/" target="_blank" rel="noopener">
+        Open Kobo preview ↗
+      </a>
+    </div>
+  </div>
+
+  {% for sec in sections %}
+    <section class="fp-section">
+      <div class="fp-section-head">
+        <h2>
+          <span class="fp-sec-code">{{ sec.code }}</span>
+          {{ sec.label }}
+          <span class="fp-sec-count">{{ sec.questions|length }} question{{ sec.questions|length|pluralize }}</span>
+        </h2>
+        {% if sec.description %}
+          <div style="margin-top:4px;font-size:13px;color:var(--neutral-700,#4b5563)">
+            {{ sec.description }}
+          </div>
+        {% endif %}
+      </div>
+
+      {% for q in sec.questions %}
+        {% if q.type in 'begin_group end_group begin_repeat end_repeat note' %}
+          <div class="fp-question structural">
+            <code>{{ q.type }}</code> · <code>{{ q.name }}</code>
+            {% if q.type == 'begin_repeat' and q.repeat_count %}
+              · repeat × <code>{{ q.repeat_count }}</code>
+            {% endif %}
+            {% if q.label %}<span style="color:var(--neutral-700,#4b5563)"> — {{ q.label }}</span>{% endif %}
+          </div>
+        {% else %}
+          <div class="fp-question">
+            <div class="fp-q-label">
+              {{ q.label|default:q.name }}
+              {% if q.required %}<span class="fp-required" title="required">*</span>{% endif %}
+              <span class="fp-sec-code" style="margin-left:6px">{{ q.name }} · {{ q.type }}</span>
+            </div>
+            {% if q.hint %}<div class="fp-q-hint">{{ q.hint }}</div>{% endif %}
+
+            {# Type-aware disabled control #}
+            {% if q.type == 'text' %}
+              <div class="fp-q-control"><input type="text" disabled placeholder="(text)"/></div>
+            {% elif q.type == 'integer' %}
+              <div class="fp-q-control"><input type="number" disabled placeholder="(integer)"/></div>
+            {% elif q.type == 'decimal' %}
+              <div class="fp-q-control"><input type="number" step="any" disabled placeholder="(decimal)"/></div>
+            {% elif q.type == 'date' %}
+              <div class="fp-q-control"><input type="date" disabled/></div>
+            {% elif q.type == 'select_one' %}
+              <div class="fp-q-control">
+                <select disabled>
+                  <option>— choose {{ q.choice_list_name }} —</option>
+                  {% for opt in q.options %}
+                    <option>{{ opt.code }} · {{ opt.label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            {% elif q.type == 'select_multiple' %}
+              <div class="fp-q-control">
+                <select disabled multiple size="4" style="height:auto">
+                  {% for opt in q.options %}
+                    <option>{{ opt.code }} · {{ opt.label }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+            {% elif q.type == 'geopoint' %}
+              <div class="fp-q-control placeholder">[ latitude, longitude ] · captured from device GPS</div>
+            {% elif q.type == 'image' %}
+              <div class="fp-q-control placeholder">[ image upload — camera / file ]</div>
+            {% elif q.type == 'calculate' %}
+              <div class="fp-q-control placeholder">(calculated — not visible to respondent)</div>
+            {% else %}
+              <div class="fp-q-control placeholder">({{ q.type }})</div>
+            {% endif %}
+
+            {# Annotation strip — relevant / constraint / appearance #}
+            {% if q.relevant or q.constraint or q.appearance %}
+              <div class="fp-q-annot">
+                {% if q.relevant %}<span class="fp-annot-rel">relevant: {{ q.relevant }}</span>{% endif %}
+                {% if q.constraint %}<span class="fp-annot-con">constraint: {{ q.constraint }}</span>{% endif %}
+                {% if q.constraint_message %}<span>msg: {{ q.constraint_message }}</span>{% endif %}
+                {% if q.appearance %}<span>appearance: {{ q.appearance }}</span>{% endif %}
+              </div>
+            {% endif %}
+          </div>
+        {% endif %}
+      {% empty %}
+        <div class="fp-question">
+          <em style="color:var(--neutral-500,#6b7280)">No questions in this section.</em>
+        </div>
+      {% endfor %}
+    </section>
+  {% empty %}
+    <div class="fp-section" style="padding:24px;text-align:center">
+      <em>No sections in this FormVersion yet.</em>
+      <div style="margin-top:8px">
+        <a href="{% url 'admin:intake_formsection_add' %}?form_version={{ form_version.pk }}">Add one</a>
+      </div>
+    </div>
+  {% endfor %}
+
+  <div style="margin:24px 0;font-size:12px;color:var(--neutral-500,#6b7280);text-align:center">
+    Preview is read-only — submissions made here are not stored.
+    For real-runtime preview with skip-logic firing, use the
+    XLSForm download + Kobo Preview link.
+  </div>
+</div>
+{% endblock %}

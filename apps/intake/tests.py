@@ -807,3 +807,125 @@ class TestRulePackSync:
             action="rule_pack_synced",
         ).count()
         assert after == before + 1
+
+
+# --- US-117d: in-admin HTML preview ----------------------------------------
+
+class TestFormVersionPreview:
+    """Preview view renders the FormVersion as HTML — sections as
+    cards, questions as disabled controls + annotation strip."""
+
+    def _staff_client(self, db, django_user_model):
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="prev-staff", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        return c
+
+    @pytest.fixture
+    def _seeded_form(self, db):
+        from apps.intake.models import (
+            FormQuestion,
+            FormSection,
+            FormVersion,
+        )
+        from apps.reference_data.models import ChoiceList, ChoiceOption
+        fv = FormVersion.objects.create(
+            version=4000, name="preview-test",
+            effective_from=date(2026, 1, 1),
+            status="draft", author="alice",
+        )
+        # ChoiceList for a select_one question.
+        cl = ChoiceList.objects.create(
+            list_name="preview_sex", version=1,
+            effective_from=date(2026, 1, 1),
+            status="active", author="alice", approved_by="bob",
+        )
+        ChoiceOption.objects.create(
+            choice_list=cl, code="M", label="Male",
+            language="en", sort_order=1,
+        )
+        ChoiceOption.objects.create(
+            choice_list=cl, code="F", label="Female",
+            language="en", sort_order=2,
+        )
+        # Section + question variety.
+        a = FormSection.objects.create(
+            form_version=fv, code="A", name="ident", label="Identification", order=1,
+        )
+        FormQuestion.objects.create(
+            section=a, name="full_name", label="Full name", type="text",
+            required=True, hint="Surname, then first name", order_in_section=1,
+        )
+        FormQuestion.objects.create(
+            section=a, name="sex", label="Sex", type="select_one",
+            choice_list_ref=cl, required=True, order_in_section=2,
+        )
+        FormQuestion.objects.create(
+            section=a, name="age_years", label="Age in years", type="integer",
+            constraint_expression=". >= 0 and . <= 120",
+            constraint_message="age must be 0-120",
+            order_in_section=3,
+        )
+        FormQuestion.objects.create(
+            section=a, name="age_hidden", label="Hidden if no age",
+            type="text", relevant_expression="${age_years} != ''",
+            order_in_section=4,
+        )
+        FormQuestion.objects.create(
+            section=a, name="gps", label="GPS", type="geopoint",
+            order_in_section=5,
+        )
+        return fv
+
+    def test_preview_returns_200(self, _seeded_form, db, django_user_model):
+        c = self._staff_client(db, django_user_model)
+        r = c.get(f"/admin/intake/formversion/_us117b/preview/{_seeded_form.id}/")
+        assert r.status_code == 200
+
+    def test_preview_renders_section_and_questions(
+        self, _seeded_form, db, django_user_model,
+    ):
+        c = self._staff_client(db, django_user_model)
+        r = c.get(f"/admin/intake/formversion/_us117b/preview/{_seeded_form.id}/")
+        body = r.content.decode()
+        # Section heading + question labels.
+        assert "Identification" in body
+        assert "Full name" in body
+        assert "Age in years" in body
+        # Required marker.
+        assert "*" in body
+        # Hint text rendered.
+        assert "Surname, then first name" in body
+        # select_one renders the choice list options.
+        assert "Male" in body and "Female" in body
+        # geopoint placeholder shown.
+        assert "latitude" in body or "GPS" in body
+        # Annotation strip surfaces relevant + constraint.
+        assert "relevant:" in body
+        assert "constraint:" in body
+
+    def test_preview_has_download_link(
+        self, _seeded_form, db, django_user_model,
+    ):
+        c = self._staff_client(db, django_user_model)
+        r = c.get(f"/admin/intake/formversion/_us117b/preview/{_seeded_form.id}/")
+        body = r.content.decode()
+        # Header has the XLSForm download link + Kobo external link.
+        assert "Download XLSForm" in body
+        assert f"export-xlsform/{_seeded_form.id}/" in body
+        assert "kobotoolbox" in body
+
+    def test_change_form_links_to_preview_and_download(
+        self, _seeded_form, db, django_user_model, settings,
+    ):
+        settings.QUESTIONNAIRE_EDITOR_V2 = True
+        c = self._staff_client(db, django_user_model)
+        r = c.get(f"/admin/intake/formversion/{_seeded_form.id}/change/")
+        body = r.content.decode()
+        # The action bar in change_form template wires the two links.
+        assert "Preview form" in body
+        assert "Download XLSForm" in body
