@@ -691,3 +691,119 @@ class TestXlsformExport:
         assert r.status_code == 200
         assert "spreadsheetml" in r["Content-Type"]
         assert r.content[:2] == b"PK"
+
+
+# --- US-119: rule-pack sync on FormVersion activation ----------------------
+
+class TestRulePackSync:
+    """When a FormVersion activates, fan out atomically to DAT-DQA:
+    one DqaRule per FormQuestion that has a constraint or skip-logic
+    DSL. Idempotent — running sync again upserts (rule_id, version).
+    """
+
+    @pytest.fixture
+    def _fv_with_constraints(self, db):
+        from apps.intake.models import (
+            FormConstraint,
+            FormQuestion,
+            FormSection,
+            FormVersion,
+        )
+        fv = FormVersion.objects.create(
+            version=3001, name="sync-test",
+            effective_from=date(2026, 1, 1),
+            status="pending_approval", author="alice",
+        )
+        s = FormSection.objects.create(
+            form_version=fv, code="C", name="roster", label="Roster", order=1,
+        )
+        q_age = FormQuestion.objects.create(
+            section=s, name="age_years", label="Age", type="integer",
+            constraint_expression=". >= 0 and . <= 120",
+            constraint_message="age must be 0-120",
+            order_in_section=1,
+        )
+        FormConstraint.objects.create(
+            question=q_age,
+            dsl={"field": "age_years", "op": "between", "value": [0, 120]},
+            message="age must be 0-120",
+        )
+        q_phone = FormQuestion.objects.create(
+            section=s, name="phone", label="Phone", type="text",
+            constraint_expression="regex(., '^[+0-9]{9,15}$')",
+            constraint_message="phone must be E.164-ish",
+            order_in_section=2,
+        )
+        FormConstraint.objects.create(
+            question=q_phone,
+            dsl={"field": "phone", "op": "regex", "value": r"^\+[0-9]{9,15}$"},
+            message="phone must be E.164-ish",
+        )
+        # A question with NO constraint — shouldn't produce a rule.
+        FormQuestion.objects.create(
+            section=s, name="full_name", label="Full name", type="text",
+            order_in_section=3,
+        )
+        return fv
+
+    def test_sync_creates_one_rule_per_constraint(self, _fv_with_constraints):
+        from apps.dqa.models import DqaRule
+        from apps.intake.rule_pack_sync import sync_rule_pack
+        before = DqaRule.objects.count()
+        report = sync_rule_pack(_fv_with_constraints, actor="alice")
+        after = DqaRule.objects.count()
+        assert after == before + 2
+        # Returned summary lists what was created.
+        assert report["created"] == 2
+        assert report["updated"] == 0
+        # Naming convention: AC-FORM-<version>-<question_name>
+        rule_ids = set(DqaRule.objects.values_list("rule_id", flat=True))
+        assert "AC-FORM-3001-age_years" in rule_ids
+        assert "AC-FORM-3001-phone" in rule_ids
+
+    def test_sync_links_dsl_into_rule_expression(self, _fv_with_constraints):
+        from apps.dqa.models import DqaRule
+        from apps.intake.rule_pack_sync import sync_rule_pack
+        sync_rule_pack(_fv_with_constraints, actor="alice")
+        rule = DqaRule.objects.get(rule_id="AC-FORM-3001-age_years")
+        assert rule.expression == {
+            "field": "age_years", "op": "between", "value": [0, 120],
+        }
+        assert rule.error_message_template == "age must be 0-120"
+        assert rule.applicability_filter == {
+            "entity": "member", "form_version": 3001,
+        }
+
+    def test_sync_is_idempotent(self, _fv_with_constraints):
+        from apps.dqa.models import DqaRule
+        from apps.intake.rule_pack_sync import sync_rule_pack
+        sync_rule_pack(_fv_with_constraints, actor="alice")
+        count_after_first = DqaRule.objects.count()
+        report = sync_rule_pack(_fv_with_constraints, actor="alice")
+        # Second pass updates existing rules; no new rows.
+        assert DqaRule.objects.count() == count_after_first
+        assert report["created"] == 0
+        assert report["updated"] >= 2
+
+    def test_sync_skips_questions_without_constraint(self, _fv_with_constraints):
+        from apps.dqa.models import DqaRule
+        from apps.intake.rule_pack_sync import sync_rule_pack
+        sync_rule_pack(_fv_with_constraints, actor="alice")
+        # `full_name` has no constraint — no rule emitted.
+        assert not DqaRule.objects.filter(
+            rule_id="AC-FORM-3001-full_name",
+        ).exists()
+
+    def test_sync_emits_audit_event(self, _fv_with_constraints):
+        from apps.intake.rule_pack_sync import sync_rule_pack
+        from apps.security.models import AuditEvent
+        before = AuditEvent.objects.filter(
+            entity_type="intake.form_version",
+            action="rule_pack_synced",
+        ).count()
+        sync_rule_pack(_fv_with_constraints, actor="alice")
+        after = AuditEvent.objects.filter(
+            entity_type="intake.form_version",
+            action="rule_pack_synced",
+        ).count()
+        assert after == before + 1
