@@ -110,8 +110,12 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
-    # Lists return {count, next, previous, results}.
-    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
+    # Lists return {count, next, previous, results}. DefaultPagination
+    # honours `?page_size=` up to MAX_PAGE_SIZE (500) per ADR-0008.
+    # Before ADR-0008 the React side was passing page_size=4/100/200
+    # and getting 50 back (DRF default ignores the param) — fixed
+    # by switching to the project-owned subclass.
+    "DEFAULT_PAGINATION_CLASS": "apps.security.pagination.DefaultPagination",
     "PAGE_SIZE": 50,
     # Throttling — only the rate scopes are declared globally; each
     # throttled view names its scope via UserRateThrottle.scope. The
