@@ -545,6 +545,90 @@ class TestReverseMergeApi:
         assert r.status_code == 400
 
 
+class TestMergePairApi:
+    """Per US-S14-001: POST /api/v1/ddup/match-pairs/{id}/merge/
+    and /reject/ wrap the existing merge_member_pair + reject_pair
+    services. Guards (dual-actor, non-pending pair, wrong survivor)
+    surface as 400."""
+
+    def _build_pending_pair(self, household):
+        from apps.security.hashing import nin_hash as _nh
+        h = _nh("CM1234567890AB")
+        Member.objects.create(household=household, line_number=1, surname="A",
+                              first_name="X", sex="M", nin_hash=h, nin_last4="00AB")
+        b = Member.objects.create(household=household, line_number=2, surname="B",
+                                  first_name="Y", sex="M", nin_hash=h, nin_last4="00AB")
+        pair = discover_nin_pairs(actor="system")[0]
+        return pair, b
+
+    def test_merge_via_api(self, household, active_model, django_user_model):
+        from rest_framework.test import APIClient
+        pair, b = self._build_pending_pair(household)
+        u = django_user_model.objects.create_user(
+            username="reviewer", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.post(
+            f"/api/v1/ddup/match-pairs/{pair.id}/merge/",
+            data={
+                "surviving_id": b.id,
+                "chosen_field_values": {"surname": "B", "telephone_1": "+256700000000"},
+                "actor": "reviewer-2",
+                "note": "decided via React Merge button",
+            },
+            format="json",
+        )
+        assert r.status_code == 200, r.data
+        assert r.data["action"] == "merge"
+        assert r.data["surviving_record_id"] == b.id
+        # chosen_field_values on MergeDecision stores the raw chosen
+        # dict (the "applied" {old, new} diff is internal to the merge
+        # service for audit emission, not on the decision row).
+        assert r.data["chosen_field_values"]["surname"] == "B"
+
+    def test_merge_via_api_wrong_survivor_rejects(
+        self, household, active_model, django_user_model,
+    ):
+        from rest_framework.test import APIClient
+        pair, b = self._build_pending_pair(household)
+        u = django_user_model.objects.create_user(
+            username="reviewer", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.post(
+            f"/api/v1/ddup/match-pairs/{pair.id}/merge/",
+            data={
+                "surviving_id": "01OUTSIDETHEPAIR0000000000",
+                "actor": "reviewer-2",
+            },
+            format="json",
+        )
+        assert r.status_code == 400
+        assert "surviving_id" in r.data["detail"]
+
+    def test_reject_via_api(self, household, active_model, django_user_model):
+        from rest_framework.test import APIClient
+        pair, _b = self._build_pending_pair(household)
+        u = django_user_model.objects.create_user(
+            username="reviewer", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.post(
+            f"/api/v1/ddup/match-pairs/{pair.id}/reject/",
+            data={"actor": "reviewer-2", "reason": "different households"},
+            format="json",
+        )
+        assert r.status_code == 200, r.data
+        assert r.data["action"] == "reject"
+        # Pair flipped to REJECTED.
+        pair.refresh_from_db()
+        from apps.ddup.models import PairStatus
+        assert pair.status == PairStatus.REJECTED
+
+
 class TestReverseMergeAdmin:
     """The admin bulk action wraps the same service so audit chain and
     guards are identical to the API surface."""

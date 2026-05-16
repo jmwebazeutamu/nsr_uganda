@@ -7,7 +7,7 @@ from apps.security.abac import MatchPairScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
 from .models import DdupModelVersion, MatchPair, MergeDecision
-from .services import MergeError, reverse_merge_decision
+from .services import MergeError, merge_member_pair, reject_pair, reverse_merge_decision
 
 
 class DdupModelVersionSerializer(serializers.ModelSerializer):
@@ -52,6 +52,31 @@ class _ReverseRequest(serializers.Serializer):
     reason = serializers.CharField()
 
 
+class _MergeRequest(serializers.Serializer):
+    """Payload for POST /api/v1/ddup/match-pairs/{id}/merge/ (US-S14-001).
+
+    surviving_id picks the record that survives (must match
+    record_a_id or record_b_id on the pair). chosen_field_values is a
+    {field: value} dict; only fields whitelisted by
+    merge_member_pair's `settable` set get applied — others are
+    silently dropped, mirroring the admin-side service behaviour.
+    actor must NOT equal the operator who created the pair-side
+    record (AC-DDUP-DUAL-ACTOR); the service enforces it.
+    """
+
+    surviving_id = serializers.CharField(max_length=26)
+    chosen_field_values = serializers.DictField(
+        child=serializers.JSONField(), required=False, default=dict,
+    )
+    actor = serializers.CharField(max_length=64)
+    note = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+class _RejectPairRequest(serializers.Serializer):
+    actor = serializers.CharField(max_length=64)
+    reason = serializers.CharField()
+
+
 @extend_schema_view(
     list=extend_schema(tags=["ddup"], summary="List DDUP model versions"),
     retrieve=extend_schema(tags=["ddup"], summary="Retrieve a DDUP model version"),
@@ -72,6 +97,75 @@ class MatchPairViewSet(
     queryset = MatchPair.objects.all().order_by("-created_at")
     serializer_class = MatchPairSerializer
     filterset_fields = ["status", "tier", "record_type"]
+    # Read-only + custom actions — DRF wires the @action endpoints
+    # without enabling create/update/delete on the base resource.
+    http_method_names = ["get", "post", "head", "options"]
+
+    @extend_schema(
+        tags=["ddup"],
+        summary="Commit a merge decision (US-S14-001)",
+        description=(
+            "Atomic merge per AC-DDUP-MERGE-COMMIT. Survivor keeps its "
+            "id; loser is soft-deleted and re-pointed; chosen field "
+            "values applied; audit chain entry written. Returns the "
+            "resulting MergeDecision row. Guards: pair must be PENDING; "
+            "surviving_id must be one of the pair members; actor must "
+            "not match the original capturer (AC-DDUP-DUAL-ACTOR)."
+        ),
+        request=_MergeRequest,
+        responses={
+            200: MergeDecisionSerializer,
+            400: OpenApiResponse(
+                description="Guard violation (non-pending, wrong survivor, "
+                            "dual-actor breach, etc.)",
+            ),
+        },
+    )
+    @action(detail=True, methods=["post"], url_path="merge")
+    def merge(self, request, pk=None):
+        ser = _MergeRequest(data=request.data)
+        ser.is_valid(raise_exception=True)
+        pair = self.get_object()
+        try:
+            decision = merge_member_pair(
+                pair,
+                surviving_id=ser.validated_data["surviving_id"],
+                chosen_field_values=ser.validated_data.get("chosen_field_values") or {},
+                actor=ser.validated_data["actor"],
+                note=ser.validated_data.get("note") or "",
+            )
+        except MergeError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(MergeDecisionSerializer(decision).data)
+
+    @extend_schema(
+        tags=["ddup"],
+        summary="Reject a match pair as not-a-duplicate",
+        description=(
+            "Marks the pair as REJECTED with an actor + reason. Used "
+            "by the DDUP React Reject button — writes a MergeDecision "
+            "row with action=REJECT for audit lineage."
+        ),
+        request=_RejectPairRequest,
+        responses={
+            200: MergeDecisionSerializer,
+            400: OpenApiResponse(description="Guard violation"),
+        },
+    )
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, pk=None):
+        ser = _RejectPairRequest(data=request.data)
+        ser.is_valid(raise_exception=True)
+        pair = self.get_object()
+        try:
+            decision = reject_pair(
+                pair,
+                actor=ser.validated_data["actor"],
+                reason=ser.validated_data["reason"],
+            )
+        except MergeError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(MergeDecisionSerializer(decision).data)
 
 
 @extend_schema_view(

@@ -149,10 +149,104 @@ const DedupScreen = () => {
 
   const set = (k, v) => setChoice({ ...choice, [k]: v });
 
+  // US-S14-001 — wire Merge + Reject to /api/v1/ddup/match-pairs/{id}/.
+  // Only fires in live mode (we have a real pair id from the API).
+  // Picks the survivor by counting how many fields the operator
+  // chose from A vs B; ties → A wins (matches the redesign default).
+  const _getCsrfToken = () => {
+    const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    return m ? m[1] : "";
+  };
+  const _post = (url, body) => fetch(url, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRFToken": _getCsrfToken(),
+      Accept: "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const _refreshNext = () => {
+    setLivePair(null);
+    _fetchJson("/api/v1/ddup/match-pairs/?status=pending&page_size=1")
+      .then(data => {
+        const pairs = data.results || data;
+        if (!pairs.length) return;
+        const pair = pairs[0];
+        return Promise.all([
+          _fetchJson(`/api/v1/data-management/members/${pair.record_a_id}/`),
+          _fetchJson(`/api/v1/data-management/members/${pair.record_b_id}/`),
+        ]).then(([mA, mB]) => setLivePair(_buildLivePair(pair, mA, mB)));
+      })
+      .catch(() => {});
+  };
+  const commitMerge = () => {
+    setConfirm(false);
+    if (!livePair) {
+      setToast("Merged into 01HXY7K3B2N9PVQE4M6FZRWS18. Loser 01HZ9NK2… archived.");
+      return;
+    }
+    const aCount = activePair.fields.filter(f => (f.fixed || choice[f.key]) === "A").length;
+    const bCount = activePair.fields.filter(f => (f.fixed || choice[f.key]) === "B").length;
+    const survivor = bCount > aCount ? livePair._memberB : livePair._memberA;
+    // Map chosen A/B values onto field names the service accepts.
+    const FIELD_KEYS = { head_name: ["surname", "first_name"], phone: ["telephone_1"] };
+    const chosen = {};
+    activePair.fields.forEach(f => {
+      const side = f.fixed || choice[f.key];
+      if (side !== "A" && side !== "B") return;
+      const value = side === "A" ? f.A : f.B;
+      const targets = FIELD_KEYS[f.key] || [f.key];
+      targets.forEach(t => { chosen[t] = value; });
+    });
+    _post(`/api/v1/ddup/match-pairs/${activePair.id}/merge/`, {
+      surviving_id: survivor.id,
+      chosen_field_values: chosen,
+      actor: "admin",
+      note,
+    })
+      .then(async r => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.detail || `HTTP ${r.status}`);
+        }
+        return r.json();
+      })
+      .then(() => {
+        setToast(`Merge committed · survivor ${survivor.id.slice(0, 12)}…`);
+        _refreshNext();
+      })
+      .catch(e => setToast(`Merge failed: ${e.message}`));
+  };
+  const commitReject = ({ reason, note: rNote } = {}) => {
+    setRejectOpen(false);
+    if (!livePair) {
+      setToast("Pair rejected. Records remain separate.");
+      return;
+    }
+    _post(`/api/v1/ddup/match-pairs/${activePair.id}/reject/`, {
+      actor: "admin",
+      reason: reason || rNote || "rejected via DDUP screen",
+    })
+      .then(async r => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.detail || `HTTP ${r.status}`);
+        }
+        return r.json();
+      })
+      .then(() => {
+        setToast(`Pair rejected · ${activePair.id.slice(0, 12)}…`);
+        _refreshNext();
+      })
+      .catch(e => setToast(`Reject failed: ${e.message}`));
+  };
+
   return (
     <div className="page" style={{paddingBottom:0}}>
       <PageHeader
-        eyebrow="DUPLICATES · US-083"
+        eyebrow={livePair ? "DUPLICATES · US-083 · LIVE" : (loadNote ? `DUPLICATES · US-083 · ${loadNote}` : "DUPLICATES · US-083")}
         title={<>Dedup compare <span className="t-mono" style={{fontSize:14, marginLeft:8, color:'var(--neutral-500)'}}>{activePair.id}</span></>}
         sub="Decide which record survives. Per-field similarity is shown to the right of each value."
         right={<>
@@ -246,7 +340,7 @@ const DedupScreen = () => {
       <Modal open={confirm} onClose={() => setConfirm(false)} title="Commit merge?" width={560}
         footer={<>
           <button className="btn" onClick={() => setConfirm(false)}>Cancel</button>
-          <button className="btn btn-primary" onClick={() => { setConfirm(false); setToast("Merged into 01HXY7K3B2N9PVQE4M6FZRWS18. Loser 01HZ9NK2P5M3QFB7… archived. PMT recompute queued."); }}>
+          <button className="btn btn-primary" onClick={commitMerge}>
             <Icon name="check" size={14}/> Confirm commit
           </button>
         </>}>
@@ -272,7 +366,7 @@ const DedupScreen = () => {
 
       <ReasonModal open={rejectOpen} title="Reject this pair" intent="danger"
         reasonOptions={REASON_OPTS_REJECT} recordLabel={activePair.id}
-        onClose={() => setRejectOpen(false)} onConfirm={() => { setRejectOpen(false); setToast("Pair rejected. Records remain separate."); }}/>
+        onClose={() => setRejectOpen(false)} onConfirm={commitReject}/>
 
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>
