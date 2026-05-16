@@ -5,7 +5,7 @@
 // (throttling). Role-gated to PARTNER_ANALYST and PARTNER_DPO per
 // ADR-0006.
 
-const { useState: useStatePDrs, useMemo: useMemoPDrs } = React;
+const { useState: useStatePDrs, useMemo: useMemoPDrs, useEffect: useEffectPDrs } = React;
 
 // DataRequest statuses mirror apps.data_requests.models.RequestStatus.
 // Partner-facing labels use plainer English than the operator-side
@@ -103,11 +103,14 @@ const PDRS_REQUESTS = [
   },
 ];
 
-const STATUS_FILTERS = [
-  { id: "all",       label: "All",              count: PDRS_REQUESTS.length },
-  { id: "submitted", label: "Pending approval", count: PDRS_REQUESTS.filter(r => r.status === "submitted").length },
-  { id: "approved",  label: "Approved",         count: PDRS_REQUESTS.filter(r => r.status === "approved").length },
-  { id: "delivered", label: "Delivered",        count: PDRS_REQUESTS.filter(r => r.status === "delivered").length },
+// Status filter definitions — counts computed dynamically in the
+// component from the live (or mock) request list so the chips
+// reflect what the API actually returned.
+const STATUS_FILTER_DEFS = [
+  { id: "all",       label: "All" },
+  { id: "submitted", label: "Pending approval" },
+  { id: "approved",  label: "Approved" },
+  { id: "delivered", label: "Delivered" },
 ];
 
 // SHA-256 over a Blob using the browser's Web Crypto API. Returns a
@@ -131,9 +134,45 @@ const PartnerDRSScreen = () => {
   // mode: "list" (the S9-005 view) or "build" (the S10-003 builder)
   const [mode, setMode] = useStatePDrs("list");
   const [statusFilter, setStatusFilter] = useStatePDrs("all");
-  const [selectedRow, setSelectedRow] = useStatePDrs(PDRS_REQUESTS[0].id);
   const [auditOpen, setAuditOpen] = useStatePDrs(false);
   const [toast, setToast] = useStatePDrs("");
+
+  // US-S13-004 — live wiring. Fetch on mount; fall back to
+  // PDRS_REQUESTS mock if /api/v1/drs/requests/mine/ isn't reachable
+  // (file:// preview or unauthenticated session).
+  const [liveRequests, setLiveRequests] = useStatePDrs(null);
+  const [dataSource, setDataSource] = useStatePDrs("mock");
+  useEffectPDrs(() => {
+    let cancelled = false;
+    fetch("/api/v1/drs/requests/mine/", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then(data => {
+        if (cancelled) return;
+        const rows = (data.results || data || []).map(r => ({
+          ...r,
+          // request_payload isn't on MyDataRequestSerializer (slim
+          // partner-facing projection); fill an empty object so the
+          // detail rail's `(current.request_payload.fields || [])`
+          // pattern stays safe.
+          request_payload: r.request_payload || { fields: [] },
+        }));
+        setLiveRequests(rows);
+        setDataSource(rows.length === 0 ? "live-empty" : "live");
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const allRequests = liveRequests || PDRS_REQUESTS;
+  const [selectedRow, setSelectedRow] = useStatePDrs(PDRS_REQUESTS[0]?.id);
+  useEffectPDrs(() => {
+    if (allRequests.length > 0 && !allRequests.find(r => r.id === selectedRow)) {
+      setSelectedRow(allRequests[0].id);
+    }
+  }, [allRequests]);
 
   // Per-request integrity-verify state (US-S11-006). Map of
   // request_id -> { state: "idle"|"hashing"|"match"|"mismatch"|"error",
@@ -159,7 +198,7 @@ const PartnerDRSScreen = () => {
     // fires onChange (browsers suppress duplicate change events).
     e.target.value = "";
     if (!file || !requestId) return;
-    const req = PDRS_REQUESTS.find(r => r.id === requestId);
+    const req = allRequests.find(r => r.id === requestId);
     if (!req) return;
     setVerify(v => ({ ...v, [requestId]: { state: "hashing" } }));
     try {
@@ -190,13 +229,23 @@ const PartnerDRSScreen = () => {
   // list-mode memos unconditionally, then branch on mode below.
   const rows = useMemoPDrs(() => (
     statusFilter === "all"
-      ? PDRS_REQUESTS
-      : PDRS_REQUESTS.filter(r => r.status === statusFilter)
-  ), [statusFilter]);
+      ? allRequests
+      : allRequests.filter(r => r.status === statusFilter)
+  ), [allRequests, statusFilter]);
 
   const current = useMemoPDrs(
-    () => PDRS_REQUESTS.find(r => r.id === selectedRow),
-    [selectedRow],
+    () => allRequests.find(r => r.id === selectedRow),
+    [allRequests, selectedRow],
+  );
+
+  // Live status-filter counts — chips reflect what the API returned.
+  const STATUS_FILTERS = useMemoPDrs(
+    () => STATUS_FILTER_DEFS.map(f => ({
+      ...f,
+      count: f.id === "all" ? allRequests.length
+                            : allRequests.filter(r => r.status === f.id).length,
+    })),
+    [allRequests],
   );
 
   if (mode === "build") {
@@ -232,7 +281,7 @@ const PartnerDRSScreen = () => {
         style={{display:"none"}}
         onChange={onFileChosen}/>
       <PageHeader
-        eyebrow="PARTNER DRS PORTAL · US-S9-005"
+        eyebrow={dataSource === "live" ? "PARTNER DRS PORTAL · LIVE" : "PARTNER DRS PORTAL · US-S9-005"}
         title={<>My data requests <Chip>{rows.length}</Chip></>}
         sub="Bulk-extract requests under your active DSA. Pending submissions go through NSR Unit approval before download."
         right={<>
