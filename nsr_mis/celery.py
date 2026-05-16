@@ -65,4 +65,14 @@ app.conf.beat_schedule = {
         # time to manually pre-empt anything edge-case.
         "schedule": crontab(minute=15),
     },
+    "process-pending-kobo-landings": {
+        "task": "apps.ingestion_hub.tasks.process_pending_kobo_landings_task",
+        # Every 5 minutes — Kobo pulls happen on operator action
+        # today, but the beat picks up any RawLandings the admin
+        # "Pull" action created without auto-processing (e.g., older
+        # pulls from before S11-014 landed). Once push-via-webhook
+        # is wired (DIH-O-CONN-04) this becomes the path that drives
+        # ALL Kobo intake.
+        "schedule": crontab(minute="*/5"),
+    },
 }

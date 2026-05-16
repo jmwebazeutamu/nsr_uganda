@@ -587,3 +587,70 @@ class TestSourceSystemForm:
         labels = dict(form.fields["kind"].choices)
         assert "(coming soon)" in labels[SourceSystemKind.UBOS]
         assert "(coming soon)" in labels[SourceSystemKind.PARTNER_MIS]
+
+
+# --- US-S12-004 — Celery beat for pending Kobo landings ---------------
+
+
+class TestProcessPendingLandingsTask:
+    """The Celery task wraps the same _process_one_landing helper as
+    the admin action, so behaviour is identical. We verify it runs
+    end-to-end and processes outstanding landings, plus that it's
+    registered on the beat schedule."""
+
+    @pytest.fixture
+    def kobo_with_dpa(self, kobo_source_with_creds):
+        from datetime import date
+
+        from apps.ingestion_hub.models import DataProvisionAgreement
+        DataProvisionAgreement.objects.create(
+            source_system=kobo_source_with_creds, reference="DPA-KOBO-BEAT",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+        )
+        return kobo_source_with_creds
+
+    def test_task_processes_pending_landings(self, kobo_with_dpa):
+        from apps.ingestion_hub.connectors.test_kobo import SAMPLE_KOBO_PAYLOAD
+        from apps.ingestion_hub.models import (
+            Connector as ConnectorModel,
+        )
+        from apps.ingestion_hub.models import (
+            ConnectorRun,
+            ConnectorRunStatus,
+            RawLanding,
+            StageRecord,
+        )
+        from apps.ingestion_hub.tasks import process_pending_kobo_landings_task
+
+        # Set up an unprocessed RawLanding (no StageRecord yet).
+        connector_row = ConnectorModel.objects.create(
+            source_system=kobo_with_dpa, name="kobo-beat-test",
+        )
+        run = ConnectorRun.objects.create(
+            connector=connector_row, status=ConnectorRunStatus.SUCCEEDED,
+        )
+        RawLanding.objects.create(
+            connector_run=run, payload=SAMPLE_KOBO_PAYLOAD, source_reference="1",
+        )
+        assert StageRecord.objects.count() == 0
+
+        # CELERY_TASK_ALWAYS_EAGER is on in settings — calling the
+        # task .delay() or directly both run synchronously.
+        summary = process_pending_kobo_landings_task()
+
+        assert StageRecord.objects.count() == 1
+        assert summary[kobo_with_dpa.code]["staged"] == 1
+
+    def test_task_skips_sources_with_no_credentials(self, db):
+        from apps.ingestion_hub.models import SourceSystem, SourceSystemKind
+        from apps.ingestion_hub.tasks import process_pending_kobo_landings_task
+        SourceSystem.objects.create(
+            code="KOBO-PILOT", name="Kobo pilot", kind=SourceSystemKind.KOBO,
+        )
+        summary = process_pending_kobo_landings_task()
+        assert summary["KOBO-PILOT"] == {"skipped": "no credential"}
+
+    def test_task_registered_on_beat_schedule(self):
+        from nsr_mis.celery import app
+        tasks = {entry["task"] for entry in app.conf.beat_schedule.values()}
+        assert "apps.ingestion_hub.tasks.process_pending_kobo_landings_task" in tasks
