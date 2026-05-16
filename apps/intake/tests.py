@@ -155,3 +155,190 @@ class TestSubmitIntakeApi:
         assert r.data["state"] == SubmissionState.PENDING_QA
         assert r.data["stage_record_id"]
         assert Submission.objects.filter(pk=r.data["id"]).exists()
+
+
+# --- US-117a: questionnaire authoring models -------------------------------
+
+class TestFormVersionLifecycleFields:
+    """The new status/author/approval_note fields landed alongside the
+    child-model structure. Defaults match the DqaRule/ChoiceList pattern."""
+
+    def test_new_form_version_defaults_to_draft(self, db):
+        fv = FormVersion.objects.create(
+            version=999, name="test-form",
+            effective_from=date(2026, 1, 1),
+        )
+        assert fv.status == "draft"
+        assert fv.author == ""
+        assert fv.approval_note == ""
+        assert fv.submitted_at is None
+
+
+class TestQuestionnaireSchema:
+    @pytest.fixture
+    def fv(self, db):
+        return FormVersion.objects.create(
+            version=2026, name="nsr-questionnaire",
+            effective_from=date(2026, 1, 1),
+            status="draft", author="alice",
+        )
+
+    def test_section_creation(self, fv):
+        from apps.intake.models import FormSection
+        s = FormSection.objects.create(
+            form_version=fv, code="A", name="identification",
+            label="Identification particulars", order=1,
+        )
+        assert str(s).endswith("A: Identification particulars")
+        assert s.form_version_id == fv.id
+
+    def test_section_code_unique_per_version(self, fv):
+        from django.db import IntegrityError
+
+        from apps.intake.models import FormSection
+        FormSection.objects.create(
+            form_version=fv, code="A", name="ident", label="x", order=1,
+        )
+        with pytest.raises(IntegrityError):
+            FormSection.objects.create(
+                form_version=fv, code="A", name="ident2", label="y", order=2,
+            )
+
+    def test_section_name_unique_per_version(self, db):
+        from django.db import IntegrityError
+
+        from apps.intake.models import FormSection
+        fv = FormVersion.objects.create(
+            version=2027, name="test-form",
+            effective_from=date(2026, 1, 1),
+        )
+        FormSection.objects.create(
+            form_version=fv, code="A", name="ident", label="x",
+        )
+        with pytest.raises(IntegrityError):
+            FormSection.objects.create(
+                form_version=fv, code="B", name="ident", label="y",
+            )
+
+    def test_question_with_choice_list_ref(self, fv):
+        from apps.intake.models import FormQuestion, FormSection
+        from apps.reference_data.models import ChoiceList
+        # Use the seeded `relationship` choice list (v=1, status=active).
+        rel = ChoiceList.objects.get(list_name="relationship", version=1)
+        section = FormSection.objects.create(
+            form_version=fv, code="C", name="roster", label="Household roster",
+        )
+        q = FormQuestion.objects.create(
+            section=section, name="relationship_to_head",
+            label="Relationship to head", type="select_one",
+            choice_list_ref=rel, required=True, order_in_section=2,
+        )
+        assert q.choice_list_ref == rel
+        assert q.type == "select_one"
+        assert q.required is True
+
+    def test_question_name_unique_per_section(self, fv):
+        from django.db import IntegrityError
+
+        from apps.intake.models import FormQuestion, FormSection
+        s = FormSection.objects.create(
+            form_version=fv, code="A", name="ident", label="x",
+        )
+        FormQuestion.objects.create(
+            section=s, name="full_name", label="Full name", type="text",
+        )
+        with pytest.raises(IntegrityError):
+            FormQuestion.objects.create(
+                section=s, name="full_name", label="dup", type="text",
+            )
+
+    def test_skip_logic_and_constraint_attach_to_question(self, fv):
+        from apps.intake.models import (
+            FormConstraint,
+            FormQuestion,
+            FormSection,
+            FormSkipLogic,
+        )
+        s = FormSection.objects.create(
+            form_version=fv, code="C", name="roster", label="x",
+        )
+        q = FormQuestion.objects.create(
+            section=s, name="age_years", label="Age in years", type="integer",
+        )
+        FormSkipLogic.objects.create(
+            question=q,
+            dsl={"field": "age_years", "op": "is_null"},
+            description="don't ask when age missing",
+        )
+        FormConstraint.objects.create(
+            question=q,
+            dsl={"field": "age_years", "op": "between", "value": [0, 120]},
+            message="age must be 0-120",
+        )
+        assert q.skip_logic.count() == 1
+        assert q.constraints.count() == 1
+
+    def test_section_questions_in_order(self, fv):
+        from apps.intake.models import FormQuestion, FormSection
+        s = FormSection.objects.create(
+            form_version=fv, code="A", name="ident", label="x",
+        )
+        FormQuestion.objects.create(
+            section=s, name="b", label="b", type="text", order_in_section=2,
+        )
+        FormQuestion.objects.create(
+            section=s, name="a", label="a", type="text", order_in_section=1,
+        )
+        FormQuestion.objects.create(
+            section=s, name="c", label="c", type="text", order_in_section=3,
+        )
+        names = list(s.questions.values_list("name", flat=True))
+        assert names == ["a", "b", "c"]
+
+
+class TestQuestionnaireAdminSmoke:
+    """The admin pages render without 500 — the v2 tree UI lands in
+    US-117b; this smoke test pins the inline + changelist contract."""
+
+    def test_form_version_changelist(self, db, django_user_model):
+        from django.test import Client
+        # Need at least one row for the changelist to render column
+        # headers — Django omits the table on an empty list.
+        FormVersion.objects.create(
+            version=2029, name="changelist-test", status="active",
+            effective_from=date(2026, 1, 1),
+        )
+        u = django_user_model.objects.create_user(
+            username="qa-staff", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        r = c.get("/admin/intake/formversion/")
+        assert r.status_code == 200
+        body = r.content.decode()
+        # changelist-test row + Status column wired into list_display.
+        assert "changelist-test" in body
+        assert "Status" in body
+
+    def test_form_section_admin(self, db, django_user_model):
+        from django.test import Client
+
+        from apps.intake.models import FormSection
+        fv = FormVersion.objects.create(
+            version=2028, name="admin-test-form",
+            effective_from=date(2026, 1, 1),
+        )
+        FormSection.objects.create(
+            form_version=fv, code="A", name="ident",
+            label="Identification", order=1,
+        )
+        u = django_user_model.objects.create_user(
+            username="qa-staff2", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        r = c.get("/admin/intake/formsection/")
+        assert r.status_code == 200
+        assert "Identification" in r.content.decode()

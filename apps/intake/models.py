@@ -39,9 +39,26 @@ class SubmissionState(models.TextChoices):
     REJECTED = "rejected"
 
 
+class FormStatus(models.TextChoices):
+    """Lifecycle states for FormVersion (US-117 — same dual-approval
+    pattern as DqaRule / ChoiceList). is_active is kept as the
+    legacy boolean for backward compat; status is the source of
+    truth going forward."""
+
+    DRAFT = "draft"
+    PENDING_APPROVAL = "pending_approval"
+    ACTIVE = "active"
+    RETIRED = "retired"
+    REJECTED = "rejected"
+
+
 class FormVersion(models.Model):
-    """Versioned questionnaire definition. Sprint 2 stores just a JSON
-    schema + skip-logic snapshot; the rule pack lives in apps.dqa."""
+    """Versioned questionnaire definition. Sprint 2 stored a JSON
+    schema blob; Sprint 19 (US-117) adds first-class FormSection /
+    FormQuestion / FormSkipLogic / FormConstraint children so the
+    questionnaire is editable, not just rendered from JSON. The
+    `schema` JSONField is now the OUTPUT (XLSForm export) — when
+    children exist they're the source of truth, schema is recomputed."""
 
     id = ULIDField(primary_key=True)
     version = models.PositiveIntegerField(unique=True)
@@ -53,15 +70,198 @@ class FormVersion(models.Model):
     effective_from = models.DateField()
     effective_to = models.DateField(null=True, blank=True)
 
+    # US-117 lifecycle fields — mirror DqaRule/ChoiceList.
+    status = models.CharField(
+        max_length=24, choices=FormStatus.choices,
+        default=FormStatus.DRAFT,
+    )
+    author = models.CharField(max_length=64, blank=True)
+    approved_by = models.CharField(max_length=64, blank=True)
+    approved_at = models.DateTimeField(null=True, blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    approval_note = models.TextField(blank=True)
+    rejection_reason = models.TextField(blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         verbose_name = "Form version"
-        indexes = [models.Index(fields=["is_active", "effective_from"])]
+        indexes = [
+            models.Index(fields=["is_active", "effective_from"]),
+            models.Index(fields=["status", "version"]),
+        ]
 
     def __str__(self) -> str:
         return f"FormVersion {self.name} v{self.version}"
+
+
+class QuestionType(models.TextChoices):
+    """XLSForm-compatible question types (US-117). Mirrors the type
+    column in the legacy XLSForm script so an export round-trip is
+    lossless. begin_/end_ pairs are structural — they don't carry a
+    value, just demarcate groups + repeats."""
+
+    TEXT = "text"
+    INTEGER = "integer"
+    DECIMAL = "decimal"
+    DATE = "date"
+    SELECT_ONE = "select_one"
+    SELECT_MULTIPLE = "select_multiple"
+    GEOPOINT = "geopoint"
+    IMAGE = "image"
+    CALCULATE = "calculate"
+    NOTE = "note"
+    BEGIN_REPEAT = "begin_repeat"
+    END_REPEAT = "end_repeat"
+    BEGIN_GROUP = "begin_group"
+    END_GROUP = "end_group"
+
+
+class FormSection(models.Model):
+    """Top-level section of a FormVersion (US-117).
+
+    Sections match the questionnaire's letter-coded blocks: A
+    Identification, B Survey status, C Roster, D Health, etc. `code`
+    is the legacy letter (`A`, `B`, …); `name` is the snake_case
+    handle the XLSForm export uses; `label` is the operator-facing
+    title."""
+
+    id = ULIDField(primary_key=True)
+    form_version = models.ForeignKey(
+        FormVersion, on_delete=models.CASCADE, related_name="sections",
+    )
+    code = models.CharField(max_length=16)
+    name = models.CharField(max_length=64)
+    label = models.CharField(max_length=256)
+    description = models.TextField(blank=True)
+    order = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Form section"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["form_version", "code"],
+                name="formsection_unique_per_version",
+            ),
+            models.UniqueConstraint(
+                fields=["form_version", "name"],
+                name="formsection_name_unique_per_version",
+            ),
+        ]
+        ordering = ("form_version", "order", "code")
+
+    def __str__(self) -> str:
+        return f"{self.form_version.name} v{self.form_version.version} {self.code}: {self.label}"
+
+
+class FormQuestion(models.Model):
+    """One question within a section (US-117).
+
+    `name` is snake_case (the XLSForm `name` column); the
+    questionnaire stores responses against this key. `label` is the
+    operator/respondent-facing prompt. `type` follows QuestionType
+    (XLSForm-compatible). `choice_list_ref` is required when type
+    is select_one / select_multiple — references the ChoiceList
+    catalogue authored in US-116.
+
+    `relevant_expression` (skip-logic) and `constraint_expression`
+    (value validation) accept XLSForm-style XPath strings; the JSON-
+    DSL twin used by the DQA engine (apps.dqa.engine) is stored on
+    FormSkipLogic / FormConstraint when richer authoring is needed."""
+
+    id = ULIDField(primary_key=True)
+    section = models.ForeignKey(
+        FormSection, on_delete=models.CASCADE, related_name="questions",
+    )
+    name = models.CharField(max_length=64)
+    label = models.CharField(max_length=512)
+    hint = models.CharField(max_length=512, blank=True)
+    type = models.CharField(max_length=24, choices=QuestionType.choices)
+    choice_list_ref = models.ForeignKey(
+        "reference_data.ChoiceList",
+        on_delete=models.PROTECT, null=True, blank=True,
+        related_name="referenced_by_questions",
+    )
+    required = models.BooleanField(default=False)
+    relevant_expression = models.CharField(max_length=512, blank=True)
+    constraint_expression = models.CharField(max_length=512, blank=True)
+    constraint_message = models.CharField(max_length=256, blank=True)
+    appearance = models.CharField(max_length=64, blank=True)
+    repeat_count = models.CharField(max_length=64, blank=True)
+    parameters = models.JSONField(default=dict, blank=True)
+    order_in_section = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Form question"
+        constraints = [
+            # name must be unique within a FormVersion (not just a
+            # section) because XLSForm uses it as a global response
+            # key. The join goes via section.form_version.
+            models.UniqueConstraint(
+                fields=["section", "name"],
+                name="formquestion_name_unique_per_section",
+            ),
+        ]
+        ordering = ("section", "order_in_section", "name")
+
+    def __str__(self) -> str:
+        return f"{self.section.code}.{self.name} ({self.type})"
+
+
+class FormSkipLogic(models.Model):
+    """Structured skip-logic record (US-117).
+
+    A FormQuestion can carry a raw `relevant_expression` (XPath
+    string for XLSForm export) and / or an entry here with a richer
+    JSON-DSL twin the DQA engine can evaluate in-process. The XPath
+    is the export format; the DSL is the source of truth when
+    authored through the Rule Editor UI (US-117b)."""
+
+    id = ULIDField(primary_key=True)
+    question = models.ForeignKey(
+        FormQuestion, on_delete=models.CASCADE, related_name="skip_logic",
+    )
+    dsl = models.JSONField(default=dict, blank=True)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Form skip-logic"
+        verbose_name_plural = "Form skip-logic"
+
+    def __str__(self) -> str:
+        return f"skip_logic for {self.question.name}"
+
+
+class FormConstraint(models.Model):
+    """Structured constraint record (US-117). Mirrors FormSkipLogic;
+    captures the JSON-DSL twin of an XLSForm `constraint` so the
+    DQA engine can evaluate it server-side without re-parsing
+    XPath."""
+
+    id = ULIDField(primary_key=True)
+    question = models.ForeignKey(
+        FormQuestion, on_delete=models.CASCADE, related_name="constraints",
+    )
+    dsl = models.JSONField(default=dict, blank=True)
+    message = models.CharField(max_length=256, blank=True)
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Form constraint"
+
+    def __str__(self) -> str:
+        return f"constraint on {self.question.name}"
 
 
 class Submission(models.Model):
