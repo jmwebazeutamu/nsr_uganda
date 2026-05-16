@@ -1,0 +1,239 @@
+{% extends "admin/change_form.html" %}
+{% load static %}
+
+{# US-117b — Questionnaire builder admin UI. #}
+{# Tree on the left (sections → questions), edit panel on the     #}
+{# right (the standard admin form). Move-up / move-down arrows on #}
+{# each tree node POST to /admin/intake/formversion/_us117b/      #}
+{# reorder-*/ endpoints. The "Validate expression" panel below    #}
+{# runs a sample DSL through apps.dqa.engine.evaluate_expression  #}
+{# so the author catches malformed rules at design time.          #}
+
+{% block extrastyle %}
+  {{ block.super }}
+  {% if questionnaire_editor_v2 %}
+  <style>
+    .qe-grid {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .qe-tree, .qe-validate {
+      border: 1px solid var(--neutral-300, #d1d5db);
+      border-radius: 6px;
+      padding: 14px 16px;
+      background: var(--neutral-50, #fafafa);
+    }
+    .qe-tree h2, .qe-validate h2 {
+      font-size: 13px;
+      margin: 0 0 10px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--neutral-700, #4b5563);
+    }
+    .qe-section { margin-bottom: 12px; }
+    .qe-section-head {
+      display: flex; align-items: center; gap: 6px;
+      font-weight: 600; font-size: 13.5px;
+      padding: 4px 0;
+    }
+    .qe-section-head a {
+      color: var(--primary-900, #1e3a8a);
+      text-decoration: none;
+    }
+    .qe-section-head a:hover { text-decoration: underline; }
+    .qe-section-head .qe-arrows { margin-left: auto; }
+    .qe-arrows button {
+      background: white; border: 1px solid var(--neutral-300, #d1d5db);
+      border-radius: 4px; padding: 1px 5px; font-size: 11px;
+      cursor: pointer;
+    }
+    .qe-arrows button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .qe-questions {
+      margin: 4px 0 0 16px; padding: 0; list-style: none;
+      border-left: 2px solid var(--neutral-200, #e5e7eb);
+    }
+    .qe-questions li {
+      padding: 3px 0 3px 10px; font-size: 12.5px;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .qe-questions a {
+      color: var(--neutral-800, #1f2937); text-decoration: none;
+    }
+    .qe-questions a:hover { text-decoration: underline; }
+    .qe-q-type {
+      font-family: ui-monospace, monospace; font-size: 11px;
+      color: var(--neutral-500, #6b7280);
+    }
+    .qe-validate textarea {
+      width: 100%; font-family: ui-monospace, monospace;
+      font-size: 12px; min-height: 70px;
+      border: 1px solid var(--neutral-300, #d1d5db);
+      border-radius: 4px; padding: 6px 8px;
+    }
+    .qe-validate-result {
+      margin-top: 8px; padding: 8px;
+      border-radius: 4px;
+      font-family: ui-monospace, monospace; font-size: 12px;
+      background: white;
+      border: 1px solid var(--neutral-200, #e5e7eb);
+      white-space: pre-wrap;
+      min-height: 32px;
+    }
+    .qe-validate-result.ok { border-left: 3px solid var(--accent-quality, #10b981); }
+    .qe-validate-result.err { border-left: 3px solid var(--accent-danger, #ef4444); }
+  </style>
+  {% endif %}
+{% endblock %}
+
+{% block field_sets %}
+  {% if questionnaire_editor_v2 and original %}
+  <div class="qe-grid">
+
+    <!-- ── Tree pane ─────────────────────────────────────────────── -->
+    <aside class="qe-tree" id="qe-tree" data-form-version="{{ original.pk }}">
+      <h2>Sections &amp; questions</h2>
+      {% for sec in dqa_form_tree %}
+        <div class="qe-section" data-section="{{ sec.id }}">
+          <div class="qe-section-head">
+            <code class="qe-q-type">{{ sec.code }}</code>
+            <a href="{% url 'admin:intake_formsection_change' sec.id %}">{{ sec.label }}</a>
+            <span class="qe-arrows">
+              <button type="button" class="qe-up" data-section="{{ sec.id }}" title="Move section up">↑</button>
+              <button type="button" class="qe-down" data-section="{{ sec.id }}" title="Move section down">↓</button>
+            </span>
+          </div>
+          {% if sec.questions %}
+          <ul class="qe-questions">
+            {% for q in sec.questions %}
+              <li data-question="{{ q.id }}">
+                <a href="{% url 'admin:intake_formquestion_change' q.id %}">{{ q.name }}</a>
+                <span class="qe-q-type">{{ q.type }}{% if q.required %} · req{% endif %}</span>
+                <span class="qe-arrows" style="margin-left:auto">
+                  <button type="button" class="qe-q-up" data-question="{{ q.id }}" title="Move question up">↑</button>
+                  <button type="button" class="qe-q-down" data-question="{{ q.id }}" title="Move question down">↓</button>
+                </span>
+              </li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </div>
+      {% empty %}
+        <p style="font-style:italic;color:var(--neutral-500,#6b7280)">No sections yet. Add one from the FormSection admin.</p>
+      {% endfor %}
+      <p style="margin:12px 0 0;font-size:12px">
+        <a href="{% url 'admin:intake_formsection_add' %}?form_version={{ original.pk }}">+ Add section</a>
+      </p>
+    </aside>
+
+    <!-- ── Edit pane (standard admin fieldsets) ──────────────────── -->
+    <div>
+      {{ block.super }}
+    </div>
+  </div>
+
+  <!-- ── Expression validator (US-117b acceptance criterion) ─── -->
+  <div class="qe-validate" id="qe-validate">
+    <h2>Validate skip-logic / constraint DSL</h2>
+    <p style="font-size:12.5px;margin:0 0 8px;color:var(--neutral-700,#4b5563)">
+      Paste a JSON-DSL expression (e.g. <code>{"field":"age","op":"between","value":[0,120]}</code>)
+      and an optional sample record. Runs through <code>apps.dqa.engine.evaluate_expression</code>
+      so authors catch malformed rules at design time.
+    </p>
+    <label style="font-size:12px;font-weight:600">Expression (JSON)</label>
+    <textarea id="qe-expr">{"field": "age", "op": "between", "value": [0, 120]}</textarea>
+    <label style="font-size:12px;font-weight:600;margin-top:8px;display:block">Sample record (JSON, optional)</label>
+    <textarea id="qe-sample">{"age": 25}</textarea>
+    <div style="margin-top:8px">
+      <button type="button" class="button" id="qe-validate-btn">Validate</button>
+    </div>
+    <div class="qe-validate-result" id="qe-validate-result">— click "Validate" to test —</div>
+  </div>
+
+  <script>
+    (function() {
+      const csrfToken = document.querySelector(
+        "input[name=csrfmiddlewaretoken]",
+      ).value;
+      const post = (url, body) => fetch(url, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+          Accept: "application/json",
+        },
+        body: JSON.stringify(body || {}),
+      });
+
+      // ── Reorder arrows ──
+      function bindReorder(selector, urlFn, key) {
+        document.querySelectorAll(selector).forEach(btn => {
+          btn.addEventListener("click", () => {
+            const id = btn.dataset[key];
+            const direction = btn.classList.contains("qe-up") ||
+                              btn.classList.contains("qe-q-up") ? "up" : "down";
+            post(urlFn(id), { direction }).then(r => r.json()).then(j => {
+              if (j.moved) {
+                window.location.reload();
+              } else {
+                // boundary or error — small visual cue
+                btn.style.background = "var(--accent-danger-bg, #fee2e2)";
+                setTimeout(() => { btn.style.background = ""; }, 600);
+              }
+            });
+          });
+        });
+      }
+      bindReorder(".qe-up, .qe-down",
+        id => `/admin/intake/formversion/_us117b/reorder-section/${id}/`,
+        "section");
+      bindReorder(".qe-q-up, .qe-q-down",
+        id => `/admin/intake/formversion/_us117b/reorder-question/${id}/`,
+        "question");
+
+      // ── Expression validator ──
+      const out = document.getElementById("qe-validate-result");
+      const btn = document.getElementById("qe-validate-btn");
+      btn.addEventListener("click", () => {
+        let expr, sample;
+        try {
+          expr = JSON.parse(document.getElementById("qe-expr").value);
+        } catch (e) {
+          out.className = "qe-validate-result err";
+          out.textContent = "expression: invalid JSON — " + e.message;
+          return;
+        }
+        try {
+          const raw = document.getElementById("qe-sample").value.trim();
+          sample = raw ? JSON.parse(raw) : {};
+        } catch (e) {
+          out.className = "qe-validate-result err";
+          out.textContent = "sample: invalid JSON — " + e.message;
+          return;
+        }
+        post("/admin/intake/formversion/_us117b/validate-expression/",
+             { expression: expr, sample_record: sample })
+          .then(r => r.json())
+          .then(j => {
+            if (j.ok) {
+              out.className = "qe-validate-result ok";
+              out.textContent = "OK — evaluates to " + j.result +
+                                " against the sample record.";
+            } else {
+              out.className = "qe-validate-result err";
+              out.textContent = "FAIL — " + j.error;
+            }
+          })
+          .catch(e => {
+            out.className = "qe-validate-result err";
+            out.textContent = "network error — " + e;
+          });
+      });
+    })();
+  </script>
+  {% else %}
+    {{ block.super }}
+  {% endif %}
+{% endblock %}

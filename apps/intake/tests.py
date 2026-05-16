@@ -342,3 +342,162 @@ class TestQuestionnaireAdminSmoke:
         r = c.get("/admin/intake/formsection/")
         assert r.status_code == 200
         assert "Identification" in r.content.decode()
+
+
+# --- US-117b: builder UI (tree + reorder + validate) -----------------------
+
+class TestQuestionnaireBuilderUI:
+    """The change_form template renders the tree pane + the
+    expression-validator panel when QUESTIONNAIRE_EDITOR_V2 is on.
+    Falls back to the default admin form when off."""
+
+    def _staff_client(self, db, django_user_model):
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="qb-staff", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        return c
+
+    def _seeded_fv(self, db):
+        from apps.intake.models import FormQuestion, FormSection, FormVersion
+        fv = FormVersion.objects.create(
+            version=3000, name="qb-test",
+            effective_from=date(2026, 1, 1),
+            status="draft", author="alice",
+        )
+        a = FormSection.objects.create(
+            form_version=fv, code="A", name="ident", label="Identification", order=1,
+        )
+        b = FormSection.objects.create(
+            form_version=fv, code="B", name="status", label="Survey status", order=2,
+        )
+        q1 = FormQuestion.objects.create(
+            section=a, name="full_name", label="Full name",
+            type="text", required=True, order_in_section=1,
+        )
+        q2 = FormQuestion.objects.create(
+            section=a, name="phone", label="Phone",
+            type="text", required=False, order_in_section=2,
+        )
+        return fv, a, b, q1, q2
+
+    def test_change_form_renders_tree_when_flag_on(
+        self, db, django_user_model, settings,
+    ):
+        settings.QUESTIONNAIRE_EDITOR_V2 = True
+        fv, a, b, q1, q2 = self._seeded_fv(db)
+        r = self._staff_client(db, django_user_model).get(
+            f"/admin/intake/formversion/{fv.id}/change/",
+        )
+        assert r.status_code == 200
+        body = r.content.decode()
+        # Tree pane present.
+        assert 'id="qe-tree"' in body
+        # Both sections rendered (by code).
+        assert "Identification" in body and "Survey status" in body
+        # Both questions rendered (by name).
+        assert "full_name" in body and "phone" in body
+        # Validator panel present.
+        assert 'id="qe-validate"' in body
+
+    def test_change_form_omits_tree_when_flag_off(
+        self, db, django_user_model, settings,
+    ):
+        settings.QUESTIONNAIRE_EDITOR_V2 = False
+        fv, *_ = self._seeded_fv(db)
+        r = self._staff_client(db, django_user_model).get(
+            f"/admin/intake/formversion/{fv.id}/change/",
+        )
+        assert r.status_code == 200
+        body = r.content.decode()
+        assert 'id="qe-tree"' not in body
+        assert 'id="qe-validate"' not in body
+
+    def test_reorder_section_swaps_order(self, db, django_user_model):
+        import json as _json
+        fv, a, b, *_ = self._seeded_fv(db)
+        # Initially: a.order=1, b.order=2. Move b up → swap.
+        c = self._staff_client(db, django_user_model)
+        r = c.post(
+            f"/admin/intake/formversion/_us117b/reorder-section/{b.id}/",
+            data=_json.dumps({"direction": "up"}),
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        a.refresh_from_db()
+        b.refresh_from_db()
+        assert b.order < a.order
+
+    def test_reorder_section_boundary_no_op(self, db, django_user_model):
+        import json as _json
+        fv, a, *_ = self._seeded_fv(db)
+        c = self._staff_client(db, django_user_model)
+        r = c.post(
+            f"/admin/intake/formversion/_us117b/reorder-section/{a.id}/",
+            data=_json.dumps({"direction": "up"}),
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["moved"] is False
+
+    def test_reorder_question_swaps_within_section(self, db, django_user_model):
+        import json as _json
+        fv, a, b, q1, q2 = self._seeded_fv(db)
+        c = self._staff_client(db, django_user_model)
+        # q2 (order=2) moves up over q1 (order=1).
+        r = c.post(
+            f"/admin/intake/formversion/_us117b/reorder-question/{q2.id}/",
+            data=_json.dumps({"direction": "up"}),
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        q1.refresh_from_db()
+        q2.refresh_from_db()
+        assert q2.order_in_section < q1.order_in_section
+
+    def test_validate_expression_ok(self, db, django_user_model):
+        import json as _json
+        c = self._staff_client(db, django_user_model)
+        r = c.post(
+            "/admin/intake/formversion/_us117b/validate-expression/",
+            data=_json.dumps({
+                "expression": {"field": "age", "op": "between",
+                               "value": [0, 120]},
+                "sample_record": {"age": 25},
+            }),
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True
+        assert body["result"] is True
+
+    def test_validate_expression_dsl_error(self, db, django_user_model):
+        import json as _json
+        c = self._staff_client(db, django_user_model)
+        r = c.post(
+            "/admin/intake/formversion/_us117b/validate-expression/",
+            data=_json.dumps({
+                "expression": {"op": "no_such_op", "field": "x"},
+                "sample_record": {},
+            }),
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is False
+        assert "no_such_op" in body["error"]
+
+    def test_validate_rejects_non_dict_expression(self, db, django_user_model):
+        import json as _json
+        c = self._staff_client(db, django_user_model)
+        r = c.post(
+            "/admin/intake/formversion/_us117b/validate-expression/",
+            data=_json.dumps({"expression": "not-a-dict"}),
+            content_type="application/json",
+        )
+        assert r.status_code == 400

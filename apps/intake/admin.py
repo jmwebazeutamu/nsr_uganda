@@ -1,4 +1,10 @@
+import json
+
+from django.conf import settings
 from django.contrib import admin
+from django.http import JsonResponse
+from django.urls import path
+from django.views.decorators.http import require_POST
 
 from .models import (
     FormConstraint,
@@ -70,6 +76,70 @@ class FormVersionAdmin(admin.ModelAdmin):
         ("Counts", {"fields": ("section_count", "question_count")}),
     )
 
+    # US-117b — custom change form with the section/question tree
+    # on the left and the standard admin edit form on the right.
+    # Gated by settings.QUESTIONNAIRE_EDITOR_V2 — when off, the
+    # template's {% if %} falls back to the default admin form so
+    # ops can disable the new UI without a deploy.
+    change_form_template = "admin/intake/formversion/change_form.html"
+
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        extra_context = extra_context or {}
+        extra_context["questionnaire_editor_v2"] = getattr(
+            settings, "QUESTIONNAIRE_EDITOR_V2", False,
+        )
+        if object_id:
+            fv = FormVersion.objects.filter(pk=object_id).first()
+            if fv:
+                # Pre-fetch the section/question tree the template
+                # renders on the left. Single-query traversal — even
+                # a 10-section / 200-question form is one round-trip.
+                sections = list(
+                    fv.sections.prefetch_related("questions").order_by("order", "code"),
+                )
+                tree = []
+                for sec in sections:
+                    tree.append({
+                        "id": sec.id,
+                        "code": sec.code,
+                        "label": sec.label,
+                        "order": sec.order,
+                        "questions": [
+                            {
+                                "id": q.id, "name": q.name, "type": q.type,
+                                "label": q.label, "required": q.required,
+                                "order": q.order_in_section,
+                            }
+                            for q in sec.questions.all().order_by("order_in_section", "name")
+                        ],
+                    })
+                extra_context["dqa_form_tree"] = tree
+        return super().changeform_view(request, object_id, form_url, extra_context)
+
+    def get_urls(self):
+        urls = super().get_urls()
+        # US-117b reorder + validate endpoints. Live under
+        # /admin/intake/formversion/_us117b/ so they're admin-gated
+        # automatically by AdminSite.has_permission().
+        extra = [
+            path(
+                "_us117b/reorder-section/<str:section_id>/",
+                self.admin_site.admin_view(_reorder_section_view),
+                name="intake_us117b_reorder_section",
+            ),
+            path(
+                "_us117b/reorder-question/<str:question_id>/",
+                self.admin_site.admin_view(_reorder_question_view),
+                name="intake_us117b_reorder_question",
+            ),
+            path(
+                "_us117b/validate-expression/",
+                self.admin_site.admin_view(_validate_expression_view),
+                name="intake_us117b_validate_expression",
+            ),
+        ]
+        return extra + urls
+
     def get_queryset(self, request):
         from django.db.models import Count
         return (super().get_queryset(request)
@@ -85,6 +155,115 @@ class FormVersionAdmin(admin.ModelAdmin):
     @admin.display(description="Questions", ordering="_question_count")
     def question_count(self, obj):
         return getattr(obj, "_question_count", 0)
+
+
+# --- US-117b reorder + validate views ---------------------------------------
+
+@require_POST
+def _reorder_section_view(request, section_id):
+    """Move a section up or down within its FormVersion. Body:
+    {"direction": "up" | "down"}. Returns the new order map.
+
+    Swaps with the adjacent section by `order`. Doesn't try to be
+    clever about gaps — re-sequences the affected pair only so the
+    rest of the tree stays stable on concurrent edits.
+    """
+    direction = json.loads(request.body or b"{}").get("direction")
+    if direction not in ("up", "down"):
+        return JsonResponse({"detail": "direction must be 'up' or 'down'"}, status=400)
+    section = FormSection.objects.filter(pk=section_id).first()
+    if not section:
+        return JsonResponse({"detail": "section not found"}, status=404)
+    qs = section.form_version.sections.order_by("order", "code")
+    siblings = list(qs)
+    idx = next((i for i, s in enumerate(siblings) if s.id == section.id), None)
+    if idx is None:
+        return JsonResponse({"detail": "section not in form version"}, status=404)
+    other_idx = idx - 1 if direction == "up" else idx + 1
+    if other_idx < 0 or other_idx >= len(siblings):
+        return JsonResponse({"detail": "already at boundary", "moved": False})
+    other = siblings[other_idx]
+    section.order, other.order = other.order, section.order
+    # If they were both 0 (default), pick deterministic new orders.
+    if section.order == other.order:
+        section.order = other_idx + 1
+        other.order = idx + 1
+    section.save(update_fields=["order"])
+    other.save(update_fields=["order"])
+    return JsonResponse({
+        "moved": True,
+        "order": {
+            section.id: section.order,
+            other.id: other.order,
+        },
+    })
+
+
+@require_POST
+def _reorder_question_view(request, question_id):
+    """Move a question up or down within its FormSection. Same
+    contract as _reorder_section_view; operates on order_in_section."""
+    direction = json.loads(request.body or b"{}").get("direction")
+    if direction not in ("up", "down"):
+        return JsonResponse({"detail": "direction must be 'up' or 'down'"}, status=400)
+    question = FormQuestion.objects.filter(pk=question_id).first()
+    if not question:
+        return JsonResponse({"detail": "question not found"}, status=404)
+    siblings = list(
+        question.section.questions.order_by("order_in_section", "name"),
+    )
+    idx = next((i for i, q in enumerate(siblings) if q.id == question.id), None)
+    if idx is None:
+        return JsonResponse({"detail": "question not in section"}, status=404)
+    other_idx = idx - 1 if direction == "up" else idx + 1
+    if other_idx < 0 or other_idx >= len(siblings):
+        return JsonResponse({"detail": "already at boundary", "moved": False})
+    other = siblings[other_idx]
+    question.order_in_section, other.order_in_section = (
+        other.order_in_section, question.order_in_section,
+    )
+    if question.order_in_section == other.order_in_section:
+        question.order_in_section = other_idx + 1
+        other.order_in_section = idx + 1
+    question.save(update_fields=["order_in_section"])
+    other.save(update_fields=["order_in_section"])
+    return JsonResponse({
+        "moved": True,
+        "order": {
+            question.id: question.order_in_section,
+            other.id: other.order_in_section,
+        },
+    })
+
+
+@require_POST
+def _validate_expression_view(request):
+    """Run a JSON-DSL expression through apps.dqa.engine to surface
+    structural errors at authoring time. Body:
+    {"expression": {...}, "sample_record": {...}}.
+
+    Returns {"ok": true, "result": bool} on success or
+    {"ok": false, "error": "<DSLError message>"} on failure.
+    Doesn't persist anything — pure preview.
+    """
+    try:
+        body = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return JsonResponse({"ok": False, "error": "invalid JSON body"}, status=400)
+    expr = body.get("expression")
+    if not isinstance(expr, dict):
+        return JsonResponse({"ok": False, "error": "expression must be an object"}, status=400)
+    sample = body.get("sample_record") or {}
+    try:
+        from apps.dqa.engine import evaluate_expression
+        result = evaluate_expression(expr, sample)
+    except Exception as exc:
+        # DSLError or anything else collapses to a clean error
+        # message — the engine's exceptions are the validation
+        # signal.
+        msg = str(exc) or exc.__class__.__name__
+        return JsonResponse({"ok": False, "error": msg})
+    return JsonResponse({"ok": True, "result": bool(result)})
 
 
 @admin.register(FormSection)

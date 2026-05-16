@@ -190,3 +190,10 @@ CELERY_TASK_SERIALIZER = "json"
 # console output in dev).
 SLACK_WEBHOOK_URL = env("SLACK_WEBHOOK_URL", default="")
 DPO_EMAIL = env("DPO_EMAIL", default="")
+
+# US-117b — feature flag for the Questionnaire builder admin UI
+# (section/question tree, up-down reorder, inline expression
+# validation). Defaults to True in dev (DEBUG=True), False in prod
+# so the rollout has an explicit env switch. Mirrors the DQA Rule
+# Editor flag (US-076).
+QUESTIONNAIRE_EDITOR_V2 = env.bool("QUESTIONNAIRE_EDITOR_V2", default=DEBUG)
