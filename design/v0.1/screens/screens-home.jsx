@@ -4,6 +4,101 @@
 const { useState: useStateHome, useEffect: useEffectHome } = React;
 
 
+// US-S13-002 — wire each role's queue panels to live API. Each
+// queue title maps to an endpoint URL + a projector that turns the
+// API response into {id, who, note, chip, age} (the shape the
+// existing queue renderer expects). Titles without a mapping
+// retain their mock items so the design preview still tells the
+// visual story.
+const _ago = (iso) => {
+  const ms = Date.parse(iso || "");
+  if (!Number.isFinite(ms)) return "—";
+  const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ${mins % 60}m`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d`;
+};
+
+const _stageItem = (s) => {
+  const payload = s.canonical_payload || {};
+  const members = payload.members || [];
+  const head = members.find(m => m.is_head) || members[0] || {};
+  const headName = [head.surname, head.first_name].filter(Boolean).join(" ") || "(no head)";
+  const geo = payload.geographic || {};
+  const dqa = s.dqa_summary || {};
+  const w = (dqa.warnings || []).length;
+  const b = (dqa.blocking_failures || []).length;
+  const ddup = (s.ddup_candidates || []).length;
+  const noteBits = [];
+  if (ddup) noteBits.push(`DDUP ×${ddup}`);
+  if (b) noteBits.push(`${b} blocking`);
+  if (w) noteBits.push(`${w} warning${w === 1 ? "" : "s"}`);
+  if (!noteBits.length) noteBits.push("Clean");
+  return {
+    id: s.id,
+    who: `${headName} · ${geo.parish || ""}`.trim(),
+    note: noteBits.join(" · "),
+    chip: (s.state || "pending").replace(/_/g, " "),
+    age: _ago(s.created_at),
+  };
+};
+
+const _changeRequestItem = (cr) => ({
+  id: cr.id,
+  who: `${(cr.entity_id || "").slice(0, 12)}… · ${cr.pmt_relevant ? "pmt_relevant" : "cosmetic"}`,
+  note: `${cr.change_type || "—"} · by ${cr.requester || "—"}`,
+  chip: cr.status,
+  age: _ago(cr.created_at),
+});
+
+const _grievanceItem = (g) => ({
+  id: g.id,
+  who: `${g.category || "—"} · tier ${g.tier || "?"}`,
+  note: (g.description || "").slice(0, 80) || "—",
+  chip: g.status,
+  age: _ago(g.created_at),
+});
+
+const _drsItem = (dr) => ({
+  id: dr.id,
+  who: `${dr.dsa_reference || "—"} · ${(dr.row_count_delivered || 0).toLocaleString()} rows`,
+  note: `${(dr.fields || []).slice(0, 3).join(", ")}${(dr.fields || []).length > 3 ? "…" : ""}`,
+  chip: dr.status,
+  age: _ago(dr.created_at),
+});
+
+// Map by queue title → { url, projector, target (nav screen) }.
+const HOME_QUEUE_LIVE_MAP = {
+  "Pending DIH promotions": {
+    url: "/api/v1/dih/stage-records/?state=pending_promotion&page_size=4",
+    projector: _stageItem,
+    target: "dih",
+  },
+  "Pending UPD reviews": {
+    url: "/api/v1/upd/change-requests/?status=pending_approval&page_size=4",
+    projector: _changeRequestItem,
+    target: "upd",
+  },
+  "GRM L2 cases": {
+    url: "/api/v1/grm/grievances/?tier=L2&page_size=4",
+    projector: _grievanceItem,
+    target: "grm",
+  },
+  "Pending approval": {
+    url: "/api/v1/drs/requests/mine/?status=submitted&page_size=4",
+    projector: _drsItem,
+    target: "partner-drs",
+  },
+  "Delivered (downloadable)": {
+    url: "/api/v1/drs/requests/mine/?status=delivered&page_size=4",
+    projector: _drsItem,
+    target: "partner-drs",
+  },
+};
+
+
 // Map a KPI's `title` to the field on the dashboard payload it
 // should read. Wiring a new KPI to live data = add an entry here.
 // Falls back to the hardcoded mock value when the field is missing
@@ -188,6 +283,45 @@ const HomeScreen = ({ role, onNavigate }) => {
     return k;
   });
 
+  // US-S13-002 — per-queue live item fetch. State: titles → list
+  // of projected items (or null while loading). Each queue's title
+  // is its key. Titles not in HOME_QUEUE_LIVE_MAP stay mock.
+  const [liveQueues, setLiveQueues] = useStateHome({});
+  useEffectHome(() => {
+    let cancelled = false;
+    // Fetch only the queues this role displays AND that have a
+    // live mapping. Avoids 4 unnecessary requests on a page mount.
+    const titles = r.queues.map(q => q.title)
+                           .filter(t => HOME_QUEUE_LIVE_MAP[t]);
+    titles.forEach(title => {
+      const cfg = HOME_QUEUE_LIVE_MAP[title];
+      fetch(cfg.url, {
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      })
+        .then(rsp => rsp.ok ? rsp.json() : Promise.reject(rsp.status))
+        .then(data => {
+          if (cancelled) return;
+          const items = (data.results || data || []).map(cfg.projector);
+          setLiveQueues(prev => ({ ...prev, [title]: items }));
+        })
+        .catch(() => {});
+    });
+    return () => { cancelled = true; };
+  }, [r.queues]);
+
+  const queues = r.queues.map(q => {
+    const live = liveQueues[q.title];
+    if (live === undefined) return q;  // not wired or still loading
+    return {
+      ...q,
+      items: live,
+      count: live.length,
+      _live: true,
+      _target: HOME_QUEUE_LIVE_MAP[q.title]?.target || "home",
+    };
+  });
+
   return (
     <div className="page">
       <PageHeader
@@ -205,38 +339,51 @@ const HomeScreen = ({ role, onNavigate }) => {
       </div>
 
       <div className="grid grid-2 mt-5">
-        {r.queues.map((q, i) => (
-          <div className="card" key={i}>
-            <div className="card-header">
-              <div className="row gap-3">
-                <div style={{width:32, height:32, borderRadius:6, background:'var(--primary-100)', color:'var(--primary-900)', display:'grid', placeItems:'center'}}>
-                  <Icon name={q.icon} size={18}/>
+        {queues.map((q, i) => {
+          const target = q._target || "dih";
+          return (
+            <div className="card" key={i}>
+              <div className="card-header">
+                <div className="row gap-3">
+                  <div style={{width:32, height:32, borderRadius:6, background:'var(--primary-100)', color:'var(--primary-900)', display:'grid', placeItems:'center'}}>
+                    <Icon name={q.icon} size={18}/>
+                  </div>
+                  <div>
+                    <h3 className="t-h3" style={{margin:0}}>
+                      {q.title}
+                      {q._live && <span className="t-cap" style={{marginLeft:8, color:"var(--accent-eligibility)"}}>· live</span>}
+                    </h3>
+                    <div className="t-cap">{q.count} {q.items.length === 1 ? "open" : "open"}</div>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="t-h3" style={{margin:0}}>{q.title}</h3>
-                  <div className="t-cap">{q.count} open</div>
-                </div>
+                <button className="btn btn-ghost btn-sm" onClick={() => onNavigate?.(target)}>
+                  Open queue <Icon name="chevronRight" size={14}/>
+                </button>
               </div>
-              <button className="btn btn-ghost btn-sm" onClick={() => onNavigate?.('dih')}>Open queue <Icon name="chevronRight" size={14}/></button>
-            </div>
-            <div>
-              {q.items.map((item, j) => (
-                <div key={j} className="row gap-3" style={{padding:'12px 20px', borderBottom: j < q.items.length - 1 ? '1px solid var(--neutral-200)' : 'none', cursor:'pointer'}}
-                     onClick={() => onNavigate?.('dih')}>
-                  <div style={{minWidth:0, flex:1}}>
-                    <div className="t-mono" style={{color:'var(--neutral-700)', fontSize:12, marginBottom:2}}>{item.id}</div>
-                    <div style={{fontWeight:500}}>{item.who}</div>
-                    <div className="t-bodysm muted" style={{marginTop:2}}>{item.note}</div>
+              <div>
+                {q.items.length === 0 && (
+                  <div className="t-bodysm muted" style={{padding:"24px 20px", textAlign:"center"}}>
+                    Queue empty.
                   </div>
-                  <div className="col" style={{alignItems:'flex-end', gap:6}}>
-                    <Chip>{item.chip}</Chip>
-                    <span className="t-cap">{item.age}</span>
+                )}
+                {q.items.map((item, j) => (
+                  <div key={j} className="row gap-3" style={{padding:'12px 20px', borderBottom: j < q.items.length - 1 ? '1px solid var(--neutral-200)' : 'none', cursor:'pointer'}}
+                       onClick={() => onNavigate?.(target)}>
+                    <div style={{minWidth:0, flex:1}}>
+                      <div className="t-mono" style={{color:'var(--neutral-700)', fontSize:12, marginBottom:2}}>{item.id}</div>
+                      <div style={{fontWeight:500}}>{item.who}</div>
+                      <div className="t-bodysm muted" style={{marginTop:2}}>{item.note}</div>
+                    </div>
+                    <div className="col" style={{alignItems:'flex-end', gap:6}}>
+                      <Chip>{item.chip}</Chip>
+                      <span className="t-cap">{item.age}</span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="card mt-5">
