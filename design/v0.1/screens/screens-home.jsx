@@ -398,6 +398,47 @@ const HomeScreen = ({ role, onNavigate }) => {
         </>}
       />
 
+      {/* US-S18-002 — drill-down breadcrumb. Only rendered while a
+          region is selected; gives the operator a one-click reset and
+          a visible reminder that they're NOT seeing national totals.
+          Without this, an operator can leave the drill-down selector
+          set, navigate away, and come back to mis-read the numbers
+          as full-scope counts. */}
+      {region && (() => {
+        const sr = subRegions.find(s => s.code === region);
+        const label = sr ? sr.name : region;
+        return (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              display:'flex', alignItems:'center', gap:8,
+              padding:'8px 14px', marginBottom:12, borderRadius:6,
+              background:'var(--accent-data-bg)',
+              border:'1px solid var(--accent-data)',
+              fontSize:13.5,
+            }}>
+            <Icon name="filter" size={14} color="var(--accent-data)"/>
+            <span className="muted">All regions</span>
+            <Icon name="chevronRight" size={12} color="var(--neutral-500)"/>
+            <strong>{label}</strong>
+            <span className="t-cap" style={{color:'var(--neutral-600)'}}>
+              · KPIs + geographic queue panels narrowed; DRS counts stay national
+            </span>
+            <div style={{flex:1}}/>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setRegion("")}
+              aria-label="Clear region drill-down"
+              title="Back to all regions in scope"
+            >
+              <Icon name="x" size={12}/> Clear drill-down
+            </button>
+          </div>
+        );
+      })()}
+
       <div className="grid grid-4">
         {kpis.map((k, i) => <KPI key={i} {...k}/>)}
       </div>
