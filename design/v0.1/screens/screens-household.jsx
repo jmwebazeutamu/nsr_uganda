@@ -94,7 +94,7 @@ const _hhApiToView = (h) => {
 };
 
 
-const HouseholdScreen = ({ householdId } = {}) => {
+const HouseholdScreen = ({ householdId, onNavigate } = {}) => {
   const [tab, setTab] = useStateHH("Overview");
   // Live-data state. Starts null when a householdId is given (loading
   // spinner); falls back to DEMO_HH when no id (design preview).
@@ -163,15 +163,20 @@ const HouseholdScreen = ({ householdId } = {}) => {
   return (
     <div className="page">
       <PageHeader
-        title={`Household ${hh.head_name}`}
-        breadcrumb={["Operator console", "Households", hh.head_name]}
-        tone="data"
-      >
-        <Chip tone="registered" size="sm">{hh.status}</Chip>
-        <span className="t-mono ml-2">{hh.registry_id}</span>
-        {dataSource === "live" && <Chip tone="eligibility" size="sm">live</Chip>}
-        {dataSource === "mock" && <Chip tone="quality" size="sm">mock</Chip>}
-      </PageHeader>
+        eyebrow={<>HOUSEHOLD DETAIL · <span className="t-mono">{hh.registry_id}</span></>}
+        title={<>
+          {hh.head_name}{" "}
+          <Chip tone="data" size="sm">{hh.status}</Chip>
+          {dataSource === "live" && <Chip tone="eligibility" size="sm">live</Chip>}
+          {dataSource === "mock" && <Chip tone="quality" size="sm">mock</Chip>}
+        </>}
+        sub={<>{hh.village}, {hh.parish}, {hh.sub_county}, {hh.district} &middot; {hh.sub_region} / {hh.region}</>}
+        right={onNavigate ? (
+          <button className="btn" onClick={() => onNavigate("registry")}>
+            <Icon name="chevronLeft" size={14}/> Back to Registry
+          </button>
+        ) : null}
+      />
 
       <div className="card mt-3">
         <div className="row gap-6" style={{flexWrap:'wrap', padding: '16px 20px'}}>
@@ -248,11 +253,11 @@ const OverviewTab = ({ hh, live }) => (
         : <>Registered 2026-04-22. 3 members. Head identified by NIN (verified by NIRA). Currently enrolled in PDM, NUSAF.</>}
     </p>
     <div className="row gap-6 mt-3" style={{flexWrap:'wrap'}}>
-      <KPI label="Members" value={hh.members.length}/>
-      <KPI label="PMT score" value={hh.pmt ? hh.pmt.score : "—"}/>
-      <KPI label={live ? "Source" : "Programmes"}
+      <KPI title="Members" value={hh.members.length}/>
+      <KPI title="PMT score" value={hh.pmt ? hh.pmt.score : "—"}/>
+      <KPI title={live ? "Source" : "Programmes"}
            value={live ? hh.source : (hh.programme_enrolments?.length || 0)}/>
-      {!live && <KPI label="Last UPD" value="14 May" tone="update"/>}
+      {!live && <KPI title="Last UPD" value="14 May"/>}
     </div>
   </div>
 );

@@ -142,7 +142,7 @@ function App() {
         {screen === "partner-drs" && <PartnerDRSScreen/>}
         {screen === "admin"   && <AdminScreen/>}
         {screen === "registry" && <RegistryScreen onNavigate={navigate}/>}
-        {screen === "household" && <HouseholdScreen householdId={screenPayload?.householdId}/>}
+        {screen === "household" && <HouseholdScreen householdId={screenPayload?.householdId} onNavigate={navigate}/>}
       </main>
 
       {/* Tweaks */}
