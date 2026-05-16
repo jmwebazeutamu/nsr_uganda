@@ -6,6 +6,44 @@
 // AC-UPD-DIFF / AC-UPD-NO-SELF-APPROVE flow opens UPD ChangeRequest forms
 // from this read-only page. No edit-in-place per UI-HH-3.
 
+
+// Lightweight error boundary — when a child render throws, render the
+// message + component stack inline instead of crashing the whole
+// tree to a blank screen. Particularly useful while iterating on the
+// live wiring; production would replace with a more polished
+// component-stack reporter.
+class HouseholdErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { err: null, info: null };
+  }
+  static getDerivedStateFromError(err) {
+    return { err };
+  }
+  componentDidCatch(err, info) {
+    this.setState({ err, info });
+    // eslint-disable-next-line no-console
+    console.error("[HouseholdScreen render error]", err, info);
+  }
+  render() {
+    if (!this.state.err) return this.props.children;
+    return (
+      <div className="page">
+        <div className="card mt-3" style={{padding:24, borderLeft:"3px solid var(--accent-danger)"}}>
+          <div className="t-h3">Household screen crashed</div>
+          <p className="muted">
+            React threw while rendering this household. The detail is below — copy it here and we'll trace the exact field.
+          </p>
+          <pre style={{
+            background:"var(--neutral-50)", padding:12, borderRadius:6,
+            overflow:"auto", fontSize:12, maxHeight:300,
+          }}>{String(this.state.err && this.state.err.message)}{"\n\n"}{this.state.info && this.state.info.componentStack}</pre>
+        </div>
+      </div>
+    );
+  }
+}
+
 const { useState: useStateHH, useEffect: useEffectHH, useMemo: useMemoHH } = React;
 
 const TABS = [
@@ -366,4 +404,14 @@ const EmptyTab = ({ name }) => (
   </div>
 );
 
-Object.assign(window, { HouseholdScreen });
+// Public-facing component wraps the inner one in the error boundary
+// so a render crash surfaces as a visible message instead of a blank
+// page. App shell imports `HouseholdScreen` so the wrap is transparent.
+const _HouseholdScreenInner = HouseholdScreen;
+const HouseholdScreenWithBoundary = (props) => (
+  <HouseholdErrorBoundary>
+    <_HouseholdScreenInner {...props}/>
+  </HouseholdErrorBoundary>
+);
+
+Object.assign(window, { HouseholdScreen: HouseholdScreenWithBoundary });
