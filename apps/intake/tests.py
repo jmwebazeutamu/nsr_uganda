@@ -581,3 +581,113 @@ class TestLegacyQuestionnaireImport:
         # Re-run upserts — no duplicates.
         assert FormSection.objects.count() == sections_before
         assert FormQuestion.objects.count() == questions_before
+
+
+# --- US-118: XLSForm export from FormVersion -------------------------------
+
+class TestXlsformExport:
+    """Round-trip: import legacy script → export → bytes are a valid
+    XLSForm with the expected sheets/columns/rows. Tests pin the
+    structural contract; not every row is asserted."""
+
+    @pytest.fixture
+    def _seeded_form(self, db):
+        import json
+        from datetime import date as _d
+        from pathlib import Path
+
+        from scripts.import_legacy_questionnaire import main as import_main
+
+        from apps.intake.models import FormVersion
+        from apps.reference_data.models import ChoiceList, ChoiceOption
+        path = (
+            Path(__file__).resolve().parent.parent / "reference_data"
+            / "seeds" / "choice_lists_v1.json"
+        )
+        for name, options in json.loads(path.read_text()).items():
+            cl, _ = ChoiceList.objects.get_or_create(
+                list_name=name, version=1,
+                defaults={"effective_from": _d(2026, 1, 1),
+                          "status": "active",
+                          "author": "system-migration",
+                          "approved_by": "system-migration"},
+            )
+            for so, opt in enumerate(options, start=1):
+                ChoiceOption.objects.get_or_create(
+                    choice_list=cl, code=opt["code"], language="en",
+                    defaults={"label": opt["label"], "sort_order": so},
+                )
+        import_main()
+        return FormVersion.objects.get(version=1)
+
+    def test_export_returns_xlsx_bytes(self, _seeded_form):
+        from apps.intake.xlsform_export import export_to_xlsx
+        out = export_to_xlsx(_seeded_form)
+        assert isinstance(out, bytes)
+        assert out[:2] == b"PK"  # ZIP magic — .xlsx is a zip
+
+    def test_export_has_required_sheets(self, _seeded_form):
+        import io
+
+        import openpyxl
+
+        from apps.intake.xlsform_export import export_to_xlsx
+        wb = openpyxl.load_workbook(io.BytesIO(export_to_xlsx(_seeded_form)))
+        assert {"survey", "choices", "settings"}.issubset(set(wb.sheetnames))
+
+    def test_export_survey_sheet_has_questions(self, _seeded_form):
+        import io
+
+        import openpyxl
+
+        from apps.intake.xlsform_export import export_to_xlsx
+        wb = openpyxl.load_workbook(io.BytesIO(export_to_xlsx(_seeded_form)))
+        ws = wb["survey"]
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        assert len(rows) >= 100  # 184 questions + structural markers
+        types = {r[0] for r in rows if r and r[0]}
+        assert "begin_group" in types
+        assert any(t and t.startswith("select_one") for t in types)
+
+    def test_export_choices_sheet_has_options(self, _seeded_form):
+        import io
+
+        import openpyxl
+
+        from apps.intake.xlsform_export import export_to_xlsx
+        wb = openpyxl.load_workbook(io.BytesIO(export_to_xlsx(_seeded_form)))
+        ws = wb["choices"]
+        rows = list(ws.iter_rows(min_row=2, values_only=True))
+        assert len(rows) >= 100
+        names = {r[0] for r in rows if r and r[0]}
+        assert "relationship" in names and "marital_status" in names
+
+    def test_export_settings_sheet_has_form_metadata(self, _seeded_form):
+        import io
+
+        import openpyxl
+
+        from apps.intake.xlsform_export import export_to_xlsx
+        wb = openpyxl.load_workbook(io.BytesIO(export_to_xlsx(_seeded_form)))
+        ws = wb["settings"]
+        rows = list(ws.iter_rows(min_row=1, values_only=True))
+        assert len(rows) >= 2
+        header = {h for h in rows[0] if h}
+        assert {"form_title", "form_id", "version"}.issubset(header)
+
+    def test_admin_export_action_returns_xlsx(
+        self, _seeded_form, db, django_user_model,
+    ):
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="xform-staff", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        r = c.get(
+            f"/admin/intake/formversion/_us118/export-xlsform/{_seeded_form.id}/",
+        )
+        assert r.status_code == 200
+        assert "spreadsheetml" in r["Content-Type"]
+        assert r.content[:2] == b"PK"

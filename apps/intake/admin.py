@@ -137,6 +137,13 @@ class FormVersionAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(_validate_expression_view),
                 name="intake_us117b_validate_expression",
             ),
+            # US-118 — XLSForm download. GET because it's a pure
+            # read; admin gating comes from admin_site.admin_view.
+            path(
+                "_us118/export-xlsform/<str:form_version_id>/",
+                self.admin_site.admin_view(_export_xlsform_view),
+                name="intake_us118_export_xlsform",
+            ),
         ]
         return extra + urls
 
@@ -264,6 +271,31 @@ def _validate_expression_view(request):
         msg = str(exc) or exc.__class__.__name__
         return JsonResponse({"ok": False, "error": msg})
     return JsonResponse({"ok": True, "result": bool(result)})
+
+
+# --- US-118 XLSForm download -----------------------------------------------
+
+def _export_xlsform_view(request, form_version_id):
+    """Stream the FormVersion as a Kobo-compatible XLSForm xlsx.
+
+    Calls apps.intake.xlsform_export.export_to_xlsx and serves the
+    bytes with the spreadsheetml MIME + an attachment filename
+    derived from the form's name + version.
+    """
+    from django.http import Http404, HttpResponse
+
+    from .xlsform_export import export_to_xlsx
+    fv = FormVersion.objects.filter(pk=form_version_id).first()
+    if fv is None:
+        raise Http404("FormVersion not found")
+    payload = export_to_xlsx(fv)
+    response = HttpResponse(
+        payload,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    filename = f"nsr_form_v{fv.version}.xlsx"
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
 
 
 @admin.register(FormSection)
