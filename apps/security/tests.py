@@ -216,3 +216,60 @@ class TestMemberPagination:
         r = self._client(django_user_model).get(self.URL + "?page_size=500")
         assert r.status_code == 200
         assert len(r.data["results"]) == 100
+
+
+class TestAuditChainVerifier:
+    """US-S16-004 — the SQLite-friendly half of the chain integrity
+    verifier. The Postgres-only half (chain-break detection on a
+    real trigger-installed db) lives in tests/integration/
+    test_audit_chain_postgres.py since the trigger only runs there.
+    """
+
+    def test_empty_chain_returns_ok_with_empty_mode(self, db):
+        from apps.security.integrity import verify_audit_chain
+        from apps.security.models import AuditEvent
+        AuditEvent.objects.all().delete()
+        report = verify_audit_chain()
+        assert report.ok is True
+        assert report.mode == "empty"
+        assert report.rows_scanned == 0
+        assert report.breaks == []
+
+    def test_sqlite_chain_returns_no_chain_mode(self, db):
+        from apps.security.audit import emit
+        from apps.security.integrity import verify_audit_chain
+        from apps.security.models import AuditEvent
+        AuditEvent.objects.all().delete()
+        emit("create", "test", "id-1", actor="alice")
+        emit("update", "test", "id-1", actor="bob")
+        report = verify_audit_chain()
+        # On SQLite the trigger is a no-op; both hashes are NULL,
+        # so the verifier reports no_chain rather than falsely
+        # claiming the chain is intact.
+        assert report.ok is True
+        assert report.mode == "no_chain"
+        assert report.rows_scanned == 2
+
+    def test_task_logs_no_chain_silently(self, db):
+        """The Celery task should NOT emit a noisy audit row on
+        SQLite — dev local runs would otherwise spam the log."""
+        from apps.security.audit import emit
+        from apps.security.models import AuditEvent
+        from apps.security.tasks import verify_audit_chain_task
+        AuditEvent.objects.all().delete()
+        emit("create", "test", "id-1", actor="alice")
+        before = AuditEvent.objects.filter(
+            action__in=["chain_integrity_verified", "chain_integrity_break"],
+        ).count()
+        result = verify_audit_chain_task()
+        assert result["mode"] == "no_chain"
+        assert result["ok"] is True
+        after = AuditEvent.objects.filter(
+            action__in=["chain_integrity_verified", "chain_integrity_break"],
+        ).count()
+        assert after == before  # no audit row written on SQLite
+
+    def test_task_registered_on_beat_schedule(self):
+        from nsr_mis.celery import app
+        tasks = {entry["task"] for entry in app.conf.beat_schedule.values()}
+        assert "apps.security.tasks.verify_audit_chain_task" in tasks

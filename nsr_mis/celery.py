@@ -75,4 +75,14 @@ app.conf.beat_schedule = {
         # ALL Kobo intake.
         "schedule": crontab(minute="*/5"),
     },
+    "verify-audit-chain": {
+        "task": "apps.security.tasks.verify_audit_chain_task",
+        # Daily at 03:00 EAT — off-peak so the whole-table scan
+        # doesn't compete with intake or DRS bundle generation.
+        # The DPO is the consumer of the result (US-S16-004); a
+        # daily cadence gives a 24-hour upper bound on detection
+        # latency, which is consistent with the prior manual-audit
+        # SOP we're replacing.
+        "schedule": crontab(minute=0, hour=3),
+    },
 }
