@@ -58,7 +58,8 @@ class GrievanceViewSet(
     scope_field_path = "household_id"
     queryset = Grievance.objects.all().order_by("-opened_at")
     serializer_class = GrievanceSerializer
-    filterset_fields = ["status", "tier", "category", "assigned_to"]
+    filterset_fields = ["status", "tier", "category", "assigned_to",
+                        "household_id"]
     http_method_names = ["get", "post", "head", "options"]
 
     def create(self, request, *args, **kwargs):

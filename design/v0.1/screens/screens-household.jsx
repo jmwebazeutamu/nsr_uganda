@@ -340,8 +340,8 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
         {tab === "hous"  && <TabHousing h={h}/>}
         {tab === "food"  && <TabFood h={h}/>}
         {tab === "hist"  && <TabHistory h={h} live={dataSource === "live"} onNavigate={onNavigate}/>}
-        {tab === "grm"   && <TabGrievances h={h}/>}
-        {tab === "prog"  && <TabProgrammes h={h}/>}
+        {tab === "grm"   && <TabGrievances h={h} live={dataSource === "live"}/>}
+        {tab === "prog"  && <TabProgrammes h={h} live={dataSource === "live"}/>}
         {tab === "cons"  && <TabConsent h={h} live={dataSource === "live"}/>}
         {tab === "aud"   && <TabAudit h={h} live={dataSource === "live"}/>}
       </div>
@@ -802,34 +802,180 @@ const TabHistory = ({ h, live, onNavigate }) => {
   );
 };
 
-const TabGrievances = ({ h }) => (
-  <div>
-    <TabHeader title="Grievances"
-      sub="GRM cases filed against or referencing this household. Live API wiring deferred — design-preview content shown."
-      action={<button className="btn btn-sm"><Icon name="plus" size={13}/> File grievance</button>}/>
-    <div style={{padding:20}}>
-      <p className="muted t-bodysm">
-        Live wiring to <code>/api/v1/grm/grievances/?household_id={h.rid}</code> ships
-        when the GRM cross-link query lands. Inspect the live chain in the
-        Audit tab today, or use <a href="/admin/grievance/grievance/" target="_blank" rel="noreferrer">Django admin</a>.
-      </p>
-    </div>
-  </div>
-);
+// US-S14-003: Grievances tab live wiring. Fetches
+// /api/v1/grm/grievances/?household_id={h.rid}; falls back to a
+// "no grievances" empty state. household_id was added to the
+// GrievanceViewSet's filterset_fields as part of this same ticket.
+const TabGrievances = ({ h, live }) => {
+  const [rows, setRows] = useStateHH(null);
+  const [err, setErr] = useStateHH(null);
+  useEffectHH(() => {
+    if (!live || !h.rid) return undefined;
+    let cancelled = false;
+    fetch(`/api/v1/grm/grievances/?household_id=${encodeURIComponent(h.rid)}&page_size=100`,
+      { credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then(data => { if (!cancelled) setRows((data.results || data).slice()); })
+      .catch(e => !cancelled && setErr(String(e)));
+    return () => { cancelled = true; };
+  }, [live, h.rid]);
 
-const TabProgrammes = ({ h }) => (
-  <div>
-    <TabHeader title="Programmes"
-      sub="Active enrolments, exits, and payment events from partner programmes. Live wiring deferred."
-      action={<button className="btn btn-sm"><Icon name="plus" size={13}/> Add referral</button>}/>
-    <div style={{padding:20}}>
-      <p className="muted t-bodysm">
-        Live wiring to <code>/api/v1/ref/programme-referrals/?household_id={h.rid}</code>
-        ships when the REF module exposes the per-household enrolment endpoint.
-      </p>
+  return (
+    <div>
+      <TabHeader title="Grievances"
+        sub={live
+          ? "GRM cases filed against or referencing this household."
+          : "GRM cases filed against or referencing this household. Mock preview — log into /admin/ first."}
+        action={<button className="btn btn-sm"><Icon name="plus" size={13}/> File grievance</button>}/>
+      {err && <div className="muted t-bodysm" style={{padding:"16px 20px"}}>Couldn't load: {err}</div>}
+      {live && !rows && !err && <div className="muted t-bodysm" style={{padding:"16px 20px"}}>Loading…</div>}
+      {live && rows?.length === 0 && (
+        <div className="muted t-bodysm" style={{padding:"16px 20px"}}>
+          No grievances recorded against this household.
+        </div>
+      )}
+      {(live ? rows && rows.length > 0 : true) && (
+        <table className="tbl">
+          <thead><tr>
+            <th>GRM ID</th><th>Category</th><th>Description</th>
+            <th>Reporter</th><th>Tier</th><th>Opened</th>
+            <th>SLA</th><th>Status</th>
+          </tr></thead>
+          <tbody>
+            {(live ? rows : [
+              { id: "GRM-2026-04-02-00088", category: "Roster: missing member",
+                sub_category: "—",
+                description: "Daughter Mary was not enrolled in the roster.",
+                reporter_name: "Sarah Nakato", tier: "l1_parish_chief",
+                opened_at: "2026-04-02T09:00:00",
+                sla_deadline: "2026-04-07T09:00:00", status: "closed" },
+            ]).map(g => (
+              <tr key={g.id}>
+                <td className="col-id">{g.id}</td>
+                <td>{g.category}</td>
+                <td className="t-bodysm" style={{maxWidth:240, overflow:"hidden",
+                                                 textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+                  {g.description}
+                </td>
+                <td className="t-bodysm">{g.reporter_name || <span className="muted">—</span>}</td>
+                <td><Chip size="sm">{(g.tier || "").replace(/^l(\d)_/, "L$1 · ").replace(/_/g, " ")}</Chip></td>
+                <td className="t-cap">{(g.opened_at || "").slice(0, 10)}</td>
+                <td className="t-cap">{(g.sla_deadline || "").slice(0, 10) || "—"}</td>
+                <td><Chip size="sm" tone={g.status === "closed" ? "data"
+                                          : g.status === "open" ? "update" : undefined}>
+                  {g.status}
+                </Chip></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
-  </div>
-);
+  );
+};
+
+// US-S14-003: Programmes tab live wiring. Fans out to two
+// endpoints — enrolments (the source of truth) + referrals (the
+// pipeline view) — and stitches both into one table. The `household`
+// filter was added to both viewsets' filterset_fields as part of
+// this same ticket.
+const TabProgrammes = ({ h, live }) => {
+  const [enrolments, setEnrolments] = useStateHH(null);
+  const [referrals, setReferrals] = useStateHH(null);
+  const [err, setErr] = useStateHH(null);
+  useEffectHH(() => {
+    if (!live || !h.rid) return undefined;
+    let cancelled = false;
+    const opts = { credentials: "same-origin", headers: { Accept: "application/json" } };
+    Promise.all([
+      fetch(`/api/v1/ref/enrolments/?household=${encodeURIComponent(h.rid)}&page_size=100`, opts)
+        .then(r => r.ok ? r.json() : Promise.reject(`enrolments HTTP ${r.status}`)),
+      fetch(`/api/v1/ref/referrals/?household=${encodeURIComponent(h.rid)}&page_size=100`, opts)
+        .then(r => r.ok ? r.json() : Promise.reject(`referrals HTTP ${r.status}`)),
+    ])
+      .then(([e, r]) => {
+        if (cancelled) return;
+        setEnrolments((e.results || e).slice());
+        setReferrals((r.results || r).slice());
+      })
+      .catch(e => !cancelled && setErr(String(e)));
+    return () => { cancelled = true; };
+  }, [live, h.rid]);
+
+  const total = (enrolments?.length || 0) + (referrals?.length || 0);
+
+  return (
+    <div>
+      <TabHeader title="Programmes"
+        sub={live
+          ? "Active enrolments and outstanding referrals under partner programmes (PDM, NUSAF, etc.)."
+          : "Active enrolments and exits from partner programmes. Mock preview — log into /admin/ first."}
+        action={<button className="btn btn-sm"><Icon name="plus" size={13}/> Add referral</button>}/>
+      {err && <div className="muted t-bodysm" style={{padding:"16px 20px"}}>Couldn't load: {err}</div>}
+      {live && (!enrolments || !referrals) && !err && (
+        <div className="muted t-bodysm" style={{padding:"16px 20px"}}>Loading…</div>
+      )}
+      {live && total === 0 && !err && (
+        <div className="muted t-bodysm" style={{padding:"16px 20px"}}>
+          No programme enrolments or referrals on file for this household.
+        </div>
+      )}
+      {(live ? total > 0 : true) && (
+        <table className="tbl">
+          <thead><tr>
+            <th>Programme</th><th>Type</th><th>Status</th><th>Effective</th>
+            <th>Referral / Enrolment ID</th>
+          </tr></thead>
+          <tbody>
+            {live ? <>
+              {(enrolments || []).map(e => (
+                <tr key={`e-${e.id}`}>
+                  <td>
+                    <div style={{fontWeight:600}}>{e.programme_code || e.programme}</div>
+                    {e.programme_name && <div className="t-bodysm muted">{e.programme_name}</div>}
+                  </td>
+                  <td><Chip size="sm" tone="data">Enrolment</Chip></td>
+                  <td><Chip size="sm" tone={e.status === "active" ? "data"
+                                            : e.status === "exited" ? "neutral" : undefined}>
+                    {e.status}
+                  </Chip></td>
+                  <td className="t-cap">{(e.effective_date || "").slice(0, 10) || "—"}</td>
+                  <td className="col-id">{e.id}</td>
+                </tr>
+              ))}
+              {(referrals || []).map(r => (
+                <tr key={`r-${r.id}`}>
+                  <td>
+                    <div style={{fontWeight:600}}>{r.programme_code || r.programme}</div>
+                    {r.programme_name && <div className="t-bodysm muted">{r.programme_name}</div>}
+                  </td>
+                  <td><Chip size="sm" tone="update">Referral</Chip></td>
+                  <td><Chip size="sm" tone={r.status === "accepted" ? "data"
+                                            : r.status === "rejected" ? "danger" : "update"}>
+                    {r.status}
+                  </Chip></td>
+                  <td className="t-cap">{(r.sent_at || "").slice(0, 10) || "—"}</td>
+                  <td className="col-id">{r.id}</td>
+                </tr>
+              ))}
+            </> : (
+              <tr>
+                <td>
+                  <div style={{fontWeight:600}}>OPM-PDM-2026</div>
+                  <div className="t-bodysm muted">Parish Development Model</div>
+                </td>
+                <td><Chip size="sm" tone="data">Enrolment</Chip></td>
+                <td><Chip size="sm" tone="data">active</Chip></td>
+                <td className="t-cap">2026-04-01</td>
+                <td className="col-id">ENR-2026-04-01-00018</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+};
 
 const TabConsent = ({ h, live }) => {
   const consent = h.questionnaire?.interview?.consent;

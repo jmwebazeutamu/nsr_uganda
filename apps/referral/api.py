@@ -27,10 +27,17 @@ class ProgrammeSerializer(serializers.ModelSerializer):
 
 
 class ReferralSerializer(serializers.ModelSerializer):
+    # Programme code + name are surfaced alongside the FK so a
+    # downstream consumer (e.g. household-detail Programmes tab) can
+    # render a human-readable row without a second round-trip.
+    programme_code = serializers.CharField(source="programme.code", read_only=True)
+    programme_name = serializers.CharField(source="programme.name", read_only=True)
+
     class Meta:
         model = Referral
         fields = (
-            "id", "programme", "household", "eligibility_rule_version",
+            "id", "programme", "programme_code", "programme_name",
+            "household", "eligibility_rule_version",
             "status", "sent_at", "accepted_at", "enrolled_at",
             "rejected_at", "exited_at",
             "programme_side_id", "reason",
@@ -44,9 +51,13 @@ class ReferralSerializer(serializers.ModelSerializer):
 
 
 class EnrolmentSerializer(serializers.ModelSerializer):
+    programme_code = serializers.CharField(source="programme.code", read_only=True)
+    programme_name = serializers.CharField(source="programme.name", read_only=True)
+
     class Meta:
         model = ProgrammeEnrolment
-        fields = ("id", "programme", "household", "referral", "status",
+        fields = ("id", "programme", "programme_code", "programme_name",
+                  "household", "referral", "status",
                   "effective_date", "exit_reason", "payment_metadata",
                   "created_at", "updated_at")
 
@@ -92,7 +103,7 @@ class ReferralViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyMode
     scope_field_path = "household__sub_region_code"
     queryset = Referral.objects.all().order_by("-sent_at")
     serializer_class = ReferralSerializer
-    filterset_fields = ["status", "programme"]
+    filterset_fields = ["status", "programme", "household"]
 
     @extend_schema(tags=["ref"], summary="Send a new referral", request=_SendReq,
                    responses={200: ReferralSerializer})
@@ -169,7 +180,7 @@ class ProgrammeEnrolmentViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.Re
     scope_field_path = "household__sub_region_code"
     queryset = ProgrammeEnrolment.objects.all().order_by("-effective_date")
     serializer_class = EnrolmentSerializer
-    filterset_fields = ["status", "programme"]
+    filterset_fields = ["status", "programme", "household"]
 
     @extend_schema(tags=["ref"], summary="Exit an enrolment",
                    request=_RejectReq, responses={200: EnrolmentSerializer})
