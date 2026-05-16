@@ -38,16 +38,37 @@ class DqaRuleAdmin(admin.ModelAdmin):
 
     @admin.action(description="Submit selected DRAFT rules for approval")
     def action_submit(self, request, queryset):
-        self._act(request, queryset, submit_for_approval, "submit_for_approval")
+        actor = request.user.username or "admin"
+        self._act(
+            request, queryset,
+            lambda r: submit_for_approval(r, actor=actor),
+            "submit_for_approval",
+        )
 
     @admin.action(description="Approve selected PENDING rules (as me)")
     def action_approve_as_admin(self, request, queryset):
         approver = request.user.username or "admin"
-        self._act(request, queryset, lambda r: approve(r, approver=approver), "approve")
+        # The service requires a non-blank note; bulk admin action
+        # uses a generic default so the audit row still carries
+        # SOMETHING — operators wanting a per-rule justification go
+        # through the per-row Rule Editor UI (US-076).
+        self._act(
+            request, queryset,
+            lambda r: approve(
+                r, approver=approver, note="Approved via admin action",
+                actor=approver,
+            ),
+            "approve",
+        )
 
     @admin.action(description="Retire selected ACTIVE rules")
     def action_retire(self, request, queryset):
-        self._act(request, queryset, retire, "retire")
+        actor = request.user.username or "admin"
+        self._act(
+            request, queryset,
+            lambda r: retire(r, actor=actor),
+            "retire",
+        )
 
 
 @admin.register(DqaResult)

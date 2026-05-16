@@ -19,7 +19,14 @@ import pytest
 
 from apps.dqa.engine import DSLError, evaluate, evaluate_expression
 from apps.dqa.models import DqaRule, RuleStatus, Severity
-from apps.dqa.services import ApprovalError, approve, submit_for_approval
+from apps.dqa.services import (
+    ApprovalError,
+    approve,
+    reject,
+    retire,
+    submit_for_approval,
+)
+from apps.security.models import AuditEvent
 
 # --- Fixtures ---------------------------------------------------------------
 
@@ -145,7 +152,7 @@ class TestApprovalWorkflow:
         assert draft_rule.status == RuleStatus.DRAFT
         submit_for_approval(draft_rule)
         assert draft_rule.status == RuleStatus.PENDING_APPROVAL
-        approve(draft_rule, approver="bob")
+        approve(draft_rule, approver="bob", note="ok")
         assert draft_rule.status == RuleStatus.ACTIVE
         assert draft_rule.approved_by == "bob"
         assert draft_rule.approved_at is not None
@@ -153,13 +160,143 @@ class TestApprovalWorkflow:
     def test_author_cannot_approve_own_rule(self, draft_rule):
         submit_for_approval(draft_rule)
         with pytest.raises(ApprovalError, match="cannot approve"):
-            approve(draft_rule, approver=draft_rule.author)
+            approve(draft_rule, approver=draft_rule.author, note="not relevant")
 
     def test_cannot_approve_a_draft(self, draft_rule):
         with pytest.raises(ApprovalError, match="PENDING_APPROVAL"):
-            approve(draft_rule, approver="bob")
+            approve(draft_rule, approver="bob", note="ok")
 
     def test_cannot_approve_without_approver(self, draft_rule):
         submit_for_approval(draft_rule)
         with pytest.raises(ApprovalError, match="approver must be supplied"):
-            approve(draft_rule, approver="")
+            approve(draft_rule, approver="", note="ok")
+
+
+# --- DQA-2: lifecycle fields, audit emission, note/reason persistence -------
+
+class TestLifecycleFields:
+    def test_new_rule_has_empty_lifecycle_audit_fields(self, draft_rule):
+        assert draft_rule.approval_note == ""
+        assert draft_rule.rejection_reason == ""
+        assert draft_rule.submitted_at is None
+
+    def test_submit_sets_submitted_at(self, draft_rule):
+        submit_for_approval(draft_rule)
+        draft_rule.refresh_from_db()
+        assert draft_rule.submitted_at is not None
+
+    def test_approve_persists_note(self, draft_rule):
+        submit_for_approval(draft_rule)
+        approve(draft_rule, approver="bob",
+                note="matches AC-MANDATORY for member surname")
+        draft_rule.refresh_from_db()
+        assert draft_rule.approval_note == "matches AC-MANDATORY for member surname"
+
+    def test_approve_rejects_blank_note(self, draft_rule):
+        submit_for_approval(draft_rule)
+        with pytest.raises(ApprovalError, match="note"):
+            approve(draft_rule, approver="bob", note="")
+        with pytest.raises(ApprovalError, match="note"):
+            approve(draft_rule, approver="bob", note="   ")
+
+    def test_reject_persists_reason(self, draft_rule):
+        submit_for_approval(draft_rule)
+        reject(draft_rule, approver="bob",
+               reason="expression conflicts with AC-NIN-FORMAT")
+        draft_rule.refresh_from_db()
+        assert draft_rule.rejection_reason == "expression conflicts with AC-NIN-FORMAT"
+        assert draft_rule.status == RuleStatus.REJECTED
+
+    def test_reject_requires_non_blank_reason(self, draft_rule):
+        submit_for_approval(draft_rule)
+        with pytest.raises(ApprovalError, match="reason"):
+            reject(draft_rule, approver="bob", reason="")
+        with pytest.raises(ApprovalError, match="reason"):
+            reject(draft_rule, approver="bob", reason="   ")
+
+
+class TestAuditEmission:
+    """One AuditEvent per successful transition; none on failed transitions.
+    entity_type="dqa.rule"; entity_id=rule.id (ULID); action names
+    namespaced under dqa.rule_version.<verb>; field_changes carries
+    before/after plus note/reason payload where applicable.
+    """
+
+    def _by_action(self, rule_id, action):
+        return AuditEvent.objects.filter(
+            entity_type="dqa.rule", entity_id=rule_id, action=action,
+        )
+
+    def test_submit_emits_one_event(self, draft_rule):
+        before = AuditEvent.objects.count()
+        submit_for_approval(draft_rule, actor="alice")
+        assert AuditEvent.objects.count() == before + 1
+        ev = self._by_action(
+            draft_rule.id, "dqa.rule_version.submitted_for_approval",
+        ).order_by("-occurred_at").first()
+        assert ev is not None
+        assert ev.actor_id == "alice"
+        assert ev.field_changes["before"] == RuleStatus.DRAFT
+        assert ev.field_changes["after"] == RuleStatus.PENDING_APPROVAL
+
+    def test_approve_emits_one_event_with_note(self, draft_rule):
+        submit_for_approval(draft_rule, actor="alice")
+        before = AuditEvent.objects.count()
+        approve(draft_rule, approver="bob", note="ok",
+                actor="bob")
+        assert AuditEvent.objects.count() == before + 1
+        ev = self._by_action(
+            draft_rule.id, "dqa.rule_version.approved",
+        ).order_by("-occurred_at").first()
+        assert ev is not None
+        assert ev.actor_id == "bob"
+        assert ev.field_changes["approver"] == "bob"
+        assert ev.field_changes["note"] == "ok"
+        assert ev.field_changes["after"] == RuleStatus.ACTIVE
+
+    def test_reject_emits_one_event_with_reason(self, draft_rule):
+        submit_for_approval(draft_rule, actor="alice")
+        before = AuditEvent.objects.count()
+        reject(draft_rule, approver="bob",
+               reason="conflicts with AC-NIN-FORMAT", actor="bob")
+        assert AuditEvent.objects.count() == before + 1
+        ev = self._by_action(
+            draft_rule.id, "dqa.rule_version.rejected",
+        ).order_by("-occurred_at").first()
+        assert ev is not None
+        assert ev.field_changes["reason"] == "conflicts with AC-NIN-FORMAT"
+        assert ev.field_changes["after"] == RuleStatus.REJECTED
+
+    def test_retire_emits_one_event(self, draft_rule):
+        submit_for_approval(draft_rule, actor="alice")
+        approve(draft_rule, approver="bob", note="ok", actor="bob")
+        before = AuditEvent.objects.count()
+        retire(draft_rule, actor="carol")
+        assert AuditEvent.objects.count() == before + 1
+        ev = self._by_action(
+            draft_rule.id, "dqa.rule_version.retired",
+        ).order_by("-occurred_at").first()
+        assert ev is not None
+        assert ev.actor_id == "carol"
+        assert ev.field_changes["after"] == RuleStatus.RETIRED
+
+    def test_failed_transition_emits_no_event(self, draft_rule):
+        # Draft → approve must raise; no audit row should land.
+        before = AuditEvent.objects.count()
+        with pytest.raises(ApprovalError):
+            approve(draft_rule, approver="bob", note="ok")
+        assert AuditEvent.objects.count() == before
+
+    def test_blank_note_failure_emits_no_event(self, draft_rule):
+        submit_for_approval(draft_rule, actor="alice")
+        before_count = AuditEvent.objects.count()
+        with pytest.raises(ApprovalError):
+            approve(draft_rule, approver="bob", note="   ")
+        assert AuditEvent.objects.count() == before_count
+
+    def test_self_approval_attempt_emits_no_event(self, draft_rule):
+        submit_for_approval(draft_rule, actor="alice")
+        before_count = AuditEvent.objects.count()
+        with pytest.raises(ApprovalError, match="cannot approve"):
+            approve(draft_rule, approver=draft_rule.author, note="trying")
+        assert AuditEvent.objects.count() == before_count
