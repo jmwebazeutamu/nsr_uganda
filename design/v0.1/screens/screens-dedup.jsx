@@ -379,6 +379,33 @@ const DedupScreen = () => {
               </div>
             );
           })()}
+          {/* US-S18-001 — per-field similarity in the confirm summary.
+              Surfaces the matcher's evidence inside the modal so the
+              operator doesn't have to scroll back to the compare table
+              to remember WHY a merge was proposed. Skips fields with
+              no similarity (registry_id, fixed-rule fields). */}
+          {(() => {
+            const tone = (s) => s >= 1 ? 'data' : s >= 0.8 ? 'quality' : 'danger';
+            const rows = activePair.fields.filter(
+              f => f.sim !== null && f.sim !== undefined,
+            );
+            if (!rows.length) return null;
+            return (
+              <div style={{border:'1px solid var(--neutral-200)', borderRadius:6, padding:10}}>
+                <div className="t-cap" style={{marginBottom:6}}>SIMILARITY BY FIELD</div>
+                <div style={{display:'grid', gridTemplateColumns:'1fr auto', rowGap:4, columnGap:12, fontSize:12.5}}>
+                  {rows.map(f => (
+                    <React.Fragment key={f.key}>
+                      <div style={{color:'var(--neutral-700)'}}>{f.label}</div>
+                      <div style={{textAlign:'right'}}>
+                        <Chip size="sm" tone={tone(f.sim)}>{f.sim.toFixed(2)}</Chip>
+                      </div>
+                    </React.Fragment>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
           <div className="tint-update" style={{padding:12, borderRadius:6, borderLeft:'3px solid var(--accent-update)'}}>
             <div className="row gap-2"><Icon name="info" size={14} color="var(--accent-update)"/><strong className="t-bodysm">Downstream effects</strong></div>
             <ul className="t-bodysm" style={{margin:'6px 0 0', paddingLeft:20, color:'var(--neutral-700)'}}>
