@@ -300,3 +300,184 @@ class TestAuditEmission:
         with pytest.raises(ApprovalError, match="cannot approve"):
             approve(draft_rule, approver=draft_rule.author, note="trying")
         assert AuditEvent.objects.count() == before_count
+
+
+# --- DQA-3 / US-079: remaining operators ------------------------------------
+
+class TestAccuracyLe:
+    """`accuracy_le` — explicit semantic for GPS accuracy rules.
+    Equivalent to `le` numerically; named so the Rule Editor can offer
+    it specifically on geometry fields without ambiguity."""
+
+    @pytest.mark.parametrize("accuracy", [0, 5, 9.99, 10])
+    def test_passes_within_threshold(self, accuracy):
+        expr = {"field": "acc", "op": "accuracy_le", "value": 10}
+        assert evaluate_expression(expr, {"acc": accuracy}) is True
+
+    @pytest.mark.parametrize("accuracy", [10.01, 15, 100])
+    def test_fails_above_threshold(self, accuracy):
+        expr = {"field": "acc", "op": "accuracy_le", "value": 10}
+        assert evaluate_expression(expr, {"acc": accuracy}) is False
+
+    def test_fails_on_null(self):
+        # Unlike is_null/any_of patterns elsewhere, this op alone
+        # treats missing accuracy as a failure — operators wanting
+        # "missing or under N" wrap with any_of.
+        expr = {"field": "acc", "op": "accuracy_le", "value": 10}
+        assert evaluate_expression(expr, {"acc": None}) is False
+
+
+class TestCountOps:
+    """`count_eq` / `count_neq` — for list-shaped fields like roster."""
+
+    def test_count_eq_matches_list_length(self):
+        expr = {"field": "members", "op": "count_eq", "value": 3}
+        assert evaluate_expression(expr, {"members": [1, 2, 3]}) is True
+        assert evaluate_expression(expr, {"members": [1, 2]}) is False
+
+    def test_count_neq_inverts(self):
+        expr = {"field": "members", "op": "count_neq", "value": 0}
+        assert evaluate_expression(expr, {"members": [1]}) is True
+        assert evaluate_expression(expr, {"members": []}) is False
+
+    def test_count_eq_on_non_list_is_false(self):
+        # A scalar can't have a count; rule should fail rather than
+        # crash so the operator gets a clear validation failure.
+        expr = {"field": "members", "op": "count_eq", "value": 1}
+        assert evaluate_expression(expr, {"members": "not-a-list"}) is False
+
+    def test_count_eq_on_none_is_false(self):
+        expr = {"field": "members", "op": "count_eq", "value": 0}
+        assert evaluate_expression(expr, {"members": None}) is False
+
+
+class TestCrossFieldEq:
+    """`cross_field_eq` — leaf with left_field + right_field.
+    Used for rules like "household.head_id matches a member.line_number=1
+    on the same household."""
+
+    def test_passes_when_two_fields_match(self):
+        expr = {
+            "op": "cross_field_eq",
+            "left_field": "head_name", "right_field": "primary_contact",
+        }
+        rec = {"head_name": "Nakato Sarah", "primary_contact": "Nakato Sarah"}
+        assert evaluate_expression(expr, rec) is True
+
+    def test_fails_when_two_fields_differ(self):
+        expr = {
+            "op": "cross_field_eq",
+            "left_field": "head_name", "right_field": "primary_contact",
+        }
+        rec = {"head_name": "Nakato Sarah", "primary_contact": "Okot James"}
+        assert evaluate_expression(expr, rec) is False
+
+    def test_both_none_passes(self):
+        # If both sides are missing, equality holds; operator wanting
+        # "both present AND equal" composes with not_null.
+        expr = {
+            "op": "cross_field_eq",
+            "left_field": "a", "right_field": "b",
+        }
+        assert evaluate_expression(expr, {}) is True
+
+    def test_requires_left_and_right_field_keys(self):
+        with pytest.raises(DSLError, match="cross_field_eq"):
+            evaluate_expression({"op": "cross_field_eq", "field": "x"}, {})
+
+
+class TestReferencesExisting:
+    """`references_existing` — the field's value must resolve to a row
+    in the named Django model. Uses dot-notation `app_label.ModelName`
+    to avoid hard-coding which model. Returns False on bad lookups
+    rather than raising — the rule should report the data-quality
+    failure, not crash the pipeline."""
+
+    def test_passes_when_geographic_unit_exists(self, db):
+        from datetime import date as _d
+
+        from apps.reference_data.models import GeographicUnit
+        g = GeographicUnit.objects.create(
+            level="parish", code="REF-OK-1", name="Ref OK",
+            effective_from=_d(2026, 1, 1),
+        )
+        expr = {
+            "field": "parish_id", "op": "references_existing",
+            "value": "reference_data.GeographicUnit",
+        }
+        assert evaluate_expression(expr, {"parish_id": g.id}) is True
+
+    def test_fails_when_lookup_does_not_exist(self, db):
+        expr = {
+            "field": "parish_id", "op": "references_existing",
+            "value": "reference_data.GeographicUnit",
+        }
+        assert evaluate_expression(expr, {"parish_id": 999999999}) is False
+
+    def test_fails_on_unknown_model(self):
+        expr = {
+            "field": "parish_id", "op": "references_existing",
+            "value": "nonexistent.Model",
+        }
+        # Unknown model → False (rule reports failure); never raises.
+        assert evaluate_expression(expr, {"parish_id": 1}) is False
+
+    def test_fails_on_null_field_value(self):
+        expr = {
+            "field": "parish_id", "op": "references_existing",
+            "value": "reference_data.GeographicUnit",
+        }
+        assert evaluate_expression(expr, {"parish_id": None}) is False
+
+
+class TestWithinPolygon:
+    """`within_polygon` — point-in-polygon via GEOSGeometry.
+
+    Uses Django's GIS bindings rather than a homegrown implementation.
+    Polygon comes from the rule expression `value`; field value is a
+    {lat, lng} dict or a WKT-style POINT string. SQLite doesn't have
+    PostGIS but Django's in-process GEOS library is independent of
+    the DB backend, so the operator works on every backend.
+    """
+
+    POLY_WKT = "POLYGON((0 0, 0 10, 10 10, 10 0, 0 0))"
+
+    def test_inside_polygon_passes(self):
+        expr = {
+            "field": "gps", "op": "within_polygon",
+            "value": self.POLY_WKT,
+        }
+        assert evaluate_expression(
+            expr, {"gps": {"lat": 5, "lng": 5}},
+        ) is True
+
+    def test_outside_polygon_fails(self):
+        expr = {
+            "field": "gps", "op": "within_polygon",
+            "value": self.POLY_WKT,
+        }
+        assert evaluate_expression(
+            expr, {"gps": {"lat": 50, "lng": 50}},
+        ) is False
+
+    def test_accepts_wkt_point_string(self):
+        expr = {
+            "field": "gps", "op": "within_polygon",
+            "value": self.POLY_WKT,
+        }
+        assert evaluate_expression(expr, {"gps": "POINT(2 2)"}) is True
+
+    def test_null_field_fails(self):
+        expr = {
+            "field": "gps", "op": "within_polygon",
+            "value": self.POLY_WKT,
+        }
+        assert evaluate_expression(expr, {"gps": None}) is False
+
+    def test_invalid_polygon_raises_dsl_error(self):
+        expr = {
+            "field": "gps", "op": "within_polygon",
+            "value": "NOT A POLYGON",
+        }
+        with pytest.raises(DSLError, match="polygon"):
+            evaluate_expression(expr, {"gps": {"lat": 1, "lng": 1}})
