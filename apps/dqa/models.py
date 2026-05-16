@@ -64,6 +64,15 @@ class DqaRule(models.Model):
     author = models.CharField(max_length=64)
     approved_by = models.CharField(max_length=64, blank=True)
     approved_at = models.DateTimeField(null=True, blank=True)
+    # Lifecycle audit (DQA-1). approval_note explains WHY a rule was
+    # approved; rejection_reason explains why one was rejected — both
+    # surface in the version-history tab (US-076) and in the AuditEvent
+    # field_changes payload (DQA-2). submitted_at completes the
+    # lifecycle timestamps so latency dashboards can compute
+    # draft → pending → active intervals.
+    approval_note = models.TextField(blank=True)
+    rejection_reason = models.TextField(blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

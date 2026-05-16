@@ -12,6 +12,8 @@ class DqaRuleSerializer(serializers.ModelSerializer):
             "applicability_filter", "expression", "error_message_template",
             "effective_from", "effective_to", "status",
             "author", "approved_by", "approved_at",
+            # DQA-1 lifecycle audit fields.
+            "approval_note", "rejection_reason", "submitted_at",
         )
 
 
