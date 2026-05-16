@@ -204,12 +204,14 @@ const HouseholdScreen = ({ householdId, onNavigate } = {}) => {
         eyebrow={`HOUSEHOLD DETAIL · ${hh.registry_id}`}
         title={hh.head_name + (dataSource === "live" ? "  (live)" : dataSource === "mock" ? "  (mock)" : "")}
         sub={`${hh.village}, ${hh.parish}, ${hh.sub_county}, ${hh.district} · ${hh.sub_region} / ${hh.region}`}
-        right={onNavigate ? (
-          <button className="btn" onClick={() => onNavigate("registry")}>
-            <Icon name="chevronLeft" size={14}/> Back to Registry
-          </button>
-        ) : null}
       />
+      {onNavigate && (
+        <div style={{marginTop: -8, marginBottom: 12}}>
+          <button className="btn" onClick={() => onNavigate("registry")}>
+            ← Back to Registry
+          </button>
+        </div>
+      )}
 
       <div className="card mt-3">
         <div className="row gap-6" style={{flexWrap:'wrap', padding: '16px 20px'}}>
