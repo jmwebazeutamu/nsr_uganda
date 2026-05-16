@@ -163,14 +163,9 @@ const HouseholdScreen = ({ householdId, onNavigate } = {}) => {
   return (
     <div className="page">
       <PageHeader
-        eyebrow={<>HOUSEHOLD DETAIL · <span className="t-mono">{hh.registry_id}</span></>}
-        title={<>
-          {hh.head_name}{" "}
-          <Chip tone="data" size="sm">{hh.status}</Chip>
-          {dataSource === "live" && <Chip tone="eligibility" size="sm">live</Chip>}
-          {dataSource === "mock" && <Chip tone="quality" size="sm">mock</Chip>}
-        </>}
-        sub={<>{hh.village}, {hh.parish}, {hh.sub_county}, {hh.district} &middot; {hh.sub_region} / {hh.region}</>}
+        eyebrow={`HOUSEHOLD DETAIL · ${hh.registry_id}`}
+        title={hh.head_name + (dataSource === "live" ? "  (live)" : dataSource === "mock" ? "  (mock)" : "")}
+        sub={`${hh.village}, ${hh.parish}, ${hh.sub_county}, ${hh.district} · ${hh.sub_region} / ${hh.region}`}
         right={onNavigate ? (
           <button className="btn" onClick={() => onNavigate("registry")}>
             <Icon name="chevronLeft" size={14}/> Back to Registry
@@ -217,8 +212,8 @@ const HouseholdScreen = ({ householdId, onNavigate } = {}) => {
           </div>
         </div>
         <div style={{display:'flex', justifyContent:'flex-end', gap: 8, padding: '8px 20px', borderTop:'1px solid var(--neutral-200)'}}>
-          <button className="btn"><Icon name="filePlus" size={14}/> Open update</button>
-          <button className="btn"><Icon name="alertTriangle" size={14}/> Open grievance</button>
+          <button className="btn"><Icon name="edit" size={14}/> Open update</button>
+          <button className="btn"><Icon name="message" size={14}/> Open grievance</button>
           <button className="btn"><Icon name="moreH" size={14}/></button>
         </div>
       </div>
