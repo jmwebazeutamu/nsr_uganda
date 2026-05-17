@@ -1004,6 +1004,65 @@ class TestInteractivePreview:
         r = c.get("/admin/intake/formversion/_us117e/schema/999999/")
         assert r.status_code == 404
 
+    def test_schema_inlines_geo_options_with_parent_code(
+        self, db, django_user_model,
+    ):
+        """The 6 legacy geographic select questions have no
+        ChoiceList in the seed catalogue — schema instead inlines
+        options from REF-DATA.GeographicUnit with parent_code so
+        React can cascade-filter (region → subregion → … → parish)."""
+        from django.test import Client
+
+        from apps.intake.models import FormQuestion, FormSection, FormVersion
+        from apps.reference_data.models import GeographicUnit
+        # Two-level synthetic hierarchy in the test DB.
+        ug = GeographicUnit.objects.create(
+            level="region", code="R-TEST", name="Test Region",
+            effective_from=date(2026, 1, 1), status="active",
+        )
+        GeographicUnit.objects.create(
+            level="sub_region", code="SR-TEST", name="Test Subregion",
+            parent=ug,
+            effective_from=date(2026, 1, 1), status="active",
+        )
+        fv = FormVersion.objects.create(
+            version=5118, name="geo-preview-fixture",
+            effective_from=date(2026, 1, 1),
+            status="draft", author="qa",
+        )
+        s = FormSection.objects.create(
+            form_version=fv, code="A", name="identification",
+            label="Identification", order=1,
+        )
+        FormQuestion.objects.create(
+            section=s, name="a0_region", label="Region",
+            type="select_one", required=True, order_in_section=1,
+        )
+        FormQuestion.objects.create(
+            section=s, name="a1_subregion", label="Subregion",
+            type="select_one", required=True, order_in_section=2,
+        )
+        u = django_user_model.objects.create_user(
+            username="ip-staff-geo", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        r = c.get(f"/admin/intake/formversion/_us117e/schema/{fv.id}/")
+        body = r.json()
+        sec = body["sections"][0]
+        region_q = next(q for q in sec["questions"] if q["name"] == "a0_region")
+        subregion_q = next(q for q in sec["questions"] if q["name"] == "a1_subregion")
+        # region: a non-empty list with no parent_question.
+        assert region_q["parent_question"] == ""
+        assert any(o["code"] == "R-TEST" for o in region_q["options"])
+        # subregion: declares its parent + each option carries
+        # the parent's code so the React cascade can filter.
+        assert subregion_q["parent_question"] == "a0_region"
+        subregion_opts = [o for o in subregion_q["options"] if o["code"] == "SR-TEST"]
+        assert len(subregion_opts) == 1
+        assert subregion_opts[0]["parent_code"] == "R-TEST"
+
     def test_static_preview_links_to_interactive(
         self, _fv_with_roster, django_user_model,
     ):

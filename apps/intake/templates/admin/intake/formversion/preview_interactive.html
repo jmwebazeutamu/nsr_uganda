@@ -272,7 +272,19 @@ const STRUCTURAL_TYPES = new Set([
   'deviceid', 'username',
 ]);
 
-function QuestionControl({ q, value, onChange, isVisible }) {
+function filterOptionsByParent(q, scope) {
+  // Cascading geographic selects: if the question declares a
+  // parent_question, only show options whose parent_code matches the
+  // currently-selected value of that parent question. Empty parent →
+  // empty list (forces the operator to pick the parent first instead
+  // of showing every option in the level).
+  if (!q.parent_question) return q.options;
+  const parentVal = scope ? scope[q.parent_question] : '';
+  if (!parentVal) return [];
+  return q.options.filter((o) => o.parent_code === parentVal);
+}
+
+function QuestionControl({ q, value, onChange, isVisible, scope }) {
   const set = (v) => onChange(q.name, v);
   switch (q.type) {
     case 'text':
@@ -296,15 +308,20 @@ function QuestionControl({ q, value, onChange, isVisible }) {
     case 'video':
     case 'file':
       return <input type="file" disabled={!isVisible} />;
-    case 'select_one':
+    case 'select_one': {
+      const opts = filterOptionsByParent(q, scope);
+      const placeholder = q.parent_question && !(scope && scope[q.parent_question])
+        ? `— select ${q.parent_question} first —`
+        : `— select ${q.choice_list_name || 'option'} —`;
       return (
         <select value={value ?? ''} onChange={(e) => set(e.target.value)} disabled={!isVisible}>
-          <option value="">— select {q.choice_list_name || 'option'} —</option>
-          {q.options.map((opt) => (
+          <option value="">{placeholder}</option>
+          {opts.map((opt) => (
             <option key={opt.code} value={opt.code}>{opt.code} · {opt.label}</option>
           ))}
         </select>
       );
+    }
     case 'select_multiple': {
       const arr = Array.isArray(value) ? value : (typeof value === 'string' && value ? value.split(' ') : []);
       const toggle = (code) => {
@@ -457,7 +474,8 @@ function QuestionRow({ q, scope, value, onChange, errors, inRepeat }) {
       </div>
       {q.hint && <div className="ip-q-hint">{q.hint}</div>}
       <div className={`ip-q-control ${error ? 'invalid' : ''}`}>
-        <QuestionControl q={q} value={value} onChange={onChange} isVisible={isVisible} />
+        <QuestionControl q={q} value={value} onChange={onChange}
+                         isVisible={isVisible} scope={scope} />
       </div>
       {error && <div className="ip-q-error">{error}</div>}
       {(q.relevant || q.constraint) && (

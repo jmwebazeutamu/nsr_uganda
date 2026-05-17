@@ -408,22 +408,74 @@ def _preview_form_view(request, form_version_id):
 
 # --- US-117e interactive preview -------------------------------------------
 
+# The 6 geographic questions in the legacy questionnaire don't have
+# seeded ChoiceLists (the legacy script builds them from an external
+# personal-OneDrive geo workbook). For the interactive preview we
+# project options live from the REF-DATA GeographicUnit hierarchy and
+# include `parent_code` so the React harness can cascade-filter
+# (region → subregion → district → county → subcounty → parish).
+# Maps FormQuestion.name → (GeographicUnit.level, parent question name).
+_GEO_QUESTIONS = {
+    "a0_region":                ("region",     None),
+    "a1_subregion":             ("sub_region", "a0_region"),
+    "a2_district_city":         ("district",   "a1_subregion"),
+    "a3_county_municipality":   ("county",     "a2_district_city"),
+    "a4_subcounty_division_tc": ("sub_county", "a3_county_municipality"),
+    "a5_parish_ward":           ("parish",     "a4_subcounty_division_tc"),
+}
+
+
+def _geo_options_for(level: str):
+    """Return [(code, label, parent_code)] for every active
+    GeographicUnit at `level`, sorted by name. parent_code is the
+    parent unit's `code` (empty for top-level)."""
+    from apps.reference_data.models import GeographicUnit
+    units = (
+        GeographicUnit.objects.filter(level=level, status="active")
+        .select_related("parent").order_by("name")
+    )
+    return [
+        {
+            "code": gu.code, "label": gu.name,
+            "parent_code": gu.parent.code if gu.parent_id else "",
+        }
+        for gu in units
+    ]
+
+
 def _build_form_schema(fv) -> dict:
     """Project a FormVersion into a JSON schema the interactive
     preview can hydrate from. Includes section repeat_count, all
     question attributes, and inline ChoiceList options so the
     React harness doesn't need a second round-trip per select."""
+    # Lazy-load geo options keyed by level; only fetched when at
+    # least one geo question is in the form.
+    geo_cache: dict = {}
+
+    def _options_for_geo(q_name):
+        level, parent_q = _GEO_QUESTIONS[q_name]
+        if level not in geo_cache:
+            geo_cache[level] = _geo_options_for(level)
+        return geo_cache[level], parent_q
+
     sections = []
     for section in fv.sections.order_by("order", "code"):
         questions = []
         for q in section.questions.order_by("order_in_section", "name"):
             options = []
-            if q.choice_list_ref is not None:
+            parent_question = ""
+            choice_list_name = ""
+            if q.name in _GEO_QUESTIONS:
+                options, parent_q = _options_for_geo(q.name)
+                parent_question = parent_q or ""
+                choice_list_name = _GEO_QUESTIONS[q.name][0]
+            elif q.choice_list_ref is not None:
                 options = [
                     {"code": opt.code, "label": opt.label}
                     for opt in q.choice_list_ref.options.filter(status="active")
                     .order_by("sort_order", "code")
                 ]
+                choice_list_name = q.choice_list_ref.list_name
             questions.append({
                 "id": q.id, "name": q.name, "label": q.label,
                 "hint": q.hint, "type": q.type, "required": q.required,
@@ -433,9 +485,8 @@ def _build_form_schema(fv) -> dict:
                 "appearance": q.appearance,
                 "repeat_count": q.repeat_count,
                 "options": options,
-                "choice_list_name": (
-                    q.choice_list_ref.list_name if q.choice_list_ref else ""
-                ),
+                "choice_list_name": choice_list_name,
+                "parent_question": parent_question,
             })
         sections.append({
             "id": section.id, "code": section.code, "name": section.name,
