@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -505,12 +506,31 @@ class TestQuestionnaireBuilderUI:
 
 # --- US-120: legacy questionnaire import -----------------------------------
 
+# The legacy builder lives in /k-forms/build_nsr_xlsform.py and is not
+# committed to the repo (it pulls a personal OneDrive geo workbook
+# path). Without it, the importer can't run, so the whole class is
+# skipped in CI where the directory is absent. Local dev runs against
+# the file as it sits in the developer's working tree.
+_LEGACY_SCRIPT = (
+    Path(__file__).resolve().parent.parent.parent
+    / "k-forms" / "build_nsr_xlsform.py"
+)
+_skip_without_legacy = pytest.mark.skipif(
+    not _LEGACY_SCRIPT.exists(),
+    reason=(
+        "k-forms/build_nsr_xlsform.py is not present — it lives outside "
+        "the repo by design (hard-coded developer paths). Local dev has it."
+    ),
+)
+
+
+@_skip_without_legacy
 class TestLegacyQuestionnaireImport:
     """The scripts/import_legacy_questionnaire.py end-to-end check.
 
     Reads k-forms/build_nsr_xlsform.py via exec (Workbook.save
-    monkey-patched no-op) and builds FormVersion v1. Re-running is
-    idempotent — section/question rows upsert on natural keys.
+    monkey-patched no-op) and builds FormVersion v1. Re-running
+    rebuilds the children in place — no stale rows survive.
     """
 
     @pytest.fixture
@@ -630,6 +650,7 @@ class TestLegacyQuestionnaireImport:
 
 # --- US-118: XLSForm export from FormVersion -------------------------------
 
+@_skip_without_legacy
 class TestXlsformExport:
     """Round-trip: import legacy script → export → bytes are a valid
     XLSForm with the expected sheets/columns/rows. Tests pin the
