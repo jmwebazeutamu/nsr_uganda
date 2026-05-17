@@ -93,14 +93,18 @@
       font-family: ui-monospace, monospace; font-size: 12.5px;
       color: var(--neutral-500, #6b7280);
     }
-    .ip-q-label { font-weight: 500; margin-bottom: 4px; font-size: 13px; }
+    .ip-q-label { font-weight: 600; margin-bottom: 4px; font-size: 16px; }
     .ip-q-label .ip-required { color: var(--accent-danger, #ef4444); margin-left: 4px; }
     .ip-q-label .ip-q-name {
       color: var(--neutral-500, #6b7280); font-family: ui-monospace, monospace;
       font-size: 11px; margin-left: 6px; font-weight: normal;
     }
-    .ip-q-hint { font-size: 12.5px; color: var(--neutral-700, #4b5563); margin-bottom: 6px; }
-    .ip-q-control input, .ip-q-control select, .ip-q-control textarea {
+    .ip-q-hint { font-size: 14px; color: var(--neutral-700, #4b5563); margin-bottom: 6px; }
+    /* Width:100% on text inputs only — checkboxes and radios must
+       keep their native 16px box so the option-row layout doesn't
+       blow up (see G15 assets list). */
+    .ip-q-control input:not([type="checkbox"]):not([type="radio"]),
+    .ip-q-control select, .ip-q-control textarea {
       width: 100%; padding: 6px 10px;
       border: 1px solid var(--neutral-300, #d1d5db); border-radius: 4px;
       font: inherit; background: white;
@@ -111,8 +115,24 @@
     .ip-q-control.invalid input, .ip-q-control.invalid select {
       border-color: var(--accent-danger, #ef4444);
     }
-    .ip-q-checks { display: flex; flex-direction: column; gap: 4px; }
-    .ip-q-checks label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+    /* select_multiple option list — single left-aligned column,
+       checkbox + label sit together on the left, 24px indent from
+       the question title, 8px row spacing. */
+    .ip-q-checks {
+      display: flex; flex-direction: column; gap: 8px;
+      padding-left: 24px; align-items: flex-start;
+    }
+    .ip-q-checks label {
+      display: flex; align-items: center; gap: 12px;
+      font-size: 14px; cursor: pointer; width: auto;
+    }
+    .ip-q-checks input[type="checkbox"] {
+      width: 16px; height: 16px; margin: 0; flex: none;
+    }
+    @media (max-width: 480px) {
+      .ip-q-checks { padding-left: 16px; }
+      .ip-q-label { font-size: 15px; }
+    }
     .ip-q-error {
       font-size: 12px; color: var(--accent-danger, #ef4444);
       margin-top: 4px;
@@ -284,7 +304,7 @@ function filterOptionsByParent(q, scope) {
   return q.options.filter((o) => o.parent_code === parentVal);
 }
 
-function QuestionControl({ q, value, onChange, isVisible, scope }) {
+function QuestionControl({ q, value, onChange, isVisible, scope, debug }) {
   const set = (v) => onChange(q.name, v);
   switch (q.type) {
     case 'text':
@@ -317,7 +337,13 @@ function QuestionControl({ q, value, onChange, isVisible, scope }) {
         <select value={value ?? ''} onChange={(e) => set(e.target.value)} disabled={!isVisible}>
           <option value="">{placeholder}</option>
           {opts.map((opt) => (
-            <option key={opt.code} value={opt.code}>{opt.code} · {opt.label}</option>
+            // End-user view: label only. The `code` is what gets
+            // submitted as the value (kept in value={opt.code}), but
+            // showing "01 · Yes" in the dropdown leaks the codebook
+            // to respondents. Debug mode below brings codes back.
+            <option key={opt.code} value={opt.code}>
+              {debug ? `${opt.code} · ${opt.label}` : opt.label}
+            </option>
           ))}
         </select>
       );
@@ -335,7 +361,9 @@ function QuestionControl({ q, value, onChange, isVisible, scope }) {
               <input type="checkbox" disabled={!isVisible}
                      checked={arr.includes(opt.code)}
                      onChange={() => toggle(opt.code)} />
-              <span><code>{opt.code}</code> {opt.label}</span>
+              {/* Label-only by default; debug mode prefixes the code
+                  so authors can verify the codebook mapping. */}
+              <span>{debug ? <><code>{opt.code}</code> {opt.label}</> : opt.label}</span>
             </label>
           ))}
         </div>
@@ -371,7 +399,7 @@ function checkRequired(q, value) {
 }
 
 // ── Section renderer (group + repeat both) ──────────────────────────
-function SectionRow({ section, scope, value, setValue, errors }) {
+function SectionRow({ section, scope, value, setValue, errors, debug }) {
   const isRepeat = Boolean(section.repeat_count);
   const tagClass = `ip-sec-tag ${isRepeat ? 'repeat' : ''}`;
   const tag = isRepeat ? `repeat × ${section.repeat_count}` : 'group';
@@ -379,20 +407,20 @@ function SectionRow({ section, scope, value, setValue, errors }) {
     <section className="ip-section">
       <div className="ip-section-head">
         <h2>
-          <span className="ip-sec-code">{section.code}</span>{' '}
+          {debug && <span className="ip-sec-code">{section.code}</span>}{debug && ' '}
           {section.label}
         </h2>
-        <span className={tagClass}>{tag}</span>
+        {debug && <span className={tagClass}>{tag}</span>}
       </div>
 
       {isRepeat
-        ? <RepeatBody section={section} scope={scope} value={value || []} setValue={setValue} errors={errors} />
-        : <GroupBody section={section} scope={scope} value={value || {}} setValue={setValue} errors={errors} />}
+        ? <RepeatBody section={section} scope={scope} value={value || []} setValue={setValue} errors={errors} debug={debug} />
+        : <GroupBody section={section} scope={scope} value={value || {}} setValue={setValue} errors={errors} debug={debug} />}
     </section>
   );
 }
 
-function GroupBody({ section, scope, value, setValue, errors }) {
+function GroupBody({ section, scope, value, setValue, errors, debug }) {
   // For groups, the scope is the FULL form scope plus this section's
   // current values (the form's flat lookup model — XLSForm scope is
   // global within a form). We pass setValue through that already
@@ -404,13 +432,14 @@ function GroupBody({ section, scope, value, setValue, errors }) {
     <>
       {section.questions.map((q) => (
         <QuestionRow key={q.id} q={q} scope={{ ...scope, ...value, __self: value[q.name] }}
-                     value={value[q.name]} onChange={onChange} errors={errors[section.name]?.[q.name]} />
+                     value={value[q.name]} onChange={onChange}
+                     errors={errors[section.name]?.[q.name]} debug={debug} />
       ))}
     </>
   );
 }
 
-function RepeatBody({ section, scope, value, setValue, errors }) {
+function RepeatBody({ section, scope, value, setValue, errors, debug }) {
   // value is an array of {questionName: value} objects, one per row.
   const setRow = (idx) => (rowValue) => {
     const next = [...value]; next[idx] = rowValue; setValue(next);
@@ -439,6 +468,7 @@ function RepeatBody({ section, scope, value, setValue, errors }) {
                          value={row[q.name]}
                          onChange={(name, v) => setRow(idx)({ ...row, [name]: v })}
                          errors={errors[section.name]?.[idx]?.[q.name]}
+                         debug={debug}
                          inRepeat />
           ))}
         </div>
@@ -450,13 +480,18 @@ function RepeatBody({ section, scope, value, setValue, errors }) {
   );
 }
 
-function QuestionRow({ q, scope, value, onChange, errors, inRepeat }) {
+function QuestionRow({ q, scope, value, onChange, errors, inRepeat, debug }) {
   const isVisible = evalBool(q.relevant, scope);
   const requiredError = isVisible ? checkRequired(q, value) : null;
   const constraintError = isVisible ? runConstraint(q, value, scope) : null;
   const error = requiredError || constraintError || errors?.message;
 
+  // Structural rows (begin_group / end_group / etc.) are author-side
+  // bookkeeping — they have no business being visible to a respondent.
+  // Hidden entirely in user view; shown as monospace marker rows in
+  // debug mode so authors can see the section anatomy.
   if (STRUCTURAL_TYPES.has(q.type) && q.type !== 'note' && q.type !== 'calculate') {
+    if (!debug) return null;
     return (
       <div className={`ip-question structural ${inRepeat ? 'in-repeat' : ''}`}>
         <code>{q.type}</code> · <code>{q.name}</code>
@@ -470,15 +505,15 @@ function QuestionRow({ q, scope, value, onChange, errors, inRepeat }) {
       <div className="ip-q-label">
         {q.label || q.name}
         {q.required && <span className="ip-required" title="required">*</span>}
-        <span className="ip-q-name">{q.name} · {q.type}</span>
+        {debug && <span className="ip-q-name">{q.name} · {q.type}</span>}
       </div>
       {q.hint && <div className="ip-q-hint">{q.hint}</div>}
       <div className={`ip-q-control ${error ? 'invalid' : ''}`}>
         <QuestionControl q={q} value={value} onChange={onChange}
-                         isVisible={isVisible} scope={scope} />
+                         isVisible={isVisible} scope={scope} debug={debug} />
       </div>
       {error && <div className="ip-q-error">{error}</div>}
-      {(q.relevant || q.constraint) && (
+      {debug && (q.relevant || q.constraint) && (
         <div className="ip-q-annot">
           {q.relevant && <span>relevant: {q.relevant}</span>}
           {q.constraint && <span>constraint: {q.constraint}</span>}
@@ -488,8 +523,24 @@ function QuestionRow({ q, scope, value, onChange, errors, inRepeat }) {
   );
 }
 
+// Debug mode is the seam between the respondent-facing view (clean
+// labels, no codes, no structural markers) and the author-facing
+// view (codebook + question names + expression annot strip + struct
+// rows). Toggle via the header button OR by appending ?debug=1 /
+// ?debug=0 to the URL — handy when sharing a link with a colleague
+// to demonstrate skip-logic.
+function useDebugMode() {
+  const initial = (() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('debug') === '1';
+  })();
+  const [debug, setDebug] = React.useState(initial);
+  return [debug, setDebug];
+}
+
 // ── Root component ──────────────────────────────────────────────────
 function PreviewApp() {
+  const [debug, setDebug] = useDebugMode();
   // Form state is a {sectionName: sectionValue} map. Group sections
   // hold a {questionName: value} object; repeat sections hold an
   // array of those objects (one per row).
@@ -535,7 +586,12 @@ function PreviewApp() {
           <span><strong className="ok">{errorReport.answered}</strong> answered</span>
           <span><strong>{errorReport.visible}</strong> visible</span>
           <span><strong className="err">{errorReport.errors}</strong> errors</span>
-          <span style={{ marginLeft: 'auto' }}>
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+              <input type="checkbox" checked={debug} onChange={(e) => setDebug(e.target.checked)}
+                     style={{ width: 14, height: 14, margin: 0 }} />
+              Author / debug view
+            </label>
             <button type="button" onClick={resetAll}
                     style={{ background: 'white', border: '1px solid var(--neutral-300,#d1d5db)', borderRadius: 4, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>
               Reset form
@@ -547,15 +603,17 @@ function PreviewApp() {
       {SCHEMA.sections.map((s) => (
         <SectionRow key={s.id} section={s} scope={flatScope}
                     value={state[s.name]} setValue={setSection(s.name)}
-                    errors={errorReport.bySection} />
+                    errors={errorReport.bySection} debug={debug} />
       ))}
 
-      <details className="ip-section" style={{ marginTop: 24 }}>
-        <summary style={{ padding: '10px 18px', cursor: 'pointer', fontSize: 13, color: 'var(--neutral-700,#4b5563)' }}>
-          Debug — current form state
-        </summary>
-        <div className="ip-debug">{JSON.stringify(state, null, 2)}</div>
-      </details>
+      {debug && (
+        <details className="ip-section" style={{ marginTop: 24 }}>
+          <summary style={{ padding: '10px 18px', cursor: 'pointer', fontSize: 13, color: 'var(--neutral-700,#4b5563)' }}>
+            Debug — current form state
+          </summary>
+          <div className="ip-debug">{JSON.stringify(state, null, 2)}</div>
+        </details>
+      )}
     </div>
   );
 }
