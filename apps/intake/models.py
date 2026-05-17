@@ -106,12 +106,34 @@ class QuestionType(models.TextChoices):
     INTEGER = "integer"
     DECIMAL = "decimal"
     DATE = "date"
+    TIME = "time"
+    DATETIME = "dateTime"
     SELECT_ONE = "select_one"
     SELECT_MULTIPLE = "select_multiple"
     GEOPOINT = "geopoint"
+    GEOTRACE = "geotrace"
+    GEOSHAPE = "geoshape"
     IMAGE = "image"
+    AUDIO = "audio"
+    VIDEO = "video"
+    FILE = "file"
+    BARCODE = "barcode"
     CALCULATE = "calculate"
     NOTE = "note"
+    ACKNOWLEDGE = "acknowledge"
+    HIDDEN = "hidden"
+    RANGE = "range"
+    RANK = "rank"
+    # XLSForm metadata types — the legacy script emits these at the
+    # top of the survey sheet. Stored on a "_meta" FormSection so the
+    # round-trip is lossless; the exporter ALSO auto-prepends them at
+    # render time if absent, so fresh-authored forms are still valid.
+    START = "start"
+    END = "end"
+    TODAY = "today"
+    DEVICEID = "deviceid"
+    USERNAME = "username"
+    PHONENUMBER = "phonenumber"
     BEGIN_REPEAT = "begin_repeat"
     END_REPEAT = "end_repeat"
     BEGIN_GROUP = "begin_group"
@@ -136,6 +158,13 @@ class FormSection(models.Model):
     label = models.CharField(max_length=256)
     description = models.TextField(blank=True)
     order = models.PositiveIntegerField(default=0)
+
+    # When non-empty, the section is exported as a begin_repeat /
+    # end_repeat block (with this value in the repeat_count column).
+    # When empty (default), the section is a begin_group / end_group
+    # wrapper. XLSForm allows the value to be a static integer or an
+    # XPath reference (e.g. "${hh_size}"); stored verbatim.
+    repeat_count = models.CharField(max_length=64, blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

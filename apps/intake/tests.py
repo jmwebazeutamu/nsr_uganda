@@ -578,9 +578,54 @@ class TestLegacyQuestionnaireImport:
         sections_before = FormSection.objects.count()
         questions_before = FormQuestion.objects.count()
         main()
-        # Re-run upserts — no duplicates.
+        # Re-run rebuilds in place — counts stay stable, no orphan
+        # rows from the prior import.
         assert FormSection.objects.count() == sections_before
         assert FormQuestion.objects.count() == questions_before
+
+    def test_import_preserves_xlsform_metadata_types(self, _seed_choice_lists):
+        """US-120b regression: an earlier importer mapped any unknown
+        legacy type (notably `time`) to END_GROUP via a misguided
+        fallback. The `a15_start_time` row was the canary."""
+        from scripts.import_legacy_questionnaire import main
+
+        from apps.intake.models import FormQuestion
+        main()
+        q = FormQuestion.objects.get(name="a15_start_time")
+        assert q.type == "time", (
+            f"a15_start_time should import as type=time, got {q.type!r} — "
+            "QuestionType enum is likely missing `time` again."
+        )
+
+    def test_import_attaches_pre_section_questions_to_prior_section(
+        self, _seed_choice_lists,
+    ):
+        """US-120b regression: `hh_size` sits at the top level in the
+        legacy script (between sections B and C) and was dropped on
+        import. It now attaches to the most-recently-closed section
+        so the begin_repeat that follows can reference it."""
+        from scripts.import_legacy_questionnaire import main
+
+        from apps.intake.models import FormQuestion
+        main()
+        q = FormQuestion.objects.get(name="hh_size")
+        assert q.type == "integer"
+        assert q.section.name == "survey_status"
+
+    def test_import_marks_household_roster_as_repeat(self, _seed_choice_lists):
+        """US-120b regression: the household_members section is a
+        begin_repeat in the legacy script. The importer must capture
+        its repeat_count attribute on the FormSection so the export
+        round-trip re-emits a begin_repeat (not begin_group)."""
+        from scripts.import_legacy_questionnaire import main
+
+        from apps.intake.models import FormSection
+        main()
+        sec = FormSection.objects.get(name="household_members")
+        assert sec.repeat_count == "${hh_size}", (
+            f"household_members.repeat_count should be ${{hh_size}}, "
+            f"got {sec.repeat_count!r}"
+        )
 
 
 # --- US-118: XLSForm export from FormVersion -------------------------------
@@ -691,6 +736,101 @@ class TestXlsformExport:
         assert r.status_code == 200
         assert "spreadsheetml" in r["Content-Type"]
         assert r.content[:2] == b"PK"
+
+    def test_export_settings_uses_kobo_valid_values(self, _seeded_form):
+        """US-118b regression: Kobo's web preview rejects forms whose
+        settings sheet uses `default_language=en` (it expects the
+        full language name) or `style=pages` (legacy used theme-grid).
+        Also pins the form_id slug + datestamp version format."""
+        import io
+
+        import openpyxl
+
+        from apps.intake.xlsform_export import export_to_xlsx
+        wb = openpyxl.load_workbook(io.BytesIO(export_to_xlsx(_seeded_form)))
+        ws = wb["settings"]
+        rows = list(ws.iter_rows(min_row=1, values_only=True))
+        header = list(rows[0])
+        values = dict(zip(header, rows[1], strict=False))
+        assert values["default_language"] == "English"
+        assert values["style"] == "theme-grid"
+        # form_id should be a slug, not the literal FormVersion.name
+        # (which contains spaces).
+        assert " " not in values["form_id"]
+        # Version stamp is YYYYMMDDHHMM, not just the int version.
+        assert len(values["version"]) == 12 and values["version"].isdigit()
+
+    def test_export_prepends_top_level_metadata_rows(self, _seeded_form):
+        """US-118b regression: every XLSForm needs start/end/today/
+        deviceid/username rows at the top so Kobo can stamp submission
+        metadata. The legacy file had them; ours didn't."""
+        import io
+
+        import openpyxl
+
+        from apps.intake.xlsform_export import export_to_xlsx
+        wb = openpyxl.load_workbook(io.BytesIO(export_to_xlsx(_seeded_form)))
+        ws = wb["survey"]
+        rows = list(ws.iter_rows(min_row=2, max_row=6, values_only=True))
+        types = [r[0] for r in rows]
+        assert types == ["start", "end", "today", "deviceid", "username"]
+
+    def test_export_emits_begin_repeat_for_roster_section(self, _seeded_form):
+        """US-118b regression: household_members is a roster — exported
+        as begin_repeat with repeat_count, not begin_group. Without
+        this, every form rendered in Kobo collapses the roster into a
+        non-iterable group and only one member can be entered."""
+        import io
+
+        import openpyxl
+
+        from apps.intake.xlsform_export import export_to_xlsx
+        wb = openpyxl.load_workbook(io.BytesIO(export_to_xlsx(_seeded_form)))
+        rows = list(wb["survey"].iter_rows(min_row=1, values_only=True))
+        header = rows[0]
+        type_col = header.index("type")
+        name_col = header.index("name")
+        repeat_col = header.index("repeat_count")
+        roster_open = next(
+            r for r in rows[1:]
+            if r[type_col] == "begin_repeat" and r[name_col] == "household_members"
+        )
+        assert roster_open[repeat_col] == "${hh_size}"
+        # And its closer is end_repeat (not end_group).
+        roster_close = next(
+            r for r in rows[1:]
+            if r[type_col] == "end_repeat" and r[name_col] == "household_members_end"
+        )
+        assert roster_close is not None
+
+    def test_export_falls_back_to_text_for_select_without_choice_list(
+        self, _seeded_form,
+    ):
+        """US-118b regression: the geo selects (a0_region etc.) lack
+        a seeded ChoiceList in the test fixture. A bare `select_one`
+        row with no list name fails Kobo's "Survey information not
+        complete" validation. We fall back to `text` with a hint
+        annotation so the export still loads."""
+        import io
+
+        import openpyxl
+
+        from apps.intake.xlsform_export import export_to_xlsx
+        wb = openpyxl.load_workbook(io.BytesIO(export_to_xlsx(_seeded_form)))
+        rows = list(wb["survey"].iter_rows(min_row=1, values_only=True))
+        header = rows[0]
+        type_col = header.index("type")
+        name_col = header.index("name")
+        hint_col = header.index("hint")
+        region_row = next(r for r in rows[1:] if r[name_col] == "a0_region")
+        assert region_row[type_col] == "text"
+        assert "missing choice list" in (region_row[hint_col] or "").lower()
+        # No row should be a bare select_one / select_multiple without
+        # a list name attached.
+        for r in rows[1:]:
+            assert r[type_col] not in ("select_one", "select_multiple"), (
+                f"row {r[name_col]} has bare {r[type_col]!r} — Kobo will reject"
+            )
 
 
 # --- US-119: rule-pack sync on FormVersion activation ----------------------

@@ -87,12 +87,19 @@ def _question_type(legacy_type: str) -> tuple[str, str]:
     return t, ""
 
 
+# XLSForm metadata types that the legacy script puts at the top of
+# the survey sheet. The exporter auto-prepends these at render time,
+# so the importer drops them — keeping them as FormQuestion rows
+# would just double them up on export.
+_TOP_LEVEL_METADATA = {"start", "end", "today", "deviceid", "username"}
+
+
 def main(*, dry_run: bool = False) -> dict:
     """Run the import. Returns a small summary dict.
 
-    Idempotent: if FormVersion 1 already exists, sections + questions
-    upsert in place. Existing rows are NOT deleted — re-runs can only
-    add or update.
+    Idempotent: re-runs delete the existing children of FormVersion v1
+    (sections cascade to questions) and rebuild from the legacy script
+    output. The FormVersion row itself is preserved across runs.
     """
     # Lazy Django setup so the script works both via `manage.py shell -c`
     # and as a standalone `python scripts/import_legacy_questionnaire.py`.
@@ -112,7 +119,10 @@ def main(*, dry_run: bool = False) -> dict:
     ns = _exec_legacy()
     survey = ns["survey"]
 
-    # ── Pull FormVersion v1 (create if missing) ──
+    # ── Pull FormVersion v1 (create if missing). On re-run, wipe
+    # existing children so the rebuild is clean. Upserting was
+    # leaving stale rows when question order or names shifted between
+    # runs of the legacy script.
     fv, _ = FormVersion.objects.get_or_create(
         version=1,
         defaults={
@@ -126,9 +136,11 @@ def main(*, dry_run: bool = False) -> dict:
             "approved_by": "system-migration",
         },
     )
+    fv.sections.all().delete()  # cascades to FormQuestion via ON DELETE
 
     # ── Walk the survey list, tracking section depth ──
     current_section: FormSection | None = None
+    last_closed_section: FormSection | None = None  # holds questions at depth 0 between sections
     current_order_in_section = 0
     section_order = 0
     depth = 0  # nested-group counter; only top-level groups become sections
@@ -147,17 +159,16 @@ def main(*, dry_run: bool = False) -> dict:
             if depth == 0:
                 code, sec_label = SECTION_MAP.get(name, (name.upper()[:16], label))
                 section_order += 1
-                current_section, created = FormSection.objects.update_or_create(
+                current_section = FormSection.objects.create(
                     form_version=fv, name=name,
-                    defaults={
-                        "code": code,
-                        "label": sec_label or label or name,
-                        "order": section_order,
-                    },
+                    code=code,
+                    label=sec_label or label or name,
+                    order=section_order,
+                    repeat_count=str(entry.get("repeat_count", "") or ""),
                 )
+                last_closed_section = None
                 current_order_in_section = 0
-                if created:
-                    counts["sections"] += 1
+                counts["sections"] += 1
                 depth = 1
                 continue
             # Nested groups inside a section — record as a question
@@ -166,25 +177,45 @@ def main(*, dry_run: bool = False) -> dict:
         elif qtype in ("end_group", "end_repeat"):
             depth = max(depth - 1, 0)
             if depth == 0:
+                last_closed_section = current_section
                 current_section = None
                 continue
 
-        if current_section is None:
+        # Top-level XLSForm metadata rows (start/end/today/deviceid/
+        # username) are dropped at import — the exporter re-adds them
+        # automatically so the round-trip stays Kobo-valid.
+        if qtype in _TOP_LEVEL_METADATA:
+            counts["skipped"] += 1
+            continue
+
+        # A regular question encountered at depth 0 (between sections,
+        # like the legacy `hh_size` between sections B and C) is
+        # attached to the most-recently-closed section as a trailing
+        # question. Keeps the form structurally intact without
+        # inventing synthetic sections.
+        section_for_q = current_section or last_closed_section
+        if section_for_q is None:
             counts["skipped"] += 1
             continue
         if not name:
             counts["skipped"] += 1
             continue
+        # If the question is going to a closed section, reset the
+        # per-section order counter to its current max.
+        if current_section is None and last_closed_section is not None:
+            current_order_in_section = (
+                FormQuestion.objects.filter(section=last_closed_section)
+                .count()
+            )
 
         normalized_type, choice_list_name = _question_type(qtype)
-        # The Django field accepts the choices enum; if the legacy
-        # type doesn't fit, store as-is and let admin validation
-        # surface the mismatch. QuestionType is a TextChoices so
-        # any string fits.
+        # All known XLSForm types now have enum values; if something
+        # exotic shows up, store the raw string — Django CharField
+        # doesn't enforce choices at the DB level and the exporter
+        # passes the type through verbatim.
         if normalized_type not in QuestionType.values:
-            # Unknown structural type (e.g. nested begin_group at
-            # depth >= 2) — store as begin_group to preserve shape.
-            normalized_type = QuestionType.BEGIN_GROUP if qtype.startswith("begin_") else QuestionType.END_GROUP
+            counts["skipped"] += 1
+            continue
 
         choice_list_ref = None
         if choice_list_name:
@@ -193,25 +224,22 @@ def main(*, dry_run: bool = False) -> dict:
             ).first()
 
         current_order_in_section += 1
-        _, created = FormQuestion.objects.update_or_create(
-            section=current_section, name=name,
-            defaults={
-                "label": label,
-                "hint": entry.get("hint", ""),
-                "type": normalized_type,
-                "choice_list_ref": choice_list_ref,
-                "required": bool(entry.get("required")),
-                "relevant_expression": entry.get("relevant", ""),
-                "constraint_expression": entry.get("constraint", ""),
-                "constraint_message": entry.get("constraint_message", ""),
-                "appearance": entry.get("appearance", ""),
-                "repeat_count": str(entry.get("repeat_count", "")),
-                "parameters": {} if not entry.get("parameters") else {"_": str(entry["parameters"])},
-                "order_in_section": current_order_in_section,
-            },
+        FormQuestion.objects.create(
+            section=section_for_q, name=name,
+            label=label,
+            hint=entry.get("hint", ""),
+            type=normalized_type,
+            choice_list_ref=choice_list_ref,
+            required=bool(entry.get("required")),
+            relevant_expression=entry.get("relevant", ""),
+            constraint_expression=entry.get("constraint", ""),
+            constraint_message=entry.get("constraint_message", ""),
+            appearance=entry.get("appearance", ""),
+            repeat_count=str(entry.get("repeat_count", "") or ""),
+            parameters={} if not entry.get("parameters") else {"_": str(entry["parameters"])},
+            order_in_section=current_order_in_section,
         )
-        if created:
-            counts["questions"] += 1
+        counts["questions"] += 1
 
     counts["form_version_id"] = fv.id
     counts["form_version_name"] = fv.name
