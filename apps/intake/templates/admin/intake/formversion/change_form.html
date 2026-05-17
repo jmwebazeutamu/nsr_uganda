@@ -90,17 +90,19 @@
 {% block field_sets %}
   {% if questionnaire_editor_v2 and original %}
 
-  <!-- US-117d preview + US-118 download action bar -->
+  <!-- US-117d static + US-117e interactive preview + US-118 download -->
   <div style="display:flex;gap:8px;margin-bottom:12px">
+    <a class="button default"
+       href="{% url 'admin:intake_us117e_interactive_preview' original.pk %}"
+       target="_blank" rel="noopener">
+      ▶  Interactive preview
+    </a>
     <a class="button" href="{% url 'admin:intake_us117b_preview_form' original.pk %}"
        target="_blank" rel="noopener">
-      👁  Preview form
+      👁  Static preview
     </a>
     <a class="button" href="{% url 'admin:intake_us118_export_xlsform' original.pk %}">
       ⬇  Download XLSForm
-    </a>
-    <a class="button" href="https://ee.kobotoolbox.org/preview/" target="_blank" rel="noopener">
-      ↗  Open Kobo preview
     </a>
   </div>
 

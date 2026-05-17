@@ -151,6 +151,21 @@ class FormVersionAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(_preview_form_view),
                 name="intake_us117b_preview_form",
             ),
+            # US-117e — interactive in-admin preview. Skip-logic
+            # fires, constraints validate, repeats (rosters) support
+            # add/remove. Backed by a single-page React harness
+            # (Babel-standalone) that reads the FormVersion schema
+            # embedded in the page.
+            path(
+                "_us117e/preview/<str:form_version_id>/",
+                self.admin_site.admin_view(_interactive_preview_view),
+                name="intake_us117e_interactive_preview",
+            ),
+            path(
+                "_us117e/schema/<str:form_version_id>/",
+                self.admin_site.admin_view(_interactive_schema_view),
+                name="intake_us117e_schema",
+            ),
         ]
         return extra + urls
 
@@ -382,6 +397,97 @@ def _preview_form_view(request, form_version_id):
         "question_count": sum(len(s["questions"]) for s in sections),
         # admin context bits so the template can fall back to the
         # standard chrome.
+        "site_header": "Django administration",
+        "site_title": "Django site admin",
+        "has_permission": True,
+        "is_popup": False,
+        "is_nav_sidebar_enabled": True,
+        "available_apps": [],
+    })
+
+
+# --- US-117e interactive preview -------------------------------------------
+
+def _build_form_schema(fv) -> dict:
+    """Project a FormVersion into a JSON schema the interactive
+    preview can hydrate from. Includes section repeat_count, all
+    question attributes, and inline ChoiceList options so the
+    React harness doesn't need a second round-trip per select."""
+    sections = []
+    for section in fv.sections.order_by("order", "code"):
+        questions = []
+        for q in section.questions.order_by("order_in_section", "name"):
+            options = []
+            if q.choice_list_ref is not None:
+                options = [
+                    {"code": opt.code, "label": opt.label}
+                    for opt in q.choice_list_ref.options.filter(status="active")
+                    .order_by("sort_order", "code")
+                ]
+            questions.append({
+                "id": q.id, "name": q.name, "label": q.label,
+                "hint": q.hint, "type": q.type, "required": q.required,
+                "relevant": q.relevant_expression,
+                "constraint": q.constraint_expression,
+                "constraint_message": q.constraint_message,
+                "appearance": q.appearance,
+                "repeat_count": q.repeat_count,
+                "options": options,
+                "choice_list_name": (
+                    q.choice_list_ref.list_name if q.choice_list_ref else ""
+                ),
+            })
+        sections.append({
+            "id": section.id, "code": section.code, "name": section.name,
+            "label": section.label, "description": section.description,
+            "repeat_count": section.repeat_count,
+            "questions": questions,
+        })
+    return {
+        "form_version_id": fv.id,
+        "name": fv.name,
+        "version": fv.version,
+        "status": fv.status,
+        "sections": sections,
+    }
+
+
+def _interactive_schema_view(request, form_version_id):
+    """Return the FormVersion schema as JSON. Used by the US-117e
+    React harness via fetch on the page, and useful for contract
+    tests that pin the schema shape independent of the renderer."""
+    from django.http import Http404, JsonResponse
+
+    fv = _resolve_form_version(
+        form_version_id,
+        prefetch=("sections__questions__choice_list_ref__options",),
+    )
+    if fv is None:
+        raise Http404("FormVersion not found")
+    return JsonResponse(_build_form_schema(fv))
+
+
+def _interactive_preview_view(request, form_version_id):
+    """Render the interactive in-admin preview. The template embeds
+    the FormVersion schema as a json_script tag and hydrates a React
+    + Babel-standalone harness that evaluates skip-logic, runs
+    constraints, and supports adding/removing repeat-section
+    instances (roster management)."""
+    from django.http import Http404
+    from django.shortcuts import render
+
+    fv = _resolve_form_version(
+        form_version_id,
+        prefetch=("sections__questions__choice_list_ref__options",),
+    )
+    if fv is None:
+        raise Http404("FormVersion not found")
+    schema = _build_form_schema(fv)
+    return render(request, "admin/intake/formversion/preview_interactive.html", {
+        "form_version": fv,
+        "schema": schema,
+        "section_count": len(schema["sections"]),
+        "question_count": sum(len(s["questions"]) for s in schema["sections"]),
         "site_header": "Django administration",
         "site_title": "Django site admin",
         "has_permission": True,

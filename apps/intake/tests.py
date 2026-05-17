@@ -854,6 +854,175 @@ class TestXlsformExport:
             )
 
 
+# --- US-117e: interactive in-admin preview ---------------------------------
+
+class TestInteractivePreview:
+    """US-117e ships an interactive preview at
+    /admin/intake/formversion/<id>/_us117e/preview/ that hydrates a
+    React harness from a JSON schema embedded in the page. Skip-logic,
+    constraints, and repeat-section (roster) add/remove all fire
+    client-side. Tests here pin the server contract — the schema
+    shape, the URL surface, and the staff-gate."""
+
+    @pytest.fixture
+    def _fv_with_roster(self, db):
+        from apps.intake.models import (
+            FormQuestion,
+            FormSection,
+            FormVersion,
+        )
+        from apps.reference_data.models import ChoiceList, ChoiceOption
+        fv = FormVersion.objects.create(
+            version=5117, name="interactive-preview-fixture",
+            effective_from=date(2026, 1, 1),
+            status="draft", author="qa",
+        )
+        # A consent section that gates the rest of the form.
+        s_consent = FormSection.objects.create(
+            form_version=fv, code="CONSENT", name="consent_group",
+            label="Consent", order=1,
+        )
+        cl_yn = ChoiceList.objects.create(
+            list_name="ip_yes_no", version=1,
+            effective_from=date(2026, 1, 1),
+            status="active",
+            author="qa", approved_by="qa",
+        )
+        ChoiceOption.objects.create(
+            choice_list=cl_yn, code="1", label="Yes",
+            language="en", sort_order=1,
+        )
+        ChoiceOption.objects.create(
+            choice_list=cl_yn, code="2", label="No",
+            language="en", sort_order=2,
+        )
+        FormQuestion.objects.create(
+            section=s_consent, name="consent", label="Consent?",
+            type="select_one", choice_list_ref=cl_yn,
+            required=True, order_in_section=1,
+        )
+        # A roster section with a per-member age question.
+        s_roster = FormSection.objects.create(
+            form_version=fv, code="C", name="household_members",
+            label="Household roster", order=2,
+            repeat_count="${hh_size}",
+        )
+        FormQuestion.objects.create(
+            section=s_roster, name="age_years", label="Age",
+            type="integer", order_in_section=1,
+            constraint_expression=". >= 0 and . <= 120",
+            constraint_message="Age must be 0-120",
+            relevant_expression="${consent}='1'",
+        )
+        return fv
+
+    def test_schema_endpoint_returns_form_shape(
+        self, _fv_with_roster, django_user_model,
+    ):
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="ip-staff", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        r = c.get(
+            f"/admin/intake/formversion/_us117e/schema/{_fv_with_roster.id}/",
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["name"] == "interactive-preview-fixture"
+        assert body["version"] == 5117
+        # Sections come through in order with their roster flag.
+        names = [s["name"] for s in body["sections"]]
+        assert names == ["consent_group", "household_members"]
+        roster = body["sections"][1]
+        assert roster["repeat_count"] == "${hh_size}"
+        # Inlined choice options on the consent question.
+        consent_q = body["sections"][0]["questions"][0]
+        assert consent_q["type"] == "select_one"
+        assert {o["code"] for o in consent_q["options"]} == {"1", "2"}
+        # Constraint + relevant expressions ride through verbatim.
+        age_q = roster["questions"][0]
+        assert age_q["constraint"] == ". >= 0 and . <= 120"
+        assert age_q["relevant"] == "${consent}='1'"
+
+    def test_interactive_preview_view_embeds_schema(
+        self, _fv_with_roster, django_user_model,
+    ):
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="ip-staff2", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        r = c.get(
+            f"/admin/intake/formversion/_us117e/preview/{_fv_with_roster.id}/",
+        )
+        assert r.status_code == 200
+        body = r.content.decode("utf-8")
+        # The schema is embedded via json_script — assert both the
+        # script tag id and a sentinel from the schema body.
+        assert 'id="us117e-schema"' in body
+        assert "household_members" in body
+        # The React mount point lives in the template.
+        assert 'id="us117e-root"' in body
+        # And the action bar links back to the static preview and
+        # XLSForm download.
+        assert f"/admin/intake/formversion/_us117b/preview/{_fv_with_roster.id}/" in body
+        assert f"/admin/intake/formversion/_us118/export-xlsform/{_fv_with_roster.id}/" in body
+
+    def test_preview_resolves_by_version_number(
+        self, _fv_with_roster, django_user_model,
+    ):
+        """Mirror US-117d's `_resolve_form_version` convenience —
+        an admin should be able to type the version number into
+        the URL bar instead of the ULID."""
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="ip-staff3", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        r = c.get(
+            f"/admin/intake/formversion/_us117e/preview/{_fv_with_roster.version}/",
+        )
+        assert r.status_code == 200
+
+    def test_preview_404_on_unknown(self, db, django_user_model):
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="ip-staff4", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        r = c.get("/admin/intake/formversion/_us117e/preview/999999/")
+        assert r.status_code == 404
+        r = c.get("/admin/intake/formversion/_us117e/schema/999999/")
+        assert r.status_code == 404
+
+    def test_static_preview_links_to_interactive(
+        self, _fv_with_roster, django_user_model,
+    ):
+        """Discovery path — an admin on the static preview should
+        see a primary CTA to switch to the interactive one."""
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="ip-staff5", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        r = c.get(
+            f"/admin/intake/formversion/_us117b/preview/{_fv_with_roster.id}/",
+        )
+        body = r.content.decode("utf-8")
+        assert f"/admin/intake/formversion/_us117e/preview/{_fv_with_roster.id}/" in body
+
+
 # --- US-119: rule-pack sync on FormVersion activation ----------------------
 
 class TestRulePackSync:
@@ -1075,10 +1244,11 @@ class TestFormVersionPreview:
         c = self._staff_client(db, django_user_model)
         r = c.get(f"/admin/intake/formversion/_us117b/preview/{_seeded_form.id}/")
         body = r.content.decode()
-        # Header has the XLSForm download link + Kobo external link.
+        # Header has the XLSForm download link + the interactive
+        # preview CTA (US-117e replaced the external Kobo link).
         assert "Download XLSForm" in body
         assert f"export-xlsform/{_seeded_form.id}/" in body
-        assert "kobotoolbox" in body
+        assert f"_us117e/preview/{_seeded_form.id}/" in body
 
     def test_change_form_links_to_preview_and_download(
         self, _seeded_form, db, django_user_model, settings,
@@ -1087,9 +1257,11 @@ class TestFormVersionPreview:
         c = self._staff_client(db, django_user_model)
         r = c.get(f"/admin/intake/formversion/{_seeded_form.id}/change/")
         body = r.content.decode()
-        # The action bar in change_form template wires the two links.
-        assert "Preview form" in body
+        # Action bar wires all three preview/download paths.
+        assert "Interactive preview" in body
+        assert "Static preview" in body
         assert "Download XLSForm" in body
+        assert f"_us117e/preview/{_seeded_form.id}/" in body
 
     def test_preview_accepts_version_number_as_fallback(
         self, _seeded_form, db, django_user_model,

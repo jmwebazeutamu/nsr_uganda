@@ -117,8 +117,8 @@
       <a href="{% url 'admin:intake_us118_export_xlsform' form_version.pk %}">
         Download XLSForm
       </a>
-      <a class="primary" href="https://ee.kobotoolbox.org/preview/" target="_blank" rel="noopener">
-        Open Kobo preview ↗
+      <a class="primary" href="{% url 'admin:intake_us117e_interactive_preview' form_version.pk %}">
+        Try interactive preview →
       </a>
     </div>
   </div>

@@ -1,0 +1,594 @@
+{% extends "admin/base_site.html" %}
+{% load static %}
+
+{# US-117e — INTERACTIVE in-admin preview. Skip-logic fires, #}
+{# constraints validate, repeat sections (rosters) support add/remove. #}
+{# Single-page React harness (Babel-standalone) — no build step, #}
+{# stays in admin chrome, reads the schema embedded below. #}
+
+{% block title %}{{ form_version.name }} v{{ form_version.version }} · interactive preview{% endblock %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <style>
+    .ip-wrap { max-width: 920px; margin: 16px auto; padding: 0 16px; }
+    .ip-header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 16px 20px; margin-bottom: 18px;
+      background: var(--neutral-50, #fafafa);
+      border: 1px solid var(--neutral-300, #d1d5db); border-radius: 6px;
+    }
+    .ip-header .ip-h-meta { font-size: 13px; color: var(--neutral-700, #4b5563); }
+    .ip-header .ip-h-actions { margin-left: auto; display: flex; gap: 8px; }
+    .ip-header .ip-h-actions a, .ip-header .ip-h-actions button {
+      display: inline-block; padding: 6px 12px; border-radius: 6px;
+      font-size: 13px; text-decoration: none;
+      border: 1px solid var(--neutral-300, #d1d5db);
+      background: white; color: var(--neutral-900, #111827); cursor: pointer;
+    }
+    .ip-header .ip-h-actions a.primary, .ip-header .ip-h-actions button.primary {
+      background: var(--primary-900, #1e3a8a); border-color: var(--primary-900, #1e3a8a);
+      color: white;
+    }
+    .ip-section {
+      border: 1px solid var(--neutral-300, #d1d5db); border-radius: 6px;
+      margin-bottom: 18px; overflow: hidden;
+    }
+    .ip-section-head {
+      padding: 12px 18px;
+      background: var(--neutral-100, #f3f4f6);
+      border-bottom: 1px solid var(--neutral-300, #d1d5db);
+      display: flex; align-items: baseline; gap: 8px;
+    }
+    .ip-section-head h2 { margin: 0; font-size: 15px; }
+    .ip-section-head .ip-sec-code {
+      color: var(--neutral-500, #6b7280);
+      font-family: ui-monospace, monospace; font-size: 12px;
+    }
+    .ip-section-head .ip-sec-tag {
+      margin-left: auto; font-size: 11px;
+      padding: 2px 8px; border-radius: 999px;
+      background: var(--neutral-200, #e5e7eb);
+      color: var(--neutral-700, #4b5563);
+      font-family: ui-monospace, monospace;
+    }
+    .ip-section-head .ip-sec-tag.repeat {
+      background: #dbeafe; color: #1e40af;
+    }
+    .ip-repeat-instance {
+      border-top: 1px solid var(--neutral-200, #e5e7eb);
+      padding: 14px 18px;
+    }
+    .ip-repeat-instance:first-of-type { border-top: none; }
+    .ip-repeat-head {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 10px; font-size: 12.5px;
+      color: var(--neutral-700, #4b5563);
+    }
+    .ip-repeat-head strong { font-size: 13px; color: var(--neutral-900, #111827); }
+    .ip-repeat-head .ip-repeat-remove {
+      margin-left: auto;
+      background: white; border: 1px solid var(--neutral-300, #d1d5db);
+      color: var(--accent-danger, #ef4444); border-radius: 4px;
+      padding: 2px 8px; font-size: 11px; cursor: pointer;
+    }
+    .ip-repeat-add {
+      padding: 10px 18px; background: var(--neutral-50, #fafafa);
+      border-top: 1px solid var(--neutral-200, #e5e7eb);
+    }
+    .ip-repeat-add button {
+      background: var(--primary-900, #1e3a8a); color: white;
+      border: 0; border-radius: 4px; padding: 6px 14px;
+      font-size: 13px; cursor: pointer;
+    }
+    .ip-question {
+      padding: 12px 18px; border-bottom: 1px solid var(--neutral-200, #e5e7eb);
+    }
+    .ip-question:last-child { border-bottom: none; }
+    .ip-question.in-repeat { padding: 8px 0; border-bottom: 1px dashed var(--neutral-200, #e5e7eb); }
+    .ip-question.in-repeat:last-of-type { border-bottom: none; }
+    .ip-question.hidden { display: none; }
+    .ip-question.structural {
+      background: var(--neutral-50, #fafafa);
+      font-family: ui-monospace, monospace; font-size: 12.5px;
+      color: var(--neutral-500, #6b7280);
+    }
+    .ip-q-label { font-weight: 500; margin-bottom: 4px; font-size: 13px; }
+    .ip-q-label .ip-required { color: var(--accent-danger, #ef4444); margin-left: 4px; }
+    .ip-q-label .ip-q-name {
+      color: var(--neutral-500, #6b7280); font-family: ui-monospace, monospace;
+      font-size: 11px; margin-left: 6px; font-weight: normal;
+    }
+    .ip-q-hint { font-size: 12.5px; color: var(--neutral-700, #4b5563); margin-bottom: 6px; }
+    .ip-q-control input, .ip-q-control select, .ip-q-control textarea {
+      width: 100%; padding: 6px 10px;
+      border: 1px solid var(--neutral-300, #d1d5db); border-radius: 4px;
+      font: inherit; background: white;
+    }
+    .ip-q-control input:focus, .ip-q-control select:focus {
+      outline: 2px solid var(--primary-500, #3b82f6); outline-offset: -1px;
+    }
+    .ip-q-control.invalid input, .ip-q-control.invalid select {
+      border-color: var(--accent-danger, #ef4444);
+    }
+    .ip-q-checks { display: flex; flex-direction: column; gap: 4px; }
+    .ip-q-checks label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+    .ip-q-error {
+      font-size: 12px; color: var(--accent-danger, #ef4444);
+      margin-top: 4px;
+    }
+    .ip-q-annot {
+      margin-top: 6px; font-size: 11px; color: var(--neutral-500, #6b7280);
+      font-family: ui-monospace, monospace;
+      display: flex; flex-wrap: wrap; gap: 8px;
+    }
+    .ip-q-annot span { background: var(--neutral-100, #f3f4f6); padding: 2px 6px; border-radius: 3px; }
+    .ip-summary {
+      margin: 18px 0; padding: 14px 18px;
+      background: var(--neutral-50, #fafafa);
+      border: 1px solid var(--neutral-300, #d1d5db); border-radius: 6px;
+      font-size: 13px;
+    }
+    .ip-summary .ip-summary-counts { display: flex; gap: 18px; }
+    .ip-summary .ip-summary-counts span {
+      display: inline-flex; gap: 6px; align-items: baseline;
+    }
+    .ip-summary .ip-summary-counts strong { font-size: 18px; }
+    .ip-summary .ip-summary-counts .ok { color: var(--accent-success, #059669); }
+    .ip-summary .ip-summary-counts .err { color: var(--accent-danger, #ef4444); }
+    .ip-debug {
+      margin-top: 12px;
+      max-height: 240px; overflow: auto;
+      background: #111827; color: #d1d5db;
+      padding: 12px; border-radius: 6px;
+      font-family: ui-monospace, monospace; font-size: 11.5px;
+      white-space: pre;
+    }
+  </style>
+{% endblock %}
+
+{% block content %}
+<div class="ip-wrap">
+
+  <div class="ip-header">
+    <div>
+      <h1 style="margin:0 0 4px;font-size:18px">{{ form_version.name }}</h1>
+      <div class="ip-h-meta">
+        v{{ form_version.version }} · status: {{ form_version.status }} ·
+        {{ section_count }} section{{ section_count|pluralize }} ·
+        {{ question_count }} question{{ question_count|pluralize }} ·
+        <em>interactive — skip-logic + constraints fire live</em>
+      </div>
+    </div>
+    <div class="ip-h-actions">
+      <a href="{% url 'admin:intake_formversion_change' form_version.pk %}">← Editor</a>
+      <a href="{% url 'admin:intake_us117b_preview_form' form_version.pk %}">Static preview</a>
+      <a href="{% url 'admin:intake_us118_export_xlsform' form_version.pk %}">Download XLSForm</a>
+    </div>
+  </div>
+
+  <div id="us117e-root">
+    <div style="padding:48px;text-align:center;color:var(--neutral-500,#6b7280)">
+      Loading interactive preview…
+    </div>
+  </div>
+
+</div>
+
+{{ schema|json_script:"us117e-schema" }}
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+{% verbatim %}
+<script type="text/babel">
+'use strict';
+
+// ── Schema hydration ────────────────────────────────────────────────
+const SCHEMA = JSON.parse(document.getElementById('us117e-schema').textContent);
+
+// ── XPath-subset expression evaluator ───────────────────────────────
+// Supports the dialect used in the legacy questionnaire:
+//   ${field}                value lookup in the current scope
+//   .                       value of the current question
+//   = == != >= <= > <       comparisons (single = is XLSForm-style)
+//   and or                  logical
+//   not(expr)               negation
+//   selected(${f}, 'code')  membership in a select_multiple value
+//   regex(., 'pattern')     pattern match
+//   true() / false()        literals
+//   numeric and string literals
+// The evaluator parses to a JS expression, substitutes lookups, and
+// runs through Function — adequate for preview-time evaluation of
+// trusted form definitions. Form definitions are authored by admins
+// behind authentication, so the eval surface is comparable to running
+// the same dialect through pyxform server-side.
+
+function lookup(scope, name) {
+  if (name === '.') return scope.__self;
+  if (Object.prototype.hasOwnProperty.call(scope, name)) {
+    const v = scope[name];
+    return v === undefined || v === null ? '' : v;
+  }
+  return '';
+}
+
+function evalExpression(expr, scope) {
+  if (!expr) return true;
+  // Replace ${field} references with __get("field") so we can resolve
+  // them at runtime against the current scope.
+  let js = expr.replace(/\$\{([a-zA-Z0-9_]+)\}/g, '__get("$1")');
+  // selected(value, "code") → __selected(value, "code")
+  js = js.replace(/\bselected\s*\(/g, '__selected(');
+  // regex(., "pattern") → __regex(__get("."), "pattern")
+  js = js.replace(/\bregex\s*\(/g, '__regex(');
+  // Bare `.` (the current question's value) → __get(".")
+  // Match `.` that's not part of a number or identifier.
+  js = js.replace(/(^|[^a-zA-Z0-9_."])\.(?![0-9a-zA-Z_])/g, '$1__get(".")');
+  // XLSForm uses single `=` for equality; convert to `==` (only when
+  // not already part of >=, <=, !=, ==).
+  js = js.replace(/([^=!<>])=([^=])/g, '$1==$2');
+  // Logical operators.
+  js = js.replace(/\band\b/g, '&&').replace(/\bor\b/g, '||');
+  js = js.replace(/\bnot\s*\(/g, '!(');
+  js = js.replace(/\btrue\s*\(\s*\)/g, 'true').replace(/\bfalse\s*\(\s*\)/g, 'false');
+
+  try {
+    const fn = new Function(
+      '__get', '__selected', '__regex',
+      `"use strict"; return (${js});`,
+    );
+    return fn(
+      (name) => lookup(scope, name),
+      (haystack, needle) => {
+        if (Array.isArray(haystack)) return haystack.includes(needle);
+        if (typeof haystack === 'string') {
+          return haystack.split(' ').includes(needle);
+        }
+        return false;
+      },
+      (value, pattern) => {
+        try { return new RegExp(pattern).test(String(value ?? '')); }
+        catch (e) { return false; }
+      },
+    );
+  } catch (err) {
+    return { __error: err.message };
+  }
+}
+
+function evalBool(expr, scope) {
+  if (!expr) return true;
+  const r = evalExpression(expr, scope);
+  if (r && typeof r === 'object' && r.__error) return true; // permissive on author errors
+  return Boolean(r);
+}
+
+// ── Per-question control ────────────────────────────────────────────
+const STRUCTURAL_TYPES = new Set([
+  'begin_group', 'end_group', 'begin_repeat', 'end_repeat',
+  'note', 'calculate', 'start', 'end', 'today',
+  'deviceid', 'username',
+]);
+
+function QuestionControl({ q, value, onChange, isVisible }) {
+  const set = (v) => onChange(q.name, v);
+  switch (q.type) {
+    case 'text':
+    case 'phonenumber':
+      return <input type="text" value={value ?? ''} onChange={(e) => set(e.target.value)} disabled={!isVisible} />;
+    case 'integer':
+      return <input type="number" step="1" value={value ?? ''} onChange={(e) => set(e.target.value)} disabled={!isVisible} />;
+    case 'decimal':
+    case 'range':
+      return <input type="number" step="any" value={value ?? ''} onChange={(e) => set(e.target.value)} disabled={!isVisible} />;
+    case 'date':
+      return <input type="date" value={value ?? ''} onChange={(e) => set(e.target.value)} disabled={!isVisible} />;
+    case 'time':
+      return <input type="time" value={value ?? ''} onChange={(e) => set(e.target.value)} disabled={!isVisible} />;
+    case 'dateTime':
+      return <input type="datetime-local" value={value ?? ''} onChange={(e) => set(e.target.value)} disabled={!isVisible} />;
+    case 'geopoint':
+      return <input type="text" placeholder="lat, lng, alt, accuracy" value={value ?? ''} onChange={(e) => set(e.target.value)} disabled={!isVisible} />;
+    case 'image':
+    case 'audio':
+    case 'video':
+    case 'file':
+      return <input type="file" disabled={!isVisible} />;
+    case 'select_one':
+      return (
+        <select value={value ?? ''} onChange={(e) => set(e.target.value)} disabled={!isVisible}>
+          <option value="">— select {q.choice_list_name || 'option'} —</option>
+          {q.options.map((opt) => (
+            <option key={opt.code} value={opt.code}>{opt.code} · {opt.label}</option>
+          ))}
+        </select>
+      );
+    case 'select_multiple': {
+      const arr = Array.isArray(value) ? value : (typeof value === 'string' && value ? value.split(' ') : []);
+      const toggle = (code) => {
+        const next = arr.includes(code) ? arr.filter((x) => x !== code) : [...arr, code];
+        set(next);
+      };
+      return (
+        <div className="ip-q-checks">
+          {q.options.map((opt) => (
+            <label key={opt.code}>
+              <input type="checkbox" disabled={!isVisible}
+                     checked={arr.includes(opt.code)}
+                     onChange={() => toggle(opt.code)} />
+              <span><code>{opt.code}</code> {opt.label}</span>
+            </label>
+          ))}
+        </div>
+      );
+    }
+    case 'note':
+      return <div style={{ color: 'var(--neutral-700,#4b5563)', fontSize: 13 }}>{q.label}</div>;
+    case 'calculate':
+      return <div style={{ color: 'var(--neutral-500,#6b7280)', fontStyle: 'italic', fontSize: 12 }}>(calculated)</div>;
+    default:
+      return <input type="text" value={value ?? ''} onChange={(e) => set(e.target.value)} disabled={!isVisible} placeholder={`(${q.type})`} />;
+  }
+}
+
+// ── Constraint runner ───────────────────────────────────────────────
+function runConstraint(q, value, scope) {
+  if (!q.constraint) return null;
+  // `.` in a constraint expression refers to this question's value.
+  const localScope = { ...scope, __self: value, '.': value };
+  const result = evalExpression(q.constraint, localScope);
+  if (result && typeof result === 'object' && result.__error) {
+    return null; // author-error — surface elsewhere
+  }
+  if (!result) return q.constraint_message || 'Value fails the constraint';
+  return null;
+}
+
+function checkRequired(q, value) {
+  if (!q.required) return null;
+  if (value === null || value === undefined || value === '') return 'Required';
+  if (Array.isArray(value) && value.length === 0) return 'Required';
+  return null;
+}
+
+// ── Section renderer (group + repeat both) ──────────────────────────
+function SectionRow({ section, scope, value, setValue, errors }) {
+  const isRepeat = Boolean(section.repeat_count);
+  const tagClass = `ip-sec-tag ${isRepeat ? 'repeat' : ''}`;
+  const tag = isRepeat ? `repeat × ${section.repeat_count}` : 'group';
+  return (
+    <section className="ip-section">
+      <div className="ip-section-head">
+        <h2>
+          <span className="ip-sec-code">{section.code}</span>{' '}
+          {section.label}
+        </h2>
+        <span className={tagClass}>{tag}</span>
+      </div>
+
+      {isRepeat
+        ? <RepeatBody section={section} scope={scope} value={value || []} setValue={setValue} errors={errors} />
+        : <GroupBody section={section} scope={scope} value={value || {}} setValue={setValue} errors={errors} />}
+    </section>
+  );
+}
+
+function GroupBody({ section, scope, value, setValue, errors }) {
+  // For groups, the scope is the FULL form scope plus this section's
+  // current values (the form's flat lookup model — XLSForm scope is
+  // global within a form). We pass setValue through that already
+  // updates the right slice.
+  const onChange = (name, v) => {
+    setValue({ ...value, [name]: v });
+  };
+  return (
+    <>
+      {section.questions.map((q) => (
+        <QuestionRow key={q.id} q={q} scope={{ ...scope, ...value, __self: value[q.name] }}
+                     value={value[q.name]} onChange={onChange} errors={errors[section.name]?.[q.name]} />
+      ))}
+    </>
+  );
+}
+
+function RepeatBody({ section, scope, value, setValue, errors }) {
+  // value is an array of {questionName: value} objects, one per row.
+  const setRow = (idx) => (rowValue) => {
+    const next = [...value]; next[idx] = rowValue; setValue(next);
+  };
+  const addRow = () => setValue([...value, {}]);
+  const removeRow = (idx) => () => {
+    const next = [...value]; next.splice(idx, 1); setValue(next);
+  };
+  return (
+    <>
+      {value.length === 0 && (
+        <div style={{ padding: '14px 18px', fontStyle: 'italic', color: 'var(--neutral-500,#6b7280)' }}>
+          No rows yet — click <strong>Add row</strong> to start the roster.
+        </div>
+      )}
+      {value.map((row, idx) => (
+        <div className="ip-repeat-instance" key={idx}>
+          <div className="ip-repeat-head">
+            <strong>Row {idx + 1}</strong>
+            <span>of {value.length}</span>
+            <button className="ip-repeat-remove" onClick={removeRow(idx)} type="button">Remove</button>
+          </div>
+          {section.questions.map((q) => (
+            <QuestionRow key={q.id} q={q}
+                         scope={{ ...scope, ...row, __self: row[q.name] }}
+                         value={row[q.name]}
+                         onChange={(name, v) => setRow(idx)({ ...row, [name]: v })}
+                         errors={errors[section.name]?.[idx]?.[q.name]}
+                         inRepeat />
+          ))}
+        </div>
+      ))}
+      <div className="ip-repeat-add">
+        <button type="button" onClick={addRow}>+ Add row</button>
+      </div>
+    </>
+  );
+}
+
+function QuestionRow({ q, scope, value, onChange, errors, inRepeat }) {
+  const isVisible = evalBool(q.relevant, scope);
+  const requiredError = isVisible ? checkRequired(q, value) : null;
+  const constraintError = isVisible ? runConstraint(q, value, scope) : null;
+  const error = requiredError || constraintError || errors?.message;
+
+  if (STRUCTURAL_TYPES.has(q.type) && q.type !== 'note' && q.type !== 'calculate') {
+    return (
+      <div className={`ip-question structural ${inRepeat ? 'in-repeat' : ''}`}>
+        <code>{q.type}</code> · <code>{q.name}</code>
+        {q.label && <span style={{ color: 'var(--neutral-700,#4b5563)' }}> — {q.label}</span>}
+      </div>
+    );
+  }
+
+  return (
+    <div className={`ip-question ${inRepeat ? 'in-repeat' : ''} ${isVisible ? '' : 'hidden'}`}>
+      <div className="ip-q-label">
+        {q.label || q.name}
+        {q.required && <span className="ip-required" title="required">*</span>}
+        <span className="ip-q-name">{q.name} · {q.type}</span>
+      </div>
+      {q.hint && <div className="ip-q-hint">{q.hint}</div>}
+      <div className={`ip-q-control ${error ? 'invalid' : ''}`}>
+        <QuestionControl q={q} value={value} onChange={onChange} isVisible={isVisible} />
+      </div>
+      {error && <div className="ip-q-error">{error}</div>}
+      {(q.relevant || q.constraint) && (
+        <div className="ip-q-annot">
+          {q.relevant && <span>relevant: {q.relevant}</span>}
+          {q.constraint && <span>constraint: {q.constraint}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Root component ──────────────────────────────────────────────────
+function PreviewApp() {
+  // Form state is a {sectionName: sectionValue} map. Group sections
+  // hold a {questionName: value} object; repeat sections hold an
+  // array of those objects (one per row).
+  const [state, setState] = React.useState(() => {
+    const init = {};
+    SCHEMA.sections.forEach((s) => {
+      init[s.name] = s.repeat_count ? [] : {};
+    });
+    return init;
+  });
+
+  // Build a flat scope across all non-repeat sections so cross-section
+  // references in `relevant` expressions resolve (e.g. ${consent} in
+  // section A relevant references the question in the consent_group
+  // section).
+  const flatScope = React.useMemo(() => {
+    const out = {};
+    SCHEMA.sections.forEach((s) => {
+      if (!s.repeat_count && typeof state[s.name] === 'object') {
+        Object.assign(out, state[s.name]);
+      }
+    });
+    return out;
+  }, [state]);
+
+  // Tally errors across the whole form for the summary widget.
+  const errorReport = React.useMemo(() => buildErrorReport(SCHEMA, state, flatScope), [state, flatScope]);
+
+  const setSection = (sectionName) => (sectionValue) => {
+    setState({ ...state, [sectionName]: sectionValue });
+  };
+
+  const resetAll = () => {
+    const init = {};
+    SCHEMA.sections.forEach((s) => { init[s.name] = s.repeat_count ? [] : {}; });
+    setState(init);
+  };
+
+  return (
+    <div>
+      <div className="ip-summary">
+        <div className="ip-summary-counts">
+          <span><strong className="ok">{errorReport.answered}</strong> answered</span>
+          <span><strong>{errorReport.visible}</strong> visible</span>
+          <span><strong className="err">{errorReport.errors}</strong> errors</span>
+          <span style={{ marginLeft: 'auto' }}>
+            <button type="button" onClick={resetAll}
+                    style={{ background: 'white', border: '1px solid var(--neutral-300,#d1d5db)', borderRadius: 4, padding: '4px 10px', fontSize: 12, cursor: 'pointer' }}>
+              Reset form
+            </button>
+          </span>
+        </div>
+      </div>
+
+      {SCHEMA.sections.map((s) => (
+        <SectionRow key={s.id} section={s} scope={flatScope}
+                    value={state[s.name]} setValue={setSection(s.name)}
+                    errors={errorReport.bySection} />
+      ))}
+
+      <details className="ip-section" style={{ marginTop: 24 }}>
+        <summary style={{ padding: '10px 18px', cursor: 'pointer', fontSize: 13, color: 'var(--neutral-700,#4b5563)' }}>
+          Debug — current form state
+        </summary>
+        <div className="ip-debug">{JSON.stringify(state, null, 2)}</div>
+      </details>
+    </div>
+  );
+}
+
+function buildErrorReport(schema, state, flatScope) {
+  const report = { answered: 0, visible: 0, errors: 0, bySection: {} };
+  for (const s of schema.sections) {
+    const isRepeat = Boolean(s.repeat_count);
+    const sectionValue = state[s.name];
+    if (isRepeat) {
+      report.bySection[s.name] = {};
+      (sectionValue || []).forEach((row, idx) => {
+        report.bySection[s.name][idx] = {};
+        const rowScope = { ...flatScope, ...row };
+        for (const q of s.questions) {
+          const v = row[q.name];
+          const visible = evalBool(q.relevant, { ...rowScope, __self: v });
+          if (!visible) continue;
+          report.visible += 1;
+          if (v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0)) report.answered += 1;
+          const reqErr = checkRequired(q, v);
+          const conErr = runConstraint(q, v, { ...rowScope, __self: v });
+          if (reqErr || conErr) {
+            report.errors += 1;
+            report.bySection[s.name][idx][q.name] = { message: reqErr || conErr };
+          }
+        }
+      });
+    } else {
+      report.bySection[s.name] = {};
+      const obj = sectionValue || {};
+      for (const q of s.questions) {
+        const v = obj[q.name];
+        const visible = evalBool(q.relevant, { ...flatScope, __self: v });
+        if (!visible) continue;
+        report.visible += 1;
+        if (v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0)) report.answered += 1;
+        const reqErr = checkRequired(q, v);
+        const conErr = runConstraint(q, v, { ...flatScope, __self: v });
+        if (reqErr || conErr) {
+          report.errors += 1;
+          report.bySection[s.name][q.name] = { message: reqErr || conErr };
+        }
+      }
+    }
+  }
+  return report;
+}
+
+const root = ReactDOM.createRoot(document.getElementById('us117e-root'));
+root.render(<PreviewApp />);
+</script>
+{% endverbatim %}
+{% endblock %}
