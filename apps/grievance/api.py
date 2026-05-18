@@ -3,11 +3,32 @@ from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from apps.security.abac import HouseholdIdScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
-from .models import Grievance, GrievanceStatus
-from .services import GrievanceError, assign, close, escalate, open_grievance, resolve
+from .models import Grievance, GrievanceStatus, GrievanceTask, TaskStatus
+from .services import (
+    GrievanceError,
+    assign,
+    close,
+    create_task,
+    escalate,
+    open_grievance,
+    resolve,
+    transition_task,
+)
+
+GRM_OFFICER_GROUP = "GRM Officer"
+
+
+def _is_grm_officer(user) -> bool:
+    """True if the user is a superuser OR belongs to the GRM Officer
+    Django group. GRM Officers see every grievance + every task,
+    regardless of who they're assigned to."""
+    if not getattr(user, "is_authenticated", False):
+        return False
+    if getattr(user, "is_superuser", False):
+        return True
+    return user.groups.filter(name=GRM_OFFICER_GROUP).exists()
 
 
 class GrievanceSerializer(serializers.ModelSerializer):
@@ -49,24 +70,49 @@ class _Resolve(serializers.Serializer):
     retrieve=extend_schema(tags=["grm"], summary="Retrieve a grievance"),
     create=extend_schema(tags=["grm"], summary="Open a new grievance"),
 )
-class GrievanceViewSet(
-    AuditReadMixin, HouseholdIdScopedQuerysetMixin, viewsets.ModelViewSet,
-):
+class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
     audit_entity_type = "grievance"
-    # Grievance.household_id is a CharField (not a real FK) because the
-    # GRM may open before a confirmed household exists.
-    scope_field_path = "household_id"
     queryset = Grievance.objects.all().order_by("-opened_at")
     serializer_class = GrievanceSerializer
     filterset_fields = ["status", "tier", "category", "assigned_to",
                         "household_id"]
 
     def get_queryset(self):
-        # US-S15-003 — optional ?sub_region_code= drill-down for the
-        # home queue panel. household_id is a CharField on Grievance
-        # (the grievance can open before a confirmed household exists),
-        # so join through Household by IN-subquery.
+        """US-S21-003b — role-based visibility:
+
+        - GRM Officer (group) and superusers see every grievance.
+        - Every other authenticated user sees only grievances they
+          OWN — either Grievance.assigned_to == their username, OR
+          they hold a non-closed GrievanceTask on the grievance.
+        - Anonymous users see nothing.
+
+        Replaces the prior HouseholdIdScopedQuerysetMixin behaviour;
+        geographic scoping for grievances was a stand-in for the
+        actual user model the project hadn't decided on. With the
+        GRM Officer role explicit we no longer need to fall back to
+        geo.
+        """
+        from django.db.models import Q
+
         qs = super().get_queryset()
+        user = self.request.user
+        if _is_grm_officer(user):
+            pass  # full visibility
+        elif getattr(user, "is_authenticated", False):
+            uname = user.username or ""
+            qs = qs.filter(
+                Q(assigned_to=uname)
+                | Q(tasks__assigned_to=uname,
+                    tasks__status__in=[
+                        TaskStatus.OPEN, TaskStatus.IN_PROGRESS,
+                    ]),
+            ).distinct()
+        else:
+            qs = qs.none()
+
+        # US-S15-003 — optional ?sub_region_code= drill-down for the
+        # home queue panel. household_id is a CharField on Grievance,
+        # so join through Household by IN-subquery.
         sr = self.request.query_params.get("sub_region_code")
         if sr:
             from apps.data_management.models import Household
@@ -178,3 +224,124 @@ class GrievanceViewSet(
         if page is not None:
             return self.get_paginated_response(self.get_serializer(page, many=True).data)
         return Response(self.get_serializer(qs, many=True).data)
+
+
+# --- US-S21-003 — GrievanceTask API ---------------------------------------
+
+class GrievanceTaskSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GrievanceTask
+        fields = (
+            "id", "grievance", "title", "description",
+            "assigned_to", "status",
+            "created_by", "created_at", "updated_at",
+            "closed_at", "closed_by",
+        )
+        read_only_fields = (
+            "id", "status", "created_by", "created_at", "updated_at",
+            "closed_at", "closed_by",
+        )
+
+
+class _TaskCreate(serializers.Serializer):
+    grievance = serializers.CharField(max_length=26)
+    title = serializers.CharField(max_length=200)
+    description = serializers.CharField(required=False, allow_blank=True)
+    assigned_to = serializers.CharField(max_length=64)
+
+
+class _TaskTransition(serializers.Serializer):
+    new_status = serializers.ChoiceField(choices=TaskStatus.choices)
+
+
+@extend_schema_view(
+    list=extend_schema(tags=["grm"], summary="List grievance tasks"),
+    retrieve=extend_schema(tags=["grm"], summary="Retrieve a task"),
+    create=extend_schema(tags=["grm"], summary="Create a task on a grievance"),
+)
+class GrievanceTaskViewSet(viewsets.ModelViewSet):
+    """REST surface for GrievanceTask. Visibility mirrors Grievance:
+    GRM Officers see every task; other operators see only tasks
+    assigned to them (or tasks on grievances they own)."""
+
+    queryset = GrievanceTask.objects.all().order_by("-created_at")
+    serializer_class = GrievanceTaskSerializer
+    filterset_fields = ["status", "grievance", "assigned_to"]
+    http_method_names = ["get", "post", "head", "options"]
+
+    def get_queryset(self):
+        from django.db.models import Q
+        qs = super().get_queryset()
+        user = self.request.user
+        if _is_grm_officer(user):
+            return qs
+        if not getattr(user, "is_authenticated", False):
+            return qs.none()
+        uname = user.username or ""
+        # Visible iff assigned to me OR on a grievance I'm
+        # assigned to (so the case lead sees every task they
+        # delegated, not just their own).
+        return qs.filter(
+            Q(assigned_to=uname)
+            | Q(grievance__assigned_to=uname),
+        ).distinct()
+
+    def create(self, request, *args, **kwargs):
+        # Only GRM Officers can create tasks; regular users execute
+        # what's assigned to them but can't scope new work onto a
+        # grievance.
+        if not _is_grm_officer(request.user):
+            return Response(
+                {"detail": "only GRM Officers can create tasks"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        ser = _TaskCreate(data=request.data)
+        ser.is_valid(raise_exception=True)
+        try:
+            grievance = Grievance.objects.get(pk=ser.validated_data["grievance"])
+        except Grievance.DoesNotExist:
+            return Response(
+                {"detail": "grievance not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        try:
+            task = create_task(
+                grievance,
+                title=ser.validated_data["title"],
+                description=ser.validated_data.get("description", ""),
+                assigned_to=ser.validated_data["assigned_to"],
+                actor=request.user.username or "admin",
+            )
+        except GrievanceError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            self.get_serializer(task).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @extend_schema(tags=["grm"], summary="Transition a task's status",
+                   request=_TaskTransition,
+                   responses={200: GrievanceTaskSerializer})
+    @action(detail=True, methods=["post"], url_path="transition")
+    def transition(self, request, pk=None):
+        # Only the assignee OR a GRM Officer may transition a task.
+        # An L1 chief can't close work scoped onto another operator.
+        task = self.get_object()
+        user = request.user
+        uname = user.username or ""
+        if not _is_grm_officer(user) and task.assigned_to != uname:
+            return Response(
+                {"detail": "only the assignee or a GRM Officer may transition"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        ser = _TaskTransition(data=request.data)
+        ser.is_valid(raise_exception=True)
+        try:
+            task = transition_task(
+                task,
+                new_status=ser.validated_data["new_status"],
+                actor=user.username or "admin",
+            )
+        except GrievanceError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(self.get_serializer(task).data)

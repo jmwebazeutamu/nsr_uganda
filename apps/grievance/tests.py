@@ -8,7 +8,6 @@ from apps.grievance.models import (
     Category,
     Grievance,
     GrievanceStatus,
-    GrievanceTask,
     TaskStatus,
     Tier,
 )
@@ -206,6 +205,188 @@ class TestGrievanceTask:
             entity_type="grievance.task", action="update",
         ).count()
         assert after == before + 1
+
+
+# --- US-S21-003b: API visibility + task endpoints --------------------------
+
+class TestGrievanceVisibility:
+    """The Grievance list endpoint narrows by role:
+    - GRM Officer group + superuser → see every row.
+    - Other authenticated users → see only rows they own (assigned_to)
+      or hold an open/in-progress task on.
+    - Anonymous → see nothing.
+    """
+
+    @pytest.fixture
+    def _users(self, db, django_user_model):
+        from django.contrib.auth.models import Group
+        officer = django_user_model.objects.create_user(
+            username="officer", password="p", is_staff=True,
+        )
+        officer.groups.add(Group.objects.get(name="GRM Officer"))
+        regular = django_user_model.objects.create_user(
+            username="parish-chief-1", password="p", is_staff=True,
+        )
+        outsider = django_user_model.objects.create_user(
+            username="outsider", password="p", is_staff=True,
+        )
+        return officer, regular, outsider
+
+    @pytest.fixture
+    def _seeded(self, db, _users):
+        # g_mine: assigned to parish-chief-1.
+        # g_task: parish-chief-1 holds a task on it.
+        # g_other: belongs to a third party, no overlap.
+        g_mine = open_grievance(
+            category=Category.OTHER, description="mine",
+            assigned_to="parish-chief-1",
+        )
+        g_task = open_grievance(category=Category.OTHER, description="task")
+        create_task(g_task, title="visit", description="",
+                    assigned_to="parish-chief-1", actor="officer")
+        g_other = open_grievance(category=Category.OTHER, description="other",
+                                 assigned_to="someone-else")
+        return g_mine, g_task, g_other
+
+    def _client(self, user):
+        from django.test import Client
+        c = Client()
+        c.force_login(user)
+        return c
+
+    def test_officer_sees_every_grievance(self, _seeded, _users):
+        officer, _, _ = _users
+        g_mine, g_task, g_other = _seeded
+        r = self._client(officer).get("/api/v1/grm/grievances/?page_size=100")
+        assert r.status_code == 200
+        ids = {row["id"] for row in r.json()["results"]}
+        assert {g_mine.id, g_task.id, g_other.id}.issubset(ids)
+
+    def test_regular_user_sees_only_assigned_and_tasked(self, _seeded, _users):
+        _, regular, _ = _users
+        g_mine, g_task, g_other = _seeded
+        r = self._client(regular).get("/api/v1/grm/grievances/?page_size=100")
+        assert r.status_code == 200
+        ids = {row["id"] for row in r.json()["results"]}
+        assert g_mine.id in ids
+        assert g_task.id in ids
+        assert g_other.id not in ids
+
+    def test_outsider_sees_nothing(self, _seeded, _users):
+        _, _, outsider = _users
+        r = self._client(outsider).get("/api/v1/grm/grievances/?page_size=100")
+        assert r.status_code == 200
+        assert r.json()["count"] == 0
+
+
+class TestGrievanceTaskApi:
+    """REST contract for /api/v1/grm/tasks/. Only GRM Officers can
+    POST a new task; only the assignee (or an officer) can transition."""
+
+    @pytest.fixture
+    def _users(self, db, django_user_model):
+        from django.contrib.auth.models import Group
+        officer = django_user_model.objects.create_user(
+            username="officer", password="p", is_staff=True,
+        )
+        officer.groups.add(Group.objects.get(name="GRM Officer"))
+        regular = django_user_model.objects.create_user(
+            username="assignee-1", password="p", is_staff=True,
+        )
+        return officer, regular
+
+    @pytest.fixture
+    def _grievance(self, db, _users):
+        return open_grievance(category=Category.OTHER, description="x")
+
+    def _client(self, user):
+        from django.test import Client
+        c = Client()
+        c.force_login(user)
+        return c
+
+    def test_officer_creates_task(self, _grievance, _users):
+        officer, _ = _users
+        r = self._client(officer).post(
+            "/api/v1/grm/tasks/",
+            data={
+                "grievance": _grievance.id,
+                "title": "Visit reporter",
+                "description": "Bring NIN",
+                "assigned_to": "assignee-1",
+            },
+            content_type="application/json",
+        )
+        assert r.status_code == 201, r.content
+        assert r.json()["grievance"] == _grievance.id
+        assert r.json()["status"] == "open"
+
+    def test_non_officer_cannot_create_task(self, _grievance, _users):
+        _, regular = _users
+        r = self._client(regular).post(
+            "/api/v1/grm/tasks/",
+            data={
+                "grievance": _grievance.id,
+                "title": "t", "description": "",
+                "assigned_to": "anyone",
+            },
+            content_type="application/json",
+        )
+        assert r.status_code == 403
+
+    def test_assignee_can_transition_their_task(self, _grievance, _users):
+        officer, regular = _users
+        # Officer scopes the task onto the assignee.
+        t = create_task(_grievance, title="t", description="",
+                        assigned_to="assignee-1", actor="officer")
+        r = self._client(regular).post(
+            f"/api/v1/grm/tasks/{t.id}/transition/",
+            data={"new_status": "in_progress"},
+            content_type="application/json",
+        )
+        assert r.status_code == 200, r.content
+        t.refresh_from_db()
+        assert t.status == "in_progress"
+
+    def test_non_assignee_cannot_transition(self, _grievance, _users):
+        """The queryset narrowing in get_queryset hides tasks the user
+        doesn't own — so a regular user who's neither the assignee nor
+        the grievance owner sees a 404 (REST convention: don't leak
+        existence) rather than a 403."""
+        _, regular = _users
+        t = create_task(_grievance, title="t", description="",
+                        assigned_to="someone-else", actor="officer")
+        r = self._client(regular).post(
+            f"/api/v1/grm/tasks/{t.id}/transition/",
+            data={"new_status": "in_progress"},
+            content_type="application/json",
+        )
+        assert r.status_code == 404
+
+    def test_officer_can_transition_any_task(self, _grievance, _users):
+        officer, _ = _users
+        t = create_task(_grievance, title="t", description="",
+                        assigned_to="someone-else", actor="officer")
+        r = self._client(officer).post(
+            f"/api/v1/grm/tasks/{t.id}/transition/",
+            data={"new_status": "closed"},
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        t.refresh_from_db()
+        assert t.status == "closed"
+
+    def test_assignee_lists_only_their_tasks(self, _grievance, _users):
+        _, regular = _users
+        create_task(_grievance, title="mine", description="",
+                    assigned_to="assignee-1", actor="officer")
+        create_task(_grievance, title="not mine", description="",
+                    assigned_to="someone-else", actor="officer")
+        r = self._client(regular).get("/api/v1/grm/tasks/?page_size=100")
+        assert r.status_code == 200
+        titles = {row["title"] for row in r.json()["results"]}
+        assert "mine" in titles
+        assert "not mine" not in titles
 
 
 class TestClose:

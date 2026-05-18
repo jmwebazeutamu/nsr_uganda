@@ -170,13 +170,20 @@ class TestScopeAcrossFKRelations:
 
 
 class TestScopeViaHouseholdIdSubquery:
-    """HouseholdIdScopedQuerysetMixin handles models that hold a
-    household reference as a CharField (Grievance.household_id) or as a
-    bare ULID (Submission/StageRecord.provisional_registry_id)."""
+    """As of US-S21-003b, Grievance visibility is role-based, not
+    geographic — GRM Officers see every row, every other authenticated
+    user sees only grievances assigned to them or carrying a task
+    assigned to them. These tests pin the new semantics; the original
+    geo-scoped tests are retained as regression markers for the
+    Submission / StageRecord paths below which still use the
+    HouseholdIdScopedQuerysetMixin."""
 
-    def test_grievance_scoped_by_household(
+    def test_geo_scoped_user_without_assignment_sees_no_grievances(
         self, db, django_user_model, two_sub_regions, households_in_each,
     ):
+        """Geographic scope alone no longer grants Grievance visibility
+        (US-S21-003b). A sub-region operator who's neither assigned a
+        grievance nor a task on one sees zero rows."""
         from apps.grievance.models import Category
         from apps.grievance.services import open_grievance
 
@@ -191,18 +198,17 @@ class TestScopeViaHouseholdIdSubquery:
         )
         r = _client_for(u).get("/api/v1/grm/grievances/")
         assert r.status_code == 200
-        assert r.data["count"] == 1
-        assert r.data["results"][0]["household_id"] == \
-            households_in_each["SR-BUGANDA"].id
+        assert r.data["count"] == 0
 
     def test_grievance_with_no_household_invisible_to_scoped_user(
         self, db, django_user_model, two_sub_regions,
     ):
+        """An anonymous-channel grievance (no household_id, no
+        assignee) is invisible to a non-officer regardless of geo
+        scope."""
         from apps.grievance.models import Category
         from apps.grievance.services import open_grievance
 
-        # Grievance with no household_id (e.g., anonymous complaint
-        # about operator conduct).
         open_grievance(category=Category.OPERATOR_CONDUCT,
                        description="anonymous complaint")
         u = django_user_model.objects.create_user(username="grm-op2", password="p")
@@ -211,7 +217,6 @@ class TestScopeViaHouseholdIdSubquery:
             scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
         )
         r = _client_for(u).get("/api/v1/grm/grievances/")
-        # No household_id -> not in any sub-region's IN-subquery -> 0 rows.
         assert r.data["count"] == 0
 
     def test_stage_record_pre_promotion_invisible_to_sub_region_operator(
