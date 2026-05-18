@@ -39,13 +39,16 @@ class GrievanceSerializer(serializers.ModelSerializer):
             "household_id", "member_id",
             "reporter_name", "reporter_phone", "reporter_relationship",
             "tier", "status", "assigned_to",
-            "opened_at", "sla_deadline", "resolved_at", "closed_at",
-            "resolution_narrative", "linked_change_request_id",
+            "opened_at", "sla_deadline",
+            "resolved_at", "resolved_by", "resolution_narrative",
+            "closed_at", "closed_by", "closing_narrative",
+            "linked_change_request_id",
             "created_at", "updated_at",
         )
         read_only_fields = (
             "id", "status", "opened_at", "sla_deadline",
-            "resolved_at", "closed_at", "created_at", "updated_at",
+            "resolved_at", "resolved_by", "closed_at", "closed_by",
+            "closing_narrative", "created_at", "updated_at",
         )
 
 
@@ -63,6 +66,14 @@ class _Resolve(serializers.Serializer):
     actor = serializers.CharField(max_length=64)
     narrative = serializers.CharField()
     linked_change_request_id = serializers.CharField(required=False, allow_blank=True)
+
+
+class _Close(serializers.Serializer):
+    """US-S21-005 — close grievance with a captured narrative.
+    `narrative` is the reason + note pair the closing operator gave;
+    persisted on Grievance.closing_narrative."""
+    actor = serializers.CharField(max_length=64)
+    narrative = serializers.CharField(required=False, allow_blank=True)
 
 
 @extend_schema_view(
@@ -199,15 +210,19 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(self.get_serializer(g).data)
 
-    @extend_schema(tags=["grm"], summary="Close a resolved grievance", request=_ActorReason,
+    @extend_schema(tags=["grm"], summary="Close a resolved grievance", request=_Close,
                    responses={200: GrievanceSerializer,
                               400: OpenApiResponse(description="not RESOLVED")})
     @action(detail=True, methods=["post"], url_path="close")
     def close(self, request, pk=None):
-        ser = _ActorReason(data=request.data)
+        ser = _Close(data=request.data)
         ser.is_valid(raise_exception=True)
         try:
-            g = close(self.get_object(), actor=ser.validated_data["actor"])
+            g = close(
+                self.get_object(),
+                actor=ser.validated_data["actor"],
+                narrative=ser.validated_data.get("narrative", ""),
+            )
         except GrievanceError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(self.get_serializer(g).data)

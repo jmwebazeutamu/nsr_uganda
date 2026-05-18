@@ -146,27 +146,42 @@ def resolve(
         )
     grievance.status = GrievanceStatus.RESOLVED
     grievance.resolved_at = timezone.now()
+    grievance.resolved_by = actor
     grievance.resolution_narrative = narrative
     if linked_change_request_id:
         grievance.linked_change_request_id = linked_change_request_id
     grievance.save(update_fields=[
-        "status", "resolved_at", "resolution_narrative",
+        "status", "resolved_at", "resolved_by", "resolution_narrative",
         "linked_change_request_id", "updated_at",
     ])
     emit_audit("update", "grievance", grievance.id, actor=actor,
                reason="resolved",
-               field_changes={"linked_change_request_id": linked_change_request_id})
+               field_changes={
+                   "linked_change_request_id": linked_change_request_id,
+                   "resolution_narrative": narrative,
+               })
     return grievance
 
 
 @transaction.atomic
-def close(grievance: Grievance, *, actor: str) -> Grievance:
+def close(grievance: Grievance, *, actor: str, narrative: str = "") -> Grievance:
+    """Move grievance from RESOLVED → CLOSED. `narrative` is the
+    closing reason / note pair captured from the operator; persisted
+    on Grievance.closing_narrative so the workbench can display the
+    full case-closeout block."""
     if grievance.status != GrievanceStatus.RESOLVED:
         raise GrievanceError(f"can only close RESOLVED (got {grievance.status})")
     grievance.status = GrievanceStatus.CLOSED
     grievance.closed_at = timezone.now()
-    grievance.save(update_fields=["status", "closed_at", "updated_at"])
-    emit_audit("update", "grievance", grievance.id, actor=actor, reason="closed")
+    grievance.closed_by = actor
+    grievance.closing_narrative = narrative or ""
+    grievance.save(update_fields=[
+        "status", "closed_at", "closed_by", "closing_narrative",
+        "updated_at",
+    ])
+    emit_audit("update", "grievance", grievance.id, actor=actor,
+               reason="closed",
+               field_changes={"closing_narrative": narrative or ""})
     return grievance
 
 

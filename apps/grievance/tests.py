@@ -134,6 +134,63 @@ class TestResolve:
         g.refresh_from_db()
         assert g.status == GrievanceStatus.RESOLVED
 
+    def test_resolve_persists_resolver_identity(self, db):
+        """US-S21-005 — resolved_by must be set so the workbench
+        can show "Resolved by <actor>" without joining audit rows."""
+        g = open_grievance(category=Category.OTHER, description="x")
+        resolve(g, actor="cdo-tapac", narrative="spoke to head")
+        g.refresh_from_db()
+        assert g.resolved_by == "cdo-tapac"
+        assert g.resolution_narrative == "spoke to head"
+
+
+class TestCloseNarrative:
+    """US-S21-005 — close() now persists a narrative + closer identity
+    so the case-closeout block shows who closed the grievance and why."""
+
+    def test_close_persists_narrative_and_closer(self, db):
+        g = open_grievance(category=Category.OTHER, description="x")
+        resolve(g, actor="op", narrative="done")
+        close(g, actor="supervisor",
+              narrative="Reporter confirmed by phone")
+        g.refresh_from_db()
+        assert g.status == GrievanceStatus.CLOSED
+        assert g.closed_by == "supervisor"
+        assert g.closing_narrative == "Reporter confirmed by phone"
+
+    def test_close_narrative_is_optional(self, db):
+        """Pre-S21-005 callers (and the bulk admin action) don't
+        supply a narrative; the field is blank in that case rather
+        than None."""
+        g = open_grievance(category=Category.OTHER, description="x")
+        resolve(g, actor="op", narrative="done")
+        close(g, actor="supervisor")
+        g.refresh_from_db()
+        assert g.closing_narrative == ""
+        assert g.closed_by == "supervisor"
+
+    def test_api_close_accepts_narrative_in_body(self, db, django_user_model):
+        """The /close/ action serialiser now accepts {actor, narrative}
+        and forwards both to the service."""
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="supervisor", password="p", is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        g = open_grievance(category=Category.OTHER, description="x")
+        resolve(g, actor="op", narrative="done")
+        r = c.post(
+            f"/api/v1/grm/grievances/{g.id}/close/",
+            data={"actor": "supervisor",
+                  "narrative": "Resolved · 30-day grace expired"},
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        g.refresh_from_db()
+        assert g.closing_narrative == "Resolved · 30-day grace expired"
+        assert g.closed_by == "supervisor"
+
 
 class TestGrievanceTask:
     """US-S21-003 — task model + state machine. Tasks attach to a

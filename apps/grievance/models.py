@@ -84,6 +84,15 @@ class Grievance(models.Model):
     resolved_at = models.DateTimeField(null=True, blank=True)
     closed_at = models.DateTimeField(null=True, blank=True)
     resolution_narrative = models.TextField(blank=True)
+    # US-S21-005 — actor + narrative pair on each lifecycle close-out.
+    # resolved_by + resolution_narrative explain WHY a grievance moved
+    # to RESOLVED. closing_narrative + closed_by capture the same for
+    # the CLOSED transition (the 30-day grace expiry, reporter
+    # confirmation, etc.). All blank by default; populated by the
+    # service-layer transitions only.
+    resolved_by = models.CharField(max_length=64, blank=True)
+    closing_narrative = models.TextField(blank=True)
+    closed_by = models.CharField(max_length=64, blank=True)
 
     # GRM → UPD linkage. Populated when a grievance produces a data
     # correction. The actual auto-open workflow is a Sprint 2.5 story.

@@ -54,6 +54,14 @@ const _grmApiToView = (g) => {
     opened_at: _grmFmtTime(g.opened_at),
     hours_to_breach,
     narrative: g.description || "",
+    // US-S21-005 — case-closeout fields used by the
+    // Resolution & Closing block.
+    resolution_narrative: g.resolution_narrative || "",
+    resolved_at: _grmFmtTime(g.resolved_at),
+    resolved_by: g.resolved_by || "",
+    closing_narrative: g.closing_narrative || "",
+    closed_at: _grmFmtTime(g.closed_at),
+    closed_by: g.closed_by || "",
   };
 };
 
@@ -692,6 +700,78 @@ const GRMScreen = ({ onNavigate }) => {
               </div>
             </div>
 
+            {/* US-S21-005 — Resolution & Closing block. Surfaces
+                the captured narrative + actor + timestamp pair for
+                each lifecycle close-out so the operator doesn't have
+                to dig into the audit drawer. Renders only when
+                the grievance has actually been resolved or closed. */}
+            {current && (current.status === "resolved" || current.status === "closed") && (
+              <div className="card" style={{borderTop:"3px solid var(--accent-eligibility)"}}>
+                <div style={{padding:"12px 16px"}}>
+                  <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:8}}>
+                    <Icon name="check" size={11}/> RESOLUTION
+                    <Chip size="sm" tone="eligibility" style={{marginLeft:6}}>
+                      Resolved
+                    </Chip>
+                  </div>
+                  {current.resolution_narrative ? (
+                    <div className="t-bodysm" style={{
+                      color:"var(--neutral-800)",
+                      lineHeight:1.5,
+                      whiteSpace:"pre-wrap",
+                      padding:"8px 10px",
+                      background:"var(--accent-eligibility-bg)",
+                      borderRadius:4,
+                    }}>
+                      {current.resolution_narrative}
+                    </div>
+                  ) : (
+                    <div className="t-bodysm muted" style={{fontStyle:"italic"}}>
+                      No narrative captured.
+                    </div>
+                  )}
+                  <div className="t-bodysm muted" style={{fontSize:11, marginTop:6}}>
+                    by <strong>{current.resolved_by || "—"}</strong>
+                    {current.resolved_at && <> · {current.resolved_at}</>}
+                  </div>
+
+                  {current.status === "closed" && (
+                    <>
+                      <div className="t-cap" style={{
+                        fontWeight:600, color:"var(--neutral-700)",
+                        margin:"14px 0 8px",
+                      }}>
+                        <Icon name="lock" size={11}/> CLOSING
+                        <Chip size="sm" tone="neutral" style={{marginLeft:6}}>
+                          Closed
+                        </Chip>
+                      </div>
+                      {current.closing_narrative ? (
+                        <div className="t-bodysm" style={{
+                          color:"var(--neutral-800)",
+                          lineHeight:1.5,
+                          whiteSpace:"pre-wrap",
+                          padding:"8px 10px",
+                          background:"var(--neutral-100)",
+                          borderRadius:4,
+                        }}>
+                          {current.closing_narrative}
+                        </div>
+                      ) : (
+                        <div className="t-bodysm muted" style={{fontStyle:"italic"}}>
+                          No closing note captured.
+                        </div>
+                      )}
+                      <div className="t-bodysm muted" style={{fontSize:11, marginTop:6}}>
+                        by <strong>{current.closed_by || "—"}</strong>
+                        {current.closed_at && <> · {current.closed_at}</>}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* US-S21-003c — Tasks panel. GRM Officer scopes the work
                 into tasks; the assignee transitions them; the resolve
                 action below is disabled until every task is closed. */}
@@ -891,7 +971,9 @@ const GRMScreen = ({ onNavigate }) => {
         recordLabel={current?.id}
         reasonOptions={reasonsClose}
         onClose={() => setModal(null)}
-        onConfirm={() => fire("close")}/>
+        onConfirm={({ reason, note }) => fire("close", {
+          body: { narrative: [reason, note].filter(Boolean).join(" — ") },
+        })}/>
 
       <Modal
         open={modal === "assign"}
