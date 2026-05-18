@@ -370,6 +370,48 @@ class TestAdminWorkbench:
             assert g.tier == Tier.L2_CDO
             assert g.status == GrievanceStatus.ESCALATED
 
+    def test_admin_create_sets_sla_deadline_via_service(
+        self, admin_client, db,
+    ):
+        """Regression: the admin's "Add grievance" form was creating
+        rows directly via Django's default save_model, skipping
+        apps.grievance.services.open_grievance — leaving rows with
+        sla_deadline=NULL that the workbench (US-S21-002) couldn't
+        badge. save_model now routes through the service."""
+        from apps.security.models import AuditEvent
+        before_audit = AuditEvent.objects.filter(
+            entity_type="grievance", action="create",
+        ).count()
+        r = admin_client.post(
+            "/admin/grievance/grievance/add/",
+            data={
+                "category": Category.DATA_CORRECTION,
+                "sub_category": "",
+                "description": "Created via admin add form.",
+                "tier": "l1_parish_chief",
+                "status": GrievanceStatus.OPEN,
+                "household_id": "", "member_id": "",
+                "reporter_name": "", "reporter_phone": "",
+                "reporter_relationship": "",
+                "assigned_to": "",
+                "resolution_narrative": "",
+                "linked_change_request_id": "",
+                "_save": "Save",
+            },
+        )
+        assert r.status_code in (200, 302), r.content[:400]
+        g = Grievance.objects.latest("created_at")
+        # The service set both fields.
+        assert g.sla_deadline is not None, "open_grievance wasn't routed"
+        # And the audit row landed.
+        assert AuditEvent.objects.filter(
+            entity_type="grievance", action="create",
+            entity_id=g.id,
+        ).count() == 1
+        assert AuditEvent.objects.filter(
+            entity_type="grievance", action="create",
+        ).count() == before_audit + 1
+
     def test_bulk_close_skips_non_resolved(self, admin_client, db):
         # One RESOLVED + one OPEN; only the RESOLVED should close.
         g_resolved = open_grievance(category=Category.OTHER, description="x")

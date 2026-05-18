@@ -1,10 +1,61 @@
 /* global React, Icon, Chip, PageHeader, AuditDrawer, Modal, ReasonModal, ActionBar, Toast */
-// NSR MIS — GRM workbench (US-S8-006). Parity-or-better with the
-// Django admin surface from S4-005 + S6-001: list + SLA badge + bulk
-// assign/escalate/resolve/close. Talks the same shape as
-// /api/v1/grm/grievances/ from apps.grievance.api.
+// NSR MIS — GRM workbench (US-S8-006 / US-S21-002 live wiring).
+// Parity-or-better with the Django admin from S4-005 + S6-001: list
+// + SLA badge + bulk assign/escalate/resolve/close. As of US-S21-002
+// the screen fetches /api/v1/grm/grievances/ on mount and routes
+// every action through the matching POST endpoint. Mock data below
+// is the offline fallback for design previews.
 
-const { useState: useStateGrm, useMemo: useMemoGrm } = React;
+const { useState: useStateGrm, useMemo: useMemoGrm, useEffect: useEffectGrm } = React;
+
+// CSRF cookie reader — required for DRF session-auth POSTs. Same
+// pattern as screens-dih + screens-dedup. The Django admin login
+// flow sets the cookie; file:// previews don't have it (the action
+// fetches will 403 in that mode, by design).
+const _grmCsrf = () => {
+  const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return m ? m[1] : "";
+};
+
+// Project an /api/v1/grm/grievances/ row into the view-model the
+// existing table renders. Field renames + derived fields:
+//   reporter_relationship → relationship
+//   description           → narrative
+//   opened_at (ISO)       → "DD MMM HH:MM" (EAT-rendered)
+//   sla_deadline + now    → hours_to_breach (positive = within SLA)
+const _grmMonths = ["Jan","Feb","Mar","Apr","May","Jun",
+                    "Jul","Aug","Sep","Oct","Nov","Dec"];
+const _grmFmtTime = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getDate())} ${_grmMonths[d.getMonth()]} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+const _grmApiToView = (g) => {
+  // null hours_to_breach means "no SLA set" — slaChip renders it as
+  // a dash. Computed positive = within SLA, negative = breached.
+  let hours_to_breach = null;
+  if (g.sla_deadline) {
+    const ms = new Date(g.sla_deadline).getTime() - Date.now();
+    hours_to_breach = Math.round(ms / 3_600_000);
+  }
+  return {
+    id: g.id,
+    category: g.category,
+    tier: g.tier,
+    status: g.status,
+    household_id: g.household_id || "",
+    member_id: g.member_id || "",
+    reporter_name: g.reporter_name || "",
+    reporter_phone: g.reporter_phone || "",
+    relationship: g.reporter_relationship || "—",
+    assigned_to: g.assigned_to || "",
+    opened_at: _grmFmtTime(g.opened_at),
+    hours_to_breach,
+    narrative: g.description || "",
+  };
+};
 
 // Tier vocabulary mirrors apps.grievance.models.Tier. Labels chosen
 // for the workbench column header — operators speak "L1/L2/L3/L4"
@@ -33,10 +84,12 @@ const GRM_STATUSES = {
   closed:      { label: "Closed",       tone: "neutral" },
 };
 
-// Mock rows that mirror the GrievanceSerializer shape (apps/grievance/
-// api.py GrievanceSerializer.Meta.fields). hours_to_breach is
-// computed: positive = within SLA, negative = breached.
-const GRM_ROWS = [
+// Offline-preview fallback rows mirroring GrievanceSerializer
+// (apps/grievance/api.py). Used when /api/v1/grm/grievances/ is
+// unreachable (file:// preview) or returns no rows (fresh DB).
+// hours_to_breach is precomputed here; live rows compute it from
+// sla_deadline via _grmApiToView.
+const GRM_MOCK_ROWS = [
   { id: "01GRM2026051400001", category: "data_correction", tier: "l1_parish_chief", status: "open",        household_id: "01HXY7K3B2N9PVQE4M6FZRWS18", member_id: "01HXY7K3B2N9PVQE4M6FZRWS19", reporter_name: "Sarah Nakato",  reporter_phone: "+256 786 234 567", relationship: "Daughter",      assigned_to: "",                  opened_at: "14 May 09:12", hours_to_breach:  18, narrative: "Surname spelled OKELO instead of OKELLO on receipt slip." },
   { id: "01GRM2026051400002", category: "exclusion_error", tier: "l2_cdo",          status: "in_progress", household_id: "01HXZ9MR4N8P2QFB7K6FZRWS33", member_id: "",                              reporter_name: "Akello Grace", reporter_phone: "+256 772 991 234", relationship: "Self · head",   assigned_to: "Adong Florence",    opened_at: "13 May 17:40", hours_to_breach:  -3, narrative: "Household enumerated but not appearing in CDO register; PMT band missing." },
   { id: "01GRM2026051400003", category: "programme_issue", tier: "l3_district",     status: "escalated",   household_id: "01HXZBVK6QN8M2PFB7K6FZRWS41", member_id: "01HXZBVK6QN8M2PFB7K6FZRWS42", reporter_name: "Onyango David",reporter_phone: "+256 752 110 080", relationship: "Self · head",   assigned_to: "Twikirize J. · DM&E",opened_at: "12 May 11:05", hours_to_breach: -27, narrative: "Eligible for PDM SACCO; partner says NSR ID not on roster." },
@@ -50,6 +103,7 @@ const GRM_ROWS = [
 // apps/grievance/admin.py — green/amber/red is the corridor signal.
 const slaChip = (h, status) => {
   if (status === "resolved" || status === "closed") return <Chip size="sm" tone="neutral">—</Chip>;
+  if (h === null || h === undefined) return <Chip size="sm" tone="neutral">no SLA</Chip>;
   if (h < 0)  return <Chip size="sm" tone="danger"><Icon name="clock" size={11}/> {Math.abs(h)}h overdue</Chip>;
   if (h <= 6) return <Chip size="sm" tone="quality"><Icon name="clock" size={11}/> {h}h to breach</Chip>;
   return <Chip size="sm" tone="data"><Icon name="clock" size={11}/> {h}h left</Chip>;
@@ -63,20 +117,64 @@ const QUICK_FILTERS_GRM = [
 ];
 
 const GRMScreen = ({ onNavigate }) => {
-  const [selectedRow, setSelectedRow] = useStateGrm(GRM_ROWS[1].id);
+  // Live state. allRows is the canonical roster (live or mock); rows
+  // is the visible subset after quick-filter. dataSource drives the
+  // eyebrow indicator so an operator can see whether they're looking
+  // at real data or the offline-preview fallback.
+  const [allRows, setAllRows] = useStateGrm(GRM_MOCK_ROWS);
+  const [dataSource, setDataSource] = useStateGrm("mock");
+  const [selectedRow, setSelectedRow] = useStateGrm(GRM_MOCK_ROWS[1].id);
   const [selection, setSelection] = useStateGrm(new Set());
   const [quickFilter, setQuickFilter] = useStateGrm(null);
   const [modal, setModal] = useStateGrm(null); // 'assign' | 'escalate' | 'resolve' | 'close'
+  const [assignee, setAssignee] = useStateGrm("");
+  const [busy, setBusy] = useStateGrm(false);
   const [auditOpen, setAuditOpen] = useStateGrm(false);
   const [toast, setToast] = useStateGrm("");
 
-  const rows = useMemoGrm(() => {
-    if (!quickFilter) return GRM_ROWS;
-    const def = QUICK_FILTERS_GRM.find(f => f.id === quickFilter);
-    return def ? GRM_ROWS.filter(def.predicate) : GRM_ROWS;
-  }, [quickFilter]);
+  // Refresh the roster from the API. Used on mount + after every
+  // successful action. On unreachable API (file:// preview) it
+  // marks dataSource so the eyebrow reflects it.
+  const refresh = () => fetch(
+    "/api/v1/grm/grievances/?page_size=100", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(data => {
+      const list = (data.results || data || []).map(_grmApiToView);
+      if (list.length === 0) {
+        // Live but empty (fresh DB / no rows in operator's ABAC
+        // scope). Keep mock visible so the design preview still
+        // demos; the eyebrow tells the operator what's happening.
+        setDataSource("live-empty");
+        return;
+      }
+      setAllRows(list);
+      setDataSource("live");
+    })
+    .catch(() => { setDataSource("offline"); });
 
-  const current = useMemoGrm(() => GRM_ROWS.find(r => r.id === selectedRow), [selectedRow]);
+  useEffectGrm(() => { refresh(); /* eslint-disable-line */ }, []);
+
+  // Keep selectedRow valid when allRows changes (e.g., after a live
+  // fetch replaces mock IDs).
+  useEffectGrm(() => {
+    if (!allRows.find(r => r.id === selectedRow)) {
+      setSelectedRow(allRows[0]?.id || "");
+    }
+  }, [allRows, selectedRow]);
+
+  const rows = useMemoGrm(() => {
+    if (!quickFilter) return allRows;
+    const def = QUICK_FILTERS_GRM.find(f => f.id === quickFilter);
+    return def ? allRows.filter(def.predicate) : allRows;
+  }, [allRows, quickFilter]);
+
+  const current = useMemoGrm(
+    () => allRows.find(r => r.id === selectedRow),
+    [allRows, selectedRow],
+  );
 
   const toggleSel = (id) => {
     const next = new Set(selection);
@@ -108,14 +206,78 @@ const GRMScreen = ({ onNavigate }) => {
     "Other (specify in note)",
   ];
 
-  const fire = (kind, n) => {
-    const map = {
-      assign:   `${n || selection.size} grievance(s) assigned. Audit chain updated.`,
-      escalate: `${n || selection.size} grievance(s) escalated one tier. SLA window reset.`,
-      resolve:  `Grievance resolved. Linked UPD will close it on commit.`,
-      close:    `${n || selection.size} grievance(s) closed.`,
-    };
-    setToast(map[kind] || "Done."); setModal(null); setSelection(new Set());
+  // Route one action through the API. Each kind maps to a custom
+  // detail-route on GrievanceViewSet (apps/grievance/api.py):
+  //   assign   POST .../assign/   {actor, assigned_to}
+  //   escalate POST .../escalate/ {actor, reason}
+  //   resolve  POST .../resolve/  {actor, narrative}
+  //   close    POST .../close/    {actor}
+  // Returns a Promise so callers can chain a refresh.
+  const _grmPost = (id, kind, body) => fetch(
+    `/api/v1/grm/grievances/${id}/${kind}/`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": _grmCsrf(),
+        Accept: "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+  // Fire `kind` against every selected id (or `current` if no
+  // selection). After all calls settle, refresh the roster, toast,
+  // and clear the selection.
+  const fire = (kind, opts = {}) => {
+    if (dataSource === "offline" || dataSource === "mock") {
+      // No live API available — keep the demo behaviour so the
+      // design preview still works under file://.
+      const map = {
+        assign:   `${selection.size || 1} grievance(s) assigned. (preview — not persisted)`,
+        escalate: `${selection.size || 1} grievance(s) escalated. (preview — not persisted)`,
+        resolve:  `Grievance resolved. (preview — not persisted)`,
+        close:    `${selection.size || 1} grievance(s) closed. (preview — not persisted)`,
+      };
+      setToast(map[kind] || "Done.");
+      setModal(null); setSelection(new Set());
+      return;
+    }
+    const ids = selection.size > 0
+      ? [...selection]
+      : current ? [current.id] : [];
+    if (ids.length === 0) {
+      setToast("No grievance selected.");
+      setModal(null);
+      return;
+    }
+    const body = { actor: "console-operator", ...(opts.body || {}) };
+    setBusy(true);
+    Promise.all(ids.map(id => _grmPost(id, kind, body)
+      .then(r => r.ok ? null : r.json().then(j => ({ id, detail: j.detail || r.status })))))
+      .then(failures => failures.filter(Boolean))
+      .then(failures => {
+        if (failures.length === 0) {
+          const map = {
+            assign:   `${ids.length} grievance(s) assigned.`,
+            escalate: `${ids.length} grievance(s) escalated one tier.`,
+            resolve:  `Grievance resolved.`,
+            close:    `${ids.length} grievance(s) closed.`,
+          };
+          setToast(map[kind] || "Done.");
+        } else {
+          setToast(
+            `${ids.length - failures.length}/${ids.length} succeeded. ` +
+            failures.slice(0, 2).map(f => f.detail).join(" · "),
+          );
+        }
+        return refresh();
+      })
+      .finally(() => {
+        setBusy(false);
+        setModal(null);
+        setSelection(new Set());
+        setAssignee("");
+      });
   };
 
   const auditEvents = current ? [
@@ -129,11 +291,22 @@ const GRMScreen = ({ onNavigate }) => {
   return (
     <div className="page" style={{paddingBottom:0, position:'relative'}}>
       <PageHeader
-        eyebrow="GRM WORKBENCH · US-S8-006"
-        title={<>Grievance management <Chip>{GRM_ROWS.filter(r => r.status !== "closed" && r.status !== "resolved").length} active</Chip></>}
-        sub="Triage, assign, escalate, resolve. SLA = 24h L1 / 48h L2 / 72h L3 / 7d L4 (per SAD §11.1)."
+        eyebrow={dataSource === "live"
+          ? "GRM WORKBENCH · US-S8-006 · LIVE"
+          : dataSource === "live-empty"
+            ? "GRM WORKBENCH · US-S8-006 · live (0 in scope)"
+            : dataSource === "offline"
+              ? "GRM WORKBENCH · US-S8-006 · offline preview"
+              : "GRM WORKBENCH · US-S8-006"}
+        title={<>Grievance management <Chip>{allRows.filter(r => r.status !== "closed" && r.status !== "resolved").length} active</Chip></>}
+        sub={dataSource === "live"
+          ? "Live ABAC-scoped data. SLA = 24h L1 / 48h L2 / 72h L3 / 7d L4 (per SAD §11.1)."
+          : "Triage, assign, escalate, resolve. SLA = 24h L1 / 48h L2 / 72h L3 / 7d L4 (per SAD §11.1)."}
         right={<>
           <button className="btn" onClick={() => setAuditOpen(true)}><Icon name="history"/> Audit chain</button>
+          <button className="btn" onClick={() => refresh()} disabled={busy}>
+            <Icon name="refreshCw"/> {busy ? "…" : "Refresh"}
+          </button>
           <button className="btn"><Icon name="download"/> Export CSV</button>
           <button className="btn primary"><Icon name="plus"/> Open grievance</button>
         </>}
@@ -144,7 +317,7 @@ const GRMScreen = ({ onNavigate }) => {
         <div className="row gap-3" style={{flexWrap:"wrap"}}>
           <span className="t-cap" style={{fontWeight:600}}>QUICK FILTERS</span>
           {QUICK_FILTERS_GRM.map(f => {
-            const count = GRM_ROWS.filter(f.predicate).length;
+            const count = allRows.filter(f.predicate).length;
             const active = quickFilter === f.id;
             return (
               <button
@@ -362,7 +535,9 @@ const GRMScreen = ({ onNavigate }) => {
 
       {/* Modal stack — wired to canned reason lists from the service guards.
           ReasonModal in components.jsx expects open + reasonOptions +
-          onClose + onConfirm({reason, note}); intent drives the button tone. */}
+          onClose + onConfirm({reason, note}); the chosen reason is
+          forwarded as `reason` (escalate / close) or `narrative`
+          (resolve) into the action body. */}
       <ReasonModal
         open={modal === "escalate"}
         title="Escalate to next tier"
@@ -370,7 +545,9 @@ const GRMScreen = ({ onNavigate }) => {
         recordLabel={current?.id}
         reasonOptions={reasonsEscalate}
         onClose={() => setModal(null)}
-        onConfirm={() => fire("escalate", 1)}/>
+        onConfirm={({ reason, note }) => fire("escalate", {
+          body: { reason: [reason, note].filter(Boolean).join(" — ") },
+        })}/>
 
       <ReasonModal
         open={modal === "resolve"}
@@ -379,7 +556,9 @@ const GRMScreen = ({ onNavigate }) => {
         recordLabel={current?.id}
         reasonOptions={reasonsResolve}
         onClose={() => setModal(null)}
-        onConfirm={() => fire("resolve", 1)}/>
+        onConfirm={({ reason, note }) => fire("resolve", {
+          body: { narrative: [reason, note].filter(Boolean).join(" — ") || reason || "resolved via console" },
+        })}/>
 
       <ReasonModal
         open={modal === "close"}
@@ -395,16 +574,24 @@ const GRMScreen = ({ onNavigate }) => {
         onClose={() => setModal(null)}
         footer={<>
           <button className="btn" onClick={() => setModal(null)}>Cancel</button>
-          <button className="btn btn-primary" onClick={() => fire("assign")}>Assign</button>
+          <button className="btn btn-primary" disabled={!assignee || busy}
+                  onClick={() => fire("assign", {
+                    body: { assigned_to: assignee },
+                  })}>
+            {busy ? "Assigning…" : "Assign"}
+          </button>
         </>}>
         <div className="t-bodysm" style={{marginBottom:12}}>
           Assign {selection.size > 1 ? `${selection.size} grievances` : "this grievance"} to:
         </div>
-        <select className="field-select" style={{width:"100%"}}>
-          <option>Adong Florence · CDO Tapac</option>
-          <option>Akiteng Lillian · Parish Chief, Nakiloro</option>
-          <option>Twikirize J. · District M&amp;E</option>
-          <option>NSR Unit duty officer</option>
+        <select className="field-select" style={{width:"100%"}}
+                value={assignee}
+                onChange={(e) => setAssignee(e.target.value)}>
+          <option value="">— pick an assignee —</option>
+          <option value="Adong Florence · CDO Tapac">Adong Florence · CDO Tapac</option>
+          <option value="Akiteng Lillian · Parish Chief, Nakiloro">Akiteng Lillian · Parish Chief, Nakiloro</option>
+          <option value="Twikirize J. · District M&E">Twikirize J. · District M&amp;E</option>
+          <option value="NSR Unit duty officer">NSR Unit duty officer</option>
         </select>
       </Modal>
 

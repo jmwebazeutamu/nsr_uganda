@@ -30,6 +30,7 @@ from .services import (
     assign,
     close,
     escalate,
+    open_grievance,
     resolve,
 )
 
@@ -65,6 +66,33 @@ class GrievanceAdmin(admin.ModelAdmin):
                                     "resolved_at", "closed_at",
                                     "created_at", "updated_at")}),
     )
+
+    def save_model(self, request, obj, form, change):
+        """For new grievances, route through apps.grievance.services.
+        open_grievance so the SLA deadline is computed and the
+        AuditEvent is emitted. Admin-direct CREATEs were silently
+        skipping both, leaving rows with sla_deadline=NULL that the
+        workbench couldn't badge."""
+        actor = getattr(request.user, "username", "") or "admin-bot"
+        if change:
+            return super().save_model(request, obj, form, change)
+        opened = open_grievance(
+            category=obj.category, description=obj.description or "",
+            household_id=obj.household_id or "",
+            member_id=obj.member_id or "",
+            reporter_name=obj.reporter_name or "",
+            reporter_phone=obj.reporter_phone or "",
+            reporter_relationship=obj.reporter_relationship or "",
+            tier=obj.tier or "l1_parish_chief",
+            assigned_to=obj.assigned_to or "",
+            sub_category=obj.sub_category or "",
+            actor=actor,
+        )
+        # Mirror the persisted state back onto the admin's in-memory
+        # obj so redirects + change-history pick up the right id.
+        obj.pk = opened.pk
+        for f in opened._meta.fields:
+            setattr(obj, f.name, getattr(opened, f.name))
 
     @admin.display(description="SLA")
     def sla_badge(self, obj: Grievance) -> str:
