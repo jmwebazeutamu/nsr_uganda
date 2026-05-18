@@ -398,7 +398,16 @@ const UPDScreen = ({ changeRequestId }) => {
   // preview rail. Live: drive off current's serializer row. Offline /
   // no current: keep the static UPD mock so the design preview still
   // demos. Self-approve banner uses `me` to detect requester==reviewer.
-  const isLive = (dataSource === "live" || dataSource === "live-empty") && current;
+  // Live rendering requires both a live data source AND a current
+  // row that actually carries the serializer payload (`_raw`). When
+  // the API returns 0 rows we keep the mock queue visible for the
+  // design preview, but those rows have no `_raw` — falling through
+  // to the live branch then dereferences current._raw.* and crashes
+  // the screen. Gate `isLive` on the presence of _raw to keep the
+  // render coherent in the live-empty case.
+  const isLive = (dataSource === "live" || dataSource === "live-empty")
+    && current
+    && current._raw;
   const headerVM = isLive
     ? {
         change_type: _updTypeLabel[current._raw.change_type] || current._raw.change_type,
