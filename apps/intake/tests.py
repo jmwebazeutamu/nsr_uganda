@@ -824,14 +824,13 @@ class TestXlsformExport:
         )
         assert roster_close is not None
 
-    def test_export_falls_back_to_text_for_select_without_choice_list(
+    def test_export_emits_geo_selects_with_cascading_filter(
         self, _seeded_form,
     ):
-        """US-118b regression: the geo selects (a0_region etc.) lack
-        a seeded ChoiceList in the test fixture. A bare `select_one`
-        row with no list name fails Kobo's "Survey information not
-        complete" validation. We fall back to `text` with a hint
-        annotation so the export still loads."""
+        """US-S20-006: geo selects (a0_region through a5_parish_ward)
+        now emit as real select_one rows with proper list names and a
+        choice_filter referencing the parent question — no more `text`
+        fallback in the export. Verifies the cascade reaches Kobo."""
         import io
 
         import openpyxl
@@ -842,16 +841,76 @@ class TestXlsformExport:
         header = rows[0]
         type_col = header.index("type")
         name_col = header.index("name")
-        hint_col = header.index("hint")
+        choice_filter_col = header.index("choice_filter")
+        appearance_col = header.index("appearance")
+
         region_row = next(r for r in rows[1:] if r[name_col] == "a0_region")
-        assert region_row[type_col] == "text"
-        assert "missing choice list" in (region_row[hint_col] or "").lower()
-        # No row should be a bare select_one / select_multiple without
-        # a list name attached.
+        assert region_row[type_col] == "select_one region"
+        # Top-level — no choice_filter.
+        assert (region_row[choice_filter_col] or "") == ""
+        # Geo questions inherit appearance=minimal when blank.
+        assert region_row[appearance_col] == "minimal"
+
+        subregion_row = next(r for r in rows[1:] if r[name_col] == "a1_subregion")
+        assert subregion_row[type_col] == "select_one sub_region"
+        assert subregion_row[choice_filter_col] == "region=${a0_region}"
+
+        parish_row = next(r for r in rows[1:] if r[name_col] == "a5_parish_ward")
+        assert parish_row[type_col] == "select_one parish"
+        assert parish_row[choice_filter_col] == "sub_county=${a4_subcounty_division_tc}"
+
+        # No bare select_one rows leak through.
         for r in rows[1:]:
             assert r[type_col] not in ("select_one", "select_multiple"), (
                 f"row {r[name_col]} has bare {r[type_col]!r} — Kobo will reject"
             )
+
+    def test_export_choices_sheet_carries_geo_ancestor_columns(
+        self, _seeded_form,
+    ):
+        """The cascade only works if the choices sheet has ancestor
+        columns populated — sub_region rows need a `region` cell so
+        Kobo can apply `region=${a0_region}`. This test validates the
+        wiring from REF-DATA.GeographicUnit through to the xlsx."""
+        import io
+
+        import openpyxl
+
+        from apps.intake.xlsform_export import export_to_xlsx
+        from apps.reference_data.models import GeographicUnit
+
+        # Seed a known geo pair the test can pin against.
+        r1 = GeographicUnit.objects.create(
+            level="region", code="TR-1", name="TestRegion",
+            effective_from=date(2026, 1, 1), status="active",
+        )
+        GeographicUnit.objects.create(
+            level="sub_region", code="TSR-1", name="TestSubregion",
+            parent=r1,
+            effective_from=date(2026, 1, 1), status="active",
+        )
+        wb = openpyxl.load_workbook(io.BytesIO(export_to_xlsx(_seeded_form)))
+        rows = list(wb["choices"].iter_rows(min_row=1, values_only=True))
+        header = list(rows[0])
+        assert "region" in header and "sub_region" in header
+        list_col = header.index("list_name")
+        name_col = header.index("name")
+        region_parent_col = header.index("region")
+
+        # Find the sub_region row for our seeded TSR-1 and confirm
+        # its `region` cell carries the parent's code.
+        sub_row = next(
+            r for r in rows[1:]
+            if r[list_col] == "sub_region" and r[name_col] == "TSR-1"
+        )
+        assert sub_row[region_parent_col] == "TR-1"
+
+        # And the top-level region row leaves all ancestor columns blank.
+        region_row = next(
+            r for r in rows[1:]
+            if r[list_col] == "region" and r[name_col] == "TR-1"
+        )
+        assert (region_row[region_parent_col] or "") == ""
 
 
 # --- US-117e: interactive in-admin preview ---------------------------------

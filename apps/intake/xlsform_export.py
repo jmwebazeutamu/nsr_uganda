@@ -35,6 +35,13 @@ import re
 
 from openpyxl import Workbook
 
+from .geo import (
+    GEO_LEVELS_ROOT_TO_LEAF,
+    GEO_PARENT_COLUMN,
+    GEO_QUESTIONS,
+    choice_filter_for,
+    geo_options_for,
+)
 from .models import FormQuestion, FormSection, FormVersion
 
 # XLSForm column orders — locked to the order the spec uses so a
@@ -45,7 +52,15 @@ SURVEY_COLS = (
     "constraint", "constraint_message", "appearance",
     "choice_filter", "calculation", "repeat_count", "parameters",
 )
-CHOICES_COLS = ("list_name", "name", "label")
+# Choices sheet gets the standard 3 columns + an ancestor column
+# per non-leaf geo level so cascading choice_filter expressions
+# resolve (e.g. sub_region rows carry their region code in the
+# `region` column). Non-geo lists leave the ancestor columns blank.
+CHOICES_COLS = (
+    "list_name", "name", "label",
+    # Order is root→leaf-1: each child level's parent column.
+    "region", "sub_region", "district", "county", "sub_county",
+)
 SETTINGS_COLS = (
     "form_title", "form_id", "version", "default_language", "style",
 )
@@ -70,6 +85,21 @@ def _slug(value: str) -> str:
     return re.sub(r"_+", "_", value).strip("_") or "form"
 
 
+def _padded_choice_row(
+    list_name: str, code: str, label: str,
+    *, geo_parent_level: str = "", geo_parent_code: str = "",
+) -> list[str]:
+    """Build one row for the choices sheet, padded out to the full
+    CHOICES_COLS width. If `geo_parent_level` is set, the parent's
+    code is written into that ancestor column; all other ancestor
+    columns are left blank. Non-geo lists pass both kwargs as ""
+    and get fully-empty ancestor columns."""
+    row = {"list_name": list_name, "name": code, "label": label}
+    if geo_parent_level and geo_parent_code:
+        row[geo_parent_level] = geo_parent_code
+    return [row.get(c, "") for c in CHOICES_COLS]
+
+
 def _flatten_parameters(value) -> str:
     """Project the FormQuestion.parameters dict to an XLSForm
     `parameters` cell string. Legacy script packs single values
@@ -83,11 +113,24 @@ def _flatten_parameters(value) -> str:
 
 def _resolve_select_type(q: FormQuestion) -> str:
     """Pack the choice-list name back into the type cell for select
-    questions. When a select question has no choice_list_ref (broken
-    data) fall back to `text` — emitting a bare `select_one` row
-    fails Kobo validation with the "Survey information not complete"
-    error so we'd rather degrade gracefully."""
+    questions. Three cases:
+
+    1. The 6 legacy geo selects (region / subregion / …) use a list
+       name derived from their GeographicUnit level — `select_one
+       region`, `select_one sub_region`, etc. — and the choices
+       sheet carries the matching rows + ancestor columns so
+       cascading choice_filter expressions resolve at form runtime.
+    2. Regular selects with a linked ChoiceList pack the list name
+       from choice_list_ref.list_name.
+    3. Broken selects (no choice_list_ref AND not a known geo
+       question) fall back to `text` — emitting a bare `select_one`
+       row fails Kobo's "Survey information not complete" validation
+       so we'd rather degrade gracefully.
+    """
     if q.type in ("select_one", "select_multiple"):
+        if q.name in GEO_QUESTIONS:
+            level = GEO_QUESTIONS[q.name][0]
+            return f"{q.type} {level}"
         if q.choice_list_ref:
             return f"{q.type} {q.choice_list_ref.list_name}"
         return "text"  # fallback — see _question_row hint annotation
@@ -98,10 +141,17 @@ def _question_row(q: FormQuestion) -> dict:
     """Project a FormQuestion to its XLSForm survey row."""
     qtype = _resolve_select_type(q)
     hint = q.hint
-    if q.type in ("select_one", "select_multiple") and not q.choice_list_ref:
-        # Surface the data defect in the export so an operator
-        # looking at the xlsx in LibreOffice notices the missing list.
+    is_geo = q.name in GEO_QUESTIONS
+    # Only flag the "missing choice list" hint for selects that
+    # AREN'T being satisfied by the geo wiring.
+    if q.type in ("select_one", "select_multiple") and not q.choice_list_ref and not is_geo:
         hint = (hint + " [missing choice list — exported as text]").strip()
+    # Geo questions inherit appearance="minimal" if the author left
+    # the field blank — matches the legacy Kobo form's UX where the
+    # cascade is rendered as compact pickers, not radio lists.
+    appearance = q.appearance
+    if is_geo and not appearance:
+        appearance = "minimal"
     return {
         "type": qtype,
         "name": q.name,
@@ -111,8 +161,8 @@ def _question_row(q: FormQuestion) -> dict:
         "relevant": q.relevant_expression,
         "constraint": q.constraint_expression,
         "constraint_message": q.constraint_message,
-        "appearance": q.appearance,
-        "choice_filter": "",
+        "appearance": appearance,
+        "choice_filter": choice_filter_for(q.name) if is_geo else "",
         "calculation": "",
         "repeat_count": q.repeat_count,
         "parameters": _flatten_parameters(q.parameters),
@@ -189,12 +239,15 @@ def export_to_xlsx(form_version: FormVersion) -> bytes:
         .order_by("order", "code"),
     )
     referenced_choice_lists: set[str] = set()
+    referenced_geo_levels: set[str] = set()
     for sec in sections:
         ws_survey.append([_section_open_row(sec).get(c, "") for c in SURVEY_COLS])
         for q in sec.questions.order_by("order_in_section", "name"):
             row = _question_row(q)
             ws_survey.append([row.get(c, "") for c in SURVEY_COLS])
-            if q.choice_list_ref is not None:
+            if q.name in GEO_QUESTIONS:
+                referenced_geo_levels.add(GEO_QUESTIONS[q.name][0])
+            elif q.choice_list_ref is not None:
                 referenced_choice_lists.add(q.choice_list_ref.list_name)
         ws_survey.append([_section_close_row(sec).get(c, "") for c in SURVEY_COLS])
 
@@ -207,7 +260,24 @@ def export_to_xlsx(form_version: FormVersion) -> bytes:
             list_name__in=referenced_choice_lists, version=1,
         ).order_by("list_name"):
             for opt in cl.options.filter(status="active").order_by("sort_order", "code"):
-                ws_choices.append([cl.list_name, opt.code, opt.label])
+                ws_choices.append(
+                    _padded_choice_row(cl.list_name, opt.code, opt.label),
+                )
+    # Geo lists — emit each level's options with the parent code in
+    # the right ancestor column so Kobo's choice_filter resolves the
+    # cascade at form runtime. Levels emitted in root→leaf order so
+    # an operator opening the xlsx can read the cascade top-down.
+    for level in GEO_LEVELS_ROOT_TO_LEAF:
+        if level not in referenced_geo_levels:
+            continue
+        for opt in geo_options_for(level):
+            ws_choices.append(
+                _padded_choice_row(
+                    level, opt["code"], opt["label"],
+                    geo_parent_level=GEO_PARENT_COLUMN.get(level, ""),
+                    geo_parent_code=opt.get("parent_code", ""),
+                ),
+            )
 
     # ── settings sheet ─────────────────────────────────────────
     ws_settings.append(SETTINGS_COLS)
