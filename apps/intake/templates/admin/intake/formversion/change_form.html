@@ -115,9 +115,18 @@
           ✓  Approve &amp; sync rule pack
         </button>
       </form>
-    {% elif original.status == 'active' %}
-      <form method="post" action="{% url 'admin:intake_uskobo_push' original.pk %}"
+    {% elif original.status == 'active' or original.status == 'retired' %}
+      <form method="post" action="{% url 'admin:intake_us_clone_form_version' original.pk %}"
             style="margin:0 0 0 auto"
+            onsubmit="return confirm('Clone v{{ original.version }} into a new DRAFT version? The current v{{ original.version }} stays unchanged; you will be redirected to the new draft to edit it.');">
+        {% csrf_token %}
+        <button type="submit" class="button">
+          ⎘  Clone to new draft
+        </button>
+      </form>
+      {% if original.status == 'active' %}
+      <form method="post" action="{% url 'admin:intake_uskobo_push' original.pk %}"
+            style="margin:0"
             onsubmit="return confirm('Push FormVersion v{{ original.version }} to Kobo? {% if original.kobo_asset_uid %}This will replace asset {{ original.kobo_asset_uid }} with a new version.{% else %}This will create a new Kobo asset.{% endif %}');">
         {% csrf_token %}
         <button type="submit" class="button"
@@ -126,8 +135,13 @@
         </button>
       </form>
       <span style="font-size:12px;color:var(--accent-success,#059669)">
-        ✓ active{% if original.kobo_asset_uid %} · kobo {{ original.kobo_asset_uid }}{% endif %}
+        ✓ active — locked{% if original.kobo_asset_uid %} · kobo {{ original.kobo_asset_uid }}{% endif %}
       </span>
+      {% else %}
+      <span style="font-size:12px;color:var(--neutral-500,#6b7280)">
+        retired — locked
+      </span>
+      {% endif %}
     {% endif %}
   </div>
 

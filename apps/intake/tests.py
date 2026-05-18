@@ -1335,6 +1335,167 @@ class TestApproveFormVersion:
         assert r.status_code == 405
 
 
+# --- US-S20-005: form-versioning hygiene -----------------------------------
+
+class TestFormVersionLockAndClone:
+    """Active and retired FormVersions are read-only in the admin —
+    operators amend them by cloning to a fresh draft. The clone
+    service duplicates the section/question/constraint/skip-logic
+    tree at the next version number."""
+
+    @pytest.fixture
+    def _populated_active_fv(self, db):
+        from apps.intake.models import (
+            FormConstraint,
+            FormQuestion,
+            FormSection,
+            FormSkipLogic,
+            FormVersion,
+        )
+        fv = FormVersion.objects.create(
+            version=7011, name="lock-clone-fixture",
+            effective_from=date(2026, 1, 1),
+            status="active", is_active=True, author="qa",
+        )
+        s = FormSection.objects.create(
+            form_version=fv, code="A", name="ident",
+            label="Identification", order=1,
+        )
+        q = FormQuestion.objects.create(
+            section=s, name="age", label="Age", type="integer",
+            constraint_expression=". >= 0",
+            constraint_message="age >= 0",
+            order_in_section=1,
+        )
+        FormConstraint.objects.create(
+            question=q, dsl={"field": "age", "op": ">=", "value": 0},
+            message="age >= 0",
+        )
+        FormSkipLogic.objects.create(
+            question=q, dsl={"field": "age", "op": "always_true"},
+        )
+        return fv
+
+    def test_admin_locks_fields_when_active(
+        self, _populated_active_fv, django_user_model,
+    ):
+        from django.contrib.admin.sites import site
+        from django.test import RequestFactory
+
+        from apps.intake.admin import FormVersionAdmin
+        from apps.intake.models import FormVersion
+        u = django_user_model.objects.create_user(
+            username="locker", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        rf = RequestFactory().get("/admin/intake/formversion/")
+        rf.user = u
+        ma = FormVersionAdmin(FormVersion, site)
+        ro = ma.get_readonly_fields(rf, _populated_active_fv)
+        # `status` must remain editable so a manual retire/reactivate
+        # transition is still possible from the admin UI.
+        assert "status" not in ro
+        # Identity / shape fields are locked.
+        for locked in ("name", "version", "description", "effective_from"):
+            assert locked in ro, f"expected {locked!r} to be locked when active"
+
+    def test_admin_locks_section_when_parent_locked(
+        self, _populated_active_fv, django_user_model,
+    ):
+        from django.contrib.admin.sites import site
+        from django.test import RequestFactory
+
+        from apps.intake.admin import FormSectionAdmin
+        from apps.intake.models import FormSection
+        u = django_user_model.objects.create_user(
+            username="locker2", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        rf = RequestFactory().get("/admin/intake/formsection/")
+        rf.user = u
+        ma = FormSectionAdmin(FormSection, site)
+        sec = _populated_active_fv.sections.first()
+        assert ma.has_delete_permission(rf, sec) is False
+        ro = ma.get_readonly_fields(rf, sec)
+        assert "name" in ro and "label" in ro and "code" in ro
+
+    def test_admin_unlocks_when_draft(self, _populated_active_fv, django_user_model):
+        from django.contrib.admin.sites import site
+        from django.test import RequestFactory
+
+        from apps.intake.admin import FormVersionAdmin
+        from apps.intake.models import FormVersion
+        _populated_active_fv.status = "draft"
+        _populated_active_fv.save(update_fields=["status"])
+        u = django_user_model.objects.create_user(
+            username="locker3", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        rf = RequestFactory().get("/admin/intake/formversion/")
+        rf.user = u
+        ma = FormVersionAdmin(FormVersion, site)
+        ro = ma.get_readonly_fields(rf, _populated_active_fv)
+        # In draft, fields are editable (only the static class-attr
+        # readonly_fields like id/created_at/etc. should appear).
+        for editable in ("name", "version", "description", "status"):
+            assert editable not in ro
+
+    def test_clone_creates_new_draft_with_next_version(self, _populated_active_fv):
+        from apps.intake.models import FormVersion
+        from apps.intake.services import clone_form_version
+        new_fv = clone_form_version(_populated_active_fv, actor="alice")
+        assert new_fv.id != _populated_active_fv.id
+        assert new_fv.status == "draft"
+        assert new_fv.is_active is False
+        assert new_fv.author == "alice"
+        assert new_fv.version == _populated_active_fv.version + 1
+        # The original is unchanged.
+        original = FormVersion.objects.get(pk=_populated_active_fv.id)
+        assert original.status == "active"
+
+    def test_clone_duplicates_section_question_constraint_tree(
+        self, _populated_active_fv,
+    ):
+        from apps.intake.services import clone_form_version
+        new_fv = clone_form_version(_populated_active_fv, actor="alice")
+        assert new_fv.sections.count() == _populated_active_fv.sections.count()
+        sec = new_fv.sections.get(name="ident")
+        q = sec.questions.get(name="age")
+        # Constraints and skip-logic both carried over.
+        assert q.constraints.count() == 1
+        assert q.skip_logic.count() == 1
+        assert q.constraints.first().dsl == {"field": "age", "op": ">=", "value": 0}
+
+    def test_clone_emits_audit_event(self, _populated_active_fv):
+        from apps.intake.services import clone_form_version
+        from apps.security.models import AuditEvent
+        new_fv = clone_form_version(_populated_active_fv, actor="alice")
+        assert AuditEvent.objects.filter(
+            entity_type="intake.form_version",
+            action="clone",
+            entity_id=new_fv.id,
+        ).exists()
+
+    def test_admin_clone_button_redirects_to_new_draft(
+        self, _populated_active_fv, django_user_model,
+    ):
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="cloner", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        r = c.post(
+            f"/admin/intake/formversion/_us-clone/{_populated_active_fv.id}/",
+        )
+        assert r.status_code == 302
+        # Redirects to the new FormVersion's changeform.
+        from apps.intake.models import FormVersion
+        new_fv = FormVersion.objects.exclude(pk=_populated_active_fv.id).get()
+        assert str(new_fv.id) in r["Location"]
+
+
 # --- US-S20-004: Kobo push -------------------------------------------------
 
 class TestKoboPush:

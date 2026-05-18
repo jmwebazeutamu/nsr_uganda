@@ -55,6 +55,31 @@ class FormQuestionInline(admin.TabularInline):
         return False
 
 
+# US-S20-005 — once a FormVersion is ACTIVE or RETIRED its shape is
+# load-bearing for past Submissions and cannot drift. The admin locks
+# all non-status fields in those states; operators amend by cloning
+# to a new DRAFT version.
+_LOCKED_FV_STATUSES = ("active", "retired")
+
+
+def _form_version_is_locked(obj) -> bool:
+    """Walk up from FormSection / FormQuestion / constraint inlines to
+    the owning FormVersion; True if that FormVersion is in a status
+    that forbids in-place edits."""
+    if obj is None:
+        return False
+    fv = None
+    if isinstance(obj, FormVersion):
+        fv = obj
+    elif hasattr(obj, "form_version_id"):
+        fv = obj.form_version
+    elif hasattr(obj, "section_id"):
+        fv = obj.section.form_version
+    elif hasattr(obj, "question_id"):
+        fv = obj.question.section.form_version
+    return fv is not None and fv.status in _LOCKED_FV_STATUSES
+
+
 @admin.register(FormVersion)
 class FormVersionAdmin(admin.ModelAdmin):
     list_display = ("version", "name", "status", "is_active",
@@ -65,6 +90,25 @@ class FormVersionAdmin(admin.ModelAdmin):
     readonly_fields = ("id", "created_at", "updated_at", "approved_at",
                        "submitted_at", "approval_note", "rejection_reason",
                        "section_count", "question_count")
+
+    def get_readonly_fields(self, request, obj=None):
+        base = list(super().get_readonly_fields(request, obj))
+        if obj and obj.status in _LOCKED_FV_STATUSES:
+            # Lock every non-readonly field except `status` itself —
+            # an admin retiring an ACTIVE form, or reactivating a
+            # RETIRED one, transitions via status and that needs to
+            # stay editable.
+            editable = {"status"}
+            for f in self.model._meta.fields:
+                if f.name not in base and f.name not in editable:
+                    base.append(f.name)
+        return base
+
+    def has_delete_permission(self, request, obj=None):
+        # Locked FormVersions are immutable history — never delete.
+        if obj and obj.status in _LOCKED_FV_STATUSES:
+            return False
+        return super().has_delete_permission(request, obj)
     fieldsets = (
         (None, {"fields": ("id", "version", "name", "description", "status",
                            "is_active")}),
@@ -177,6 +221,12 @@ class FormVersionAdmin(admin.ModelAdmin):
                 "_uskobo/push/<str:form_version_id>/",
                 self.admin_site.admin_view(_kobo_push_view),
                 name="intake_uskobo_push",
+            ),
+            # US-S20-005 — clone an existing FormVersion to a fresh draft.
+            path(
+                "_us-clone/<str:form_version_id>/",
+                self.admin_site.admin_view(_clone_form_version_view),
+                name="intake_us_clone_form_version",
             ),
         ]
         return extra + urls
@@ -585,6 +635,44 @@ def _kobo_push_view(request, form_version_id):
     return HttpResponseRedirect(target)
 
 
+# --- US-S20-005 — clone form version --------------------------------------
+
+@require_POST
+def _clone_form_version_view(request, form_version_id):
+    """Clone an existing FormVersion into a new DRAFT version and
+    redirect to its changeform. Lets operators amend an active form
+    without mutating the system-of-record shape that past submissions
+    depend on."""
+    from django.contrib import messages
+    from django.http import HttpResponseRedirect
+    from django.urls import reverse
+
+    from .services import FormApprovalError, clone_form_version
+    fv = _resolve_form_version(form_version_id)
+    if fv is None:
+        messages.error(request, "FormVersion not found.")
+        return HttpResponseRedirect(
+            reverse("admin:intake_formversion_changelist"),
+        )
+    try:
+        new_fv = clone_form_version(
+            fv, actor=request.user.username or "admin",
+        )
+    except FormApprovalError as exc:
+        messages.error(request, str(exc))
+        return HttpResponseRedirect(
+            reverse("admin:intake_formversion_change", args=[fv.id]),
+        )
+    messages.success(
+        request,
+        f"Cloned v{fv.version} → v{new_fv.version} (draft). "
+        "Edit, then click Approve & sync when ready.",
+    )
+    return HttpResponseRedirect(
+        reverse("admin:intake_formversion_change", args=[new_fv.id]),
+    )
+
+
 # --- US-119b approve + sync action -----------------------------------------
 
 @require_POST
@@ -647,8 +735,38 @@ def _interactive_preview_view(request, form_version_id):
     })
 
 
+class _LockedByParentMixin:
+    """Mixin for FormSection / FormQuestion admins (and their inlines).
+    When the owning FormVersion is in a locked status, everything is
+    readonly and add/delete are refused — operators are expected to
+    clone the FormVersion to a fresh draft and edit the draft."""
+
+    def get_readonly_fields(self, request, obj=None):
+        base = list(super().get_readonly_fields(request, obj))
+        if _form_version_is_locked(obj):
+            for f in self.model._meta.fields:
+                if f.name not in base:
+                    base.append(f.name)
+        return base
+
+    def has_delete_permission(self, request, obj=None):
+        if _form_version_is_locked(obj):
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def has_add_permission(self, request, obj=None):
+        if obj is not None and _form_version_is_locked(obj):
+            return False
+        # ModelAdmin.has_add_permission accepts only (request);
+        # InlineModelAdmin accepts (request, obj=None). Branch so
+        # the mixin works on either.
+        if obj is None:
+            return super().has_add_permission(request)
+        return super().has_add_permission(request, obj)
+
+
 @admin.register(FormSection)
-class FormSectionAdmin(admin.ModelAdmin):
+class FormSectionAdmin(_LockedByParentMixin, admin.ModelAdmin):
     list_display = ("form_version", "order", "code", "name", "label",
                     "question_count")
     list_filter = ("form_version",)
@@ -668,7 +786,7 @@ class FormSectionAdmin(admin.ModelAdmin):
 
 
 @admin.register(FormQuestion)
-class FormQuestionAdmin(admin.ModelAdmin):
+class FormQuestionAdmin(_LockedByParentMixin, admin.ModelAdmin):
     list_display = ("section", "order_in_section", "name", "type",
                     "required", "choice_list_ref", "label_short")
     list_filter = ("type", "required", "section__form_version",

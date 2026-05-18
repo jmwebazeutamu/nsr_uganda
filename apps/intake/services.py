@@ -185,3 +185,83 @@ def approve_form_version(form_version: FormVersion, *, actor: str) -> dict:
         "new_status": form_version.status,
         "approved_by": actor,
     }
+
+
+# --- US-S20-005: clone-to-new-version --------------------------------------
+
+# Statuses where editing in place is forbidden — the form is the
+# system-of-record for past submissions and can't change shape under
+# them. Operators clone to a new DRAFT version instead.
+LOCKED_STATUSES = ("active", "retired")
+
+
+@transaction.atomic
+def clone_form_version(form_version: FormVersion, *, actor: str) -> FormVersion:
+    """Create a draft copy of `form_version` at version=max+1. All
+    children (FormSection, FormQuestion, FormConstraint, FormSkipLogic)
+    are duplicated. The new row carries the same name with a
+    "(clone of vN)" suffix and inherits effective_from from today.
+
+    Used when an operator needs to amend an active form — the original
+    keeps its shape (submissions still resolve correctly), the new
+    draft is editable.
+    """
+    if not actor:
+        raise FormApprovalError("actor required for clone")
+    from .models import FormConstraint, FormQuestion, FormSection, FormSkipLogic
+    next_version = (
+        FormVersion.objects.order_by("-version")
+        .values_list("version", flat=True).first() or 0
+    ) + 1
+    today = timezone.now().date()
+    new_fv = FormVersion.objects.create(
+        version=next_version,
+        name=f"{form_version.name} (clone of v{form_version.version})",
+        description=form_version.description,
+        effective_from=today,
+        status="draft", is_active=False,
+        author=actor,
+    )
+
+    for section in form_version.sections.order_by("order", "code"):
+        new_section = FormSection.objects.create(
+            form_version=new_fv,
+            code=section.code, name=section.name,
+            label=section.label, description=section.description,
+            order=section.order, repeat_count=section.repeat_count,
+        )
+        for q in section.questions.order_by("order_in_section", "name"):
+            new_q = FormQuestion.objects.create(
+                section=new_section, name=q.name, label=q.label,
+                hint=q.hint, type=q.type,
+                choice_list_ref=q.choice_list_ref,
+                required=q.required,
+                relevant_expression=q.relevant_expression,
+                constraint_expression=q.constraint_expression,
+                constraint_message=q.constraint_message,
+                appearance=q.appearance, repeat_count=q.repeat_count,
+                parameters=q.parameters,
+                order_in_section=q.order_in_section,
+            )
+            for c in q.constraints.all():
+                FormConstraint.objects.create(
+                    question=new_q, dsl=c.dsl,
+                    message=c.message, description=c.description,
+                )
+            for sl in q.skip_logic.all():
+                FormSkipLogic.objects.create(
+                    question=new_q, dsl=sl.dsl,
+                    description=sl.description,
+                )
+
+    emit_audit(
+        action="clone", entity_type="intake.form_version",
+        entity_id=new_fv.id, actor=actor,
+        reason=f"cloned from v{form_version.version}",
+        field_changes={
+            "source_form_version": form_version.id,
+            "source_version": form_version.version,
+            "new_version": new_fv.version,
+        },
+    )
+    return new_fv
