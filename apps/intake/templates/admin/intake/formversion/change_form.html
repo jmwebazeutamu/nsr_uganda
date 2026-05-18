@@ -90,8 +90,9 @@
 {% block field_sets %}
   {% if questionnaire_editor_v2 and original %}
 
-  <!-- US-117d static + US-117e interactive preview + US-118 download -->
-  <div style="display:flex;gap:8px;margin-bottom:12px">
+  <!-- US-117d static + US-117e interactive preview + US-118 download
+       + US-119b approve & sync -->
+  <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
     <a class="button default"
        href="{% url 'admin:intake_us117e_interactive_preview' original.pk %}"
        target="_blank" rel="noopener">
@@ -104,6 +105,21 @@
     <a class="button" href="{% url 'admin:intake_us118_export_xlsform' original.pk %}">
       ⬇  Download XLSForm
     </a>
+    {% if original.status == 'draft' or original.status == 'pending_approval' %}
+      <form method="post" action="{% url 'admin:intake_us119b_approve' original.pk %}"
+            style="margin:0 0 0 auto"
+            onsubmit="return confirm('Approve FormVersion v{{ original.version }} and sync its constraint pack to DAT-DQA? This is atomic — if the sync fails, the approval rolls back.');">
+        {% csrf_token %}
+        <button type="submit" class="button"
+                style="background:var(--primary-900,#1e3a8a);color:white;border:none">
+          ✓  Approve &amp; sync rule pack
+        </button>
+      </form>
+    {% elif original.status == 'active' %}
+      <span style="margin-left:auto;font-size:12px;color:var(--accent-success,#059669)">
+        ✓ active — rule pack synced
+      </span>
+    {% endif %}
   </div>
 
   <div class="qe-grid">

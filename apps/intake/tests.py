@@ -1198,6 +1198,143 @@ class TestRulePackSync:
         assert after == before + 1
 
 
+# --- US-119b: atomic approve + sync ----------------------------------------
+
+class TestApproveFormVersion:
+    """approve_form_version() ties the status transition (draft|
+    pending_approval → active) and rule-pack sync into one transaction.
+    The whole point is to close the gap where v2 looked ACTIVE in
+    admin but DAT-DQA never received the rules."""
+
+    @pytest.fixture
+    def _pending_fv(self, db):
+        from apps.intake.models import (
+            FormConstraint,
+            FormQuestion,
+            FormSection,
+            FormVersion,
+        )
+        fv = FormVersion.objects.create(
+            version=4119, name="approve-sync-test",
+            effective_from=date(2026, 1, 1),
+            status="pending_approval", author="alice",
+        )
+        s = FormSection.objects.create(
+            form_version=fv, code="C", name="roster", label="Roster", order=1,
+        )
+        q = FormQuestion.objects.create(
+            section=s, name="age_years", label="Age", type="integer",
+            constraint_expression=". >= 0 and . <= 120",
+            constraint_message="age out of range",
+            order_in_section=1,
+        )
+        FormConstraint.objects.create(
+            question=q,
+            dsl={"field": "age_years", "op": "between", "value": [0, 120]},
+            message="age out of range",
+        )
+        return fv
+
+    def test_approve_transitions_to_active_and_creates_rules(self, _pending_fv):
+        from apps.dqa.models import DqaRule
+        from apps.intake.services import approve_form_version
+        report = approve_form_version(_pending_fv, actor="bob")
+        _pending_fv.refresh_from_db()
+        assert _pending_fv.status == "active"
+        assert _pending_fv.is_active is True
+        assert _pending_fv.approved_by == "bob"
+        assert _pending_fv.approved_at is not None
+        assert report["new_status"] == "active"
+        assert report["previous_status"] == "pending_approval"
+        # The rule pack landed in DAT-DQA at the same time.
+        assert DqaRule.objects.filter(rule_id="AC-FORM-4119-age_years").exists()
+
+    def test_approve_works_from_draft(self, _pending_fv):
+        from apps.intake.services import approve_form_version
+        _pending_fv.status = "draft"
+        _pending_fv.save(update_fields=["status"])
+        report = approve_form_version(_pending_fv, actor="bob")
+        assert report["previous_status"] == "draft"
+        assert report["new_status"] == "active"
+
+    def test_approve_rejected_from_retired(self, _pending_fv):
+        from apps.intake.services import FormApprovalError, approve_form_version
+        _pending_fv.status = "retired"
+        _pending_fv.save(update_fields=["status"])
+        with pytest.raises(FormApprovalError, match="cannot be approved"):
+            approve_form_version(_pending_fv, actor="bob")
+
+    def test_approve_requires_actor(self, _pending_fv):
+        from apps.intake.services import FormApprovalError, approve_form_version
+        with pytest.raises(FormApprovalError, match="actor required"):
+            approve_form_version(_pending_fv, actor="")
+
+    def test_approve_rollback_on_sync_failure(self, _pending_fv, monkeypatch):
+        """If sync_rule_pack raises, the status transition must roll
+        back. This is the whole reason the service exists — atomic."""
+        from apps.intake import rule_pack_sync as rps
+        from apps.intake.models import FormVersion
+        from apps.intake.services import approve_form_version
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("simulated DAT-DQA failure")
+
+        # The service imports sync_rule_pack from the rule_pack_sync
+        # module at call time, so this monkeypatch is picked up.
+        monkeypatch.setattr(rps, "sync_rule_pack", boom)
+        with pytest.raises(RuntimeError, match="simulated"):
+            approve_form_version(_pending_fv, actor="bob")
+        # Status must NOT have flipped — atomic rollback.
+        fresh = FormVersion.objects.get(pk=_pending_fv.pk)
+        assert fresh.status == "pending_approval"
+        assert fresh.is_active is False
+
+    def test_approve_emits_audit_event(self, _pending_fv):
+        from apps.intake.services import approve_form_version
+        from apps.security.models import AuditEvent
+        approve_form_version(_pending_fv, actor="bob")
+        assert AuditEvent.objects.filter(
+            entity_type="intake.form_version",
+            action="approve",
+            entity_id=_pending_fv.id,
+        ).exists()
+
+    def test_admin_action_button_posts_and_redirects(
+        self, _pending_fv, django_user_model,
+    ):
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="approver", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        r = c.post(
+            f"/admin/intake/formversion/_us119b/approve/{_pending_fv.id}/",
+        )
+        assert r.status_code == 302
+        _pending_fv.refresh_from_db()
+        assert _pending_fv.status == "active"
+        assert _pending_fv.approved_by == "approver"
+
+    def test_admin_action_button_rejects_get(
+        self, _pending_fv, django_user_model,
+    ):
+        """The endpoint is POST-only — GETs from web crawlers /
+        accidental link clicks must not change state."""
+        from django.test import Client
+        u = django_user_model.objects.create_user(
+            username="approver2", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        r = c.get(
+            f"/admin/intake/formversion/_us119b/approve/{_pending_fv.id}/",
+        )
+        assert r.status_code == 405
+
+
 # --- US-117d: in-admin HTML preview ----------------------------------------
 
 class TestFormVersionPreview:

@@ -166,6 +166,12 @@ class FormVersionAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(_interactive_schema_view),
                 name="intake_us117e_schema",
             ),
+            # US-119b — atomic approve + DAT-DQA rule-pack sync.
+            path(
+                "_us119b/approve/<str:form_version_id>/",
+                self.admin_site.admin_view(_approve_form_version_view),
+                name="intake_us119b_approve",
+            ),
         ]
         return extra + urls
 
@@ -516,6 +522,38 @@ def _interactive_schema_view(request, form_version_id):
     if fv is None:
         raise Http404("FormVersion not found")
     return JsonResponse(_build_form_schema(fv))
+
+
+# --- US-119b approve + sync action -----------------------------------------
+
+@require_POST
+def _approve_form_version_view(request, form_version_id):
+    """Move a FormVersion to ACTIVE and sync its rule pack to DAT-DQA
+    in a single transaction. POST-only (state-changing); redirects to
+    the changeform with a message banner reflecting the outcome."""
+    from django.contrib import messages
+    from django.http import HttpResponseRedirect
+    from django.urls import reverse
+
+    from .services import FormApprovalError, approve_form_version
+    fv = _resolve_form_version(form_version_id)
+    target = reverse("admin:intake_formversion_change", args=[fv.id]) if fv else \
+             reverse("admin:intake_formversion_changelist")
+    if fv is None:
+        messages.error(request, "FormVersion not found.")
+        return HttpResponseRedirect(target)
+    try:
+        report = approve_form_version(fv, actor=request.user.username or "admin")
+    except FormApprovalError as exc:
+        messages.error(request, str(exc))
+        return HttpResponseRedirect(target)
+    messages.success(
+        request,
+        f"FormVersion v{report['version']} approved — "
+        f"{report['created']} rule(s) created, {report['updated']} updated "
+        f"in DAT-DQA.",
+    )
+    return HttpResponseRedirect(target)
 
 
 def _interactive_preview_view(request, form_version_id):

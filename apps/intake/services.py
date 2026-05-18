@@ -115,3 +115,73 @@ def submit_intake(
         process_stage_record(stage, actor=actor or enumerator)
 
     return submission
+
+
+# --- US-119b: atomic approve + rule-pack sync ------------------------------
+
+class FormApprovalError(IntakeError):
+    """Approval refused for state / data reasons."""
+
+
+# Statuses we accept as the source of the transition to ACTIVE. Approving
+# a RETIRED or REJECTED form would be a policy reversal; force the
+# operator to create a new FormVersion instead.
+_APPROVABLE_FROM = {"draft", "pending_approval"}
+
+
+@transaction.atomic
+def approve_form_version(form_version: FormVersion, *, actor: str) -> dict:
+    """Move a FormVersion to ACTIVE and fan out its rule pack to
+    DAT-DQA in the same transaction.
+
+    Atomic by design: if sync_rule_pack raises, the status transition
+    rolls back and the form stays where it was. Avoids the dangling
+    case where v2 looks ACTIVE in the admin but DAT-DQA never received
+    the rules (US-119b — closes the gap left by US-119).
+
+    Returns the rule_pack_sync report augmented with the new status +
+    approver.
+    """
+    if form_version.status not in _APPROVABLE_FROM:
+        raise FormApprovalError(
+            f"FormVersion v{form_version.version} cannot be approved from "
+            f"status={form_version.status!r}; allowed: {sorted(_APPROVABLE_FROM)}",
+        )
+    if not actor:
+        raise FormApprovalError("actor required for approval")
+
+    # Local import — apps.intake.services already pulls in DIH +
+    # security; pulling rule_pack_sync at module-import would mean
+    # apps.dqa loads at intake-app boot, which we want to avoid.
+    from .rule_pack_sync import sync_rule_pack
+
+    previous_status = form_version.status
+    report = sync_rule_pack(form_version, actor=actor)
+
+    form_version.status = "active"
+    form_version.is_active = True
+    form_version.approved_by = actor
+    form_version.approved_at = timezone.now()
+    form_version.save(update_fields=[
+        "status", "is_active", "approved_by", "approved_at", "updated_at",
+    ])
+
+    emit_audit(
+        action="approve", entity_type="intake.form_version",
+        entity_id=form_version.id, actor=actor,
+        reason=f"v{form_version.version} {previous_status}→active",
+        field_changes={
+            "status": ["active", previous_status],
+            "rule_pack_created": report.get("created", 0),
+            "rule_pack_updated": report.get("updated", 0),
+        },
+    )
+
+    return {
+        **report,
+        "form_version_id": form_version.id,
+        "version": form_version.version,
+        "previous_status": previous_status,
+        "new_status": form_version.status,
+        "approved_by": actor,
+    }
