@@ -163,3 +163,169 @@ class TestApprovalWorkflow:
         submit_for_approval(draft_rule)
         with pytest.raises(ApprovalError, match="approver must be supplied"):
             approve(draft_rule, approver="")
+
+
+# --- US-080: re-run rules on UPD commit ------------------------------------
+
+class TestRulesOnUpdCommit:
+    """When apps.update_workflow.commit_change_request fires its
+    post_change_committed signal, the dqa app subscribes and re-runs
+    every ACTIVE rule applicable to the changed record. Failure rows
+    land in DqaResult so the violations dashboard reflects the new
+    state; an audit event captures the re-evaluation. Without this
+    hook, constraints added AFTER a record was first ingested
+    never get evaluated against that record."""
+
+    @pytest.fixture
+    def _geo(self, db):
+        from apps.reference_data.models import GeographicUnit
+        nodes = {}
+        for level, key, parent in [
+            ("region", "r", None), ("sub_region", "sr", "r"),
+            ("district", "d", "sr"), ("county", "c", "d"),
+            ("sub_county", "sc", "c"), ("parish", "p", "sc"),
+            ("village", "v", "p"),
+        ]:
+            nodes[key] = GeographicUnit.objects.create(
+                level=level, code=f"U-{key.upper()}", name=key.title(),
+                parent=nodes.get(parent), effective_from=date(2026, 1, 1),
+            )
+        return nodes
+
+    @pytest.fixture
+    def _member(self, _geo):
+        from apps.data_management.models import Household, Member
+        hh = Household.objects.create(
+            region=_geo["r"], sub_region=_geo["sr"], district=_geo["d"],
+            county=_geo["c"], sub_county=_geo["sc"], parish=_geo["p"],
+            village=_geo["v"], urban_rural="rural",
+            address_narrative="Plot 7",
+        )
+        return Member.objects.create(
+            household=hh, line_number=1, surname="Okot",
+            first_name="James", sex="M",
+        )
+
+    @pytest.fixture
+    def _failing_rule(self, db):
+        # Active rule scoped to members; trips on the fixture member
+        # because surname="Okot" is not null AND `tin` field is missing
+        # — `is_null` op should fail.
+        return DqaRule.objects.create(
+            rule_id="UPD-RERUN-TEST",
+            version=1,
+            description="re-run smoke",
+            severity=Severity.WARNING,
+            expression={"field": "surname", "op": "is_null"},  # always fails on a real surname
+            error_message_template="surname must be empty (test rule)",
+            applicability_filter={"entity": "member"},
+            effective_from=date(2026, 1, 1),
+            status=RuleStatus.ACTIVE,
+            author="alice",
+            approved_by="bob",
+        )
+
+    def _commit_a_change(self, member, approver="bob"):
+        from apps.update_workflow.models import (
+            ChangeRequest,
+            ChangeType,
+            EntityType,
+            SourceChannel,
+        )
+        from apps.update_workflow.services import (
+            commit_change_request,
+            submit_change_request,
+        )
+        req = ChangeRequest.objects.create(
+            entity_type=EntityType.MEMBER, entity_id=member.id,
+            change_type=ChangeType.CORRECTION, pmt_relevant=False,
+            changes={"first_name": {"old": "James", "new": "Joseph"}},
+            source_channel=SourceChannel.PARISH, requester="alice",
+        )
+        submit_change_request(req)
+        commit_change_request(req, approver=approver)
+        return req
+
+    def test_commit_appends_dqaresult_for_failing_rule(
+        self, _member, _failing_rule,
+    ):
+        from apps.dqa.models import DqaResult
+        before = DqaResult.objects.filter(rule=_failing_rule).count()
+        self._commit_a_change(_member)
+        after = DqaResult.objects.filter(rule=_failing_rule).count()
+        # Exactly one new row, scoped to the member.
+        assert after == before + 1
+        row = DqaResult.objects.filter(rule=_failing_rule).latest("executed_at")
+        assert row.passed is False
+        assert row.record_type == "member"
+        assert str(_member.household_id) in row.record_id  # "<hh>:<line>"
+
+    def test_passing_rule_does_not_create_row(self, _member, db):
+        """The engine returns Evaluations for every rule, but only
+        failures land in DqaResult — passing rules don't bloat the
+        table."""
+        from apps.dqa.models import DqaResult
+        DqaRule.objects.create(
+            rule_id="ALWAYS-PASS", version=1, description="pass",
+            severity=Severity.INFO,
+            expression={"field": "surname", "op": "not_null"},
+            error_message_template="",
+            applicability_filter={"entity": "member"},
+            effective_from=date(2026, 1, 1),
+            status=RuleStatus.ACTIVE,
+            author="alice", approved_by="bob",
+        )
+        before = DqaResult.objects.count()
+        self._commit_a_change(_member)
+        # No DqaResult row for the passing rule.
+        assert DqaResult.objects.count() == before
+
+    def test_commit_emits_re_evaluated_audit(self, _member, _failing_rule):
+        from apps.security.models import AuditEvent
+        before = AuditEvent.objects.filter(
+            action="rules_re_evaluated", entity_type="dat.member",
+        ).count()
+        self._commit_a_change(_member)
+        after = AuditEvent.objects.filter(
+            action="rules_re_evaluated", entity_type="dat.member",
+        ).count()
+        assert after == before + 1
+
+    def test_household_change_evaluates_household_rules(self, _member):
+        """The signal handler routes by entity_type — a household
+        CR triggers household-scoped rules, not member-scoped."""
+        from apps.dqa.models import DqaResult
+        from apps.update_workflow.models import (
+            ChangeRequest,
+            ChangeType,
+            EntityType,
+            SourceChannel,
+        )
+        from apps.update_workflow.services import (
+            commit_change_request,
+            submit_change_request,
+        )
+        DqaRule.objects.create(
+            rule_id="HH-RERUN-TEST", version=1, description="hh re-run",
+            severity=Severity.WARNING,
+            expression={"field": "urban_rural", "op": "is_null"},
+            error_message_template="",
+            applicability_filter={"entity": "household"},
+            effective_from=date(2026, 1, 1),
+            status=RuleStatus.ACTIVE,
+            author="alice", approved_by="bob",
+        )
+        hh = _member.household
+        req = ChangeRequest.objects.create(
+            entity_type=EntityType.HOUSEHOLD, entity_id=hh.id,
+            change_type=ChangeType.CORRECTION, pmt_relevant=False,
+            changes={"address_narrative": {"old": "Plot 7", "new": "Plot 7A"}},
+            source_channel=SourceChannel.PARISH, requester="alice",
+        )
+        submit_change_request(req)
+        commit_change_request(req, approver="bob")
+        # Failure row keyed by record_type=household.
+        assert DqaResult.objects.filter(
+            rule__rule_id="HH-RERUN-TEST",
+            record_type="household", record_id=str(hh.id),
+        ).exists()
