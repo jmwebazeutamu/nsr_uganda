@@ -323,16 +323,10 @@
           if (!dragSrc || dragSrc === el) return;
           const targetKind = dragKind(el);
           if (targetKind !== dragSrcKind) return;
-          // For questions, only allow drops within the same section
-          // (re-parenting is out of scope today).
-          if (dragSrcKind === "question" &&
-              el.dataset.section !== dragSrc.dataset.section) {
-            return;
-          }
+          // Questions can now cross sections (US-117c-2). The
+          // backend handles the re-parent + re-sequence.
           e.preventDefault();
           e.dataTransfer.dropEffect = "move";
-          // Decide above-vs-below based on cursor position relative
-          // to the row's vertical midpoint.
           const rect = el.getBoundingClientRect();
           const before = e.clientY < rect.top + rect.height / 2;
           clearDropMarks();
@@ -342,17 +336,11 @@
           if (!dragSrc || dragSrc === el) return;
           const targetKind = dragKind(el);
           if (targetKind !== dragSrcKind) return;
-          if (dragSrcKind === "question" &&
-              el.dataset.section !== dragSrc.dataset.section) {
-            return;
-          }
           e.preventDefault();
           const rect = el.getBoundingClientRect();
           const before = e.clientY < rect.top + rect.height / 2;
           let afterId;
           if (before) {
-            // Drop above target → after the target's predecessor
-            // (or "" = top of the list).
             const prev = el.previousElementSibling;
             afterId = prev && prev.dataset
               ? (prev.dataset.section || prev.dataset.question || "")
@@ -360,14 +348,16 @@
           } else {
             afterId = el.dataset.section || el.dataset.question || "";
           }
-          // Don't no-op-call the API if the drop would leave the
-          // item where it is (next to itself).
           if (afterId === (dragSrc.dataset.section || dragSrc.dataset.question)) return;
 
           const movingId = dragSrc.dataset.section || dragSrc.dataset.question;
           const urlPrefix = dragSrcKind === "section"
             ? "/admin/intake/formversion/_us117b/reorder-section/"
             : "/admin/intake/formversion/_us117b/reorder-question/";
+          // For cross-section question drops, the backend reads the
+          // target's section from after_id. No extra payload needed
+          // here — the same call works for both same- and
+          // cross-section moves.
           post(`${urlPrefix}${movingId}/`, { after_id: afterId })
             .then(r => r.json())
             .then(j => {
@@ -376,6 +366,38 @@
               } else {
                 clearDropMarks();
               }
+            });
+        });
+      });
+
+      // ── Empty-section drop targets ──
+      // Drop a question onto a section's header (when the section
+      // has no children, or to put the question at the very top of
+      // a populated section) triggers a re-parent with after_id="".
+      document.querySelectorAll(".qe-section-head").forEach(head => {
+        head.addEventListener("dragover", e => {
+          if (!dragSrc || dragSrcKind !== "question") return;
+          const section = head.closest(".qe-section");
+          if (!section) return;
+          // Don't show the drop indicator on the source's own section
+          // when the source is the only child — it'd be a no-op.
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          clearDropMarks();
+          head.classList.add("qe-drop-after");
+        });
+        head.addEventListener("drop", e => {
+          if (!dragSrc || dragSrcKind !== "question") return;
+          const section = head.closest(".qe-section");
+          if (!section) return;
+          e.preventDefault();
+          const movingId = dragSrc.dataset.question;
+          post(`/admin/intake/formversion/_us117b/reorder-question/${movingId}/`,
+               { section_id: section.dataset.section, after_id: "" })
+            .then(r => r.json())
+            .then(j => {
+              if (j.moved) window.location.reload();
+              else clearDropMarks();
             });
         });
       });

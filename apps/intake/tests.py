@@ -559,6 +559,92 @@ class TestQuestionnaireBuilderUI:
         assert 'draggable="true"' in body
         assert "drag rows to reorder" in body
 
+    # --- US-117c-2: cross-section question drag ----
+
+    def test_reorder_question_can_cross_sections_via_after_id(
+        self, db, django_user_model,
+    ):
+        """Drag q1 (in section A) and drop after a question in
+        section B → q1 re-parents to section B and lands after the
+        anchor."""
+        import json as _json
+
+        from apps.intake.models import FormQuestion
+        fv, a, b, q1, q2 = self._seeded_fv(db)
+        q3 = FormQuestion.objects.create(
+            section=b, name="b_anchor", label="Anchor",
+            type="text", order_in_section=1,
+        )
+        c = self._staff_client(db, django_user_model)
+        r = c.post(
+            f"/admin/intake/formversion/_us117b/reorder-question/{q1.id}/",
+            data=_json.dumps({"after_id": q3.id}),
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["moved"] is True
+        assert body["re_parented"] is True
+        b_order = list(
+            FormQuestion.objects.filter(section=b)
+            .order_by("order_in_section").values_list("id", flat=True),
+        )
+        a_order = list(
+            FormQuestion.objects.filter(section=a)
+            .order_by("order_in_section").values_list("id", flat=True),
+        )
+        assert b_order == [q3.id, q1.id]
+        assert a_order == [q2.id]
+
+    def test_reorder_question_explicit_section_id_top_of_section(
+        self, db, django_user_model,
+    ):
+        """Explicit section_id with after_id="" lands the question
+        at position 0 of the target section — used when the operator
+        drops onto a section header (populating an empty section)."""
+        import json as _json
+
+        from apps.intake.models import FormQuestion
+        fv, a, b, q1, q2 = self._seeded_fv(db)
+        c = self._staff_client(db, django_user_model)
+        r = c.post(
+            f"/admin/intake/formversion/_us117b/reorder-question/{q1.id}/",
+            data=_json.dumps({"section_id": b.id, "after_id": ""}),
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        b_order = list(
+            FormQuestion.objects.filter(section=b)
+            .order_by("order_in_section").values_list("id", flat=True),
+        )
+        assert b_order == [q1.id]
+
+    def test_reorder_question_rejects_cross_form_version(
+        self, db, django_user_model,
+    ):
+        """Question can move between sections of the same FormVersion
+        but not into a section of a different FormVersion — the
+        meaning would change under past Submissions."""
+        import json as _json
+
+        from apps.intake.models import FormSection, FormVersion
+        fv, a, b, q1, q2 = self._seeded_fv(db)
+        other_fv = FormVersion.objects.create(
+            version=3001, name="other", effective_from=date(2026, 1, 1),
+            status="draft", author="qa",
+        )
+        other_sec = FormSection.objects.create(
+            form_version=other_fv, code="X", name="x", label="X", order=1,
+        )
+        c = self._staff_client(db, django_user_model)
+        r = c.post(
+            f"/admin/intake/formversion/_us117b/reorder-question/{q1.id}/",
+            data=_json.dumps({"section_id": other_sec.id, "after_id": ""}),
+            content_type="application/json",
+        )
+        assert r.status_code == 400
+        assert "cannot move question across FormVersions" in r.json()["detail"]
+
     def test_validate_expression_ok(self, db, django_user_model):
         import json as _json
         c = self._staff_client(db, django_user_model)

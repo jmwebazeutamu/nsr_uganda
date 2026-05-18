@@ -322,42 +322,109 @@ def _reorder_section_view(request, section_id):
     return JsonResponse({"moved": True, "order": new_order})
 
 
+def _re_sequence(items, attr: str = "order_in_section") -> dict:
+    """Bulk-assign 1..N values to `attr` in order. Returns the new
+    {id: new_value} map. Only writes when the value actually changes
+    (avoids no-op update queries when re-sequencing is idempotent)."""
+    out = {}
+    for i, obj in enumerate(items, start=1):
+        if getattr(obj, attr) != i:
+            setattr(obj, attr, i)
+            obj.save(update_fields=[attr])
+        out[obj.id] = i
+    return out
+
+
 @require_POST
 def _reorder_question_view(request, question_id):
-    """Move a question within its FormSection. Same contract as
-    _reorder_section_view — accepts `direction` (legacy) OR
-    `after_id` (drag-and-drop)."""
+    """Move a question within its FormSection OR re-parent it to a
+    different section. Body shapes (in precedence order):
+
+    - {"after_id": "<q_id>"} — drop after the named sibling. If the
+      named sibling lives in a different section, the question is
+      re-parented to that section first.
+    - {"after_id": "", "section_id": "<sec_id>"} — drop at the top
+      of `section_id` (re-parent if needed). Empty after_id with no
+      section_id means "top of the current section".
+    - {"direction": "up"|"down"} — legacy swap with adjacent sibling.
+
+    Re-parenting re-sequences BOTH the old and the new section's
+    siblings to 1..N so the order columns stay compact in both
+    places.
+    """
     body = json.loads(request.body or b"{}")
     question = FormQuestion.objects.filter(pk=question_id).first()
     if not question:
         return JsonResponse({"detail": "question not found"}, status=404)
+    old_section = question.section
+
+    after_id = body.get("after_id")
+    section_id = body.get("section_id")
+    if after_id is not None:
+        # Determine the destination section. Priority: explicit
+        # section_id > target question's section > current section.
+        if section_id:
+            dest_section = FormSection.objects.filter(pk=section_id).first()
+            if dest_section is None:
+                return JsonResponse({"detail": "section_id not found"}, status=404)
+        elif after_id:
+            anchor = FormQuestion.objects.filter(pk=after_id).first()
+            if anchor is None:
+                return JsonResponse(
+                    {"moved": False, "detail": "unknown after_id"},
+                )
+            dest_section = anchor.section
+        else:
+            dest_section = question.section
+
+        # Both source and dest must belong to the same FormVersion —
+        # moving a question to another form would change its meaning.
+        if dest_section.form_version_id != question.section.form_version_id:
+            return JsonResponse(
+                {"detail": "cannot move question across FormVersions"},
+                status=400,
+            )
+
+        if dest_section.id != question.section_id:
+            # Re-parent: detach from old section, attach to dest.
+            question.section = dest_section
+            question.save(update_fields=["section"])
+
+        dest_siblings = list(
+            dest_section.questions.order_by("order_in_section", "name"),
+        )
+        new, moved = _drop_after(dest_siblings, question.id, after_id)
+        if not moved and dest_section.id == old_section.id:
+            return JsonResponse({"moved": False, "detail": "no-op or unknown after_id"})
+
+        new_order = _re_sequence(new)
+        # If we re-parented, also re-sequence the source section
+        # (which has lost one row and may have gaps).
+        if dest_section.id != old_section.id:
+            old_siblings = list(
+                old_section.questions.order_by("order_in_section", "name"),
+            )
+            _re_sequence(old_siblings)
+        return JsonResponse({
+            "moved": True, "order": new_order,
+            "section_id": dest_section.id,
+            "re_parented": dest_section.id != old_section.id,
+        })
+
+    # Legacy direction= path — adjacent swap.
+    direction = body.get("direction")
+    if direction not in ("up", "down"):
+        return JsonResponse({"detail": "direction must be 'up' or 'down'"}, status=400)
     siblings = list(
         question.section.questions.order_by("order_in_section", "name"),
     )
-
-    after_id = body.get("after_id")
-    if after_id is not None:
-        new, moved = _drop_after(siblings, question.id, after_id)
-        if not moved:
-            return JsonResponse({"moved": False, "detail": "no-op or unknown after_id"})
-    else:
-        direction = body.get("direction")
-        if direction not in ("up", "down"):
-            return JsonResponse({"detail": "direction must be 'up' or 'down'"}, status=400)
-        idx = next((i for i, q in enumerate(siblings) if q.id == question.id), None)
-        other_idx = idx - 1 if direction == "up" else idx + 1
-        if other_idx < 0 or other_idx >= len(siblings):
-            return JsonResponse({"moved": False, "detail": "already at boundary"})
-        new = list(siblings)
-        new[idx], new[other_idx] = new[other_idx], new[idx]
-
-    new_order = {}
-    for i, q in enumerate(new, start=1):
-        if q.order_in_section != i:
-            q.order_in_section = i
-            q.save(update_fields=["order_in_section"])
-        new_order[q.id] = i
-    return JsonResponse({"moved": True, "order": new_order})
+    idx = next((i for i, q in enumerate(siblings) if q.id == question.id), None)
+    other_idx = idx - 1 if direction == "up" else idx + 1
+    if other_idx < 0 or other_idx >= len(siblings):
+        return JsonResponse({"moved": False, "detail": "already at boundary"})
+    new = list(siblings)
+    new[idx], new[other_idx] = new[other_idx], new[idx]
+    return JsonResponse({"moved": True, "order": _re_sequence(new)})
 
 
 @require_POST
