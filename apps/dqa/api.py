@@ -139,8 +139,12 @@ class DqaRuleViewSet(viewsets.ModelViewSet):
         # Deterministic seed so the same rule + sample_size returns
         # the same preview within a test run (US-077 acceptance:
         # tests get a fixed sample). Random.Random instance keeps the
-        # seed local — doesn't disturb global randomness.
-        rng = random.Random(f"{rule.id}|{sample_size}|{record_type}")
+        # seed local — doesn't disturb global randomness. Sampling
+        # here is for non-security preview record selection, not
+        # cryptographic.
+        rng = random.Random(  # nosec B311 — non-security preview sampler
+            f"{rule.id}|{sample_size}|{record_type}",
+        )
         all_ids = list(qs.values_list("id", flat=True))
         if len(all_ids) <= sample_size:
             chosen_ids = all_ids
