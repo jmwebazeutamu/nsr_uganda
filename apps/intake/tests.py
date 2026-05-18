@@ -1335,6 +1335,214 @@ class TestApproveFormVersion:
         assert r.status_code == 405
 
 
+# --- US-S20-004: Kobo push -------------------------------------------------
+
+class TestKoboPush:
+    """publish_form_version builds the xlsx, calls KoboConnector
+    .publish_xlsform, and persists the returned asset_uid back on
+    the FormVersion. We mock the upstream HTTP with `responses` so
+    the tests don't need a real Kobo instance."""
+
+    @pytest.fixture
+    def _active_fv(self, db):
+        from apps.intake.models import (
+            FormQuestion,
+            FormSection,
+            FormVersion,
+        )
+        fv = FormVersion.objects.create(
+            version=6204, name="kobo-push-fixture",
+            effective_from=date(2026, 1, 1),
+            status="active", is_active=True, author="qa",
+        )
+        s = FormSection.objects.create(
+            form_version=fv, code="A", name="identification",
+            label="Identification", order=1,
+        )
+        FormQuestion.objects.create(
+            section=s, name="b1_respondent_name", label="Respondent name",
+            type="text", required=True, order_in_section=1,
+        )
+        return fv
+
+    @pytest.fixture
+    def _kobo_setup(self, db):
+        """Active KOBO SourceSystem + KoboCredential so the service's
+        DB lookup resolves before it ever opens a socket."""
+        from apps.ingestion_hub.models import (
+            KoboCredential,
+            SourceSystem,
+            SourceSystemKind,
+        )
+        src = SourceSystem.objects.create(
+            code="KOBO-TEST", kind=SourceSystemKind.KOBO,
+            name="Kobo test", is_active=True,
+        )
+        cred = KoboCredential.objects.create(
+            source_system=src,
+            server_url="https://kobo.example.test",
+            token_encrypted=b"test-token-xyz",
+            acquired_by_username="qa",
+        )
+        return src, cred
+
+    def test_publish_unavailable_when_no_credential(self, _active_fv, db):
+        from apps.intake.kobo_push import (
+            KoboPushUnavailable,
+            publish_form_version,
+        )
+        with pytest.raises(KoboPushUnavailable):
+            publish_form_version(_active_fv, actor="bob")
+
+    def test_publish_refuses_non_active(self, _active_fv, _kobo_setup):
+        from apps.intake.kobo_push import KoboPushError, publish_form_version
+        _active_fv.status = "draft"
+        _active_fv.is_active = False
+        _active_fv.save(update_fields=["status", "is_active"])
+        with pytest.raises(KoboPushError, match="only active forms"):
+            publish_form_version(_active_fv, actor="bob")
+
+    def test_publish_creates_new_asset(self, _active_fv, _kobo_setup):
+        """Happy path: no existing kobo_asset_uid, so the connector
+        creates a new asset; the returned uid persists on FormVersion."""
+        import responses
+
+        from apps.intake.kobo_push import publish_form_version
+        server = "https://kobo.example.test"
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST, f"{server}/api/v2/imports/",
+                json={"uid": "iABC123"}, status=201,
+            )
+            rsps.add(
+                responses.GET, f"{server}/api/v2/imports/iABC123/",
+                json={
+                    "status": "complete",
+                    "messages": {"created": [{"uid": "aDEPLOY9"}]},
+                },
+                status=200,
+            )
+            rsps.add(
+                responses.POST,
+                f"{server}/api/v2/assets/aDEPLOY9/deployment/",
+                json={"active": True}, status=200,
+            )
+            report = publish_form_version(_active_fv, actor="bob")
+        assert report["status"] == "complete"
+        assert report["asset_uid"] == "aDEPLOY9"
+        assert report["deployed"] is True
+        _active_fv.refresh_from_db()
+        assert _active_fv.kobo_asset_uid == "aDEPLOY9"
+
+    def test_publish_replaces_existing_asset(self, _active_fv, _kobo_setup):
+        """When FormVersion has a kobo_asset_uid, the connector posts
+        with `destination` pointing at the existing asset so Kobo
+        treats it as a new version of the same form."""
+        import json
+
+        import responses
+
+        from apps.intake.kobo_push import publish_form_version
+        _active_fv.kobo_asset_uid = "aOLD777"
+        _active_fv.save(update_fields=["kobo_asset_uid"])
+        server = "https://kobo.example.test"
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST, f"{server}/api/v2/imports/",
+                json={"uid": "iREPLACE1"}, status=201,
+            )
+            rsps.add(
+                responses.GET, f"{server}/api/v2/imports/iREPLACE1/",
+                json={
+                    "status": "complete",
+                    "messages": {"updated": [{"uid": "aOLD777"}]},
+                },
+                status=200,
+            )
+            rsps.add(
+                responses.POST,
+                f"{server}/api/v2/assets/aOLD777/deployment/",
+                json={"active": True}, status=200,
+            )
+            report = publish_form_version(_active_fv, actor="bob")
+            # Inspect the upload call to confirm `destination` carried
+            # the existing asset URL — this is the whole point of
+            # the replace path (preserves submission history).
+            upload_call = next(c for c in rsps.calls if c.request.url.endswith("/imports/"))
+            body = upload_call.request.body
+            # multipart body is bytes; the `destination` field is
+            # present somewhere in the payload.
+            payload = body.decode("utf-8", errors="ignore") if isinstance(body, bytes) else json.dumps(body)
+            assert "aOLD777" in payload
+        assert report["asset_uid"] == "aOLD777"
+
+    def test_publish_audits_even_on_timeout(self, _active_fv, _kobo_setup):
+        """The import task can stall — we still audit the attempt so
+        an operator can reconcile with Kobo's UI."""
+        import responses
+
+        from apps.intake.kobo_push import publish_form_version
+        from apps.security.models import AuditEvent
+        server = "https://kobo.example.test"
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.POST, f"{server}/api/v2/imports/",
+                json={"uid": "iSTALL5"}, status=201,
+            )
+            # Always-processing — exhaust the poll budget.
+            rsps.add(
+                responses.GET, f"{server}/api/v2/imports/iSTALL5/",
+                json={"status": "processing"}, status=200,
+            )
+            report = publish_form_version(
+                _active_fv, actor="bob",
+                connector=_FastPollKoboConnector(),
+            )
+        assert report["status"] == "timeout"
+        assert AuditEvent.objects.filter(
+            entity_type="intake.form_version",
+            action="kobo_publish",
+            entity_id=_active_fv.id,
+        ).exists()
+
+    def test_admin_button_posts(self, _active_fv, _kobo_setup, django_user_model):
+        import responses
+        from django.test import Client
+
+        u = django_user_model.objects.create_user(
+            username="publisher", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        server = "https://kobo.example.test"
+        with responses.RequestsMock() as rsps:
+            rsps.add(responses.POST, f"{server}/api/v2/imports/",
+                     json={"uid": "iADMIN"}, status=201)
+            rsps.add(responses.GET, f"{server}/api/v2/imports/iADMIN/",
+                     json={"status": "complete",
+                           "messages": {"created": [{"uid": "aADMIN9"}]}},
+                     status=200)
+            rsps.add(responses.POST,
+                     f"{server}/api/v2/assets/aADMIN9/deployment/",
+                     status=200, json={"active": True})
+            r = c.post(f"/admin/intake/formversion/_uskobo/push/{_active_fv.id}/")
+        assert r.status_code == 302
+        _active_fv.refresh_from_db()
+        assert _active_fv.kobo_asset_uid == "aADMIN9"
+
+
+class _FastPollKoboConnector:
+    """A test connector that polls 3× at zero interval so the
+    timeout-path test finishes in milliseconds."""
+
+    def publish_xlsform(self, credentials, **kwargs):
+        from apps.ingestion_hub.connectors.kobo import KoboConnector
+        return KoboConnector().publish_xlsform(
+            credentials, **{**kwargs, "poll_attempts": 3, "poll_interval_s": 0},
+        )
+
+
 # --- US-117d: in-admin HTML preview ----------------------------------------
 
 class TestFormVersionPreview:

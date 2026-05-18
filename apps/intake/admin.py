@@ -172,6 +172,12 @@ class FormVersionAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(_approve_form_version_view),
                 name="intake_us119b_approve",
             ),
+            # US-S20-004 — push xlsx to Kobo (with deploy).
+            path(
+                "_uskobo/push/<str:form_version_id>/",
+                self.admin_site.admin_view(_kobo_push_view),
+                name="intake_uskobo_push",
+            ),
         ]
         return extra + urls
 
@@ -522,6 +528,61 @@ def _interactive_schema_view(request, form_version_id):
     if fv is None:
         raise Http404("FormVersion not found")
     return JsonResponse(_build_form_schema(fv))
+
+
+# --- US-S20-004 — Kobo publish --------------------------------------------
+
+@require_POST
+def _kobo_push_view(request, form_version_id):
+    """Build the FormVersion's xlsx and push it to Kobo. POST-only;
+    redirects back to the changeform with a messages banner."""
+    from django.contrib import messages
+    from django.http import HttpResponseRedirect
+    from django.urls import reverse
+    from requests.exceptions import RequestException
+
+    from .kobo_push import (
+        KoboPushError,
+        KoboPushUnavailable,
+        publish_form_version,
+    )
+    fv = _resolve_form_version(form_version_id)
+    target = reverse("admin:intake_formversion_change", args=[fv.id]) if fv else \
+             reverse("admin:intake_formversion_changelist")
+    if fv is None:
+        messages.error(request, "FormVersion not found.")
+        return HttpResponseRedirect(target)
+    actor = request.user.username or "admin"
+    try:
+        report = publish_form_version(fv, actor=actor)
+    except KoboPushUnavailable as exc:
+        messages.warning(
+            request,
+            f"Kobo not configured — {exc}. Add a KoboCredential under "
+            "Ingestion hub → SourceSystems first.",
+        )
+        return HttpResponseRedirect(target)
+    except KoboPushError as exc:
+        messages.error(request, f"Kobo push refused: {exc}")
+        return HttpResponseRedirect(target)
+    except RequestException as exc:
+        messages.error(request, f"Kobo upstream error: {exc}")
+        return HttpResponseRedirect(target)
+    status = report.get("status", "?")
+    if status == "complete":
+        messages.success(
+            request,
+            f"Published v{report['version']} to Kobo "
+            f"(asset {report['asset_uid']}, "
+            f"{'deployed' if report.get('deployed') else 'not deployed'}).",
+        )
+    else:
+        messages.warning(
+            request,
+            f"Kobo import status={status} — asset_uid={report.get('asset_uid') or '(none)'}. "
+            "Check Kobo's import log.",
+        )
+    return HttpResponseRedirect(target)
 
 
 # --- US-119b approve + sync action -----------------------------------------

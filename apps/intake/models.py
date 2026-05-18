@@ -82,6 +82,14 @@ class FormVersion(models.Model):
     approval_note = models.TextField(blank=True)
     rejection_reason = models.TextField(blank=True)
 
+    # When this FormVersion has been pushed up to Kobo, the upstream
+    # asset uid lives here. Re-publishing routes through the same
+    # uid so the form's submission history stays attached (Kobo
+    # creates a new VERSION of the same asset rather than a new
+    # asset). Empty when never published, or when the publish is
+    # for a different Kobo instance.
+    kobo_asset_uid = models.CharField(max_length=32, blank=True, default="")
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

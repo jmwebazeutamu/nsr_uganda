@@ -677,4 +677,111 @@ class KoboConnector:
             params = {}
 
 
+    def publish_xlsform(
+        self, credentials: dict, *,
+        xlsx_bytes: bytes, name: str,
+        destination_uid: str | None = None,
+        deploy: bool = True,
+        poll_attempts: int = 30,
+        poll_interval_s: float = 1.0,
+    ) -> dict:
+        """Upload an XLSForm xlsx to Kobo and (optionally) deploy it.
+
+        Two modes:
+          - New form (`destination_uid is None`) — uploads via
+            POST /api/v2/imports/ which Kobo runs asynchronously,
+            creates a fresh asset, and reports the new asset_uid
+            once the import task completes.
+          - Replace form (`destination_uid` set) — uploads via the
+            same imports endpoint with the destination param so the
+            existing asset gains a new version (the form_id /
+            submission history stay attached).
+
+        Polling: Kobo's import endpoint is async. We poll the import
+        task until status='complete' / 'error' or the budget is
+        exhausted. Defaults are 30 attempts × 1s = 30s total which
+        covers the vast majority of real imports; very large forms
+        may need a higher budget passed in.
+
+        Returns:
+            {
+              "asset_uid": "aXXX",
+              "import_uid": "iXXX",
+              "deployed": bool,
+              "status": "complete" | "error" | "timeout",
+              "messages": [...],   # Kobo's import-task message stream
+            }
+
+        Raises RequestException on HTTP failure or auth rejection.
+        """
+        server_url = credentials["server_url"].rstrip("/")
+        token = credentials["token"]
+        session = _new_session()
+        session.headers["Authorization"] = f"Token {token}"
+
+        # ── upload ──────────────────────────────────────────────
+        upload_url = f"{server_url}/api/v2/imports/"
+        files = {
+            "file": (
+                f"{name}.xlsx", xlsx_bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+        }
+        data: dict[str, Any] = {"name": name, "library": "false"}
+        if destination_uid:
+            data["destination"] = (
+                f"{server_url}/api/v2/assets/{destination_uid}/"
+            )
+        upload = _request_with_retry(
+            "POST", upload_url, session=session, files=files, data=data,
+        )
+        upload.raise_for_status()
+        import_uid = upload.json().get("uid")
+        if not import_uid:
+            raise RequestException("Kobo /imports/ returned no uid")
+
+        # ── poll ────────────────────────────────────────────────
+        poll_url = f"{server_url}/api/v2/imports/{import_uid}/"
+        status = "processing"
+        body: dict = {}
+        for _ in range(poll_attempts):
+            resp = _request_with_retry("GET", poll_url, session=session)
+            resp.raise_for_status()
+            body = resp.json()
+            status = body.get("status", "processing")
+            if status in ("complete", "error"):
+                break
+            time.sleep(poll_interval_s)
+        else:
+            status = "timeout"
+
+        # ── extract asset_uid ───────────────────────────────────
+        asset_uid = destination_uid or ""
+        if status == "complete":
+            messages = body.get("messages", {}) or {}
+            created = messages.get("created") or messages.get("updated") or []
+            if created:
+                asset_uid = created[0].get("uid") or asset_uid
+
+        # ── deploy ──────────────────────────────────────────────
+        deployed = False
+        if status == "complete" and deploy and asset_uid:
+            deploy_url = f"{server_url}/api/v2/assets/{asset_uid}/deployment/"
+            # First-time deploy is POST; redeploy of an existing asset
+            # is PATCH with active=true. Try POST first; on 405/409
+            # fall through to PATCH.
+            d = session.post(deploy_url, json={"active": True}, timeout=DEFAULT_TIMEOUT)
+            if d.status_code in (405, 409):
+                d = session.patch(deploy_url, json={"active": True}, timeout=DEFAULT_TIMEOUT)
+            deployed = d.status_code < 400
+
+        return {
+            "asset_uid": asset_uid,
+            "import_uid": import_uid,
+            "deployed": deployed,
+            "status": status,
+            "messages": body.get("messages", []),
+        }
+
+
 register_connector(KoboConnector())
