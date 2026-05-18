@@ -11,7 +11,8 @@ class DqaRuleAdmin(admin.ModelAdmin):
     search_fields = ("rule_id", "description", "author", "approved_by")
     readonly_fields = ("id", "created_at", "updated_at", "approved_at")
     ordering = ("rule_id", "-version")
-    actions = ["action_submit", "action_approve_as_admin", "action_retire"]
+    actions = ["action_submit", "action_approve_as_admin",
+               "action_retire", "action_backfill"]
 
     fieldsets = (
         (None, {"fields": ("id", "rule_id", "version", "status")}),
@@ -48,6 +49,48 @@ class DqaRuleAdmin(admin.ModelAdmin):
     @admin.action(description="Retire selected ACTIVE rules")
     def action_retire(self, request, queryset):
         self._act(request, queryset, retire, "retire")
+
+    # US-080b — sweep the selected ACTIVE rule(s) against every
+    # stored Household/Member matching applicability_filter.entity.
+    # Synchronous; the management command in
+    # apps/dqa/management/commands/backfill_dqa_rules.py handles
+    # production-scale runs (and is the only path that should be
+    # used against 12M-row datasets).
+    @admin.action(description="Backfill against stored records (US-080b)")
+    def action_backfill(self, request, queryset):
+        from .backfill import backfill_rule
+        ok, fail, skipped = 0, 0, 0
+        actor = request.user.username or "admin"
+        for rule in queryset:
+            try:
+                report = backfill_rule(rule, actor=actor)
+                ok += 1
+                self.message_user(
+                    request,
+                    f"{rule.rule_id} v{rule.version}: "
+                    f"{report['records_scanned']} "
+                    f"{report['entity']}(s) scanned, "
+                    f"{report['failures']} failure(s)",
+                    level=messages.SUCCESS,
+                )
+            except ValueError as e:
+                skipped += 1
+                self.message_user(
+                    request, f"{rule.rule_id} v{rule.version}: skipped — {e}",
+                    level=messages.WARNING,
+                )
+            except Exception as e:
+                fail += 1
+                self.message_user(
+                    request, f"{rule.rule_id} v{rule.version}: error — {e}",
+                    level=messages.ERROR,
+                )
+        if ok or skipped or fail:
+            self.message_user(
+                request,
+                f"backfill: {ok} swept, {skipped} skipped, {fail} errored",
+                level=messages.SUCCESS if ok and not fail else messages.WARNING,
+            )
 
 
 @admin.register(DqaResult)

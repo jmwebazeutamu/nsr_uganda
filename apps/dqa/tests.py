@@ -329,3 +329,187 @@ class TestRulesOnUpdCommit:
             rule__rule_id="HH-RERUN-TEST",
             record_type="household", record_id=str(hh.id),
         ).exists()
+
+
+# --- US-080b: backfill rule pack against stored records --------------------
+
+class TestBackfillRulePack:
+    """The forward path (apps.dqa.signals) only catches UPD commits.
+    backfill_rule / backfill_all sweep the stored Household + Member
+    rows so a newly-approved rule flags records captured before it
+    existed."""
+
+    @pytest.fixture
+    def _geo(self, db):
+        from apps.reference_data.models import GeographicUnit
+        nodes = {}
+        for level, key, parent in [
+            ("region", "r", None), ("sub_region", "sr", "r"),
+            ("district", "d", "sr"), ("county", "c", "d"),
+            ("sub_county", "sc", "c"), ("parish", "p", "sc"),
+            ("village", "v", "p"),
+        ]:
+            nodes[key] = GeographicUnit.objects.create(
+                level=level, code=f"U-{key.upper()}", name=key.title(),
+                parent=nodes.get(parent), effective_from=date(2026, 1, 1),
+            )
+        return nodes
+
+    @pytest.fixture
+    def _three_households(self, _geo):
+        from apps.data_management.models import Household, Member
+        hhs = []
+        for i in range(3):
+            hh = Household.objects.create(
+                region=_geo["r"], sub_region=_geo["sr"], district=_geo["d"],
+                county=_geo["c"], sub_county=_geo["sc"], parish=_geo["p"],
+                village=_geo["v"], urban_rural="rural",
+                address_narrative=f"Plot {i + 1}",
+            )
+            Member.objects.create(
+                household=hh, line_number=1, surname=f"Family{i}",
+                first_name="Head", sex="M",
+            )
+            hhs.append(hh)
+        return hhs
+
+    @pytest.fixture
+    def _failing_member_rule(self, db):
+        return DqaRule.objects.create(
+            rule_id="BACKFILL-FAIL", version=1,
+            description="always fails on a real member surname",
+            severity=Severity.WARNING,
+            expression={"field": "surname", "op": "is_null"},
+            error_message_template="surname must be empty (test)",
+            applicability_filter={"entity": "member"},
+            effective_from=date(2026, 1, 1),
+            status=RuleStatus.ACTIVE,
+            author="alice", approved_by="bob",
+        )
+
+    def test_backfill_creates_dqaresult_for_each_failing_record(
+        self, _three_households, _failing_member_rule,
+    ):
+        from apps.dqa.backfill import backfill_rule
+        from apps.dqa.models import DqaResult
+        before = DqaResult.objects.filter(rule=_failing_member_rule).count()
+        report = backfill_rule(_failing_member_rule, actor="qa")
+        after = DqaResult.objects.filter(rule=_failing_member_rule).count()
+        assert report["records_scanned"] == 3
+        assert report["failures"] == 3
+        assert after == before + 3
+
+    def test_backfill_dry_run_writes_no_rows(
+        self, _three_households, _failing_member_rule,
+    ):
+        from apps.dqa.backfill import backfill_rule
+        from apps.dqa.models import DqaResult
+        before = DqaResult.objects.count()
+        report = backfill_rule(_failing_member_rule, actor="qa", dry_run=True)
+        assert report["records_scanned"] == 3
+        assert report["failures"] == 3
+        assert report["dry_run"] is True
+        assert DqaResult.objects.count() == before  # nothing persisted
+
+    def test_backfill_refuses_inactive_rule(self, _three_households, db):
+        from apps.dqa.backfill import backfill_rule
+        rule = DqaRule.objects.create(
+            rule_id="BACKFILL-DRAFT", version=1, description="draft",
+            severity=Severity.WARNING,
+            expression={"field": "surname", "op": "not_null"},
+            error_message_template="",
+            applicability_filter={"entity": "member"},
+            effective_from=date(2026, 1, 1),
+            status=RuleStatus.DRAFT, author="alice",
+        )
+        with pytest.raises(ValueError, match="refusing inactive"):
+            backfill_rule(rule, actor="qa")
+
+    def test_backfill_refuses_rule_without_entity_filter(self, _three_households, db):
+        from apps.dqa.backfill import backfill_rule
+        rule = DqaRule.objects.create(
+            rule_id="BACKFILL-NOENT", version=1, description="no entity",
+            severity=Severity.WARNING,
+            expression={"field": "surname", "op": "is_null"},
+            error_message_template="",
+            applicability_filter={},  # missing 'entity'
+            effective_from=date(2026, 1, 1),
+            status=RuleStatus.ACTIVE,
+            author="alice", approved_by="bob",
+        )
+        with pytest.raises(ValueError, match="applicability_filter.entity"):
+            backfill_rule(rule, actor="qa")
+
+    def test_backfill_emits_audit(
+        self, _three_households, _failing_member_rule,
+    ):
+        from apps.dqa.backfill import backfill_rule
+        from apps.security.models import AuditEvent
+        before = AuditEvent.objects.filter(action="rules_backfilled").count()
+        backfill_rule(_failing_member_rule, actor="qa")
+        after = AuditEvent.objects.filter(action="rules_backfilled").count()
+        assert after == before + 1
+
+    def test_backfill_all_sweeps_each_active_rule(
+        self, _three_households, _failing_member_rule, db,
+    ):
+        """backfill_all picks up every ACTIVE rule and skips others."""
+        from apps.dqa.backfill import backfill_all
+        from apps.dqa.models import DqaResult
+        # A second active rule scoped to households.
+        DqaRule.objects.create(
+            rule_id="BACKFILL-HH-FAIL", version=1, description="hh",
+            severity=Severity.INFO,
+            expression={"field": "address_narrative", "op": "is_null"},
+            error_message_template="",
+            applicability_filter={"entity": "household"},
+            effective_from=date(2026, 1, 1),
+            status=RuleStatus.ACTIVE,
+            author="alice", approved_by="bob",
+        )
+        before = DqaResult.objects.count()
+        report = backfill_all(actor="qa")
+        assert report["rules_processed"] == 2
+        # 3 members (member rule) + 3 households (hh rule) = 6 failures.
+        assert report["total_failures"] == 6
+        assert DqaResult.objects.count() == before + 6
+
+    def test_management_command_runs_for_a_named_rule(
+        self, _three_households, _failing_member_rule,
+    ):
+        from io import StringIO
+
+        from django.core.management import call_command
+        out = StringIO()
+        call_command(
+            "backfill_dqa_rules",
+            "--rule", _failing_member_rule.rule_id,
+            stdout=out,
+        )
+        body = out.getvalue()
+        assert "3 member(s) scanned" in body
+        assert "3 failure(s)" in body
+
+    def test_admin_action_button_sweeps(
+        self, _three_households, _failing_member_rule, django_user_model,
+    ):
+        from django.test import Client
+
+        from apps.dqa.models import DqaResult
+        u = django_user_model.objects.create_user(
+            username="backfill-staff", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        before = DqaResult.objects.count()
+        # Trigger the admin action via the changelist POST contract.
+        r = c.post(
+            "/admin/dqa/dqarule/",
+            data={
+                "action": "action_backfill",
+                "_selected_action": [str(_failing_member_rule.pk)],
+            },
+        )
+        assert r.status_code in (200, 302)
+        assert DqaResult.objects.count() == before + 3
