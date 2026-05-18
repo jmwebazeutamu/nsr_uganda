@@ -119,6 +119,63 @@ class TestHouseholdsBySubRegion:
         assert ev.actor_id == "su2"
         assert ev.action == "dashboard_read"
 
+    def test_can_group_by_region(self, db, households, django_user_model):
+        su = django_user_model.objects.create_user(
+            username="geo-region", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(
+            "/api/v1/rpt/dashboards/households-by-sub-region/?group_by=region",
+        )
+        assert r.status_code == 200
+        buckets = {row["key"]: row["count"] for row in r.data}
+        assert len(buckets) == 2
+        assert all(count == 1 for count in buckets.values())
+        assert "label" in r.data[0]
+
+    def test_can_group_by_district_under_selected_region(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        su = django_user_model.objects.create_user(
+            username="geo-district", password="p", is_superuser=True,
+        )
+        region_code = two_sub_regions["SR-BUGANDA"]["r"].code
+        district_code = two_sub_regions["SR-BUGANDA"]["d"].code
+        r = _client_for(su).get(
+            "/api/v1/rpt/dashboards/households-by-sub-region/",
+            {"group_by": "district", "region": region_code},
+        )
+        assert r.status_code == 200
+        assert {row["key"]: row["count"] for row in r.data} == {district_code: 1}
+
+    def test_can_group_by_district_under_selected_sub_region(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        su = django_user_model.objects.create_user(
+            username="geo-sub-region", password="p", is_superuser=True,
+        )
+        sub_region_code = two_sub_regions["SR-KARAMOJA"]["sr"].code
+        district_code = two_sub_regions["SR-KARAMOJA"]["d"].code
+        r = _client_for(su).get(
+            "/api/v1/rpt/dashboards/households-by-sub-region/",
+            {"group_by": "district", "sub_region": sub_region_code},
+        )
+        assert r.status_code == 200
+        assert {row["key"]: row["count"] for row in r.data} == {district_code: 1}
+
+    def test_can_filter_to_selected_district(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        su = django_user_model.objects.create_user(
+            username="geo-district-filter", password="p", is_superuser=True,
+        )
+        district_code = two_sub_regions["SR-BUGANDA"]["d"].code
+        r = _client_for(su).get(
+            "/api/v1/rpt/dashboards/households-by-sub-region/",
+            {"group_by": "district", "district": district_code},
+        )
+        assert r.status_code == 200
+        assert {row["key"]: row["count"] for row in r.data} == {district_code: 1}
+
 
 class TestHouseholdsByPmtBand:
     def test_groups_by_band(self, db, pmt_seeded, django_user_model):
@@ -938,6 +995,387 @@ class TestOperatorKpisRegionDrillDown:
         assert f"region={buganda_code}" in (ev.reason or "")
 
 
+class TestAdditionalReportDashboards:
+    def test_households_by_urban_rural_is_scope_filtered(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        households["SR-BUGANDA"].urban_rural = "urban"
+        households["SR-BUGANDA"].save(update_fields=["urban_rural"])
+        households["SR-KARAMOJA"].urban_rural = "rural"
+        households["SR-KARAMOJA"].save(update_fields=["urban_rural"])
+        u = django_user_model.objects.create_user(username="hh-ur", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/rpt/dashboards/households-by-urban-rural/")
+        assert r.status_code == 200
+        assert {row["key"]: row["count"] for row in r.data} == {"urban": 1}
+
+    def test_households_by_intake_source_groups_registry_rows(
+        self, db, households, django_user_model,
+    ):
+        households["SR-BUGANDA"].current_intake_source = "dih"
+        households["SR-BUGANDA"].save(update_fields=["current_intake_source"])
+        households["SR-KARAMOJA"].current_intake_source = "capi"
+        households["SR-KARAMOJA"].save(update_fields=["current_intake_source"])
+        su = django_user_model.objects.create_user(
+            username="hh-src", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get("/api/v1/rpt/dashboards/households-by-intake-source/")
+        assert r.status_code == 200
+        assert {row["key"]: row["count"] for row in r.data} == {"capi": 1, "dih": 1}
+
+    def test_dih_stages_by_state_is_scope_filtered(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        from apps.ingestion_hub.models import (
+            Connector,
+            ConnectorRun,
+            SourceSystem,
+            SourceSystemKind,
+            StageRecord,
+            StageRecordState,
+        )
+        ss = SourceSystem.objects.create(
+            code="RPT-STG", name="Report source", kind=SourceSystemKind.PARTNER_MIS,
+        )
+        conn = Connector.objects.create(source_system=ss, name="rpt")
+        run = ConnectorRun.objects.create(connector=conn)
+        StageRecord.objects.create(
+            connector_run=run,
+            provisional_registry_id=households["SR-BUGANDA"].id,
+            canonical_payload={},
+            state=StageRecordState.PENDING_PROMOTION,
+        )
+        StageRecord.objects.create(
+            connector_run=run,
+            provisional_registry_id=households["SR-KARAMOJA"].id,
+            canonical_payload={},
+            state=StageRecordState.QUALITY_FAILED,
+        )
+        u = django_user_model.objects.create_user(username="stg-op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/rpt/dashboards/dih-stages-by-state/")
+        assert r.status_code == 200
+        assert {row["key"]: row["count"] for row in r.data} == {
+            StageRecordState.PENDING_PROMOTION: 1,
+        }
+
+    def test_national_connector_runs_by_status(self, db, django_user_model):
+        from apps.ingestion_hub.models import (
+            Connector,
+            ConnectorRun,
+            ConnectorRunStatus,
+            SourceSystem,
+            SourceSystemKind,
+        )
+        ss = SourceSystem.objects.create(
+            code="RPT-RUN", name="Run source", kind=SourceSystemKind.PARTNER_MIS,
+        )
+        conn = Connector.objects.create(source_system=ss, name="rpt")
+        ConnectorRun.objects.create(connector=conn, status=ConnectorRunStatus.RUNNING)
+        ConnectorRun.objects.create(connector=conn, status=ConnectorRunStatus.FAILED)
+        su = django_user_model.objects.create_user(
+            username="runs-su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get("/api/v1/rpt/dashboards/connector-runs-by-status/")
+        assert r.status_code == 200
+        assert {row["key"]: row["count"] for row in r.data} == {
+            ConnectorRunStatus.FAILED: 1,
+            ConnectorRunStatus.RUNNING: 1,
+        }
+
+    def test_local_operator_cannot_read_national_connector_health(
+        self, db, two_sub_regions, django_user_model,
+    ):
+        u = django_user_model.objects.create_user(username="runs-op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/rpt/dashboards/connector-runs-by-status/")
+        assert r.status_code == 200
+        assert r.data == []
+
+    def test_idv_attempts_by_status_is_national_only(self, db, django_user_model):
+        from django.utils import timezone
+
+        from apps.identity_verification.models import AttemptStatus, NiraVerificationAttempt
+        NiraVerificationAttempt.objects.create(
+            nin_hash=b"1" * 32,
+            status=AttemptStatus.QUEUED,
+            attempts=1,
+            next_retry_at=timezone.now(),
+        )
+        su = django_user_model.objects.create_user(
+            username="idv-su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get("/api/v1/rpt/dashboards/idv-attempts-by-status/")
+        assert r.status_code == 200
+        assert {row["key"]: row["count"] for row in r.data} == {AttemptStatus.QUEUED: 1}
+
+    def test_change_requests_by_status_scopes_household_and_member_targets(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        from apps.data_management.models import Member
+        from apps.update_workflow.models import (
+            ChangeRequest,
+            ChangeStatus,
+            ChangeType,
+            EntityType,
+            SourceChannel,
+        )
+        buganda_member = Member.objects.create(
+            household=households["SR-BUGANDA"], line_number=31,
+            surname="A", first_name="B", sex="M",
+        )
+        ChangeRequest.objects.create(
+            entity_type=EntityType.MEMBER, entity_id=buganda_member.id,
+            change_type=ChangeType.CORRECTION, source_channel=SourceChannel.WEB,
+            requester="op", status=ChangeStatus.PENDING_APPROVAL,
+        )
+        ChangeRequest.objects.create(
+            entity_type=EntityType.HOUSEHOLD, entity_id=households["SR-KARAMOJA"].id,
+            change_type=ChangeType.CORRECTION, source_channel=SourceChannel.WEB,
+            requester="op", status=ChangeStatus.REJECTED,
+        )
+        u = django_user_model.objects.create_user(username="cr-op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/rpt/dashboards/change-requests-by-status/")
+        assert r.status_code == 200
+        assert {row["key"]: row["count"] for row in r.data} == {
+            ChangeStatus.PENDING_APPROVAL: 1,
+        }
+
+    def test_data_requests_by_status_respects_partner_scope(
+        self, db, django_user_model,
+    ):
+        from datetime import date
+
+        from apps.data_requests.models import (
+            DataRequest,
+            DataSharingAgreement,
+            DsaStatus,
+            Partner,
+            RequestStatus,
+        )
+        p1 = Partner.objects.create(code="P1", name="Partner 1")
+        p2 = Partner.objects.create(code="P2", name="Partner 2")
+        dsa1 = DataSharingAgreement.objects.create(
+            partner=p1, reference="DSA-P1", allowed_scopes={},
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 1, 1),
+            status=DsaStatus.ACTIVE,
+        )
+        dsa2 = DataSharingAgreement.objects.create(
+            partner=p2, reference="DSA-P2", allowed_scopes={},
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 1, 1),
+            status=DsaStatus.ACTIVE,
+        )
+        DataRequest.objects.create(dsa=dsa1, requester="a", status=RequestStatus.SUBMITTED)
+        DataRequest.objects.create(dsa=dsa2, requester="b", status=RequestStatus.DELIVERED)
+        u = django_user_model.objects.create_user(username="partner-op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARTNER, scope_code="P1",
+        )
+        r = _client_for(u).get("/api/v1/rpt/dashboards/data-requests-by-status/")
+        assert r.status_code == 200
+        assert {row["key"]: row["count"] for row in r.data} == {
+            RequestStatus.SUBMITTED: 1,
+        }
+
+    def test_referrals_by_programme_status_is_scope_filtered(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        from apps.referral.models import Programme, Referral, ReferralStatus
+        programme = Programme.objects.create(code="PDM", name="PDM")
+        Referral.objects.create(
+            programme=programme, household=households["SR-BUGANDA"],
+            status=ReferralStatus.SENT,
+        )
+        Referral.objects.create(
+            programme=programme, household=households["SR-KARAMOJA"],
+            status=ReferralStatus.ACCEPTED,
+        )
+        u = django_user_model.objects.create_user(username="ref-op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/rpt/dashboards/referrals-by-programme-status/")
+        assert r.status_code == 200
+        assert {row["key"]: row["count"] for row in r.data} == {
+            f"PDM / {ReferralStatus.SENT}": 1,
+        }
+
+    def test_audit_events_by_action_is_national_only(
+        self, db, two_sub_regions, django_user_model,
+    ):
+        emit = AuditEvent.objects.create
+        emit(actor_id="a", action="read", entity_type="household", entity_id="1")
+        emit(actor_id="a", action="promote", entity_type="household", entity_id="2")
+        su = django_user_model.objects.create_user(
+            username="audit-su", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get("/api/v1/rpt/dashboards/audit-events-by-action/")
+        assert r.status_code == 200
+        buckets = {row["key"]: row["count"] for row in r.data}
+        assert buckets["read"] == 1
+        assert buckets["promote"] == 1
+
+        u = django_user_model.objects.create_user(username="audit-op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        scoped = _client_for(u).get("/api/v1/rpt/dashboards/audit-events-by-action/")
+        assert scoped.status_code == 200
+        assert scoped.data == []
+
+
+class TestOperationalRecordExports:
+    def test_grievance_records_csv_respects_scope(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        open_grievance(
+            category=Category.DATA_CORRECTION, description="a",
+            household_id=households["SR-BUGANDA"].id,
+        )
+        open_grievance(
+            category=Category.OTHER, description="b",
+            household_id=households["SR-KARAMOJA"].id,
+        )
+        u = django_user_model.objects.create_user(username="grm-export", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/rpt/dashboards/grievances/records/?export=csv")
+        assert r.status_code == 200
+        body = r.content.decode("utf-8")
+        assert households["SR-BUGANDA"].id in body
+        assert households["SR-KARAMOJA"].id not in body
+
+    def test_change_request_records_include_member_targets_in_scope(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        from apps.data_management.models import Member
+        from apps.update_workflow.models import (
+            ChangeRequest,
+            ChangeStatus,
+            ChangeType,
+            EntityType,
+            SourceChannel,
+        )
+        member = Member.objects.create(
+            household=households["SR-BUGANDA"], line_number=41,
+            surname="Scope", first_name="Member", sex="F",
+        )
+        ChangeRequest.objects.create(
+            entity_type=EntityType.MEMBER, entity_id=member.id,
+            change_type=ChangeType.CORRECTION, source_channel=SourceChannel.WEB,
+            requester="op", status=ChangeStatus.PENDING_APPROVAL,
+        )
+        u = django_user_model.objects.create_user(username="upd-export", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/rpt/dashboards/change-requests/records/")
+        assert r.status_code == 200
+        assert len(r.data) == 1
+        assert r.data[0]["entity_id"] == member.id
+
+    def test_dedup_pair_records_apply_both_ends_scope(
+        self, db, households, two_sub_regions, django_user_model,
+    ):
+        from apps.data_management.models import Member
+        from apps.ddup.models import DdupModelVersion, MatchPair, ModelStatus, PairStatus
+        model = DdupModelVersion.objects.create(
+            version=101, config={}, author="a", status=ModelStatus.ACTIVE,
+        )
+        m1 = Member.objects.create(
+            household=households["SR-BUGANDA"], line_number=51,
+            surname="A", first_name="One", sex="M",
+        )
+        m2 = Member.objects.create(
+            household=households["SR-BUGANDA"], line_number=52,
+            surname="A", first_name="Two", sex="M",
+        )
+        a, b = sorted([m1.id, m2.id])
+        MatchPair.objects.create(
+            record_type="member", record_a_id=a, record_b_id=b, tier=1,
+            match_reason="nin", model_version=model, status=PairStatus.PENDING,
+        )
+        u = django_user_model.objects.create_user(username="dd-export", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get("/api/v1/rpt/dashboards/dedup-pairs/records/?status=pending")
+        assert r.status_code == 200
+        assert len(r.data) == 1
+        assert r.data[0]["match_reason"] == "nin"
+
+    def test_data_request_records_partner_scope(
+        self, db, django_user_model,
+    ):
+        from datetime import date
+
+        from apps.data_requests.models import (
+            DataRequest,
+            DataSharingAgreement,
+            DsaStatus,
+            Partner,
+            RequestStatus,
+        )
+        partner = Partner.objects.create(code="PX", name="Partner X")
+        dsa = DataSharingAgreement.objects.create(
+            partner=partner, reference="DSA-PX", allowed_scopes={},
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 1, 1),
+            status=DsaStatus.ACTIVE,
+        )
+        DataRequest.objects.create(dsa=dsa, requester="x", status=RequestStatus.SUBMITTED)
+        u = django_user_model.objects.create_user(username="drs-export", password="p")
+        OperatorScope.objects.create(user=u, scope_level=ScopeLevel.PARTNER, scope_code="PX")
+        r = _client_for(u).get("/api/v1/rpt/dashboards/data-requests/records/")
+        assert r.status_code == 200
+        assert len(r.data) == 1
+        assert r.data[0]["partner_code"] == "PX"
+
+    def test_idv_attempt_records_are_national_only(
+        self, db, two_sub_regions, django_user_model,
+    ):
+        from django.utils import timezone
+
+        from apps.identity_verification.models import AttemptStatus, NiraVerificationAttempt
+        NiraVerificationAttempt.objects.create(
+            nin_hash=b"2" * 32,
+            status=AttemptStatus.QUEUED,
+            attempts=2,
+            next_retry_at=timezone.now(),
+        )
+        u = django_user_model.objects.create_user(username="idv-local", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        assert _client_for(u).get("/api/v1/rpt/dashboards/idv-attempts/records/").data == []
+        su = django_user_model.objects.create_user(
+            username="idv-national", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get("/api/v1/rpt/dashboards/idv-attempts/records/?export=csv")
+        assert r.status_code == 200
+        assert "idv-attempt-records.csv" in r["content-disposition"]
+        assert "queued" in r.content.decode("utf-8")
+
+
 class TestRegionDrillDownQueuePanels:
     """US-S15-003 — the home queue panels honour ?sub_region_code= on
     DIH stages, UPD change-requests, and GRM grievances. Verifies the
@@ -1040,6 +1478,7 @@ class TestDqaViolationsDashboard:
     deferred until telemetry shows we need it."""
 
     URL = "/api/v1/rpt/dashboards/dqa-violations/"
+    RECORDS_URL = "/api/v1/rpt/dashboards/dqa-violations/records/"
 
     @pytest.fixture
     def seeded_rules(self, db):
@@ -1193,3 +1632,101 @@ class TestDqaViolationsDashboard:
         ).order_by("-occurred_at").first()
         assert ev is not None
         assert ev.action == "dashboard_read"
+
+    def test_records_endpoint_returns_specific_failed_records(
+        self, db, households, two_sub_regions, seeded_rules, django_user_model,
+    ):
+        from apps.data_management.models import Member
+
+        Member.objects.create(
+            household=households["SR-BUGANDA"], line_number=1,
+            surname="Okello", first_name="Grace", sex="F",
+        )
+        self._seed_results(db, households, two_sub_regions, seeded_rules)
+        su = django_user_model.objects.create_user(
+            username="viol-rec", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(self.RECORDS_URL + "?rule_id=AC-MEM-SURNAME")
+        assert r.status_code == 200
+        assert len(r.data) == 5
+        row = r.data[0]
+        assert row["rule_id"] == "AC-MEM-SURNAME"
+        assert row["record_type"] == "member"
+        assert row["household_id"] in {
+            households["SR-BUGANDA"].id,
+            households["SR-KARAMOJA"].id,
+        }
+        assert row["member_line_number"] in {"1", "2", "3"}
+        assert row["reason"] == "missing"
+        buganda_rows = [
+            record for record in r.data
+            if record["household_id"] == households["SR-BUGANDA"].id
+            and record["member_line_number"] == "1"
+        ]
+        assert buganda_rows[0]["member_name"] == "Okello Grace"
+        assert households["SR-BUGANDA"].village.name in buganda_rows[0]["household_label"]
+
+    def test_records_endpoint_reuses_sub_region_filter(
+        self, db, households, two_sub_regions, seeded_rules, django_user_model,
+    ):
+        self._seed_results(db, households, two_sub_regions, seeded_rules)
+        su = django_user_model.objects.create_user(
+            username="viol-rec-rgn", password="p", is_superuser=True,
+        )
+        karamoja_code = two_sub_regions["SR-KARAMOJA"]["sr"].code
+        r = _client_for(su).get(
+            self.RECORDS_URL
+            + f"?rule_id=AC-MEM-SURNAME&sub_region_code={karamoja_code}",
+        )
+        assert r.status_code == 200
+        assert len(r.data) == 2
+        assert {row["sub_region_code"] for row in r.data} == {karamoja_code}
+
+    def test_records_endpoint_scope_filtered(
+        self, db, households, two_sub_regions, seeded_rules, django_user_model,
+    ):
+        self._seed_results(db, households, two_sub_regions, seeded_rules)
+        u = django_user_model.objects.create_user(username="viol-rec-op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION,
+            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        )
+        r = _client_for(u).get(self.RECORDS_URL + "?rule_id=AC-MEM-SURNAME")
+        assert r.status_code == 200
+        assert len(r.data) == 3
+        assert {row["household_id"] for row in r.data} == {households["SR-BUGANDA"].id}
+
+    def test_records_endpoint_csv_download(
+        self, db, households, two_sub_regions, seeded_rules, django_user_model,
+    ):
+        self._seed_results(db, households, two_sub_regions, seeded_rules)
+        su = django_user_model.objects.create_user(
+            username="viol-rec-csv", password="p", is_superuser=True,
+        )
+        r = _client_for(su).get(
+            self.RECORDS_URL + "?rule_id=AC-NIN-FMT&export=csv",
+        )
+        assert r.status_code == 200
+        assert r["content-type"] == "text/csv"
+        assert "dqa-violation-records.csv" in r["content-disposition"]
+        body = r.content.decode("utf-8")
+        assert body.splitlines()[0].startswith(
+            "result_id,rule_id,rule_label,severity,record_type,record_id,"
+            "household_id,household_label,member_line_number,member_name",
+        )
+        assert "AC-NIN-FMT" in body
+        assert body.count("AC-NIN-FMT") == 3
+
+    def test_records_endpoint_emits_audit_event(
+        self, db, households, two_sub_regions, seeded_rules, django_user_model,
+    ):
+        self._seed_results(db, households, two_sub_regions, seeded_rules)
+        su = django_user_model.objects.create_user(
+            username="viol-rec-aud", password="p", is_superuser=True,
+        )
+        _client_for(su).get(self.RECORDS_URL + "?rule_id=AC-MEM-SURNAME")
+        ev = AuditEvent.objects.filter(
+            entity_type="rpt_dashboard", entity_id="dqa_violation_records",
+        ).order_by("-occurred_at").first()
+        assert ev is not None
+        assert ev.actor_id == "viol-rec-aud"

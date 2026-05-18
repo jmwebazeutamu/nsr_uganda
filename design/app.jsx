@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, AdminScreen, RegistryScreen, HouseholdScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -115,7 +115,8 @@ function App() {
 
         {/* Sub-nav under capture for receipt etc */}
         <div className="nav-section-label">SYSTEM</div>
-        <button className="nav-item" onClick={() => alert('Reports — out of scope for this design pass')}>
+        <button className={`nav-item ${screen === "reports" ? "active" : ""}`}
+                onClick={() => navigate("reports")}>
           <Icon name="barchart" size={18}/>
           <span className="nav-label">Reports</span>
         </button>
@@ -140,6 +141,7 @@ function App() {
         {screen === "drs"     && <DRSScreen/>}
         {screen === "grm"     && <GRMScreen onNavigate={navigate}/>}
         {screen === "partner-drs" && <PartnerDRSScreen/>}
+        {screen === "reports" && <ReportsScreen role={role}/>}
         {screen === "admin"   && <AdminScreen/>}
         {screen === "registry" && <RegistryScreen onNavigate={navigate}/>}
         {screen === "household" && <HouseholdScreen householdId={screenPayload?.householdId} onNavigate={navigate}/>}
