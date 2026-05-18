@@ -235,6 +235,7 @@ class TestAuditChainVerifier:
         assert report.rows_scanned == 0
         assert report.breaks == []
 
+    @pytest.mark.sqlite_only
     def test_sqlite_chain_returns_no_chain_mode(self, db):
         from apps.security.audit import emit
         from apps.security.integrity import verify_audit_chain
@@ -245,11 +246,15 @@ class TestAuditChainVerifier:
         report = verify_audit_chain()
         # On SQLite the trigger is a no-op; both hashes are NULL,
         # so the verifier reports no_chain rather than falsely
-        # claiming the chain is intact.
+        # claiming the chain is intact. On Postgres the trigger
+        # populates hashes and mode == "verified" — see the
+        # @postgres-tagged counterpart in tests/integration/
+        # test_audit_chain_postgres.py.
         assert report.ok is True
         assert report.mode == "no_chain"
         assert report.rows_scanned == 2
 
+    @pytest.mark.sqlite_only
     def test_task_logs_no_chain_silently(self, db):
         """The Celery task should NOT emit a noisy audit row on
         SQLite — dev local runs would otherwise spam the log."""
@@ -355,6 +360,7 @@ class TestChainBreakAlerts:
         assert result["slack_sent"] is False
         assert mock_post.called
 
+    @pytest.mark.sqlite_only
     def test_task_skips_notify_on_no_chain(self, db, settings):
         """On a SQLite/no-trigger backend the task short-circuits
         before alerting anything."""

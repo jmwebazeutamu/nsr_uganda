@@ -56,6 +56,7 @@ python_files = ["test_*.py", "*_test.py", "tests.py"]
 addopts = "-ra --strict-markers"
 markers = [
   "postgres: requires PostgreSQL backend (audit-chain trigger, etc.) — auto-skipped on other vendors",
+  "sqlite_only: pins behaviour that only manifests on sqlite (no-trigger fallback) — auto-skipped on PostgreSQL",
 ]
 
 [tool.mypy]
