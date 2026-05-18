@@ -8,16 +8,20 @@ from apps.grievance.models import (
     Category,
     Grievance,
     GrievanceStatus,
+    GrievanceTask,
+    TaskStatus,
     Tier,
 )
 from apps.grievance.services import (
     GrievanceError,
     assign,
     close,
+    create_task,
     escalate,
     open_change_request_for_grievance,
     open_grievance,
     resolve,
+    transition_task,
 )
 
 
@@ -110,6 +114,98 @@ class TestResolve:
         g = open_grievance(category=Category.OTHER, description="x")
         with pytest.raises(GrievanceError, match="narrative"):
             resolve(g, actor="op", narrative="")
+
+    def test_resolve_refused_when_open_tasks_exist(self, db):
+        """US-S21-003 — every task must be CLOSED before resolve."""
+        g = open_grievance(category=Category.OTHER, description="x")
+        create_task(g, title="Visit reporter", description="",
+                    assigned_to="cdo-1", actor="officer")
+        with pytest.raises(GrievanceError, match="task"):
+            resolve(g, actor="officer", narrative="ok")
+
+    def test_resolve_succeeds_after_all_tasks_closed(self, db):
+        g = open_grievance(category=Category.OTHER, description="x")
+        t1 = create_task(g, title="A", description="", assigned_to="u1",
+                         actor="officer")
+        t2 = create_task(g, title="B", description="", assigned_to="u2",
+                         actor="officer")
+        transition_task(t1, new_status=TaskStatus.CLOSED, actor="u1")
+        transition_task(t2, new_status=TaskStatus.CLOSED, actor="u2")
+        resolve(g, actor="officer", narrative="done")
+        g.refresh_from_db()
+        assert g.status == GrievanceStatus.RESOLVED
+
+
+class TestGrievanceTask:
+    """US-S21-003 — task model + state machine. Tasks attach to a
+    grievance and gate the resolve transition."""
+
+    def test_create_task_records_audit(self, db):
+        from apps.security.models import AuditEvent
+        g = open_grievance(category=Category.OTHER, description="x")
+        t = create_task(g, title="Visit reporter", description="bring NIN",
+                        assigned_to="parish-chief-3", actor="officer")
+        assert t.grievance_id == g.id
+        assert t.status == TaskStatus.OPEN
+        assert t.assigned_to == "parish-chief-3"
+        assert t.created_by == "officer"
+        assert AuditEvent.objects.filter(
+            entity_type="grievance.task", action="create",
+            entity_id=t.id,
+        ).exists()
+
+    def test_create_task_refused_on_resolved_grievance(self, db):
+        g = open_grievance(category=Category.OTHER, description="x")
+        resolve(g, actor="o", narrative="done")
+        with pytest.raises(GrievanceError, match="cannot add task"):
+            create_task(g, title="t", description="", assigned_to="u",
+                        actor="officer")
+
+    def test_create_task_requires_assignee(self, db):
+        g = open_grievance(category=Category.OTHER, description="x")
+        with pytest.raises(GrievanceError, match="assigned"):
+            create_task(g, title="t", description="", assigned_to="",
+                        actor="officer")
+
+    def test_transition_open_to_in_progress_to_closed(self, db):
+        g = open_grievance(category=Category.OTHER, description="x")
+        t = create_task(g, title="t", description="", assigned_to="u",
+                        actor="o")
+        t = transition_task(t, new_status=TaskStatus.IN_PROGRESS, actor="u")
+        assert t.status == TaskStatus.IN_PROGRESS
+        t = transition_task(t, new_status=TaskStatus.CLOSED, actor="u")
+        assert t.status == TaskStatus.CLOSED
+        assert t.closed_at is not None
+        assert t.closed_by == "u"
+
+    def test_transition_closed_to_open_refused(self, db):
+        g = open_grievance(category=Category.OTHER, description="x")
+        t = create_task(g, title="t", description="", assigned_to="u",
+                        actor="o")
+        transition_task(t, new_status=TaskStatus.CLOSED, actor="u")
+        with pytest.raises(GrievanceError, match="not allowed"):
+            transition_task(t, new_status=TaskStatus.OPEN, actor="u")
+
+    def test_transition_unknown_status_refused(self, db):
+        g = open_grievance(category=Category.OTHER, description="x")
+        t = create_task(g, title="t", description="", assigned_to="u",
+                        actor="o")
+        with pytest.raises(GrievanceError, match="unknown task status"):
+            transition_task(t, new_status="weird", actor="u")
+
+    def test_transition_records_audit(self, db):
+        from apps.security.models import AuditEvent
+        g = open_grievance(category=Category.OTHER, description="x")
+        t = create_task(g, title="t", description="", assigned_to="u",
+                        actor="o")
+        before = AuditEvent.objects.filter(
+            entity_type="grievance.task", action="update",
+        ).count()
+        transition_task(t, new_status=TaskStatus.IN_PROGRESS, actor="u")
+        after = AuditEvent.objects.filter(
+            entity_type="grievance.task", action="update",
+        ).count()
+        assert after == before + 1
 
 
 class TestClose:

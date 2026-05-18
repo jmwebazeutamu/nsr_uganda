@@ -20,7 +20,14 @@ from django.utils import timezone
 
 from apps.security.audit import emit as emit_audit
 
-from .models import Category, Grievance, GrievanceStatus, Tier
+from .models import (
+    Category,
+    Grievance,
+    GrievanceStatus,
+    GrievanceTask,
+    TaskStatus,
+    Tier,
+)
 
 SLA_BY_TIER = {
     Tier.L1_PARISH_CHIEF: timedelta(hours=24),
@@ -127,6 +134,16 @@ def resolve(
         raise GrievanceError(f"already {grievance.status}")
     if not narrative:
         raise GrievanceError("resolution requires a narrative")
+    # US-S21-003 — every task must be CLOSED before a grievance can
+    # resolve. Operators can't side-step the work that was scoped
+    # out (and audited) when the tasks were created.
+    open_tasks = grievance.tasks.exclude(status=TaskStatus.CLOSED)
+    open_count = open_tasks.count()
+    if open_count:
+        raise GrievanceError(
+            f"cannot resolve: {open_count} task(s) still open. "
+            "Close every task first.",
+        )
     grievance.status = GrievanceStatus.RESOLVED
     grievance.resolved_at = timezone.now()
     grievance.resolution_narrative = narrative
@@ -151,6 +168,96 @@ def close(grievance: Grievance, *, actor: str) -> Grievance:
     grievance.save(update_fields=["status", "closed_at", "updated_at"])
     emit_audit("update", "grievance", grievance.id, actor=actor, reason="closed")
     return grievance
+
+
+# --- US-S21-003 — GrievanceTask service layer ------------------------------
+
+# Allowed task status transitions. Keep it linear: open → in_progress →
+# closed. Re-opening a closed task should be rare and is a separate
+# follow-up — for now we enforce strict forward motion so the audit
+# trail is clean.
+_TASK_TRANSITIONS = {
+    TaskStatus.OPEN: {TaskStatus.IN_PROGRESS, TaskStatus.CLOSED},
+    TaskStatus.IN_PROGRESS: {TaskStatus.CLOSED, TaskStatus.OPEN},
+    TaskStatus.CLOSED: set(),  # terminal
+}
+
+
+@transaction.atomic
+def create_task(
+    grievance: Grievance, *,
+    title: str, description: str, assigned_to: str, actor: str,
+) -> GrievanceTask:
+    """Open a new task on `grievance`. Tasks can be added in any
+    pre-resolved status — a freshly-resolved grievance with no tasks
+    is the happy path, but a long-running L3 case may collect tasks
+    as it works."""
+    if not title:
+        raise GrievanceError("task title required")
+    if not assigned_to:
+        raise GrievanceError("task must be assigned to someone")
+    if not actor:
+        raise GrievanceError("actor required")
+    if grievance.status in (GrievanceStatus.RESOLVED, GrievanceStatus.CLOSED):
+        raise GrievanceError(
+            f"cannot add task to a {grievance.status} grievance",
+        )
+    task = GrievanceTask.objects.create(
+        grievance=grievance,
+        title=title, description=description or "",
+        assigned_to=assigned_to,
+        status=TaskStatus.OPEN, created_by=actor,
+    )
+    emit_audit(
+        "create", "grievance.task", task.id, actor=actor,
+        reason=f"task added to {grievance.id}",
+        field_changes={
+            "grievance_id": grievance.id,
+            "assigned_to": assigned_to,
+            "title": title,
+        },
+    )
+    return task
+
+
+@transaction.atomic
+def transition_task(
+    task: GrievanceTask, *, new_status: str, actor: str,
+) -> GrievanceTask:
+    """Move a task between statuses. Allowed paths: open↔in_progress,
+    in_progress→closed, open→closed. Closed is terminal."""
+    if not actor:
+        raise GrievanceError("actor required")
+    if new_status not in TaskStatus.values:
+        raise GrievanceError(f"unknown task status: {new_status!r}")
+    if new_status == task.status:
+        return task  # no-op
+    allowed = _TASK_TRANSITIONS.get(task.status, set())
+    if new_status not in allowed:
+        raise GrievanceError(
+            f"task transition {task.status!r}→{new_status!r} not allowed",
+        )
+    prev_status = task.status
+    task.status = new_status
+    if new_status == TaskStatus.CLOSED:
+        task.closed_at = timezone.now()
+        task.closed_by = actor
+        task.save(update_fields=[
+            "status", "closed_at", "closed_by", "updated_at",
+        ])
+    else:
+        # Re-opening clears the close-stamp so a future close re-stamps.
+        task.closed_at = None
+        task.closed_by = ""
+        task.save(update_fields=[
+            "status", "closed_at", "closed_by", "updated_at",
+        ])
+    emit_audit(
+        "update", "grievance.task", task.id, actor=actor,
+        reason=f"{prev_status}→{new_status}",
+        field_changes={"status": [new_status, prev_status]},
+    )
+    return task
 
 
 @transaction.atomic

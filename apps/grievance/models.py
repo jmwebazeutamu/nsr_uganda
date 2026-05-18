@@ -41,6 +41,18 @@ class GrievanceStatus(models.TextChoices):
     CLOSED = "closed"
 
 
+class TaskStatus(models.TextChoices):
+    """US-S21-003 — GrievanceTask lifecycle. A task is a unit of
+    follow-up work assigned to one operator. A grievance can carry
+    many tasks (e.g., the L2 CDO assigns one to a parish chief and
+    another to a partner liaison). The grievance can only be
+    resolved when every task is CLOSED."""
+
+    OPEN = "open"
+    IN_PROGRESS = "in_progress"
+    CLOSED = "closed"
+
+
 class Grievance(models.Model):
     id = ULIDField(primary_key=True)
 
@@ -90,3 +102,43 @@ class Grievance(models.Model):
 
     def __str__(self) -> str:
         return f"Grievance {self.id} [{self.tier}/{self.status}]"
+
+
+class GrievanceTask(models.Model):
+    """US-S21-003 — a unit of follow-up work attached to a grievance.
+
+    Operators in the GRM Officer role create tasks and assign them to
+    specific people; the assignee transitions the task open→in_progress
+    →closed. A grievance can only be resolved when ALL its tasks are
+    CLOSED — the service-layer guard in apps.grievance.services.resolve
+    enforces this.
+    """
+
+    id = ULIDField(primary_key=True)
+    grievance = models.ForeignKey(
+        Grievance, on_delete=models.CASCADE, related_name="tasks",
+    )
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    # Operator username the task is assigned to. String until the
+    # Keycloak user catalogue (US-S2-002) lands.
+    assigned_to = models.CharField(max_length=64, db_index=True)
+    status = models.CharField(
+        max_length=16, choices=TaskStatus.choices, default=TaskStatus.OPEN,
+    )
+    created_by = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    closed_by = models.CharField(max_length=64, blank=True)
+
+    class Meta:
+        verbose_name = "Grievance task"
+        indexes = [
+            models.Index(fields=["grievance", "status"]),
+            models.Index(fields=["assigned_to", "status"]),
+        ]
+        ordering = ("created_at",)
+
+    def __str__(self) -> str:
+        return f"Task {self.id} on {self.grievance_id} [{self.status}]"
