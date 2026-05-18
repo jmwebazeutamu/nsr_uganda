@@ -74,8 +74,6 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
     audit_entity_type = "grievance"
     queryset = Grievance.objects.all().order_by("-opened_at")
     serializer_class = GrievanceSerializer
-    filterset_fields = ["status", "tier", "category", "assigned_to",
-                        "household_id"]
 
     def get_queryset(self):
         """US-S21-003b — role-based visibility:
@@ -91,6 +89,11 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
         actual user model the project hadn't decided on. With the
         GRM Officer role explicit we no longer need to fall back to
         geo.
+
+        US-S21-004 — query-param filters are applied manually because
+        django-filter isn't installed; declaring filterset_fields
+        alone was silently a no-op. Supported: status, tier, category,
+        assigned_to, household_id (+ sub_region_code drill-down).
         """
         from django.db.models import Q
 
@@ -109,6 +112,14 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
             ).distinct()
         else:
             qs = qs.none()
+
+        # Apply per-field query-param filters. Each is opt-in — empty
+        # string or missing leaves the queryset alone.
+        for field in ("status", "tier", "category",
+                      "assigned_to", "household_id"):
+            value = self.request.query_params.get(field)
+            if value:
+                qs = qs.filter(**{field: value})
 
         # US-S15-003 — optional ?sub_region_code= drill-down for the
         # home queue panel. household_id is a CharField on Grievance,
@@ -279,25 +290,32 @@ class GrievanceTaskViewSet(viewsets.ModelViewSet):
 
     queryset = GrievanceTask.objects.all().order_by("-created_at")
     serializer_class = GrievanceTaskSerializer
-    filterset_fields = ["status", "grievance", "assigned_to"]
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
+        """Visibility + query-param filters. django-filter isn't
+        installed so filterset_fields was a silent no-op — we apply
+        ?grievance=, ?status=, ?assigned_to= manually here."""
         from django.db.models import Q
         qs = super().get_queryset()
         user = self.request.user
         if _is_grm_officer(user):
-            return qs
-        if not getattr(user, "is_authenticated", False):
+            pass  # full visibility before filters
+        elif not getattr(user, "is_authenticated", False):
             return qs.none()
-        uname = user.username or ""
-        # Visible iff assigned to me OR on a grievance I'm
-        # assigned to (so the case lead sees every task they
-        # delegated, not just their own).
-        return qs.filter(
-            Q(assigned_to=uname)
-            | Q(grievance__assigned_to=uname),
-        ).distinct()
+        else:
+            uname = user.username or ""
+            # Visible iff assigned to me OR on a grievance I'm
+            # assigned to (so the case lead sees every task they
+            # delegated, not just their own).
+            qs = qs.filter(
+                Q(assigned_to=uname) | Q(grievance__assigned_to=uname),
+            ).distinct()
+        for field in ("status", "grievance", "assigned_to"):
+            value = self.request.query_params.get(field)
+            if value:
+                qs = qs.filter(**{field: value})
+        return qs
 
     def create(self, request, *args, **kwargs):
         # Only GRM Officers can create tasks; regular users execute

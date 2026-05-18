@@ -399,6 +399,45 @@ class TestGrievanceTaskApi:
         r = self._client(regular).get("/api/v1/grm/grievances/me/")
         assert r.json() == {"username": "assignee-1", "is_officer": False}
 
+    def test_tasks_filtered_by_grievance(self, _users):
+        """US-S21-004 regression — ?grievance=<id> must narrow the task
+        list. django-filter isn't installed; the previous filterset_fields
+        declaration was silently a no-op, returning ALL tasks regardless
+        of the filter. Manual filtering in get_queryset fixes it."""
+        officer, _ = _users
+        g_a = open_grievance(category=Category.OTHER, description="A")
+        g_b = open_grievance(category=Category.OTHER, description="B")
+        create_task(g_a, title="for-a-1", description="",
+                    assigned_to="u", actor="officer")
+        create_task(g_a, title="for-a-2", description="",
+                    assigned_to="u", actor="officer")
+        create_task(g_b, title="for-b-1", description="",
+                    assigned_to="u", actor="officer")
+
+        c = self._client(officer)
+        r_all = c.get("/api/v1/grm/tasks/?page_size=100")
+        assert r_all.json()["count"] == 3
+        r_a = c.get(f"/api/v1/grm/tasks/?grievance={g_a.id}&page_size=100")
+        titles_a = {row["title"] for row in r_a.json()["results"]}
+        assert titles_a == {"for-a-1", "for-a-2"}
+        r_b = c.get(f"/api/v1/grm/tasks/?grievance={g_b.id}&page_size=100")
+        titles_b = {row["title"] for row in r_b.json()["results"]}
+        assert titles_b == {"for-b-1"}
+
+    def test_grievances_filtered_by_status(self, _users):
+        """Same regression on the grievance list. ?status=open|resolved
+        must narrow. Was a no-op pre-S21-004."""
+        officer, _ = _users
+        g_open = open_grievance(category=Category.OTHER, description="open")
+        g_resolved = open_grievance(category=Category.OTHER, description="r")
+        resolve(g_resolved, actor="o", narrative="done")
+
+        c = self._client(officer)
+        r_open = c.get("/api/v1/grm/grievances/?status=open&page_size=100")
+        ids = {row["id"] for row in r_open.json()["results"]}
+        assert g_open.id in ids
+        assert g_resolved.id not in ids
+
 
 class TestClose:
     def test_close_resolved(self, db):
