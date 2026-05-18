@@ -1,0 +1,221 @@
+openapi: 3.1.0
+info:
+  title: NSR MIS — DAT-DQA
+  version: "0.2.0"
+  description: |
+    Data Quality Assurance rules engine + lifecycle endpoints.
+    Authoritative source for rule definition, preview, and
+    approval workflow. The DRF auto-generated schema at
+    /api/schema/?format=openapi-yaml is the deploy-time spec;
+    this file is the human-readable contract.
+
+    See ADR-0009 for the design context behind US-076 / US-077 / US-079.
+
+servers:
+  - url: /api/v1/dqa
+
+paths:
+  /rules/:
+    get:
+      tags: [dqa]
+      summary: List DQA rules
+      responses:
+        "200":
+          description: Paginated rule list
+    post:
+      tags: [dqa]
+      summary: Create a DRAFT rule (DQA Author only)
+      description: |
+        Restricted to users in the `dqa_author` Django group (or
+        superusers). Returns the persisted rule with status="draft".
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/DqaRuleCreate" } }
+      responses:
+        "201": { description: Rule created }
+        "403": { description: Not a DQA Author }
+
+  /rules/{id}/:
+    get:
+      tags: [dqa]
+      summary: Retrieve a DQA rule
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses: { "200": { description: Rule detail } }
+    put:
+      tags: [dqa]
+      summary: Update a DRAFT rule (DQA Author only)
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: "#/components/schemas/DqaRuleCreate" } }
+      responses:
+        "200": { description: Rule updated }
+        "403": { description: Not a DQA Author }
+    patch:
+      tags: [dqa]
+      summary: Patch a DRAFT rule (DQA Author only)
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: Rule patched }
+        "403": { description: Not a DQA Author }
+
+  /rules/{id}/preview/:
+    post:
+      tags: [dqa]
+      summary: Preview rule impact on a sample (US-077)
+      description: |
+        Evaluates the rule against a deterministic random sample of
+        records of the requested type. Returns pass/fail counts and
+        up to 10 IDs of failing records. **Record values are never
+        returned.** Persists a DqaRulePreviewRun audit row.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [record_type]
+              properties:
+                sample_size: { type: integer, minimum: 1, maximum: 10000, default: 50 }
+                record_type:
+                  type: string
+                  enum: [member, household]
+      responses:
+        "200":
+          description: Preview counts + sample failed IDs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pass_count: { type: integer }
+                  fail_count: { type: integer }
+                  sample_failed_record_ids:
+                    type: array
+                    maxItems: 10
+                    items: { type: string }
+        "400": { description: Unknown record_type or bad sample_size }
+
+  /rules/{id}/submit-for-approval/:
+    post:
+      tags: [dqa]
+      summary: Submit a DRAFT rule for approval
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200":
+          description: Rule advanced to PENDING_APPROVAL, AuditEvent emitted
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/DqaRule" } }
+        "400": { description: Bad state (not DRAFT) }
+
+  /rules/{id}/approve/:
+    post:
+      tags: [dqa]
+      summary: Approve a PENDING rule (note required)
+      description: |
+        Note is required (audit chain). Author cannot approve their
+        own rule (AC-DQA-DUAL-ACTOR). On success, rule advances to
+        ACTIVE and emits a `dqa.rule_version.approved` AuditEvent.
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [note]
+              properties:
+                note: { type: string, minLength: 1 }
+      responses:
+        "200": { description: Rule approved }
+        "400":
+          description: |
+            Bad state, missing note, blank note, or self-approval attempt.
+
+  /rules/{id}/reject/:
+    post:
+      tags: [dqa]
+      summary: Reject a PENDING rule (reason required)
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1 }
+      responses:
+        "200": { description: Rule rejected }
+        "400": { description: Bad state, missing reason, or self-rejection }
+
+  /rules/{id}/retire/:
+    post:
+      tags: [dqa]
+      summary: Retire an ACTIVE rule
+      parameters: [ { name: id, in: path, required: true, schema: { type: string } } ]
+      responses:
+        "200": { description: Rule retired }
+        "400": { description: Bad state (not ACTIVE) }
+
+  /results/:
+    get:
+      tags: [dqa]
+      summary: List DQA evaluation results (read-only)
+      responses: { "200": { description: Paginated result list } }
+
+components:
+  schemas:
+    DqaRule:
+      type: object
+      properties:
+        id: { type: string, description: ULID }
+        rule_id: { type: string }
+        version: { type: integer }
+        description: { type: string }
+        severity:
+          type: string
+          enum: [blocking, warning, info]
+        applicability_filter:
+          type: object
+          description: |
+            Filter that decides whether a rule applies to a given
+            record. Keys: entity, channel, geography, age_band,
+            form_version. Empty means "applies to everything that
+            matches the entity type".
+        expression:
+          type: object
+          description: JSON-DSL rule. See SAD §4.2.1.
+        error_message_template: { type: string }
+        effective_from: { type: string, format: date, nullable: true }
+        effective_to: { type: string, format: date, nullable: true }
+        status:
+          type: string
+          enum: [draft, pending_approval, active, retired, rejected]
+        author: { type: string }
+        approved_by: { type: string }
+        approved_at: { type: string, format: date-time, nullable: true }
+        approval_note: { type: string }
+        rejection_reason: { type: string }
+        submitted_at: { type: string, format: date-time, nullable: true }
+
+    DqaRuleCreate:
+      type: object
+      required: [rule_id, version, description, severity, expression, author]
+      properties:
+        rule_id: { type: string }
+        version: { type: integer }
+        description: { type: string }
+        severity:
+          type: string
+          enum: [blocking, warning, info]
+        applicability_filter: { type: object }
+        expression: { type: object }
+        error_message_template: { type: string }
+        effective_from: { type: string, format: date }
+        effective_to: { type: string, format: date }
+        author: { type: string }

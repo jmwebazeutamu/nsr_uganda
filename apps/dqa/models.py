@@ -64,6 +64,15 @@ class DqaRule(models.Model):
     author = models.CharField(max_length=64)
     approved_by = models.CharField(max_length=64, blank=True)
     approved_at = models.DateTimeField(null=True, blank=True)
+    # Lifecycle audit (DQA-1). approval_note explains WHY a rule was
+    # approved; rejection_reason explains why one was rejected — both
+    # surface in the version-history tab (US-076) and in the AuditEvent
+    # field_changes payload (DQA-2). submitted_at completes the
+    # lifecycle timestamps so latency dashboards can compute
+    # draft → pending → active intervals.
+    approval_note = models.TextField(blank=True)
+    rejection_reason = models.TextField(blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -81,6 +90,43 @@ class DqaRule(models.Model):
 
     def __str__(self) -> str:
         return f"{self.rule_id} v{self.version} [{self.severity}]"
+
+
+class DqaRulePreviewRun(models.Model):
+    """Audit trail of preview runs (US-077 / DQA-4).
+
+    Each row records one /preview/ call: the rule version, the
+    requested sample size, pass / fail counts, and the IDs (only IDs)
+    of up to 10 failing records. Record VALUES are never persisted —
+    the preview's whole point is to show the rule author the impact
+    without leaking the underlying personal data.
+    """
+
+    id = ULIDField(primary_key=True)
+    rule = models.ForeignKey(
+        DqaRule, on_delete=models.PROTECT, related_name="preview_runs",
+    )
+    sample_size = models.PositiveIntegerField()
+    record_type = models.CharField(max_length=32)
+    pass_count = models.PositiveIntegerField()
+    fail_count = models.PositiveIntegerField()
+    sample_failed_record_ids = models.JSONField(default=list, blank=True)
+
+    executed_at = models.DateTimeField(auto_now_add=True)
+    executed_by = models.CharField(max_length=64)
+
+    class Meta:
+        verbose_name = "DQA rule preview run"
+        verbose_name_plural = "DQA rule preview runs"
+        indexes = [
+            models.Index(fields=["rule", "-executed_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"preview {self.rule.rule_id} v{self.rule.version} "
+            f"by {self.executed_by} @ {self.executed_at:%Y-%m-%d %H:%M}"
+        )
 
 
 class DqaResult(models.Model):

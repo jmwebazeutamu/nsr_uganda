@@ -1,0 +1,226 @@
+{% extends "admin/change_form.html" %}
+{% load static %}
+
+{# US-076 / DQA-5 — custom Rule Editor change-form. #}
+{# Feature-flagged on settings.DQA_RULE_EDITOR_V2; when off we fall  #}
+{# through to the default admin change_form via {{ block.super }}.   #}
+{# Imports design tokens at design/v0.1/tokens.css so the panels     #}
+{# pick up the project palette (active rule status = --accent-quality).#}
+
+{% block extrastyle %}
+  {{ block.super }}
+  {% if dqa_rule_editor_v2 %}
+  <link rel="stylesheet" href="{% static 'design/v0.1/tokens.css' %}"/>
+  <style>
+    .dqa-panel {
+      border: 1px solid var(--neutral-300, #d1d5db);
+      border-radius: 6px;
+      padding: 16px 20px;
+      margin: 16px 0;
+      background: var(--neutral-50, #fafafa);
+    }
+    .dqa-panel h2 {
+      font-size: 14px;
+      margin: 0 0 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--neutral-700, #4b5563);
+    }
+    .dqa-status-active {
+      color: var(--accent-quality, #10b981);
+      font-weight: 600;
+    }
+    .dqa-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .dqa-actions button {
+      padding: 6px 12px; border-radius: 6px; cursor: pointer;
+      font-size: 13px; border: 1px solid var(--neutral-300, #d1d5db);
+      background: white;
+    }
+    .dqa-actions button.danger { color: var(--accent-danger, #ef4444); }
+    .dqa-actions button.success { color: var(--accent-quality, #10b981); }
+    .dqa-preview-output {
+      font-family: ui-monospace, monospace; font-size: 12px;
+      background: white; padding: 10px; border-radius: 4px;
+      border: 1px solid var(--neutral-200, #e5e7eb);
+      white-space: pre-wrap; min-height: 60px;
+    }
+    .dqa-history { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .dqa-history th, .dqa-history td {
+      text-align: left; padding: 6px 8px;
+      border-bottom: 1px solid var(--neutral-200, #e5e7eb);
+      vertical-align: top;
+    }
+    .dqa-diff { white-space: pre; font-family: ui-monospace, monospace;
+      font-size: 11.5px; background: white; padding: 8px;
+      border-radius: 4px; border: 1px solid var(--neutral-200, #e5e7eb); }
+  </style>
+  {% endif %}
+{% endblock %}
+
+{% block after_field_sets %}
+  {{ block.super }}
+  {% if dqa_rule_editor_v2 and original %}
+
+  <!-- ── Preview panel (US-077 — POST /preview, render counts) ──── -->
+  <div class="dqa-panel" id="dqa-preview-panel">
+    <h2>Rule preview</h2>
+    <div class="dqa-actions" style="margin-bottom:10px">
+      <label for="dqa-preview-record-type" style="font-size:13px">Record type:</label>
+      <select id="dqa-preview-record-type">
+        <option value="member">member</option>
+        <option value="household">household</option>
+      </select>
+      <label for="dqa-preview-sample-size" style="font-size:13px">Sample:</label>
+      <input id="dqa-preview-sample-size" type="number" value="50" min="1" max="10000" style="width:80px"/>
+      <button type="button" id="dqa-preview-btn">Run preview</button>
+    </div>
+    <div class="dqa-preview-output" id="dqa-preview-output">— click "Run preview" to evaluate against a sample of records —</div>
+  </div>
+
+  <!-- ── Approve / Reject buttons (US-076 — modal demanding note/reason) ── -->
+  <div class="dqa-panel" id="dqa-decisions-panel">
+    <h2>Decisions
+      {% if original.status == "active" %}<span class="dqa-status-active">(active)</span>{% endif %}
+    </h2>
+    <div class="dqa-actions">
+      {% if original.status == "draft" %}
+        <button type="button" id="dqa-submit-btn">Submit for approval</button>
+      {% endif %}
+      {% if original.status == "pending_approval" %}
+        <button type="button" class="success" id="dqa-approve-btn">Approve…</button>
+        <button type="button" class="danger" id="dqa-reject-btn">Reject…</button>
+      {% endif %}
+      {% if original.status == "active" %}
+        <button type="button" id="dqa-retire-btn">Retire</button>
+      {% endif %}
+    </div>
+    <div id="dqa-decision-output" style="margin-top:10px;font-size:13px;"></div>
+  </div>
+
+  <!-- ── Version history (US-076 — author/approver/note/diff per version) ── -->
+  <div class="dqa-panel" id="dqa-history-panel">
+    <h2>Version history</h2>
+    <table class="dqa-history">
+      <thead><tr>
+        <th>Version</th><th>Status</th><th>Author</th><th>Approver</th>
+        <th>Submitted</th><th>Approved</th><th>Note / reason</th>
+      </tr></thead>
+      <tbody>
+      {% for row in dqa_version_history %}
+        <tr>
+          <td>v{{ row.rule.version }}</td>
+          <td>{{ row.rule.status }}</td>
+          <td>{{ row.rule.author }}</td>
+          <td>{{ row.rule.approved_by|default:"—" }}</td>
+          <td>{{ row.rule.submitted_at|default:"—" }}</td>
+          <td>{{ row.rule.approved_at|default:"—" }}</td>
+          <td>
+            {% if row.rule.approval_note %}<strong>note:</strong> {{ row.rule.approval_note }}{% endif %}
+            {% if row.rule.rejection_reason %}<strong>reason:</strong> {{ row.rule.rejection_reason }}{% endif %}
+          </td>
+        </tr>
+        {% if row.diff %}
+          <tr><td colspan="7"><div class="dqa-diff">{{ row.diff }}</div></td></tr>
+        {% endif %}
+      {% empty %}
+        <tr><td colspan="7"><em>(this is v1 — no prior version to diff)</em></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    (function() {
+      const ruleId = "{{ original.pk }}";
+      const csrfToken = document.querySelector(
+        "input[name=csrfmiddlewaretoken]",
+      ).value;
+      const out = document.getElementById("dqa-preview-output");
+      const decisionOut = document.getElementById("dqa-decision-output");
+      const post = (path, body) => fetch(`/api/v1/dqa/rules/${ruleId}/${path}/`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+          Accept: "application/json",
+        },
+        body: JSON.stringify(body || {}),
+      });
+
+      // ── Preview ────
+      const previewBtn = document.getElementById("dqa-preview-btn");
+      if (previewBtn) previewBtn.addEventListener("click", () => {
+        out.textContent = "running…";
+        post("preview", {
+          sample_size: parseInt(
+            document.getElementById("dqa-preview-sample-size").value, 10,
+          ),
+          record_type: document.getElementById("dqa-preview-record-type").value,
+        }).then(r => r.json().then(j => {
+          if (!r.ok) {
+            out.textContent = "preview failed: " + (j.detail || r.status);
+            return;
+          }
+          out.textContent =
+            `pass ${j.pass_count} · fail ${j.fail_count}` +
+            (j.sample_failed_record_ids.length
+              ? `\nfailed IDs (first ${j.sample_failed_record_ids.length}):\n  ` +
+                j.sample_failed_record_ids.join("\n  ")
+              : "");
+        })).catch(e => { out.textContent = "preview error: " + e; });
+      });
+
+      // ── Submit ────
+      const submitBtn = document.getElementById("dqa-submit-btn");
+      if (submitBtn) submitBtn.addEventListener("click", () => {
+        post("submit-for-approval").then(r => r.json().then(j => {
+          decisionOut.textContent = r.ok
+            ? "submitted — refresh to see updated status"
+            : "submit failed: " + (j.detail || r.status);
+        }));
+      });
+
+      // ── Approve (modal demanding note) ────
+      const approveBtn = document.getElementById("dqa-approve-btn");
+      if (approveBtn) approveBtn.addEventListener("click", () => {
+        const note = prompt("Approval note (required — written to audit chain):");
+        if (!note || !note.trim()) {
+          decisionOut.textContent = "note required";
+          return;
+        }
+        post("approve", {note}).then(r => r.json().then(j => {
+          decisionOut.textContent = r.ok
+            ? "approved — refresh to see updated status"
+            : "approve failed: " + (j.detail || r.status);
+        }));
+      });
+
+      // ── Reject (modal demanding reason) ────
+      const rejectBtn = document.getElementById("dqa-reject-btn");
+      if (rejectBtn) rejectBtn.addEventListener("click", () => {
+        const reason = prompt("Rejection reason (required — written to audit chain):");
+        if (!reason || !reason.trim()) {
+          decisionOut.textContent = "reason required";
+          return;
+        }
+        post("reject", {reason}).then(r => r.json().then(j => {
+          decisionOut.textContent = r.ok
+            ? "rejected — refresh to see updated status"
+            : "reject failed: " + (j.detail || r.status);
+        }));
+      });
+
+      // ── Retire ────
+      const retireBtn = document.getElementById("dqa-retire-btn");
+      if (retireBtn) retireBtn.addEventListener("click", () => {
+        post("retire").then(r => r.json().then(j => {
+          decisionOut.textContent = r.ok
+            ? "retired — refresh to see updated status"
+            : "retire failed: " + (j.detail || r.status);
+        }));
+      });
+    })();
+  </script>
+  {% endif %}
+{% endblock %}
