@@ -40,7 +40,14 @@ class AuditEvent(models.Model):
     actor_id = models.CharField(max_length=64, db_index=True)
     actor_kind = models.CharField(max_length=16, default="user")
 
-    action = models.CharField(max_length=24, choices=Action.choices)
+    # Width widened from 24→64 (US-S21-001) so hierarchical action
+    # names from feature-flagged modules fit: the DQA Rule Editor's
+    # "dqa.rule_version.submitted_for_approval" (40 chars) couldn't
+    # land on Postgres CI under the old limit. CharField.choices is
+    # an authoring-time validator only — the DB column accepts any
+    # string up to max_length, so widening doesn't lock anyone out
+    # of using the existing Action enum values.
+    action = models.CharField(max_length=64, choices=Action.choices)
     entity_type = models.CharField(max_length=64, db_index=True)
     entity_id = models.CharField(max_length=64, db_index=True)
 
