@@ -126,6 +126,52 @@ def reject_change_request(req: ChangeRequest, *, approver: str, reason: str) -> 
 
 
 @transaction.atomic
+def hold_change_request(
+    req: ChangeRequest, *, approver: str, reason: str,
+) -> ChangeRequest:
+    """PENDING_APPROVAL -> ON_HOLD. Reviewer parks the request pending
+    more info (evidence, NIRA reconciliation, linked GRM case). Same
+    no-self-approve + non-empty-reason guards as reject."""
+    if req.status != ChangeStatus.PENDING_APPROVAL:
+        raise UpdError(f"can only hold PENDING_APPROVAL (got {req.status})")
+    if not reason:
+        raise UpdError("hold requires a non-empty reason")
+    if approver == req.requester:
+        raise UpdError("AC-UPD-NO-SELF-APPROVE: requester cannot hold own request")
+    req.status = ChangeStatus.ON_HOLD
+    req.approver = approver
+    req.decided_at = timezone.now()
+    req.decision_reason = reason
+    req.save(update_fields=[
+        "status", "approver", "decided_at", "decision_reason", "updated_at",
+    ])
+    emit_audit("hold", "change_request", req.id, actor=approver, reason=reason)
+    return req
+
+
+@transaction.atomic
+def release_change_request(
+    req: ChangeRequest, *, approver: str, reason: str = "",
+) -> ChangeRequest:
+    """ON_HOLD -> PENDING_APPROVAL. Reviewer reopens after the held
+    information arrives. SLA deadline is left untouched (the breach
+    sweep handles re-escalation if it lapsed during the hold)."""
+    if req.status != ChangeStatus.ON_HOLD:
+        raise UpdError(f"can only release ON_HOLD (got {req.status})")
+    if approver == req.requester:
+        raise UpdError("AC-UPD-NO-SELF-APPROVE: requester cannot release own request")
+    req.status = ChangeStatus.PENDING_APPROVAL
+    req.approver = ""
+    req.decided_at = None
+    req.decision_reason = ""
+    req.save(update_fields=[
+        "status", "approver", "decided_at", "decision_reason", "updated_at",
+    ])
+    emit_audit("release", "change_request", req.id, actor=approver, reason=reason or "released from hold")
+    return req
+
+
+@transaction.atomic
 def commit_change_request(
     req: ChangeRequest, *, approver: str, allow_self: bool = False,
 ) -> ChangeRequest:

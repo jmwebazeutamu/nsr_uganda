@@ -22,8 +22,10 @@ from apps.update_workflow.services import (
     auto_commit_change_request,
     commit_change_request,
     compute_diff,
+    hold_change_request,
     post_change_committed,
     reject_change_request,
+    release_change_request,
     submit_change_request,
 )
 
@@ -143,6 +145,88 @@ class TestReject:
         submit_change_request(req)
         with pytest.raises(UpdError, match="non-empty reason"):
             reject_change_request(req, approver="bob", reason="")
+
+
+# --- US-S22-001 — hold / release transitions -------------------------------
+
+class TestHoldRelease:
+    """PENDING_APPROVAL ↔ ON_HOLD. Reviewer parks a request pending
+    more info, then releases it back into the queue. Both transitions
+    enforce AC-UPD-NO-SELF-APPROVE and emit an audit event."""
+
+    def test_hold_parks_request_with_reason(self, member):
+        req = _draft(member, requester="alice")
+        submit_change_request(req)
+        hold_change_request(req, approver="bob", reason="awaiting NIRA reconciliation")
+        req.refresh_from_db()
+        assert req.status == ChangeStatus.ON_HOLD
+        assert req.approver == "bob"
+        assert req.decision_reason == "awaiting NIRA reconciliation"
+        assert req.decided_at is not None
+
+    def test_hold_requires_pending_approval(self, member):
+        req = _draft(member)  # DRAFT, not submitted
+        with pytest.raises(UpdError, match="can only hold PENDING_APPROVAL"):
+            hold_change_request(req, approver="bob", reason="x")
+
+    def test_hold_requires_reason(self, member):
+        req = _draft(member, requester="alice")
+        submit_change_request(req)
+        with pytest.raises(UpdError, match="non-empty reason"):
+            hold_change_request(req, approver="bob", reason="")
+
+    def test_hold_no_self(self, member):
+        req = _draft(member, requester="alice")
+        submit_change_request(req)
+        with pytest.raises(UpdError, match="AC-UPD-NO-SELF-APPROVE"):
+            hold_change_request(req, approver="alice", reason="x")
+
+    def test_hold_emits_audit_event(self, member):
+        req = _draft(member, requester="alice")
+        submit_change_request(req)
+        hold_change_request(req, approver="bob", reason="awaiting evidence")
+        ev = AuditEvent.objects.filter(
+            entity_type="change_request", entity_id=req.id, action="hold",
+        ).first()
+        assert ev is not None
+        assert ev.actor_id == "bob"
+        assert "awaiting evidence" in ev.reason
+
+    def test_release_returns_to_pending_approval(self, member):
+        req = _draft(member, requester="alice")
+        submit_change_request(req)
+        hold_change_request(req, approver="bob", reason="x")
+        release_change_request(req, approver="bob")
+        req.refresh_from_db()
+        assert req.status == ChangeStatus.PENDING_APPROVAL
+        # Decision metadata cleared so the next decision is recorded clean.
+        assert req.approver == ""
+        assert req.decided_at is None
+        assert req.decision_reason == ""
+
+    def test_release_requires_on_hold(self, member):
+        req = _draft(member, requester="alice")
+        submit_change_request(req)
+        with pytest.raises(UpdError, match="can only release ON_HOLD"):
+            release_change_request(req, approver="bob")
+
+    def test_release_no_self(self, member):
+        req = _draft(member, requester="alice")
+        submit_change_request(req)
+        hold_change_request(req, approver="bob", reason="x")
+        with pytest.raises(UpdError, match="AC-UPD-NO-SELF-APPROVE"):
+            release_change_request(req, approver="alice")
+
+    def test_release_emits_audit_event(self, member):
+        req = _draft(member, requester="alice")
+        submit_change_request(req)
+        hold_change_request(req, approver="bob", reason="x")
+        release_change_request(req, approver="bob")
+        ev = AuditEvent.objects.filter(
+            entity_type="change_request", entity_id=req.id, action="release",
+        ).first()
+        assert ev is not None
+        assert ev.actor_id == "bob"
 
 
 # --- commit -----------------------------------------------------------------
@@ -716,3 +800,101 @@ class TestBulkActions:
                              data={"ids": big, "actor": "approver"},
                              format="json")
         assert r.status_code == 400
+
+
+# --- US-S22-001 — hold / release / me endpoints --------------------------
+
+
+class TestHoldReleaseEndpoints:
+    """Per-row hold and release POSTs. Mirror the reject endpoint:
+    {actor, reason}; guards from the services surface as 400."""
+
+    @pytest.fixture
+    def staff_user(self, db, django_user_model):
+        return django_user_model.objects.create_user(
+            username="reviewer", password="p",
+            is_staff=True, is_superuser=True,
+        )
+
+    @pytest.fixture
+    def api_client(self, staff_user):
+        from rest_framework.test import APIClient
+        c = APIClient()
+        c.force_authenticate(user=staff_user)
+        return c
+
+    def _submitted(self, member, *, requester="enum-a"):
+        req = _draft(member, requester=requester)
+        submit_change_request(req)
+        return req
+
+    def test_hold_endpoint_parks_request(self, db, member, api_client):
+        req = self._submitted(member)
+        r = api_client.post(
+            f"/api/v1/upd/change-requests/{req.id}/hold/",
+            data={"actor": "reviewer", "reason": "awaiting birth certificate"},
+            format="json",
+        )
+        assert r.status_code == 200
+        assert r.data["status"] == ChangeStatus.ON_HOLD
+        req.refresh_from_db()
+        assert req.status == ChangeStatus.ON_HOLD
+
+    def test_hold_endpoint_400_on_missing_reason(self, db, member, api_client):
+        req = self._submitted(member)
+        r = api_client.post(
+            f"/api/v1/upd/change-requests/{req.id}/hold/",
+            data={"actor": "reviewer"},
+            format="json",
+        )
+        assert r.status_code == 400
+
+    def test_hold_endpoint_400_on_self(self, db, member, api_client):
+        req = self._submitted(member, requester="self-actor")
+        r = api_client.post(
+            f"/api/v1/upd/change-requests/{req.id}/hold/",
+            data={"actor": "self-actor", "reason": "x"},
+            format="json",
+        )
+        assert r.status_code == 400
+        assert "NO-SELF-APPROVE" in r.data["detail"]
+
+    def test_release_endpoint_reopens(self, db, member, api_client):
+        req = self._submitted(member)
+        hold_change_request(req, approver="reviewer-1", reason="x")
+        r = api_client.post(
+            f"/api/v1/upd/change-requests/{req.id}/release/",
+            data={"actor": "reviewer-2"},
+            format="json",
+        )
+        assert r.status_code == 200
+        assert r.data["status"] == ChangeStatus.PENDING_APPROVAL
+
+    def test_release_endpoint_400_when_not_on_hold(self, db, member, api_client):
+        req = self._submitted(member)
+        r = api_client.post(
+            f"/api/v1/upd/change-requests/{req.id}/release/",
+            data={"actor": "reviewer"},
+            format="json",
+        )
+        assert r.status_code == 400
+
+
+class TestMeEndpoint:
+    """GET /me/ returns the requesting user's identity for the React
+    workbench to bind as `actor` in subsequent action POSTs."""
+
+    def test_me_returns_username(self, db, django_user_model):
+        from rest_framework.test import APIClient
+        u = django_user_model.objects.create_user(username="florence", password="p")
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.get("/api/v1/upd/change-requests/me/")
+        assert r.status_code == 200
+        assert r.data["username"] == "florence"
+        assert r.data["is_staff"] is False
+
+    def test_me_requires_authentication(self, db):
+        from rest_framework.test import APIClient
+        r = APIClient().get("/api/v1/upd/change-requests/me/")
+        assert r.status_code in (401, 403)

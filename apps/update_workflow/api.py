@@ -11,7 +11,9 @@ from .services import (
     UpdError,
     commit_change_request,
     escalate_change_request,
+    hold_change_request,
     reject_change_request,
+    release_change_request,
     submit_change_request,
 )
 
@@ -152,6 +154,62 @@ class ChangeRequestViewSet(
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         req.refresh_from_db()
         return Response(self.get_serializer(req).data)
+
+    # --- US-S22-001 — hold / release / me ---------------------------------
+
+    @extend_schema(
+        tags=["upd"],
+        summary="Hold a PENDING_APPROVAL change request pending more info",
+        request=_ActorReason,
+        responses={200: ChangeRequestSerializer, 400: OpenApiResponse(description="precondition unmet")},
+    )
+    @action(detail=True, methods=["post"], url_path="hold")
+    def hold(self, request, pk=None):
+        ser = _ActorReason(data=request.data)
+        ser.is_valid(raise_exception=True)
+        reason = ser.validated_data.get("reason", "")
+        req = self.get_object()
+        try:
+            hold_change_request(req, approver=ser.validated_data["actor"], reason=reason)
+        except UpdError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        req.refresh_from_db()
+        return Response(self.get_serializer(req).data)
+
+    @extend_schema(
+        tags=["upd"],
+        summary="Release an ON_HOLD change request back into the queue",
+        request=_ActorReason,
+        responses={200: ChangeRequestSerializer, 400: OpenApiResponse(description="precondition unmet")},
+    )
+    @action(detail=True, methods=["post"], url_path="release")
+    def release(self, request, pk=None):
+        ser = _ActorReason(data=request.data)
+        ser.is_valid(raise_exception=True)
+        reason = ser.validated_data.get("reason", "")
+        req = self.get_object()
+        try:
+            release_change_request(req, approver=ser.validated_data["actor"], reason=reason)
+        except UpdError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        req.refresh_from_db()
+        return Response(self.get_serializer(req).data)
+
+    @extend_schema(
+        tags=["upd"],
+        summary="Current user identity for the UPD workbench",
+        responses={200: OpenApiResponse(
+            description="{username: str, is_staff: bool, is_superuser: bool}",
+        )},
+    )
+    @action(detail=False, methods=["get"], url_path="me")
+    def me(self, request):
+        u = request.user
+        return Response({
+            "username": u.username,
+            "is_staff": bool(u.is_staff),
+            "is_superuser": bool(u.is_superuser),
+        })
 
     # --- US-S10-004 — bulk actions ----------------------------------------
     #
