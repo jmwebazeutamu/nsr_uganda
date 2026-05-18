@@ -105,6 +105,13 @@
     <a class="button" href="{% url 'admin:intake_us118_export_xlsform' original.pk %}">
       ⬇  Download XLSForm
     </a>
+    <form method="post" action="{% url 'admin:intake_us_pii_lint' original.pk %}"
+          style="margin:0">
+      {% csrf_token %}
+      <button type="submit" class="button">
+        🔍  Lint PII
+      </button>
+    </form>
     {% if original.status == 'draft' or original.status == 'pending_approval' %}
       <form method="post" action="{% url 'admin:intake_us119b_approve' original.pk %}"
             style="margin:0 0 0 auto"

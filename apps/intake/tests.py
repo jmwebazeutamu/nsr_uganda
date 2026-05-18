@@ -1394,6 +1394,125 @@ class TestApproveFormVersion:
         assert r.status_code == 405
 
 
+# --- US-S20-001: PII lint --------------------------------------------------
+
+class TestPiiLint:
+    """The lint catches NIN-shaped, phone-shaped, email, vehicle-plate
+    and 11+-digit values embedded in label / hint / constraint message
+    text. Authors often paste a "real-looking" example and we want
+    that surfaced before it lands in DqaResult error rows."""
+
+    def test_clean_text_returns_no_violations(self):
+        from apps.intake.pii_lint import lint_text
+        assert lint_text("Enter a valid phone number.") == []
+        assert lint_text("Age must be between 0 and 120.") == []
+        assert lint_text("") == []
+
+    def test_detects_uganda_nin_shape(self):
+        from apps.intake.pii_lint import lint_text
+        v = lint_text("Enter NIN like CM12345678ABCDE")
+        assert any(item["rule"] == "nin" and item["matched"] == "CM12345678ABCDE" for item in v)
+
+    def test_detects_uganda_phone(self):
+        from apps.intake.pii_lint import lint_text
+        v_plus = lint_text("Call +256770123456 for help")
+        v_local = lint_text("Try 0770123456 first")
+        assert any(item["rule"] == "phone" for item in v_plus)
+        assert any(item["rule"] == "phone" for item in v_local)
+
+    def test_detects_email(self):
+        from apps.intake.pii_lint import lint_text
+        v = lint_text("Contact john.doe@example.com for support")
+        assert any(item["rule"] == "email" for item in v)
+
+    def test_detects_long_digit_runs(self):
+        """11+ consecutive digits (passport, MM wallet, voter card)."""
+        from apps.intake.pii_lint import lint_text
+        v = lint_text("Use voter card 12345678901234")
+        assert any(item["rule"] == "long_digits" for item in v)
+
+    def test_detects_vehicle_plate(self):
+        from apps.intake.pii_lint import lint_text
+        v = lint_text("Plate UAE 123J was seen")
+        assert any(item["rule"] == "plate" for item in v)
+
+    def test_does_not_double_attribute_phone_as_long_digits(self):
+        """A phone-shaped number must classify as 'phone', not also
+        get tallied as 'long_digits' — the consumed-span tracking
+        in lint_text exists for exactly this case."""
+        from apps.intake.pii_lint import lint_text
+        v = lint_text("Phone +256770123456 please")
+        rules = [item["rule"] for item in v]
+        assert "phone" in rules
+        assert "long_digits" not in rules
+
+    def test_lint_form_version_walks_the_tree(self, db):
+        from apps.intake.models import (
+            FormConstraint,
+            FormQuestion,
+            FormSection,
+            FormVersion,
+        )
+        from apps.intake.pii_lint import lint_form_version
+        fv = FormVersion.objects.create(
+            version=8001, name="lint-tree",
+            effective_from=date(2026, 1, 1),
+            status="draft", author="qa",
+        )
+        s = FormSection.objects.create(
+            form_version=fv, code="C", name="ros", label="Ros", order=1,
+        )
+        q = FormQuestion.objects.create(
+            section=s, name="phone", label="Phone",
+            type="text", order_in_section=1,
+            constraint_message="Enter a phone like +256770123456.",
+            hint="Example NIN: CM12345678ABCDE",
+        )
+        FormConstraint.objects.create(
+            question=q, dsl={"field": "phone", "op": "regex", "value": "^\\+?256"},
+            message="See example +256770999999 for format.",
+        )
+        report = lint_form_version(fv)
+        assert report["questions_scanned"] == 1
+        assert len(report["violations"]) == 1
+        entry = report["violations"][0]
+        assert entry["section"] == "C" and entry["question"] == "phone"
+        rules = {item["rule"] for item in entry["items"]}
+        # phone × 2 (hint + constraint message), nin × 1 (hint).
+        assert {"phone", "nin"}.issubset(rules)
+
+    def test_admin_pii_lint_button_returns_302(self, db, django_user_model):
+        from django.test import Client
+
+        from apps.intake.models import (
+            FormQuestion,
+            FormSection,
+            FormVersion,
+        )
+        fv = FormVersion.objects.create(
+            version=8002, name="lint-admin",
+            effective_from=date(2026, 1, 1),
+            status="draft", author="qa",
+        )
+        s = FormSection.objects.create(
+            form_version=fv, code="A", name="ident",
+            label="Identification", order=1,
+        )
+        FormQuestion.objects.create(
+            section=s, name="nin", label="NIN",
+            type="text", order_in_section=1,
+            constraint_message="Try CM12345678ABCDE for the format.",
+        )
+        u = django_user_model.objects.create_user(
+            username="linter", password="p",
+            is_staff=True, is_superuser=True,
+        )
+        c = Client()
+        c.force_login(u)
+        r = c.post(f"/admin/intake/formversion/_us-pii-lint/{fv.id}/")
+        assert r.status_code == 302
+
+
 # --- US-S20-005: form-versioning hygiene -----------------------------------
 
 class TestFormVersionLockAndClone:

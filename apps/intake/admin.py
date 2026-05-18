@@ -228,6 +228,12 @@ class FormVersionAdmin(admin.ModelAdmin):
                 self.admin_site.admin_view(_clone_form_version_view),
                 name="intake_us_clone_form_version",
             ),
+            # US-S20-001 — PII lint scan over the whole authored form.
+            path(
+                "_us-pii-lint/<str:form_version_id>/",
+                self.admin_site.admin_view(_pii_lint_view),
+                name="intake_us_pii_lint",
+            ),
         ]
         return extra + urls
 
@@ -601,6 +607,59 @@ def _kobo_push_view(request, form_version_id):
     return HttpResponseRedirect(target)
 
 
+# --- US-S20-001 — PII lint scan --------------------------------------------
+
+@require_POST
+def _pii_lint_view(request, form_version_id):
+    """Run the constraint-message PII lint over a whole FormVersion
+    and surface violations as admin messages. Redirects back to the
+    changeform with one warning per violation (capped) or a single
+    success message when clean."""
+    from django.contrib import messages
+    from django.http import HttpResponseRedirect
+    from django.urls import reverse
+
+    from .pii_lint import lint_form_version
+    fv = _resolve_form_version(form_version_id)
+    target = reverse("admin:intake_formversion_change", args=[fv.id]) if fv else \
+             reverse("admin:intake_formversion_changelist")
+    if fv is None:
+        messages.error(request, "FormVersion not found.")
+        return HttpResponseRedirect(target)
+    report = lint_form_version(fv)
+    violations = report["violations"]
+    if not violations:
+        messages.success(
+            request,
+            f"PII lint: clean — scanned {report['questions_scanned']} questions.",
+        )
+        return HttpResponseRedirect(target)
+    # Cap shown violations so a noisy form doesn't drown the admin
+    # message stack. The summary line carries the total.
+    shown = 0
+    cap = 25
+    for entry in violations:
+        for item in entry["items"]:
+            if shown >= cap:
+                break
+            messages.warning(
+                request,
+                f"{entry['section']}/{entry['question']}: `{item['matched']}` "
+                f"({item['rule']} in {item['where']})",
+            )
+            shown += 1
+        if shown >= cap:
+            break
+    total_items = sum(len(e["items"]) for e in violations)
+    messages.warning(
+        request,
+        f"PII lint: {total_items} violation(s) across "
+        f"{len(violations)} question(s); {report['questions_scanned']} "
+        f"questions scanned. Showing first {min(shown, cap)}.",
+    )
+    return HttpResponseRedirect(target)
+
+
 # --- US-S20-005 — clone form version --------------------------------------
 
 @require_POST
@@ -766,6 +825,24 @@ class FormQuestionAdmin(_LockedByParentMixin, admin.ModelAdmin):
     def label_short(self, obj):
         label = obj.label or ""
         return label if len(label) <= 60 else label[:57] + "…"
+
+    def save_model(self, request, obj, form, change):
+        """After save, run the PII lint over the question's text
+        fields (label / hint / constraint_message) and surface any
+        violations as admin warnings. Doesn't block save — the
+        author may have a legitimate reason (e.g. a placeholder
+        regex example) and we don't want to be paternalistic."""
+        from django.contrib import messages
+
+        from .pii_lint import lint_form_question
+        super().save_model(request, obj, form, change)
+        for v in lint_form_question(obj):
+            messages.warning(
+                request,
+                f"PII-shape lint: `{v['matched']}` looks like a "
+                f"{v['rule']} in {v['where']}. If that's a real "
+                "value, replace it with a placeholder.",
+            )
 
 
 @admin.register(Submission)
