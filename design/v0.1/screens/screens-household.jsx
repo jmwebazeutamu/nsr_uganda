@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, KPI, PageHeader */
+/* global React, Icon, Chip, KPI, PageHeader, Modal, Toast */
 // NSR MIS — Household detail (US-005, US-090)
 //
 // Visual design from the claude.ai/design redesign deposited at
@@ -159,6 +159,62 @@ const _eduLabel = (code) => ({
 })[String(code)] || (code ? `code ${code}` : "—");
 
 
+// ────────────────────────────────────────────────────────────────
+// US-S22-002 — Open Update + Open Grievance wiring helpers
+// ────────────────────────────────────────────────────────────────
+
+// CSRF cookie reader for DRF session-auth POSTs (same pattern as
+// screens-grm + screens-upd).
+const _hhCsrf = () => {
+  const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return m ? m[1] : "";
+};
+
+// Whitelist of editable fields per entity type. Kept narrow on
+// purpose: these are the household / member ORM columns the live
+// HouseholdSerializer + MemberSerializer surface AND that operators
+// realistically correct from the registry view. Anything more
+// invasive (geo unit, NIN status, head_member swap) should go
+// through a dedicated workflow, not a one-shot field change.
+const _UPD_HH_FIELDS = [
+  { key: "urban_rural",       label: "Urban / rural" },
+  { key: "address_narrative", label: "Address narrative" },
+];
+const _UPD_MEMBER_FIELDS = [
+  { key: "surname",               label: "Surname" },
+  { key: "first_name",            label: "First name" },
+  { key: "other_name",            label: "Other name" },
+  { key: "relationship_to_head",  label: "Relationship to head" },
+  { key: "telephone_1",           label: "Phone (primary)" },
+  { key: "telephone_2",           label: "Phone (secondary)" },
+];
+
+const _UPD_CHANGE_TYPES = [
+  { value: "correction",        label: "Correction" },
+  { value: "addition",          label: "Roster: addition" },
+  { value: "removal",           label: "Roster: removal" },
+  { value: "vital_event",       label: "Roster: vital event" },
+  { value: "programme_state",   label: "Programme state" },
+  { value: "recertification",   label: "Recertification" },
+];
+
+const _GRM_CATEGORIES = [
+  { value: "data_correction",  label: "Data correction" },
+  { value: "exclusion_error",  label: "Wrongly excluded" },
+  { value: "inclusion_error",  label: "Wrongly included" },
+  { value: "programme_issue",  label: "Programme issue" },
+  { value: "operator_conduct", label: "Operator conduct" },
+  { value: "other",            label: "Other" },
+];
+
+const _GRM_TIERS = [
+  { value: "l1_parish_chief", label: "L1 — Parish Chief" },
+  { value: "l2_cdo",          label: "L2 — CDO" },
+  { value: "l3_district",     label: "L3 — District" },
+  { value: "l4_nsr_unit",     label: "L4 — NSR Unit" },
+];
+
+
 // Tab definitions match the redesign's IDs + count badges.
 const HH_TABS = [
   { id: "over",  label: "Overview" },
@@ -181,6 +237,38 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
   const [liveHh, setLiveHh] = useStateHH(null);
   const [loadError, setLoadError] = useStateHH(null);
   const [dataSource, setDataSource] = useStateHH(householdId ? "loading" : "mock");
+
+  // US-S22-002 — Open Update / Open Grievance wiring state.
+  // `modal` is the open dialog ("upd" | "grm" | null). `me` is bound
+  // from /api/v1/upd/change-requests/me/ and serves as the actor /
+  // requester on every POST. `lastCreated` powers the post-submit
+  // toast that offers a one-click jump to UPD / GRM.
+  const [modal, setModal] = useStateHH(null);
+  const [toast, setToast] = useStateHH("");
+  const [busy, setBusy] = useStateHH(false);
+  const [me, setMe] = useStateHH(null);
+  const [lastCreated, setLastCreated] = useStateHH(null);
+  const [updForm, setUpdForm] = useStateHH({
+    entity_type: "household",
+    entity_id: "",
+    member_id: "",
+    change_type: "correction",
+    pmt_relevant: false,
+    field: "",
+    old_value: "",
+    new_value: "",
+    requester_note: "",
+  });
+  const [grmForm, setGrmForm] = useStateHH({
+    category: "data_correction",
+    tier: "l1_parish_chief",
+    description: "",
+    member_id: "",
+    reporter_name: "",
+    reporter_phone: "",
+    reporter_relationship: "",
+  });
+  const [formErr, setFormErr] = useStateHH("");
 
   useEffectHH(() => {
     if (!householdId) return undefined;
@@ -211,6 +299,180 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
   }, [householdId]);
 
   const h = useMemoHH(() => liveHh || (householdId ? null : DEMO_HH), [liveHh, householdId]);
+
+  // Probe /me once on mount so action POSTs can bind a real actor.
+  // 401/403 (file:// preview) leaves me=null and submits use the
+  // "console-operator" placeholder.
+  useEffectHH(() => {
+    fetch("/api/v1/upd/change-requests/me/", {
+      credentials: "same-origin", headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setMe(data); })
+      .catch(() => {});
+  }, []);
+
+  // Open the UPD modal pre-filled with this household as the target
+  // entity. Members dropdown lights up when the operator switches
+  // entity_type to "member".
+  const openUpdate = () => {
+    if (!h) return;
+    setUpdForm({
+      entity_type: "household",
+      entity_id: h.rid,
+      member_id: h.members[0]?.id || "",
+      change_type: "correction",
+      pmt_relevant: false,
+      field: _UPD_HH_FIELDS[0].key,
+      old_value: "",
+      new_value: "",
+      requester_note: "",
+    });
+    setFormErr("");
+    setModal("upd");
+  };
+
+  const openGrievance = () => {
+    if (!h) return;
+    setGrmForm({
+      category: "data_correction",
+      tier: "l1_parish_chief",
+      description: "",
+      member_id: "",
+      reporter_name: h.head || "",
+      reporter_phone: h.phone && h.phone !== "—" ? h.phone : "",
+      reporter_relationship: "Self · head",
+    });
+    setFormErr("");
+    setModal("grm");
+  };
+
+  // Resolve the "current" old value for the picked field. When
+  // entity_type=household the value comes from h.* projections that
+  // mirror the ORM column names; for member, look up the selected
+  // member and read the matching key.
+  const resolveOldValue = (form) => {
+    if (!h) return "";
+    if (form.entity_type === "household") {
+      // h is the projected view-model — only urban_rural is exposed
+      // directly; address_narrative isn't projected, so we fall back
+      // to "" (the server will accept old="" and rely on its own
+      // concurrent-edit guard when committing).
+      if (form.field === "urban_rural") return h.urban_rural || "";
+      return "";
+    }
+    const member = h.members.find(m => m.id === form.member_id);
+    if (!member) return "";
+    if (form.field === "telephone_1") return member.phone || "";
+    if (form.field === "surname")     return (member.name.split(" ")[0] || "");
+    if (form.field === "first_name")  return (member.name.split(" ").slice(1).join(" ") || "");
+    if (form.field === "relationship_to_head") return member.rel === "Head" ? "head" : "";
+    return "";
+  };
+
+  const submitOpenUpdate = () => {
+    if (!h) return;
+    const form = updForm;
+    if (!form.field || !form.new_value) {
+      setFormErr("Pick a field and provide the new value.");
+      return;
+    }
+    if (form.entity_type === "member" && !form.member_id) {
+      setFormErr("Pick which household member this change applies to.");
+      return;
+    }
+    const entity_id = form.entity_type === "household" ? h.rid : form.member_id;
+    const old_value = form.old_value || resolveOldValue(form);
+    const requester = me?.username || "console-operator";
+    setBusy(true);
+    setFormErr("");
+    fetch("/api/v1/upd/change-requests/", {
+      method: "POST", credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": _hhCsrf(),
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        entity_type: form.entity_type,
+        entity_id,
+        change_type: form.change_type,
+        pmt_relevant: !!form.pmt_relevant,
+        changes: { [form.field]: { old: old_value, new: form.new_value } },
+        evidence: form.requester_note ? [{ kind: "note", label: form.requester_note }] : [],
+        source_channel: "web",
+        requester,
+        requester_note: form.requester_note,
+      }),
+    })
+      .then(async r => {
+        if (r.status === 201) return r.json();
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.detail || JSON.stringify(j) || `HTTP ${r.status}`);
+      })
+      .then(cr => fetch(`/api/v1/upd/change-requests/${cr.id}/submit/`, {
+        method: "POST", credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": _hhCsrf(),
+          Accept: "application/json",
+        },
+      }).then(async r => {
+        if (r.ok) return r.json();
+        const j = await r.json().catch(() => ({}));
+        // CR was created (DRAFT) but submit failed — surface both
+        // pieces so the operator knows the row is on the workbench
+        // even though the submit transition didn't apply.
+        throw new Error(`Draft saved (${cr.id.slice(0, 8)}…) but submit failed: ${j.detail || r.status}`);
+      }))
+      .then(submitted => {
+        setLastCreated({ kind: "upd", id: submitted.id });
+        setToast(`Change request ${submitted.id.slice(0, 12)}… submitted.`);
+        setModal(null);
+      })
+      .catch(e => setFormErr(String(e.message || e)))
+      .finally(() => setBusy(false));
+  };
+
+  const submitOpenGrievance = () => {
+    if (!h) return;
+    if (!grmForm.description) {
+      setFormErr("Description is required.");
+      return;
+    }
+    setBusy(true);
+    setFormErr("");
+    fetch("/api/v1/grm/grievances/", {
+      method: "POST", credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": _hhCsrf(),
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        category: grmForm.category,
+        tier: grmForm.tier,
+        description: grmForm.description,
+        household_id: h.rid,
+        member_id: grmForm.member_id || "",
+        reporter_name: grmForm.reporter_name,
+        reporter_phone: grmForm.reporter_phone,
+        reporter_relationship: grmForm.reporter_relationship,
+      }),
+    })
+      .then(async r => {
+        if (r.status === 201) return r.json();
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.detail || JSON.stringify(j) || `HTTP ${r.status}`);
+      })
+      .then(grievance => {
+        setLastCreated({ kind: "grm", id: grievance.id });
+        setToast(`Grievance ${grievance.id.slice(0, 12)}… opened.`);
+        setModal(null);
+      })
+      .catch(e => setFormErr(String(e.message || e)))
+      .finally(() => setBusy(false));
+  };
 
   if (dataSource === "loading") {
     return (
@@ -305,8 +567,18 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
               : "Status confirmed · design-preview content"}
           </span>
           <div style={{flex:1}}/>
-          <button className="btn"><Icon name="edit" size={14}/> Open update</button>
-          <button className="btn"><Icon name="message" size={14}/> Open grievance</button>
+          <button className="btn"
+            disabled={dataSource !== "live"}
+            title={dataSource !== "live" ? "Live data required — log in via /admin/" : ""}
+            onClick={openUpdate}>
+            <Icon name="edit" size={14}/> Open update
+          </button>
+          <button className="btn"
+            disabled={dataSource !== "live"}
+            title={dataSource !== "live" ? "Live data required — log in via /admin/" : ""}
+            onClick={openGrievance}>
+            <Icon name="message" size={14}/> Open grievance
+          </button>
           <button className="btn btn-ghost"><Icon name="moreH" size={14}/></button>
         </div>
       </div>
@@ -350,6 +622,239 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
         Read-only registry view (AC-UPD-VERSION). All edits open a UPD ChangeRequest.
         Audit chain available under the Audit tab.
       </div>
+
+      {/* US-S22-002 — Open Update modal */}
+      <Modal open={modal === "upd"} onClose={() => !busy && setModal(null)}
+        title="Open a change request"
+        width={560}
+        footer={
+          <>
+            <button className="btn" disabled={busy} onClick={() => setModal(null)}>Cancel</button>
+            <button className="btn btn-success" disabled={busy} onClick={submitOpenUpdate}>
+              {busy ? "Submitting…" : "Create & submit"}
+            </button>
+          </>
+        }>
+        <div className="col gap-3">
+          <div className="t-bodysm muted">
+            Creates a DRAFT change request scoped to this household and
+            advances it to PENDING_APPROVAL. Reviewer routing comes from
+            the change_type × pmt_relevant matrix (SAD §4.4.4).
+          </div>
+
+          <div className="row gap-3">
+            <label style={{flex:1}}>
+              <div className="t-cap">Entity</div>
+              <select value={updForm.entity_type}
+                onChange={(e) => setUpdForm({...updForm,
+                  entity_type: e.target.value,
+                  field: (e.target.value === "household"
+                          ? _UPD_HH_FIELDS[0].key
+                          : _UPD_MEMBER_FIELDS[0].key),
+                })}>
+                <option value="household">This household</option>
+                <option value="member">A household member</option>
+              </select>
+            </label>
+            {updForm.entity_type === "member" && (
+              <label style={{flex:2}}>
+                <div className="t-cap">Member</div>
+                <select value={updForm.member_id}
+                  onChange={(e) => setUpdForm({...updForm, member_id: e.target.value})}>
+                  {(h?.members || []).map(m => (
+                    <option key={m.id} value={m.id}>
+                      Line {m.line} · {m.name}{m.rel === "Head" ? " (head)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+
+          <div className="row gap-3">
+            <label style={{flex:1}}>
+              <div className="t-cap">Change type</div>
+              <select value={updForm.change_type}
+                onChange={(e) => setUpdForm({...updForm, change_type: e.target.value})}>
+                {_UPD_CHANGE_TYPES.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="row gap-2" style={{alignItems:"center", paddingTop:18}}>
+              <input type="checkbox" checked={updForm.pmt_relevant}
+                onChange={(e) => setUpdForm({...updForm, pmt_relevant: e.target.checked})}/>
+              <span className="t-bodysm">PMT-relevant</span>
+            </label>
+          </div>
+
+          <label>
+            <div className="t-cap">Field to change</div>
+            <select value={updForm.field}
+              onChange={(e) => setUpdForm({...updForm, field: e.target.value})}>
+              {(updForm.entity_type === "household" ? _UPD_HH_FIELDS : _UPD_MEMBER_FIELDS).map(f => (
+                <option key={f.key} value={f.key}>{f.label}</option>
+              ))}
+            </select>
+          </label>
+
+          <div className="row gap-3">
+            <label style={{flex:1}}>
+              <div className="t-cap">Current value</div>
+              <input type="text" value={updForm.old_value || resolveOldValue(updForm)}
+                onChange={(e) => setUpdForm({...updForm, old_value: e.target.value})}
+                placeholder="Old value (pre-filled when known)"/>
+            </label>
+            <label style={{flex:1}}>
+              <div className="t-cap">New value *</div>
+              <input type="text" value={updForm.new_value}
+                onChange={(e) => setUpdForm({...updForm, new_value: e.target.value})}
+                placeholder="What the field should become"/>
+            </label>
+          </div>
+
+          <label>
+            <div className="t-cap">Requester note</div>
+            <textarea rows={2} value={updForm.requester_note}
+              onChange={(e) => setUpdForm({...updForm, requester_note: e.target.value})}
+              placeholder="Why this change? (becomes the evidence note + audit reason.)"/>
+          </label>
+
+          {formErr && (
+            <div className="t-bodysm" style={{color:"var(--accent-danger)",
+              padding:"8px 10px", background:"var(--neutral-50)",
+              border:"1px solid var(--accent-danger)", borderRadius:6}}>
+              {formErr}
+            </div>
+          )}
+
+          <div className="t-cap muted">
+            Requester: <strong>{me?.username || "console-operator"}</strong> ·
+            Source: <strong>web</strong>
+          </div>
+        </div>
+      </Modal>
+
+      {/* US-S22-002 — Open Grievance modal */}
+      <Modal open={modal === "grm"} onClose={() => !busy && setModal(null)}
+        title="Open a grievance"
+        width={560}
+        footer={
+          <>
+            <button className="btn" disabled={busy} onClick={() => setModal(null)}>Cancel</button>
+            <button className="btn btn-success" disabled={busy} onClick={submitOpenGrievance}>
+              {busy ? "Opening…" : "Open grievance"}
+            </button>
+          </>
+        }>
+        <div className="col gap-3">
+          <div className="t-bodysm muted">
+            Creates a grievance pinned to this household. SLA and tier
+            routing are stamped server-side from the SAD §4.5 matrix.
+          </div>
+
+          <div className="row gap-3">
+            <label style={{flex:1}}>
+              <div className="t-cap">Category</div>
+              <select value={grmForm.category}
+                onChange={(e) => setGrmForm({...grmForm, category: e.target.value})}>
+                {_GRM_CATEGORIES.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{flex:1}}>
+              <div className="t-cap">Tier</div>
+              <select value={grmForm.tier}
+                onChange={(e) => setGrmForm({...grmForm, tier: e.target.value})}>
+                {_GRM_TIERS.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <label>
+            <div className="t-cap">Member (optional)</div>
+            <select value={grmForm.member_id}
+              onChange={(e) => setGrmForm({...grmForm, member_id: e.target.value})}>
+              <option value="">— Household-level grievance —</option>
+              {(h?.members || []).map(m => (
+                <option key={m.id} value={m.id}>
+                  Line {m.line} · {m.name}{m.rel === "Head" ? " (head)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            <div className="t-cap">Description *</div>
+            <textarea rows={3} value={grmForm.description}
+              onChange={(e) => setGrmForm({...grmForm, description: e.target.value})}
+              placeholder="Describe the complaint in the operator's own words."/>
+          </label>
+
+          <div className="row gap-3">
+            <label style={{flex:1}}>
+              <div className="t-cap">Reporter name</div>
+              <input type="text" value={grmForm.reporter_name}
+                onChange={(e) => setGrmForm({...grmForm, reporter_name: e.target.value})}
+                placeholder="Who is reporting"/>
+            </label>
+            <label style={{flex:1}}>
+              <div className="t-cap">Reporter phone</div>
+              <input type="text" value={grmForm.reporter_phone}
+                onChange={(e) => setGrmForm({...grmForm, reporter_phone: e.target.value})}
+                placeholder="+256…"/>
+            </label>
+          </div>
+
+          <label>
+            <div className="t-cap">Relationship</div>
+            <input type="text" value={grmForm.reporter_relationship}
+              onChange={(e) => setGrmForm({...grmForm, reporter_relationship: e.target.value})}
+              placeholder="e.g., Self · head; Daughter; Neighbour"/>
+          </label>
+
+          {formErr && (
+            <div className="t-bodysm" style={{color:"var(--accent-danger)",
+              padding:"8px 10px", background:"var(--neutral-50)",
+              border:"1px solid var(--accent-danger)", borderRadius:6}}>
+              {formErr}
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* Post-submit toast with one-click jump to the new record */}
+      {toast && (
+        <div style={{position:"fixed", bottom:24, right:24, zIndex:50,
+          padding:"12px 16px", background:"var(--primary-900)", color:"white",
+          borderRadius:8, boxShadow:"0 4px 14px rgba(0,0,0,0.15)",
+          display:"flex", alignItems:"center", gap:12, maxWidth:520}}>
+          <span className="t-bodysm">{toast}</span>
+          {lastCreated && onNavigate && (
+            <button className="btn btn-sm"
+              style={{background:"white", color:"var(--primary-900)"}}
+              onClick={() => {
+                if (lastCreated.kind === "upd") {
+                  onNavigate("upd", { changeRequestId: lastCreated.id });
+                } else {
+                  onNavigate("grm");
+                }
+                setToast("");
+                setLastCreated(null);
+              }}>
+              Open in {lastCreated.kind === "upd" ? "UPD" : "GRM"}
+            </button>
+          )}
+          <button className="icon-btn" style={{color:"white"}}
+            onClick={() => { setToast(""); setLastCreated(null); }}
+            aria-label="Dismiss">
+            <Icon name="x" size={14}/>
+          </button>
+        </div>
+      )}
     </div>
   );
 };
