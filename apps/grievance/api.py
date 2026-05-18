@@ -203,13 +203,26 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
 
     @extend_schema(
         tags=["grm"],
+        summary="Return the current user's GRM role + username",
+        description=("Lets the React console show or hide the 'Add task' / "
+                     "'Open grievance' affordances without a probe POST. "
+                     "Returns {username, is_officer}."),
+    )
+    @action(detail=False, methods=["get"], url_path="me")
+    def me(self, request):
+        return Response({
+            "username": getattr(request.user, "username", "") or "",
+            "is_officer": _is_grm_officer(request.user),
+        })
+
+    @extend_schema(
+        tags=["grm"],
         summary="List grievances past their SLA deadline",
         description=("Returns open / in-progress / escalated grievances whose "
-                     "sla_deadline is in the past. The queryset is ABAC-scoped "
-                     "via the same HouseholdIdScopedQuerysetMixin path as the "
-                     "main list — a sub-region operator only sees overdue "
-                     "items they have authority over. Powers L2/L3/L4 "
-                     "supervision dashboards."),
+                     "sla_deadline is in the past. The queryset is role-scoped "
+                     "via the same get_queryset path as the main list — a "
+                     "non-officer only sees overdue items they own or hold "
+                     "a task on. Powers L2/L3/L4 supervision dashboards."),
         responses={200: GrievanceSerializer(many=True)},
     )
     @action(detail=False, methods=["get"], url_path="overdue")

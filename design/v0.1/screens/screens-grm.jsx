@@ -109,6 +109,65 @@ const slaChip = (h, status) => {
   return <Chip size="sm" tone="data"><Icon name="clock" size={11}/> {h}h left</Chip>;
 };
 
+// US-S21-003c — synthetic timeline for the CASE DETAIL rail. Builds
+// a chronological list of {label, detail, at, tone} events from the
+// grievance fields + tasks state. Used inline instead of (or
+// alongside) the Audit drawer.
+const _grmTimelineFor = (g, tasks) => {
+  if (!g) return [];
+  const events = [];
+  events.push({
+    label: "Opened",
+    detail: g.reporter_name ? `Reporter: ${g.reporter_name}` : "Anonymous channel",
+    at: g.opened_at, tone: "data",
+  });
+  if (g.assigned_to) {
+    events.push({
+      label: `Assigned to ${g.assigned_to}`,
+      at: g.opened_at, tone: "user",
+    });
+  }
+  if (g.status === "escalated") {
+    events.push({
+      label: `Escalated to ${GRM_TIERS[g.tier]?.short || g.tier}`,
+      detail: "Tier reset · SLA window restarted",
+      at: "—", tone: "update",
+    });
+  }
+  for (const t of (tasks || [])) {
+    events.push({
+      label: `Task created: ${t.title}`,
+      detail: `assigned to ${t.assigned_to}`,
+      at: _grmFmtTime(t.created_at), tone: "data",
+    });
+    if (t.status === "in_progress") {
+      events.push({
+        label: `Task started: ${t.title}`,
+        at: _grmFmtTime(t.updated_at), tone: "update",
+      });
+    }
+    if (t.closed_at) {
+      events.push({
+        label: `Task closed: ${t.title}`,
+        detail: t.closed_by ? `by ${t.closed_by}` : "",
+        at: _grmFmtTime(t.closed_at), tone: "eligibility",
+      });
+    }
+  }
+  if (g.status === "resolved" || g.status === "closed") {
+    events.push({
+      label: "Resolved",
+      detail: g.narrative ? g.narrative.slice(0, 60) : "",
+      at: "—", tone: "eligibility",
+    });
+  }
+  if (g.status === "closed") {
+    events.push({ label: "Closed", at: "—", tone: "neutral" });
+  }
+  return events;
+};
+
+
 const QUICK_FILTERS_GRM = [
   { id: "breach",    label: "Past SLA (any tier)",       icon: "alert",      tone: "danger",  predicate: r => r.hours_to_breach < 0 && r.status !== "resolved" && r.status !== "closed" },
   { id: "open_l1",   label: "Open L1 — Parish Chief",    icon: "users",      tone: "data",    predicate: r => r.tier === "l1_parish_chief" && r.status === "open" },
@@ -126,11 +185,27 @@ const GRMScreen = ({ onNavigate }) => {
   const [selectedRow, setSelectedRow] = useStateGrm(GRM_MOCK_ROWS[1].id);
   const [selection, setSelection] = useStateGrm(new Set());
   const [quickFilter, setQuickFilter] = useStateGrm(null);
-  const [modal, setModal] = useStateGrm(null); // 'assign' | 'escalate' | 'resolve' | 'close'
+  // 'assign' | 'escalate' | 'resolve' | 'close' | 'open_grievance' | 'add_task'
+  const [modal, setModal] = useStateGrm(null);
   const [assignee, setAssignee] = useStateGrm("");
   const [busy, setBusy] = useStateGrm(false);
   const [auditOpen, setAuditOpen] = useStateGrm(false);
   const [toast, setToast] = useStateGrm("");
+  // US-S21-003c — tasks for the currently-selected grievance, plus
+  // role flag from the /me endpoint. Officer-status drives whether
+  // "+ Add task" and "Open grievance" affordances render.
+  const [tasks, setTasks] = useStateGrm([]);
+  const [me, setMe] = useStateGrm({ username: "", is_officer: false });
+  // Form state for the Open-Grievance modal.
+  const [openForm, setOpenForm] = useStateGrm({
+    category: "data_correction", description: "", tier: "l1_parish_chief",
+    household_id: "", member_id: "",
+    reporter_name: "", reporter_phone: "", reporter_relationship: "",
+  });
+  // Form state for the Add-Task modal.
+  const [taskForm, setTaskForm] = useStateGrm({
+    title: "", description: "", assigned_to: "",
+  });
 
   // Refresh the roster from the API. Used on mount + after every
   // successful action. On unreachable API (file:// preview) it
@@ -156,6 +231,130 @@ const GRMScreen = ({ onNavigate }) => {
     .catch(() => { setDataSource("offline"); });
 
   useEffectGrm(() => { refresh(); /* eslint-disable-line */ }, []);
+
+  // Probe the /me endpoint on mount to learn whether this user is a
+  // GRM Officer. Officer status gates the "Open grievance" + "Add
+  // task" affordances. On a file:// preview (no Django session)
+  // the call 401s and we leave is_officer=false — the preview demo
+  // still works because the offline fallback in fire() doesn't
+  // require an officer.
+  useEffectGrm(() => {
+    fetch("/api/v1/grm/grievances/me/", {
+      credentials: "same-origin", headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (data) setMe(data); })
+      .catch(() => {});
+  }, []);
+
+  // Refetch tasks whenever the selected grievance changes. Tasks are
+  // visible-to-everyone on the row (the API narrows server-side); we
+  // just render whatever the API returns.
+  const refreshTasks = (grievanceId) => {
+    if (!grievanceId) { setTasks([]); return Promise.resolve(); }
+    return fetch(
+      `/api/v1/grm/tasks/?grievance=${encodeURIComponent(grievanceId)}&page_size=100`,
+      { credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => { setTasks(data.results || data || []); })
+      .catch(() => { setTasks([]); });
+  };
+  useEffectGrm(() => {
+    if (dataSource === "live" || dataSource === "live-empty") {
+      refreshTasks(selectedRow);
+    }
+    /* eslint-disable-next-line */
+  }, [selectedRow, dataSource]);
+
+  // Open a new grievance via POST /api/v1/grm/grievances/. The
+  // server stamps SLA + audit; we just refresh on success.
+  const submitOpenGrievance = () => {
+    if (!openForm.category || !openForm.description) {
+      setToast("Category and description are required.");
+      return;
+    }
+    setBusy(true);
+    fetch("/api/v1/grm/grievances/", {
+      method: "POST", credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": _grmCsrf(),
+        Accept: "application/json",
+      },
+      body: JSON.stringify(openForm),
+    })
+      .then(async r => {
+        if (r.status === 201) return r.json();
+        const j = await r.json().catch(() => ({ detail: r.status }));
+        throw new Error(j.detail || `HTTP ${r.status}`);
+      })
+      .then(grievance => {
+        setToast(`Grievance ${grievance.id.slice(0, 8)}… opened.`);
+        setModal(null);
+        setOpenForm({
+          category: "data_correction", description: "", tier: "l1_parish_chief",
+          household_id: "", member_id: "",
+          reporter_name: "", reporter_phone: "", reporter_relationship: "",
+        });
+        return refresh().then(() => setSelectedRow(grievance.id));
+      })
+      .catch(e => setToast(`Open failed: ${e.message}`))
+      .finally(() => setBusy(false));
+  };
+
+  // Create a task on the current grievance.
+  const submitAddTask = () => {
+    if (!current) return;
+    if (!taskForm.title || !taskForm.assigned_to) {
+      setToast("Task needs a title and an assignee.");
+      return;
+    }
+    setBusy(true);
+    fetch("/api/v1/grm/tasks/", {
+      method: "POST", credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": _grmCsrf(),
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ ...taskForm, grievance: current.id }),
+    })
+      .then(async r => {
+        if (r.status === 201) return r.json();
+        const j = await r.json().catch(() => ({ detail: r.status }));
+        throw new Error(j.detail || `HTTP ${r.status}`);
+      })
+      .then(() => {
+        setToast(`Task assigned to ${taskForm.assigned_to}.`);
+        setModal(null);
+        setTaskForm({ title: "", description: "", assigned_to: "" });
+        return refreshTasks(current.id);
+      })
+      .catch(e => setToast(`Add task failed: ${e.message}`))
+      .finally(() => setBusy(false));
+  };
+
+  // Transition a task's status (open ↔ in_progress, → closed).
+  const transitionTask = (taskId, new_status) => {
+    setBusy(true);
+    fetch(`/api/v1/grm/tasks/${taskId}/transition/`, {
+      method: "POST", credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": _grmCsrf(),
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ new_status }),
+    })
+      .then(async r => {
+        if (r.ok) return r.json();
+        const j = await r.json().catch(() => ({ detail: r.status }));
+        throw new Error(j.detail || `HTTP ${r.status}`);
+      })
+      .then(() => refreshTasks(current?.id))
+      .catch(e => setToast(`Transition failed: ${e.message}`))
+      .finally(() => setBusy(false));
+  };
 
   // Keep selectedRow valid when allRows changes (e.g., after a live
   // fetch replaces mock IDs).
@@ -308,7 +507,11 @@ const GRMScreen = ({ onNavigate }) => {
             <Icon name="refreshCw"/> {busy ? "…" : "Refresh"}
           </button>
           <button className="btn"><Icon name="download"/> Export CSV</button>
-          <button className="btn primary"><Icon name="plus"/> Open grievance</button>
+          {me.is_officer && (
+            <button className="btn primary" onClick={() => setModal("open_grievance")}>
+              <Icon name="plus"/> Open grievance
+            </button>
+          )}
         </>}
       />
 
@@ -489,6 +692,119 @@ const GRMScreen = ({ onNavigate }) => {
               </div>
             </div>
 
+            {/* US-S21-003c — Tasks panel. GRM Officer scopes the work
+                into tasks; the assignee transitions them; the resolve
+                action below is disabled until every task is closed. */}
+            {(dataSource === "live" || dataSource === "live-empty") && (
+              <div className="card">
+                <div className="card-header" style={{padding:"12px 16px"}}>
+                  <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)"}}>
+                    <Icon name="check" size={11}/> TASKS
+                    {tasks.length > 0 && (
+                      <Chip size="sm" tone="data" style={{marginLeft:6}}>
+                        {tasks.filter(t => t.status !== "closed").length} open · {tasks.length} total
+                      </Chip>
+                    )}
+                  </div>
+                  {me.is_officer && current.status !== "resolved" && current.status !== "closed" && (
+                    <button className="btn" onClick={() => setModal("add_task")}>
+                      <Icon name="plus" size={12}/> Add task
+                    </button>
+                  )}
+                </div>
+                <div style={{padding: tasks.length === 0 ? 16 : 0}}>
+                  {tasks.length === 0 && (
+                    <div className="t-bodysm muted" style={{fontStyle:"italic"}}>
+                      No tasks yet.
+                      {me.is_officer && " Use Add task to scope the work."}
+                    </div>
+                  )}
+                  {tasks.map(t => {
+                    const isMine = me.username && t.assigned_to === me.username;
+                    const canTransition = isMine || me.is_officer;
+                    const statusTone = t.status === "closed" ? "neutral"
+                      : t.status === "in_progress" ? "update" : "data";
+                    return (
+                      <div key={t.id} style={{
+                        padding: "10px 16px",
+                        borderTop: "1px solid var(--neutral-200)",
+                        display: "flex", alignItems: "flex-start", gap: 8,
+                      }}>
+                        <div style={{flex: 1, minWidth: 0}}>
+                          <div className="t-bodysm" style={{fontWeight: 500, color: "var(--neutral-900)"}}>
+                            {t.title}
+                          </div>
+                          {t.description && (
+                            <div className="t-bodysm muted" style={{marginTop: 2, fontSize: 12}}>
+                              {t.description}
+                            </div>
+                          )}
+                          <div className="t-bodysm muted" style={{fontSize: 11, marginTop: 4}}>
+                            {t.assigned_to}{isMine && " · you"}
+                            {t.closed_at && ` · closed by ${t.closed_by || "—"}`}
+                          </div>
+                        </div>
+                        <div style={{display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end"}}>
+                          <Chip size="sm" tone={statusTone}>
+                            {t.status === "in_progress" ? "in progress" : t.status}
+                          </Chip>
+                          {canTransition && t.status !== "closed" && (
+                            <div style={{display: "flex", gap: 4}}>
+                              {t.status === "open" && (
+                                <button className="btn ghost" disabled={busy}
+                                        title="Mark in progress"
+                                        onClick={() => transitionTask(t.id, "in_progress")}
+                                        style={{padding: "2px 6px", fontSize: 11}}>
+                                  Start
+                                </button>
+                              )}
+                              <button className="btn ghost" disabled={busy}
+                                      title="Close task"
+                                      onClick={() => transitionTask(t.id, "closed")}
+                                      style={{padding: "2px 6px", fontSize: 11}}>
+                                Close
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* US-S21-003c — Timeline. Synthetic chronology built from
+                the grievance fields + tasks state. Surfaces work-log
+                progression inline rather than only via the audit drawer. */}
+            {(dataSource === "live" || dataSource === "live-empty") && (
+              <div className="card">
+                <div style={{padding: "12px 16px"}}>
+                  <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom: 8}}>
+                    <Icon name="history" size={11}/> TIMELINE
+                  </div>
+                  <ul style={{margin: 0, padding: 0, listStyle: "none", borderLeft: "2px solid var(--neutral-200)"}}>
+                    {_grmTimelineFor(current, tasks).map((ev, i) => (
+                      <li key={i} style={{padding: "6px 0 6px 14px", position: "relative"}}>
+                        <span style={{
+                          position: "absolute", left: -5, top: 10,
+                          width: 8, height: 8, borderRadius: 4,
+                          background: `var(--accent-${ev.tone || "data"})`,
+                        }}/>
+                        <div className="t-bodysm" style={{color: "var(--neutral-900)", fontWeight: 500}}>
+                          {ev.label}
+                        </div>
+                        <div className="t-bodysm muted" style={{fontSize: 11}}>
+                          {ev.detail && <>{ev.detail} · </>}
+                          {ev.at}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+
             {/* Per-row actions */}
             <div className="card">
               <div style={{padding:"12px 16px"}}>
@@ -504,11 +820,20 @@ const GRMScreen = ({ onNavigate }) => {
                       <Icon name="arrowUp" size={13}/> Escalate one tier
                     </button>
                   )}
-                  {current.status !== "resolved" && current.status !== "closed" && (
-                    <button className="btn primary" onClick={() => setModal("resolve")}>
-                      <Icon name="check" size={13}/> Resolve with narrative
-                    </button>
-                  )}
+                  {current.status !== "resolved" && current.status !== "closed" && (() => {
+                    // US-S21-003 — resolve is gated by every task being closed.
+                    const openTasks = tasks.filter(t => t.status !== "closed").length;
+                    const disabled = openTasks > 0 && (dataSource === "live" || dataSource === "live-empty");
+                    return (
+                      <button className="btn primary"
+                              disabled={disabled}
+                              title={disabled ? `${openTasks} task(s) still open — close them first` : undefined}
+                              onClick={() => setModal("resolve")}>
+                        <Icon name="check" size={13}/> Resolve with narrative
+                        {disabled && <span style={{fontSize: 11, opacity: 0.8}}> · {openTasks} open task(s)</span>}
+                      </button>
+                    );
+                  })()}
                   {current.status === "resolved" && (
                     <button className="btn primary" onClick={() => setModal("close")}>
                       <Icon name="lock" size={13}/> Close grievance
@@ -593,6 +918,122 @@ const GRMScreen = ({ onNavigate }) => {
           <option value="Twikirize J. · District M&E">Twikirize J. · District M&amp;E</option>
           <option value="NSR Unit duty officer">NSR Unit duty officer</option>
         </select>
+      </Modal>
+
+      {/* US-S21-003c — Open Grievance modal. POSTs to
+          /api/v1/grm/grievances/; the server stamps SLA + audit. */}
+      <Modal
+        open={modal === "open_grievance"}
+        title="Open a new grievance"
+        onClose={() => setModal(null)}
+        footer={<>
+          <button className="btn" onClick={() => setModal(null)}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy}
+                  onClick={submitOpenGrievance}>
+            {busy ? "Opening…" : "Open grievance"}
+          </button>
+        </>}>
+        <div className="col gap-2">
+          <label className="t-cap" style={{fontWeight:600}}>CATEGORY</label>
+          <select className="field-select" style={{width:"100%"}}
+                  value={openForm.category}
+                  onChange={(e) => setOpenForm({...openForm, category: e.target.value})}>
+            {Object.entries(GRM_CATEGORIES).map(([code, label]) => (
+              <option key={code} value={code}>{label}</option>
+            ))}
+          </select>
+
+          <label className="t-cap" style={{fontWeight:600, marginTop:8}}>TIER</label>
+          <select className="field-select" style={{width:"100%"}}
+                  value={openForm.tier}
+                  onChange={(e) => setOpenForm({...openForm, tier: e.target.value})}>
+            {Object.entries(GRM_TIERS).map(([code, t]) => (
+              <option key={code} value={code}>{t.short} · {t.label} ({t.sla_hours}h SLA)</option>
+            ))}
+          </select>
+
+          <label className="t-cap" style={{fontWeight:600, marginTop:8}}>NARRATIVE</label>
+          <textarea className="field-text"
+                    style={{width:"100%", minHeight:80, padding:8, fontFamily:"inherit"}}
+                    placeholder="Describe the grievance. What happened, when, who reported it."
+                    value={openForm.description}
+                    onChange={(e) => setOpenForm({...openForm, description: e.target.value})}/>
+
+          <div className="row gap-2" style={{marginTop:8}}>
+            <div style={{flex:1}}>
+              <label className="t-cap" style={{fontWeight:600}}>HOUSEHOLD ID <span className="muted">(optional)</span></label>
+              <input className="field-text" type="text"
+                     style={{width:"100%", padding:6, fontFamily:"ui-monospace, monospace", fontSize:12}}
+                     placeholder="01HXY7K3B2N9PVQE4M6FZRWS18"
+                     value={openForm.household_id}
+                     onChange={(e) => setOpenForm({...openForm, household_id: e.target.value})}/>
+            </div>
+            <div style={{flex:1}}>
+              <label className="t-cap" style={{fontWeight:600}}>MEMBER ID <span className="muted">(optional)</span></label>
+              <input className="field-text" type="text"
+                     style={{width:"100%", padding:6, fontFamily:"ui-monospace, monospace", fontSize:12}}
+                     value={openForm.member_id}
+                     onChange={(e) => setOpenForm({...openForm, member_id: e.target.value})}/>
+            </div>
+          </div>
+
+          <label className="t-cap" style={{fontWeight:600, marginTop:8}}>REPORTER</label>
+          <div className="row gap-2">
+            <input className="field-text" type="text" placeholder="Name"
+                   style={{flex:2, padding:6}}
+                   value={openForm.reporter_name}
+                   onChange={(e) => setOpenForm({...openForm, reporter_name: e.target.value})}/>
+            <input className="field-text" type="text" placeholder="Phone (+256…)"
+                   style={{flex:2, padding:6}}
+                   value={openForm.reporter_phone}
+                   onChange={(e) => setOpenForm({...openForm, reporter_phone: e.target.value})}/>
+            <input className="field-text" type="text" placeholder="Relationship"
+                   style={{flex:1, padding:6}}
+                   value={openForm.reporter_relationship}
+                   onChange={(e) => setOpenForm({...openForm, reporter_relationship: e.target.value})}/>
+          </div>
+        </div>
+      </Modal>
+
+      {/* US-S21-003c — Add Task modal. Officer-only POSTs to
+          /api/v1/grm/tasks/. The new task lands in OPEN status. */}
+      <Modal
+        open={modal === "add_task"}
+        title={current ? `Add task to ${current.id.slice(0, 12)}…` : "Add task"}
+        onClose={() => setModal(null)}
+        footer={<>
+          <button className="btn" onClick={() => setModal(null)}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy || !taskForm.title || !taskForm.assigned_to}
+                  onClick={submitAddTask}>
+            {busy ? "Adding…" : "Add task"}
+          </button>
+        </>}>
+        <div className="col gap-2">
+          <label className="t-cap" style={{fontWeight:600}}>TITLE</label>
+          <input className="field-text" type="text"
+                 style={{width:"100%", padding:6}}
+                 placeholder="e.g. Visit reporter and verify NIN"
+                 value={taskForm.title}
+                 onChange={(e) => setTaskForm({...taskForm, title: e.target.value})}/>
+
+          <label className="t-cap" style={{fontWeight:600, marginTop:8}}>DESCRIPTION</label>
+          <textarea className="field-text"
+                    style={{width:"100%", minHeight:60, padding:8, fontFamily:"inherit"}}
+                    placeholder="What needs to happen and how the assignee should report back."
+                    value={taskForm.description}
+                    onChange={(e) => setTaskForm({...taskForm, description: e.target.value})}/>
+
+          <label className="t-cap" style={{fontWeight:600, marginTop:8}}>ASSIGNED TO</label>
+          <input className="field-text" type="text"
+                 style={{width:"100%", padding:6, fontFamily:"ui-monospace, monospace"}}
+                 placeholder="username (e.g. parish-chief-3)"
+                 value={taskForm.assigned_to}
+                 onChange={(e) => setTaskForm({...taskForm, assigned_to: e.target.value})}/>
+          <div className="t-bodysm muted" style={{fontSize:11}}>
+            The assignee will see this grievance in their queue until the
+            task is closed. Resolve is blocked while any task is open.
+          </div>
+        </div>
       </Modal>
 
       <AuditDrawer open={auditOpen} events={auditEvents} onClose={() => setAuditOpen(false)}/>

@@ -388,6 +388,17 @@ class TestGrievanceTaskApi:
         assert "mine" in titles
         assert "not mine" not in titles
 
+    def test_me_endpoint_reports_role(self, _users):
+        """The /me endpoint tells the React console whether to render
+        officer-only affordances (Open grievance, Add task) — without
+        making the console probe with a 403-baiting POST."""
+        officer, regular = _users
+        r = self._client(officer).get("/api/v1/grm/grievances/me/")
+        assert r.status_code == 200
+        assert r.json() == {"username": "officer", "is_officer": True}
+        r = self._client(regular).get("/api/v1/grm/grievances/me/")
+        assert r.json() == {"username": "assignee-1", "is_officer": False}
+
 
 class TestClose:
     def test_close_resolved(self, db):
