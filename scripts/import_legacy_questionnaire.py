@@ -237,6 +237,12 @@ def main(*, dry_run: bool = False) -> dict:
             appearance=entry.get("appearance", ""),
             repeat_count=str(entry.get("repeat_count", "") or ""),
             parameters={} if not entry.get("parameters") else {"_": str(entry["parameters"])},
+            # XLSForm `calculation` cell. Carries `position(..)` for the
+            # household_members.member_index row and any other calculate-
+            # type row the legacy script emits. US-S21-006: previously
+            # dropped on import which left calculate rows with an empty
+            # cell on export and Kobo rejected the form.
+            calculation=entry.get("calculation", "") or "",
             order_in_section=current_order_in_section,
         )
         counts["questions"] += 1

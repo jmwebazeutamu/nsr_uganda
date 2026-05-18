@@ -1097,6 +1097,71 @@ class TestXlsformExport:
         )
         assert (region_row[region_parent_col] or "") == ""
 
+    def test_calculate_row_carries_expression(self, _seeded_form):
+        """US-S21-006 regression — Kobo rejected the legacy roster
+        with '[row : 38] Missing calculation.' because FormQuestion
+        had no `calculation` field, so the importer dropped
+        `position(..)` and the exporter wrote an empty cell.
+        Verifies the round-trip now ships the expression."""
+        import io
+
+        import openpyxl
+
+        from apps.intake.xlsform_export import export_to_xlsx
+        wb = openpyxl.load_workbook(io.BytesIO(export_to_xlsx(_seeded_form)))
+        rows = list(wb["survey"].iter_rows(min_row=1, values_only=True))
+        header = list(rows[0])
+        type_col = header.index("type")
+        name_col = header.index("name")
+        calc_col = header.index("calculation")
+        # Every calculate row must have a non-empty calculation —
+        # otherwise Kobo rejects the deploy.
+        calc_rows = [r for r in rows[1:] if r[type_col] == "calculate"]
+        assert calc_rows, "expected at least one calculate row in the v1 export"
+        for r in calc_rows:
+            assert (r[calc_col] or "").strip(), (
+                f"calculate row name={r[name_col]!r} has empty "
+                "calculation — Kobo will reject this xlsx"
+            )
+        # member_index specifically carries position(..) per the legacy script.
+        member_index = next(
+            r for r in calc_rows if r[name_col] == "member_index"
+        )
+        assert member_index[calc_col] == "position(..)"
+
+    def test_export_skips_orphan_calculate_with_no_expression(self, db):
+        """Defensive: if a calculate row sneaks in with an empty
+        expression (data migration, manual admin entry, broken
+        importer), the exporter drops it from the survey rather
+        than ship an unloadable xlsx."""
+        import io
+
+        import openpyxl
+
+        from apps.intake.models import FormQuestion, FormSection, FormVersion
+        from apps.intake.xlsform_export import export_to_xlsx
+        fv = FormVersion.objects.create(
+            version=8200, name="orphan-calc",
+            effective_from=date(2026, 1, 1),
+            status="draft", author="qa",
+        )
+        s = FormSection.objects.create(
+            form_version=fv, code="A", name="ident", label="A", order=1,
+        )
+        FormQuestion.objects.create(
+            section=s, name="ok_q", label="OK", type="text",
+            order_in_section=1,
+        )
+        FormQuestion.objects.create(
+            section=s, name="orphan_calc", label="orphan",
+            type="calculate", order_in_section=2,
+            # calculation deliberately blank
+        )
+        wb = openpyxl.load_workbook(io.BytesIO(export_to_xlsx(fv)))
+        names = [r[1] for r in wb["survey"].iter_rows(min_row=2, values_only=True)]
+        assert "ok_q" in names
+        assert "orphan_calc" not in names  # silently skipped
+
 
 # --- US-117e: interactive in-admin preview ---------------------------------
 

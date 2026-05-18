@@ -230,6 +230,12 @@ class FormQuestion(models.Model):
     appearance = models.CharField(max_length=64, blank=True)
     repeat_count = models.CharField(max_length=64, blank=True)
     parameters = models.JSONField(default=dict, blank=True)
+    # XLSForm `calculation` cell. Required for type='calculate'; for
+    # every other type it's typically blank but XLSForm allows a
+    # calculation to ride on a regular field too (the engine evaluates
+    # it on every recompute). Kobo rejects calculate rows without a
+    # non-empty calculation — see US-S21-006.
+    calculation = models.CharField(max_length=512, blank=True)
     order_in_section = models.PositiveIntegerField(default=0)
 
     created_at = models.DateTimeField(auto_now_add=True)

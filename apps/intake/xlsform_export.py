@@ -163,7 +163,11 @@ def _question_row(q: FormQuestion) -> dict:
         "constraint_message": q.constraint_message,
         "appearance": appearance,
         "choice_filter": choice_filter_for(q.name) if is_geo else "",
-        "calculation": "",
+        # US-S21-006 — XLSForm calculation cell. Required for
+        # type=calculate; allowed (and sometimes used) on any other
+        # type for client-side derived values. Kobo rejects calculate
+        # rows whose cell is empty.
+        "calculation": q.calculation or "",
         "repeat_count": q.repeat_count,
         "parameters": _flatten_parameters(q.parameters),
     }
@@ -243,6 +247,14 @@ def export_to_xlsx(form_version: FormVersion) -> bytes:
     for sec in sections:
         ws_survey.append([_section_open_row(sec).get(c, "") for c in SURVEY_COLS])
         for q in sec.questions.order_by("order_in_section", "name"):
+            # US-S21-006 — defensive skip: a calculate row with no
+            # expression is what tripped Kobo with "[row : N]
+            # Missing calculation." Skip it rather than ship an
+            # invalid xlsx. The proper fix is to populate
+            # FormQuestion.calculation; this safeguard prevents
+            # one bad row from re-poisoning the whole upload.
+            if q.type == "calculate" and not (q.calculation or ""):
+                continue
             row = _question_row(q)
             ws_survey.append([row.get(c, "") for c in SURVEY_COLS])
             if q.name in GEO_QUESTIONS:
