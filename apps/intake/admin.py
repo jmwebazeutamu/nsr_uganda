@@ -256,81 +256,108 @@ class FormVersionAdmin(admin.ModelAdmin):
 
 # --- US-117b reorder + validate views ---------------------------------------
 
+def _drop_after(siblings: list, moving_id: str, after_id: str | None) -> tuple[list, bool]:
+    """Return a new list with `moving_id` repositioned. If `after_id`
+    is "" or None, the item goes to position 0 (top). Otherwise it
+    lands immediately after the sibling with that id. Returns
+    (new_list, moved) — moved=False if the position didn't change."""
+    moving = next((s for s in siblings if s.id == moving_id), None)
+    if moving is None:
+        return siblings, False
+    rest = [s for s in siblings if s.id != moving_id]
+    if not after_id:
+        new = [moving, *rest]
+    else:
+        anchor_idx = next((i for i, s in enumerate(rest) if s.id == after_id), None)
+        if anchor_idx is None:
+            return siblings, False
+        new = [*rest[:anchor_idx + 1], moving, *rest[anchor_idx + 1:]]
+    moved = [s.id for s in new] != [s.id for s in siblings]
+    return new, moved
+
+
 @require_POST
 def _reorder_section_view(request, section_id):
-    """Move a section up or down within its FormVersion. Body:
-    {"direction": "up" | "down"}. Returns the new order map.
+    """Move a section within its FormVersion. Body accepts EITHER:
 
-    Swaps with the adjacent section by `order`. Doesn't try to be
-    clever about gaps — re-sequences the affected pair only so the
-    rest of the tree stays stable on concurrent edits.
+    - {"direction": "up" | "down"} — swap with the adjacent sibling
+      (used by the up/down arrows; legacy contract from US-117b).
+    - {"after_id": "<sibling_id>" | ""} — drop after the given
+      sibling, or "" to drop at position 0 (used by US-117c drag-
+      and-drop). When supplied, takes precedence over `direction`.
+
+    On any successful move re-sequences the section's siblings to
+    1..N so the order field stays compact and stable.
     """
-    direction = json.loads(request.body or b"{}").get("direction")
-    if direction not in ("up", "down"):
-        return JsonResponse({"detail": "direction must be 'up' or 'down'"}, status=400)
+    body = json.loads(request.body or b"{}")
     section = FormSection.objects.filter(pk=section_id).first()
     if not section:
         return JsonResponse({"detail": "section not found"}, status=404)
-    qs = section.form_version.sections.order_by("order", "code")
-    siblings = list(qs)
-    idx = next((i for i, s in enumerate(siblings) if s.id == section.id), None)
-    if idx is None:
-        return JsonResponse({"detail": "section not in form version"}, status=404)
-    other_idx = idx - 1 if direction == "up" else idx + 1
-    if other_idx < 0 or other_idx >= len(siblings):
-        return JsonResponse({"detail": "already at boundary", "moved": False})
-    other = siblings[other_idx]
-    section.order, other.order = other.order, section.order
-    # If they were both 0 (default), pick deterministic new orders.
-    if section.order == other.order:
-        section.order = other_idx + 1
-        other.order = idx + 1
-    section.save(update_fields=["order"])
-    other.save(update_fields=["order"])
-    return JsonResponse({
-        "moved": True,
-        "order": {
-            section.id: section.order,
-            other.id: other.order,
-        },
-    })
+    siblings = list(
+        section.form_version.sections.order_by("order", "code"),
+    )
+
+    after_id = body.get("after_id")
+    if after_id is not None:
+        new, moved = _drop_after(siblings, section.id, after_id)
+        if not moved:
+            return JsonResponse({"moved": False, "detail": "no-op or unknown after_id"})
+    else:
+        direction = body.get("direction")
+        if direction not in ("up", "down"):
+            return JsonResponse({"detail": "direction must be 'up' or 'down'"}, status=400)
+        idx = next((i for i, s in enumerate(siblings) if s.id == section.id), None)
+        other_idx = idx - 1 if direction == "up" else idx + 1
+        if other_idx < 0 or other_idx >= len(siblings):
+            return JsonResponse({"moved": False, "detail": "already at boundary"})
+        new = list(siblings)
+        new[idx], new[other_idx] = new[other_idx], new[idx]
+
+    new_order = {}
+    for i, s in enumerate(new, start=1):
+        if s.order != i:
+            s.order = i
+            s.save(update_fields=["order"])
+        new_order[s.id] = i
+    return JsonResponse({"moved": True, "order": new_order})
 
 
 @require_POST
 def _reorder_question_view(request, question_id):
-    """Move a question up or down within its FormSection. Same
-    contract as _reorder_section_view; operates on order_in_section."""
-    direction = json.loads(request.body or b"{}").get("direction")
-    if direction not in ("up", "down"):
-        return JsonResponse({"detail": "direction must be 'up' or 'down'"}, status=400)
+    """Move a question within its FormSection. Same contract as
+    _reorder_section_view — accepts `direction` (legacy) OR
+    `after_id` (drag-and-drop)."""
+    body = json.loads(request.body or b"{}")
     question = FormQuestion.objects.filter(pk=question_id).first()
     if not question:
         return JsonResponse({"detail": "question not found"}, status=404)
     siblings = list(
         question.section.questions.order_by("order_in_section", "name"),
     )
-    idx = next((i for i, q in enumerate(siblings) if q.id == question.id), None)
-    if idx is None:
-        return JsonResponse({"detail": "question not in section"}, status=404)
-    other_idx = idx - 1 if direction == "up" else idx + 1
-    if other_idx < 0 or other_idx >= len(siblings):
-        return JsonResponse({"detail": "already at boundary", "moved": False})
-    other = siblings[other_idx]
-    question.order_in_section, other.order_in_section = (
-        other.order_in_section, question.order_in_section,
-    )
-    if question.order_in_section == other.order_in_section:
-        question.order_in_section = other_idx + 1
-        other.order_in_section = idx + 1
-    question.save(update_fields=["order_in_section"])
-    other.save(update_fields=["order_in_section"])
-    return JsonResponse({
-        "moved": True,
-        "order": {
-            question.id: question.order_in_section,
-            other.id: other.order_in_section,
-        },
-    })
+
+    after_id = body.get("after_id")
+    if after_id is not None:
+        new, moved = _drop_after(siblings, question.id, after_id)
+        if not moved:
+            return JsonResponse({"moved": False, "detail": "no-op or unknown after_id"})
+    else:
+        direction = body.get("direction")
+        if direction not in ("up", "down"):
+            return JsonResponse({"detail": "direction must be 'up' or 'down'"}, status=400)
+        idx = next((i for i, q in enumerate(siblings) if q.id == question.id), None)
+        other_idx = idx - 1 if direction == "up" else idx + 1
+        if other_idx < 0 or other_idx >= len(siblings):
+            return JsonResponse({"moved": False, "detail": "already at boundary"})
+        new = list(siblings)
+        new[idx], new[other_idx] = new[other_idx], new[idx]
+
+    new_order = {}
+    for i, q in enumerate(new, start=1):
+        if q.order_in_section != i:
+            q.order_in_section = i
+            q.save(update_fields=["order_in_section"])
+        new_order[q.id] = i
+    return JsonResponse({"moved": True, "order": new_order})
 
 
 @require_POST

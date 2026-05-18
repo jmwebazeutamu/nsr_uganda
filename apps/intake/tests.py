@@ -460,6 +460,105 @@ class TestQuestionnaireBuilderUI:
         q2.refresh_from_db()
         assert q2.order_in_section < q1.order_in_section
 
+    # --- US-117c: drag-and-drop "after_id" payload ----
+
+    def test_reorder_section_after_id_drops_below_target(
+        self, db, django_user_model,
+    ):
+        """Drag section a (order=1) and drop it after section b
+        (order=2) → resulting order [b, a]."""
+        import json as _json
+
+        from apps.intake.models import FormSection
+        fv, a, b, *_ = self._seeded_fv(db)
+        c = self._staff_client(db, django_user_model)
+        r = c.post(
+            f"/admin/intake/formversion/_us117b/reorder-section/{a.id}/",
+            data=_json.dumps({"after_id": b.id}),
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        assert r.json()["moved"] is True
+        ordered = list(
+            FormSection.objects.filter(form_version=fv)
+            .order_by("order").values_list("id", flat=True),
+        )
+        assert ordered == [b.id, a.id]
+
+    def test_reorder_section_after_id_empty_lands_at_top(
+        self, db, django_user_model,
+    ):
+        """An empty after_id ("") puts the section at position 0."""
+        import json as _json
+
+        from apps.intake.models import FormSection
+        fv, a, b, *_ = self._seeded_fv(db)
+        c = self._staff_client(db, django_user_model)
+        # Move b to the top.
+        r = c.post(
+            f"/admin/intake/formversion/_us117b/reorder-section/{b.id}/",
+            data=_json.dumps({"after_id": ""}),
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        ordered = list(
+            FormSection.objects.filter(form_version=fv)
+            .order_by("order").values_list("id", flat=True),
+        )
+        assert ordered == [b.id, a.id]
+
+    def test_reorder_question_after_id_drops_below_target(
+        self, db, django_user_model,
+    ):
+        """Drag q1 (order=1) after q2 (order=2) → resulting order [q2, q1]."""
+        import json as _json
+
+        from apps.intake.models import FormQuestion
+        fv, a, b, q1, q2 = self._seeded_fv(db)
+        c = self._staff_client(db, django_user_model)
+        r = c.post(
+            f"/admin/intake/formversion/_us117b/reorder-question/{q1.id}/",
+            data=_json.dumps({"after_id": q2.id}),
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        ordered = list(
+            FormQuestion.objects.filter(section=a)
+            .order_by("order_in_section").values_list("id", flat=True),
+        )
+        assert ordered == [q2.id, q1.id]
+
+    def test_reorder_question_unknown_after_id_returns_no_op(
+        self, db, django_user_model,
+    ):
+        import json as _json
+        fv, a, b, q1, q2 = self._seeded_fv(db)
+        c = self._staff_client(db, django_user_model)
+        r = c.post(
+            f"/admin/intake/formversion/_us117b/reorder-question/{q1.id}/",
+            data=_json.dumps({"after_id": "no-such-id-XYZ"}),
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["moved"] is False
+
+    def test_change_form_tree_marks_rows_draggable(
+        self, db, django_user_model, settings,
+    ):
+        """The HTML5 drag-and-drop relies on draggable=true on each
+        section and question row. The CSS contract is tested by the
+        markup containing the affordance hint."""
+        settings.QUESTIONNAIRE_EDITOR_V2 = True
+        fv, *_ = self._seeded_fv(db)
+        r = self._staff_client(db, django_user_model).get(
+            f"/admin/intake/formversion/{fv.id}/change/",
+        )
+        body = r.content.decode()
+        assert "qe-drag-handle" in body
+        assert 'draggable="true"' in body
+        assert "drag rows to reorder" in body
+
     def test_validate_expression_ok(self, db, django_user_model):
         import json as _json
         c = self._staff_client(db, django_user_model)

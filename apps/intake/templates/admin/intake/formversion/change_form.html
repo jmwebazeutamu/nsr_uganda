@@ -66,6 +66,21 @@
       font-family: ui-monospace, monospace; font-size: 11px;
       color: var(--neutral-500, #6b7280);
     }
+    /* US-117c drag-and-drop affordances */
+    .qe-drag-handle {
+      cursor: grab; color: var(--neutral-400, #9ca3af);
+      font-family: ui-monospace, monospace; font-size: 14px;
+      user-select: none; padding: 0 2px;
+    }
+    .qe-drag-handle:active { cursor: grabbing; }
+    .qe-section[draggable="true"], .qe-questions li[draggable="true"] {
+      transition: background 0.15s ease;
+    }
+    .qe-dragging { opacity: 0.4; }
+    /* Drop zones: a thin colored bar appears above/below the row
+       the cursor is over, indicating where the drop will land. */
+    .qe-drop-before { box-shadow: 0 -3px 0 0 var(--primary-500, #3b82f6) inset; }
+    .qe-drop-after  { box-shadow: 0  3px 0 0 var(--primary-500, #3b82f6) inset; }
     .qe-validate textarea {
       width: 100%; font-family: ui-monospace, monospace;
       font-size: 12px; min-height: 70px;
@@ -156,10 +171,12 @@
 
     <!-- ── Tree pane ─────────────────────────────────────────────── -->
     <aside class="qe-tree" id="qe-tree" data-form-version="{{ original.pk }}">
-      <h2>Sections &amp; questions</h2>
+      <h2>Sections &amp; questions <span style="font-size:11px;font-weight:normal;color:var(--neutral-500,#6b7280)">— drag rows to reorder</span></h2>
       {% for sec in dqa_form_tree %}
-        <div class="qe-section" data-section="{{ sec.id }}">
+        <div class="qe-section" data-section="{{ sec.id }}"
+             draggable="true">
           <div class="qe-section-head">
+            <span class="qe-drag-handle" title="Drag to reorder section">⋮⋮</span>
             <code class="qe-q-type">{{ sec.code }}</code>
             <a href="{% url 'admin:intake_formsection_change' sec.id %}">{{ sec.label }}</a>
             <span class="qe-arrows">
@@ -168,9 +185,11 @@
             </span>
           </div>
           {% if sec.questions %}
-          <ul class="qe-questions">
+          <ul class="qe-questions" data-section-bucket="{{ sec.id }}">
             {% for q in sec.questions %}
-              <li data-question="{{ q.id }}">
+              <li data-question="{{ q.id }}" data-section="{{ sec.id }}"
+                  draggable="true">
+                <span class="qe-drag-handle" title="Drag to reorder question">⋮⋮</span>
                 <a href="{% url 'admin:intake_formquestion_change' q.id %}">{{ q.name }}</a>
                 <span class="qe-q-type">{{ q.type }}{% if q.required %} · req{% endif %}</span>
                 <span class="qe-arrows" style="margin-left:auto">
@@ -255,6 +274,111 @@
       bindReorder(".qe-q-up, .qe-q-down",
         id => `/admin/intake/formversion/_us117b/reorder-question/${id}/`,
         "question");
+
+      // ── US-117c drag-and-drop reorder ──
+      // The user can drag any section row to reorder among sections,
+      // or any question row to reorder within its parent section.
+      // Drop ON a row means "place me immediately after that row";
+      // a thin top/bottom indicator on the hovered row hints which
+      // half of the row the cursor is in so the user sees where the
+      // drop will land before releasing. Drag-into-another-section
+      // is intentionally not supported here (re-parenting questions
+      // is a bigger surface — separate ticket).
+
+      function dragKind(el) {
+        if (el.dataset.section && !el.dataset.question) return "section";
+        if (el.dataset.question) return "question";
+        return null;
+      }
+      function findDraggable(el) {
+        while (el && el !== document.body) {
+          if (el.dataset && (el.dataset.section || el.dataset.question)) {
+            if (el.draggable) return el;
+          }
+          el = el.parentElement;
+        }
+        return null;
+      }
+      function clearDropMarks() {
+        document.querySelectorAll(".qe-drop-before, .qe-drop-after")
+          .forEach(n => { n.classList.remove("qe-drop-before"); n.classList.remove("qe-drop-after"); });
+      }
+      let dragSrc = null;
+      let dragSrcKind = null;
+      document.querySelectorAll("#qe-tree [draggable='true']").forEach(el => {
+        el.addEventListener("dragstart", e => {
+          dragSrc = el;
+          dragSrcKind = dragKind(el);
+          el.classList.add("qe-dragging");
+          e.dataTransfer.effectAllowed = "move";
+          // Some browsers refuse the drag without setData.
+          e.dataTransfer.setData("text/plain", el.dataset.section || el.dataset.question);
+        });
+        el.addEventListener("dragend", () => {
+          el.classList.remove("qe-dragging");
+          clearDropMarks();
+          dragSrc = null; dragSrcKind = null;
+        });
+        el.addEventListener("dragover", e => {
+          if (!dragSrc || dragSrc === el) return;
+          const targetKind = dragKind(el);
+          if (targetKind !== dragSrcKind) return;
+          // For questions, only allow drops within the same section
+          // (re-parenting is out of scope today).
+          if (dragSrcKind === "question" &&
+              el.dataset.section !== dragSrc.dataset.section) {
+            return;
+          }
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          // Decide above-vs-below based on cursor position relative
+          // to the row's vertical midpoint.
+          const rect = el.getBoundingClientRect();
+          const before = e.clientY < rect.top + rect.height / 2;
+          clearDropMarks();
+          el.classList.add(before ? "qe-drop-before" : "qe-drop-after");
+        });
+        el.addEventListener("drop", e => {
+          if (!dragSrc || dragSrc === el) return;
+          const targetKind = dragKind(el);
+          if (targetKind !== dragSrcKind) return;
+          if (dragSrcKind === "question" &&
+              el.dataset.section !== dragSrc.dataset.section) {
+            return;
+          }
+          e.preventDefault();
+          const rect = el.getBoundingClientRect();
+          const before = e.clientY < rect.top + rect.height / 2;
+          let afterId;
+          if (before) {
+            // Drop above target → after the target's predecessor
+            // (or "" = top of the list).
+            const prev = el.previousElementSibling;
+            afterId = prev && prev.dataset
+              ? (prev.dataset.section || prev.dataset.question || "")
+              : "";
+          } else {
+            afterId = el.dataset.section || el.dataset.question || "";
+          }
+          // Don't no-op-call the API if the drop would leave the
+          // item where it is (next to itself).
+          if (afterId === (dragSrc.dataset.section || dragSrc.dataset.question)) return;
+
+          const movingId = dragSrc.dataset.section || dragSrc.dataset.question;
+          const urlPrefix = dragSrcKind === "section"
+            ? "/admin/intake/formversion/_us117b/reorder-section/"
+            : "/admin/intake/formversion/_us117b/reorder-question/";
+          post(`${urlPrefix}${movingId}/`, { after_id: afterId })
+            .then(r => r.json())
+            .then(j => {
+              if (j.moved) {
+                window.location.reload();
+              } else {
+                clearDropMarks();
+              }
+            });
+        });
+      });
 
       // ── Expression validator ──
       const out = document.getElementById("qe-validate-result");
