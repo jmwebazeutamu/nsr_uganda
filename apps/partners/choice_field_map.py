@@ -23,6 +23,12 @@ MODEL_FIELDS: dict[str, dict[str, tuple[str, Kind]]] = {
         "status": ("partner_status", "single"),
         "tone":   ("ui_tone",        "single"),
     },
-    # PartnerContact / Programme / DataSharingAgreement / DsaSignature
-    # registrations land alongside their models in subsequent commits.
+    "PartnerContact": {
+        "role": ("partner_contact_role", "single"),
+    },
+    "Programme": {
+        "kind":   ("programme_kind",   "single"),
+        "status": ("programme_status", "single"),
+    },
+    # DataSharingAgreement / DsaSignature land in US-S23-006.
 }

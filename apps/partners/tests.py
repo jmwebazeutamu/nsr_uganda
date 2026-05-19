@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from apps.partners.models import Partner
+from apps.partners.models import Partner, PartnerContact, Programme
 from apps.reference_data.services import clear_resolver_cache
 
 
@@ -74,3 +74,54 @@ class TestE001CoversPartnerFields:
         assert set(MODEL_FIELDS["Partner"]) == {
             "type", "sector", "status", "tone",
         }
+
+
+@pytest.mark.django_db
+class TestPartnerContact:
+    def test_unique_role_per_partner(self):
+        from django.db.utils import IntegrityError
+        p = Partner.objects.create(code="X", name="X", type="ministry")
+        PartnerContact.objects.create(
+            partner=p, role="authorised_signatory",
+            full_name="Dr. Atim Florence", email="a@x.go.ug",
+        )
+        with pytest.raises(IntegrityError):
+            PartnerContact.objects.create(
+                partner=p, role="authorised_signatory",
+                full_name="Someone Else", email="b@x.go.ug",
+            )
+
+    def test_role_label_resolves(self):
+        p = Partner.objects.create(code="X", name="X", type="ministry")
+        c = PartnerContact.objects.create(
+            partner=p, role="partner_dpo",
+            full_name="Mukasa Catherine", email="dpo@x.go.ug",
+        )
+        assert c.get_role_label() == "Data Protection Officer (Partner)"
+
+
+@pytest.mark.django_db
+class TestProgramme:
+    def test_kind_and_status_labels_resolve(self):
+        p = Partner.objects.create(code="X", name="X", type="ngo")
+        prog = Programme.objects.create(
+            partner=p, name="Karamoja Cash 2026",
+            kind="cash_transfer", status="active",
+        )
+        assert prog.get_kind_label() == "Cash transfer"
+        assert prog.get_status_label() == "Active"
+
+    def test_geographic_units_m2m(self):
+        from datetime import date
+
+        from apps.reference_data.models import GeographicUnit
+        gu = GeographicUnit.objects.create(
+            level="sub_region", code="SR-PROG-1", name="Karamoja",
+            effective_from=date(2026, 1, 1),
+        )
+        p = Partner.objects.create(code="P", name="P", type="ngo")
+        prog = Programme.objects.create(
+            partner=p, name="X", kind="cash_transfer", status="active",
+        )
+        prog.geographic_units.add(gu)
+        assert list(prog.geographic_units.all()) == [gu]

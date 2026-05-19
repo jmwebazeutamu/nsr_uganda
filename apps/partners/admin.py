@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from django.contrib import admin
 
-from .models import Partner
+from .models import Partner, PartnerContact, Programme
 
 
 @admin.register(Partner)
@@ -40,3 +40,24 @@ class PartnerAdmin(admin.ModelAdmin):
             "classes": ("collapse",),
         }),
     )
+
+
+@admin.register(PartnerContact)
+class PartnerContactAdmin(admin.ModelAdmin):
+    list_display = ("partner", "role", "full_name", "title", "email", "nin_verified_at")
+    list_filter = ("role",)
+    search_fields = ("partner__code", "full_name", "email", "nin_last4")
+    readonly_fields = ("id", "nin_hash", "nin_last4", "nin_verified_at",
+                       "created_at", "updated_at")
+    raw_id_fields = ("partner",)
+
+
+@admin.register(Programme)
+class ProgrammeAdmin(admin.ModelAdmin):
+    list_display = ("partner", "name", "kind", "status",
+                    "start_date", "end_date", "beneficiary_estimate")
+    list_filter = ("kind", "status")
+    search_fields = ("partner__code", "name")
+    readonly_fields = ("id", "created_at", "updated_at")
+    raw_id_fields = ("partner",)
+    filter_horizontal = ("geographic_units",)
