@@ -142,6 +142,11 @@ class Programme(models.Model):
     """A programme the partner runs that consumes NSR data. Per
     ADR-0011, programmes are M2M-scoped under a DSA — the same
     programme can sit under multiple DSAs across renewal cycles.
+
+    US-S25-002 extends this model with the cohort / disbursement /
+    lifecycle / webhook columns captured by the registration wizard
+    (apps.referral.Programme keeps the operational referral side
+    until that legacy app is consolidated in a Sprint 26 follow-up).
     """
 
     id = ULIDField(primary_key=True)
@@ -149,12 +154,68 @@ class Programme(models.Model):
         Partner, on_delete=models.PROTECT, related_name="programmes",
     )
 
+    # Identity (US-S25-002).
+    code = models.CharField(
+        max_length=24, blank=True,
+        help_text="Short programme mark (MGLSD-DVA). Unique per partner.",
+    )
     name = models.CharField(max_length=256)
+    summary = models.TextField(
+        blank=True,
+        help_text="One-sentence description shown in the partner "
+                  "programmes tab and the registration wizard preview.",
+    )
+
     # Coded — programme_kind ChoiceList (cash_transfer, service, ...).
     kind = models.CharField(max_length=32)
     # Coded — programme_status ChoiceList (draft, active, closed).
     status = models.CharField(max_length=32, default="draft")
 
+    # Optional DSA the programme registers under (used by the wizard
+    # to inherit the geo + entity scope cap). The DSA<->Programme M2M
+    # on DataSharingAgreement.programmes remains the canonical join.
+    dsa = models.ForeignKey(
+        "DataSharingAgreement",
+        on_delete=models.SET_NULL,
+        related_name="programmes_via_fk",
+        null=True, blank=True,
+    )
+
+    # Cohort & targeting (US-S25-002).
+    # Coded — programme_unit_of_enrolment ChoiceList.
+    unit_of_enrolment = models.CharField(max_length=32, blank=True)
+    cohort_target = models.PositiveIntegerField(null=True, blank=True)
+    # Coded — programme_sex_filter ChoiceList (any/1/2).
+    sex_filter = models.CharField(max_length=8, blank=True)
+    age_min = models.PositiveSmallIntegerField(null=True, blank=True)
+    age_max = models.PositiveSmallIntegerField(null=True, blank=True)
+    # Lists of ChoiceOption codes — not native ChoiceLists themselves
+    # (storing the option codes in a JSON array preserves the multi-
+    # select semantics without joining a Through model).
+    pmt_bands = models.JSONField(
+        default=list, blank=True,
+        help_text='List of programme_pmt_band codes, e.g. '
+                  '["poorest_20", "poorest_40"].',
+    )
+    composition_flags = models.JSONField(
+        default=list, blank=True,
+        help_text='List of programme_composition_flag codes, e.g. '
+                  '["female_headed", "under_five"].',
+    )
+
+    # Disbursement (US-S25-002).
+    amount_ugx = models.PositiveBigIntegerField(null=True, blank=True)
+    # Coded — programme_disbursement_cycle ChoiceList.
+    disbursement_cycle = models.CharField(max_length=32, blank=True)
+    duration_months = models.PositiveSmallIntegerField(null=True, blank=True)
+    channel = models.CharField(max_length=128, blank=True)
+    start_month = models.CharField(
+        max_length=24, blank=True,
+        help_text="Free-text 'Aug 2026' — first cycle target. Concrete "
+                  "calendar lands when the scheduler app boots.",
+    )
+
+    # Geographic scope — M2M to GeographicUnit (kept from earlier).
     scope_text = models.TextField(
         blank=True,
         help_text="Free-text geographic / cohort scope. Structured "
@@ -167,6 +228,28 @@ class Programme(models.Model):
     )
     beneficiary_estimate = models.PositiveIntegerField(null=True, blank=True)
 
+    # Lifecycle policy (US-S25-002).
+    exit_codes_allowed = models.JSONField(
+        default=list, blank=True,
+        help_text='List of programme_exit_reason codes, e.g. '
+                  '["10","20","30","40","50","60","70"].',
+    )
+    auto_exit_triggers = models.JSONField(
+        default=list, blank=True,
+        help_text='List of programme_auto_exit_trigger codes.',
+    )
+    suspend_on_grievance = models.BooleanField(default=False)
+
+    # Partner MIS callback (US-S25-002 — mirrors apps.referral.Programme
+    # webhook contract). Secret is stored as an HMAC hash; the cleartext
+    # is shown only once at create-time.
+    webhook_url = models.URLField(blank=True)
+    webhook_secret_hash = models.CharField(
+        max_length=64, blank=True,
+        help_text="sha256(webhook_secret). The cleartext secret is "
+                  "returned in the create response and never persisted.",
+    )
+
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
 
@@ -176,9 +259,17 @@ class Programme(models.Model):
     class Meta:
         verbose_name = "Programme"
         verbose_name_plural = "Programmes"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["partner", "code"],
+                condition=models.Q(code__gt=""),
+                name="programme_partner_code_unique",
+            ),
+        ]
         indexes = [
             models.Index(fields=["partner"]),
             models.Index(fields=["status"]),
+            models.Index(fields=["dsa"]),
         ]
 
     def __str__(self) -> str:

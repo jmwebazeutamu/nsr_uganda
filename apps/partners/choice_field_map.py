@@ -27,8 +27,11 @@ MODEL_FIELDS: dict[str, dict[str, tuple[str, Kind]]] = {
         "role": ("partner_contact_role", "single"),
     },
     "Programme": {
-        "kind":   ("programme_kind",   "single"),
-        "status": ("programme_status", "single"),
+        "kind":               ("programme_kind",               "single"),
+        "status":             ("programme_status",             "single"),
+        "unit_of_enrolment":  ("programme_unit_of_enrolment",  "single"),
+        "sex_filter":         ("programme_sex_filter",         "single"),
+        "disbursement_cycle": ("programme_disbursement_cycle", "single"),
     },
     "DataSharingAgreement": {
         "status":                   ("dsa_status",              "single"),
