@@ -1,0 +1,63 @@
+{
+  "programme_kind_v2_additions": [
+    { "code": "grant",   "label": "Grant" },
+    { "code": "subsidy", "label": "Subsidy" }
+  ],
+  "programme_unit_of_enrolment": [
+    { "code": "household", "label": "Household" },
+    { "code": "member",    "label": "Member" },
+    { "code": "group",     "label": "Group" }
+  ],
+  "programme_disbursement_cycle": [
+    { "code": "monthly",     "label": "Monthly" },
+    { "code": "quarterly",   "label": "Quarterly" },
+    { "code": "semi_annual", "label": "Semi-annual" },
+    { "code": "annual",      "label": "Annual" },
+    { "code": "one_off",     "label": "One-off" }
+  ],
+  "programme_pmt_band": [
+    { "code": "poorest_20", "label": "Poorest 20%" },
+    { "code": "poorest_40", "label": "Poorest 40%" },
+    { "code": "middle_40",  "label": "Middle 40%" },
+    { "code": "top_20",     "label": "Top 20%" }
+  ],
+  "programme_exit_reason": [
+    { "code": "10", "label": "Graduated" },
+    { "code": "20", "label": "Transferred" },
+    { "code": "30", "label": "Deceased" },
+    { "code": "40", "label": "Migrated · lost" },
+    { "code": "50", "label": "Re-targeted out" },
+    { "code": "60", "label": "Withdrew consent" },
+    { "code": "70", "label": "Programme closed" },
+    { "code": "80", "label": "Non-compliance" },
+    { "code": "99", "label": "Other" }
+  ],
+  "programme_composition_flag": [
+    { "code": "female_headed", "label": "Female-headed" },
+    { "code": "under_five",    "label": "Has child under 5" },
+    { "code": "elderly",       "label": "Has elderly 60+" },
+    { "code": "pregnant",      "label": "Has pregnant or lactating" },
+    { "code": "disabled",      "label": "Has person with disability" },
+    { "code": "orphan",        "label": "Has orphan child" }
+  ],
+  "programme_auto_exit_trigger": [
+    { "code": "age_out",   "label": "Aged out of programme" },
+    { "code": "deceased",  "label": "Civil registry · deceased" },
+    { "code": "pmt_shift", "label": "PMT band shift out of scope" },
+    { "code": "missed_3",  "label": "Missed 3 cycles unreachable" }
+  ],
+  "programme_webhook_event": [
+    { "code": "referral.sent",         "label": "referral.sent" },
+    { "code": "referral.accepted",     "label": "referral.accepted" },
+    { "code": "enrolment.created",     "label": "enrolment.created" },
+    { "code": "enrolment.suspended",   "label": "enrolment.suspended" },
+    { "code": "enrolment.resumed",     "label": "enrolment.resumed" },
+    { "code": "enrolment.exited",      "label": "enrolment.exited" },
+    { "code": "payment.acknowledged",  "label": "payment.acknowledged" }
+  ],
+  "programme_sex_filter": [
+    { "code": "any", "label": "Any" },
+    { "code": "1",   "label": "Male" },
+    { "code": "2",   "label": "Female" }
+  ]
+}
