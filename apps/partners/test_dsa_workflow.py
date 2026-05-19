@@ -28,7 +28,10 @@ def _flush():
 def api(settings, db):
     settings.PARTNERS_MODULE_ENABLED = True
     user_cls = get_user_model()
-    u = user_cls.objects.create_user(username="dsa-tester", password="p")
+    # Sprint 24 / ADR-0013: Partner + DSA viewsets are ABAC-scoped via
+    # PartnerScopedQuerysetMixin. A regular user with no OperatorScope
+    # gets a fail-closed empty queryset. Superuser bypasses scope.
+    u = user_cls.objects.create_superuser(username="dsa-tester", password="p")
     c = APIClient()
     c.force_authenticate(user=u)
     return c, u

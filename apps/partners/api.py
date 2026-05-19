@@ -32,6 +32,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
 from apps.data_management.serializer_labels import attach_label_methodfields
+from apps.security.abac import PartnerScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
 from .choice_field_map import MODEL_FIELDS
@@ -92,10 +93,14 @@ class _PartnersWriteFlagPermission(permissions.BasePermission):
     create=extend_schema(tags=["partners"], summary="Create a partner"),
     partial_update=extend_schema(tags=["partners"], summary="Update a partner"),
 )
-class PartnerViewSet(AuditReadMixin, viewsets.ModelViewSet):
-    """CRUD for partner organisations. Writes are flag-gated."""
+class PartnerViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
+                     viewsets.ModelViewSet):
+    """CRUD for partner organisations. Writes are flag-gated.
+    Per ADR-0013 ABAC: partner-affiliated users see only their own
+    Partner; NSR Unit / national / superuser see all."""
 
     audit_entity_type = "partner"
+    partner_id_field = "id"
     queryset = Partner.objects.all().order_by("-last_activity_at", "code")
     serializer_class = PartnerSerializer
     permission_classes = [permissions.IsAuthenticated, _PartnersWriteFlagPermission]
@@ -374,10 +379,13 @@ attach_label_methodfields(
     create=extend_schema(tags=["partners"], summary="Create a draft DSA"),
     partial_update=extend_schema(tags=["partners"], summary="Update a DSA"),
 )
-class DsaViewSet(AuditReadMixin, viewsets.ModelViewSet):
-    """CRUD + submit-for-signoff action on Data Sharing Agreements."""
+class DsaViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
+                 viewsets.ModelViewSet):
+    """CRUD + submit-for-signoff action on Data Sharing Agreements.
+    ABAC-scoped by partner — see PartnerScopedQuerysetMixin."""
 
     audit_entity_type = "dsa"
+    partner_id_field = "partner_id"
     queryset = (
         DataSharingAgreement.objects.all()
         .select_related("partner")

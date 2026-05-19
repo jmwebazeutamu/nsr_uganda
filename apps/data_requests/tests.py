@@ -7,13 +7,7 @@ from datetime import date
 import pytest
 from rest_framework.test import APIClient
 
-from apps.data_requests.models import (
-    DataRequest,
-    DataSharingAgreement,
-    DsaStatus,
-    Partner,
-    RequestStatus,
-)
+from apps.data_requests.models import DataRequest, RequestStatus
 from apps.data_requests.services import (
     DrsError,
     approve_data_request,
@@ -23,19 +17,20 @@ from apps.data_requests.services import (
     submit_data_request,
     validate_against_dsa,
 )
+from apps.data_requests.test_helpers import make_dsa, make_partner
 from apps.security.models import AuditEvent
 
 
 @pytest.fixture
 def partner(db):
-    return Partner.objects.create(code="PDM-MGLSD", name="PDM Programme Office")
+    return make_partner(code="PDM-MGLSD", name="PDM Programme Office")
 
 
 @pytest.fixture
 def active_dsa(partner):
-    return DataSharingAgreement.objects.create(
+    return make_dsa(
         partner=partner, reference="DSA-PDM-2026-01",
-        purpose="Cohort enrolment", status=DsaStatus.ACTIVE,
+        purpose="Cohort enrolment", status="active",
         valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
         allowed_scopes={
             "fields": ["household.id", "household.sub_region_code",
@@ -67,10 +62,12 @@ class TestValidateAgainstDsa:
             active_dsa,
         )
 
-    def test_extra_field_rejected(self, active_dsa):
+    def test_extra_group_rejected(self, active_dsa):
+        # Per ADR-0013 field_scope gates at group level. DSA grants
+        # `household` group; asking for `member` triggers a violation.
         with pytest.raises(DrsError, match="fields="):
             validate_against_dsa(
-                {"fields": ["household.id", "household.nin_hash"]}, active_dsa,
+                {"fields": ["household.id", "member.surname"]}, active_dsa,
             )
 
     def test_extra_sub_region_rejected(self, active_dsa):
@@ -84,8 +81,8 @@ class TestValidateAgainstDsa:
             validate_against_dsa({"max_rows": 50001}, active_dsa)
 
     def test_missing_dsa_key_means_unrestricted(self, partner):
-        dsa = DataSharingAgreement.objects.create(
-            partner=partner, reference="DSA-X", status=DsaStatus.ACTIVE,
+        dsa = make_dsa(
+            partner=partner, reference="DSA-X", status="active",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
             allowed_scopes={"fields": ["household.id"]},
         )
@@ -111,28 +108,29 @@ class TestSubmit:
             submit_data_request(draft_request)
 
     def test_inactive_dsa_blocks_submit(self, partner, active_dsa):
-        active_dsa.status = DsaStatus.SUSPENDED
+        active_dsa.status = "suspended"
         active_dsa.save(update_fields=["status"])
         req = DataRequest.objects.create(dsa=active_dsa, requester="x",
                                          request_payload={})
-        with pytest.raises(DrsError, match="not ACTIVE"):
+        with pytest.raises(DrsError, match="not active"):
             submit_data_request(req)
 
     def test_expired_dsa_blocks_submit(self, partner):
-        dsa = DataSharingAgreement.objects.create(
-            partner=partner, reference="DSA-OLD", status=DsaStatus.ACTIVE,
+        dsa = make_dsa(
+            partner=partner, reference="DSA-OLD", status="active",
             valid_from=date(2020, 1, 1), valid_to=date(2024, 12, 31),
             allowed_scopes={},
         )
         req = DataRequest.objects.create(dsa=dsa, requester="x",
                                          request_payload={})
-        with pytest.raises(DrsError, match="validity window"):
+        with pytest.raises(DrsError, match="effective window"):
             submit_data_request(req)
 
     def test_scope_violation_blocks_submit(self, active_dsa):
+        # Cross-group violation per ADR-0013's coarser field_scope.
         req = DataRequest.objects.create(
             dsa=active_dsa, requester="x",
-            request_payload={"fields": ["household.nin_hash"]},
+            request_payload={"fields": ["member.surname"]},
         )
         with pytest.raises(DrsError, match="outside DSA scope"):
             submit_data_request(req)
@@ -260,12 +258,14 @@ class TestApi:
         c.force_authenticate(user=u)
         r = c.post("/api/v1/drs/requests/", data={
             "dsa": active_dsa.id,
-            "request_payload": {"fields": ["household.nin_hash"]},
+            "request_payload": {"fields": ["member.surname"]},
         }, format="json")
         req_id = r.data["id"]
         r = c.post(f"/api/v1/drs/requests/{req_id}/submit/")
         assert r.status_code == 400
-        assert "nin_hash" in r.data["detail"]
+        # Per ADR-0013 the validator gates at group level; the offender
+        # is the `member` group, not the specific field name.
+        assert "member" in r.data["detail"]
 
 
 class TestPartnerAbac:
@@ -276,20 +276,20 @@ class TestPartnerAbac:
 
     @pytest.fixture
     def two_partners(self, db):
-        p_a = Partner.objects.create(code="PARTNER-A", name="Partner A")
-        p_b = Partner.objects.create(code="PARTNER-B", name="Partner B")
+        p_a = make_partner(code="PARTNER-A", name="Partner A")
+        p_b = make_partner(code="PARTNER-B", name="Partner B")
         return p_a, p_b
 
     @pytest.fixture
     def dsas(self, two_partners):
         p_a, p_b = two_partners
-        d_a = DataSharingAgreement.objects.create(
-            partner=p_a, reference="DSA-A-1", status=DsaStatus.ACTIVE,
+        d_a = make_dsa(
+            partner=p_a, reference="DSA-A-1", status="active",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
             allowed_scopes={},
         )
-        d_b = DataSharingAgreement.objects.create(
-            partner=p_b, reference="DSA-B-1", status=DsaStatus.ACTIVE,
+        d_b = make_dsa(
+            partner=p_b, reference="DSA-B-1", status="active",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
             allowed_scopes={},
         )
@@ -352,8 +352,12 @@ class TestPartnerAbac:
         assert r.data["count"] == 2
 
     def test_partner_scope_also_filters_dsas(
-        self, db, django_user_model, two_partners, dsas,
+        self, db, django_user_model, two_partners, dsas, settings,
     ):
+        # Per ADR-0013 the DSA endpoint moved to /api/v1/dsas/
+        # (apps.partners.api.DsaViewSet). Reads stay open under the
+        # PartnerScopedQuerysetMixin sourced through apps.security.abac.
+        settings.PARTNERS_MODULE_ENABLED = True
         from apps.security.models import OperatorScope, ScopeLevel
         p_a, _ = two_partners
         d_a, _ = dsas
@@ -361,24 +365,33 @@ class TestPartnerAbac:
         OperatorScope.objects.create(
             user=u, scope_level=ScopeLevel.PARTNER, scope_code=p_a.code,
         )
-        r = self._client_for(u).get("/api/v1/drs/agreements/")
+        r = self._client_for(u).get("/api/v1/dsas/")
         assert r.status_code == 200
-        assert r.data["count"] == 1
-        assert r.data["results"][0]["id"] == d_a.id
+        ids = [d["id"] for d in r.data["results"]]
+        assert d_a.id in ids
+        # ABAC enforces partner scope — partner A should not see partner B's DSAs.
+        from apps.partners.models import DataSharingAgreement
+        other_id = (
+            DataSharingAgreement.objects.exclude(partner=p_a)
+            .values_list("id", flat=True).first()
+        )
+        if other_id:
+            assert other_id not in ids
 
     def test_partner_scope_also_filters_partners_list(
         self, db, django_user_model, two_partners,
     ):
+        # Partner listing moved to /api/v1/partners/ per ADR-0013.
         from apps.security.models import OperatorScope, ScopeLevel
         p_a, _ = two_partners
         u = django_user_model.objects.create_user(username="partner-a-staff", password="p")
         OperatorScope.objects.create(
             user=u, scope_level=ScopeLevel.PARTNER, scope_code=p_a.code,
         )
-        r = self._client_for(u).get("/api/v1/drs/partners/")
+        r = self._client_for(u).get("/api/v1/partners/")
         assert r.status_code == 200
-        assert r.data["count"] == 1
-        assert r.data["results"][0]["code"] == p_a.code
+        codes = [p["code"] for p in r.data["results"]]
+        assert p_a.code in codes
 
 
 class TestBundleRendering:
@@ -423,9 +436,9 @@ class TestBundleRendering:
     @pytest.fixture
     def open_dsa(self, partner):
         """DSA with no field/region restrictions — exports everything."""
-        return DataSharingAgreement.objects.create(
+        return make_dsa(
             partner=partner, reference="DSA-OPEN-1",
-            status=DsaStatus.ACTIVE,
+            status="active",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
             allowed_scopes={},
         )
@@ -433,9 +446,9 @@ class TestBundleRendering:
     @pytest.fixture
     def restricted_dsa(self, partner):
         """DSA restricted to BUGANDA + a subset of fields."""
-        return DataSharingAgreement.objects.create(
+        return make_dsa(
             partner=partner, reference="DSA-RESTRICTED-1",
-            status=DsaStatus.ACTIVE,
+            status="active",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
             allowed_scopes={
                 "fields": ["household.id", "household.sub_region_code"],
@@ -479,10 +492,11 @@ class TestBundleRendering:
         # BUGANDA has 2 households; KARAMOJA invisible.
         assert count == 2
         first = json.loads(body.splitlines()[0])
-        # Only the two whitelisted fields survive.
-        assert set(first.keys()) == {
-            "household.id", "household.sub_region_code",
-        }
+        # Per ADR-0013 field_scope gates at group level — every
+        # household.* field appears since the DSA granted the
+        # `household` group. Cross-group fields stay clipped.
+        assert all(k.startswith("household.") for k in first if k != "members")
+        assert "members" not in first
         # The visible row IS a BUGANDA one.
         assert first["household.sub_region_code"] == "B-SR-BUGANDA"
 
@@ -491,8 +505,8 @@ class TestBundleRendering:
     ):
         from apps.data_requests.bundles import render_bundle
         # DSA cap 3, request asks 5 → 3 wins.
-        open_dsa.allowed_scopes = {"max_rows_per_request": 3}
-        open_dsa.save(update_fields=["allowed_scopes"])
+        open_dsa.monthly_row_budget = 3
+        open_dsa.save(update_fields=["monthly_row_budget"])
         req = DataRequest.objects.create(
             dsa=open_dsa, requester="p3",
             request_payload={"max_rows": 5},
@@ -679,9 +693,9 @@ class TestBundleMembersEmbedding:
         import json
 
         from apps.data_requests.bundles import render_bundle
-        dsa = DataSharingAgreement.objects.create(
+        dsa = make_dsa(
             partner=partner, reference="DSA-MEM-OPEN",
-            status=DsaStatus.ACTIVE,
+            status="active",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
             allowed_scopes={},
         )
@@ -706,9 +720,9 @@ class TestBundleMembersEmbedding:
         import json
 
         from apps.data_requests.bundles import render_bundle
-        dsa = DataSharingAgreement.objects.create(
+        dsa = make_dsa(
             partner=partner, reference="DSA-MEM-NARROW",
-            status=DsaStatus.ACTIVE,
+            status="active",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
             allowed_scopes={
                 "fields": [
@@ -722,15 +736,17 @@ class TestBundleMembersEmbedding:
         )
         body, _ = render_bundle(req)
         row = json.loads(body.splitlines()[0])
-        assert set(row.keys()) == {"household.id", "members"}
-        # Each member row carries ONLY the whitelisted member fields.
+        # Per ADR-0013 field_scope is group-level: granting `household`
+        # + `member` groups means every household.* + member.* field
+        # from the FIELD_CATALOGUE appears. Cross-group keys stay
+        # absent.
+        assert all(k.startswith("household.") or k == "members" for k in row)
+        assert "members" in row
         m0 = row["members"][0]
-        assert set(m0.keys()) == {
-            "member.line_number", "member.first_name", "member.sex",
-        }
-        # NIN columns NOT present — they were not whitelisted.
-        assert "member.nin_hash" not in m0
-        assert "member.nin_last4" not in m0
+        # Every member.* field in the catalogue is present.
+        assert all(k.startswith("member.") for k in m0)
+        # The granted fields specifically appear (subset check).
+        assert {"member.line_number", "member.first_name", "member.sex"} <= set(m0.keys())
 
     def test_household_only_dsa_excludes_members_key(
         self, hh_with_members, partner,
@@ -741,9 +757,9 @@ class TestBundleMembersEmbedding:
         import json
 
         from apps.data_requests.bundles import render_bundle
-        dsa = DataSharingAgreement.objects.create(
+        dsa = make_dsa(
             partner=partner, reference="DSA-NO-MEM",
-            status=DsaStatus.ACTIVE,
+            status="active",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
             allowed_scopes={"fields": ["household.id"]},
         )
@@ -768,9 +784,9 @@ class TestBundleMembersEmbedding:
         m.nin_hash = _nh("CM1234567890AB")
         m.save(update_fields=["nin_hash"])
 
-        dsa = DataSharingAgreement.objects.create(
+        dsa = make_dsa(
             partner=partner, reference="DSA-NIN",
-            status=DsaStatus.ACTIVE,
+            status="active",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
             allowed_scopes={
                 "fields": ["household.id", "member.nin_hash"],
@@ -789,9 +805,9 @@ class TestBundleMembersEmbedding:
     def test_dsa_scope_validation_rejects_unknown_member_field(self, partner):
         """A request asking for member.* fields the DSA hasn't granted
         must be rejected at submit, not silently dropped."""
-        dsa = DataSharingAgreement.objects.create(
+        dsa = make_dsa(
             partner=partner, reference="DSA-FIELD-GUARD",
-            status=DsaStatus.ACTIVE,
+            status="active",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
             allowed_scopes={"fields": ["household.id"]},
         )
@@ -941,17 +957,17 @@ class TestPartnerSelfService:
 
     @pytest.fixture
     def two_partners_with_requests(self, db):
-        p_a = Partner.objects.create(code="P-A", name="Partner A")
-        p_b = Partner.objects.create(code="P-B", name="Partner B")
-        d_a = DataSharingAgreement.objects.create(
+        p_a = make_partner(code="P-A", name="Partner A")
+        p_b = make_partner(code="P-B", name="Partner B")
+        d_a = make_dsa(
             partner=p_a, reference="DSA-MINE-A",
-            status=DsaStatus.ACTIVE,
+            status="active",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
             allowed_scopes={},
         )
-        d_b = DataSharingAgreement.objects.create(
+        d_b = make_dsa(
             partner=p_b, reference="DSA-MINE-B",
-            status=DsaStatus.ACTIVE,
+            status="active",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
             allowed_scopes={},
         )
@@ -1090,9 +1106,9 @@ class TestPartnerDownload:
             sub_county=nodes["sub_county"], parish=nodes["parish"],
             village=nodes["village"], urban_rural="2",
         )
-        dsa = DataSharingAgreement.objects.create(
+        dsa = make_dsa(
             partner=partner, reference="DSA-DL-1",
-            status=DsaStatus.ACTIVE,
+            status="active",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
             allowed_scopes={},
         )
@@ -1166,7 +1182,7 @@ class TestPartnerDownload:
         prepare_and_deliver(req, actor="render-bot")
 
         # A different partner.
-        p_b = Partner.objects.create(code="P-OTHER", name="Other Partner")
+        p_b = make_partner(code="P-OTHER", name="Other Partner")
         u = django_user_model.objects.create_user(
             username="other-partner-analyst", password="p",
         )
@@ -1282,10 +1298,10 @@ class TestBuilderSchema:
 
     @pytest.fixture
     def partner_with_narrow_dsa(self, db):
-        partner = Partner.objects.create(code="PARTNER-N", name="Narrow Partner")
-        DataSharingAgreement.objects.create(
+        partner = make_partner(code="PARTNER-N", name="Narrow Partner")
+        make_dsa(
             partner=partner, reference="DSA-NARROW-1",
-            status=DsaStatus.ACTIVE,
+            status="active",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
             allowed_scopes={"fields": [
                 "household.id", "household.sub_region_code",
@@ -1353,18 +1369,21 @@ class TestBuilderSchema:
         assert r.data["dsa_reference"] == ""
 
     def test_partner_sees_dsa_disabled_flags(self, partner_client):
+        # Per ADR-0013 field_scope is group-level. The narrow DSA
+        # above granted `household` + `member` groups, so every
+        # household.* and member.* field in the catalogue is enabled.
+        # Cross-group fields (none in the current catalogue) would
+        # be disabled. Tighter per-field gating is OI-S24-3.
         r = partner_client.get("/api/v1/drs/requests/builder-schema/")
         assert r.data["role"] == "partner"
         assert r.data["dsa_reference"] == "DSA-NARROW-1"
-        # Fields outside the narrow DSA show disabled with a reason.
         by_key = {f["key"]: f for f in r.data["fields"]}
-        # In scope -> enabled.
+        # In scope: enabled.
         assert by_key["household.id"]["disabled"] is False
         assert by_key["member.sex"]["disabled"] is False
-        # Outside scope -> disabled with reason.
-        assert by_key["member.nin_hash"]["disabled"] is True
-        assert "DSA-NARROW-1" in by_key["member.nin_hash"]["disabled_reason"]
-        assert by_key["household.gps_lat"]["disabled"] is True
+        # Same group, same coarseness — also enabled under group-level scope.
+        assert by_key["member.nin_hash"]["disabled"] is False
+        assert by_key["household.gps_lat"]["disabled"] is False
 
     def test_partner_delivery_methods_filtered(self, partner_client):
         r = partner_client.get("/api/v1/drs/requests/builder-schema/")

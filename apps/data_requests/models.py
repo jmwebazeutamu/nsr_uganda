@@ -2,9 +2,13 @@
 
 SAD §4.10: partner MDAs and programmes request bulk extracts of NSR
 data under a signed Data Sharing Agreement (DSA). Every request is
-scoped by the DSA's allowed_scopes (fields, geography, programme,
-max_rows) at submit time; an APPROVED request produces a signed
-manifest at delivery time so the partner can verify integrity.
+scoped against its parent DSA at submit time; an APPROVED request
+produces a signed manifest at delivery time so the partner can
+verify integrity.
+
+ADR-0013 (US-S24): Partner and DataSharingAgreement are owned by
+apps.partners. This module's DataRequest is the only model that
+lives here; the DSA FK points at apps.partners.DataSharingAgreement.
 
 Lifecycle: DRAFT -> SUBMITTED -> APPROVED -> DELIVERED -> EXPIRED
                               \\-> REJECTED
@@ -17,88 +21,6 @@ from __future__ import annotations
 
 from django.db import models
 from nsr_mis.common.fields import ULIDField
-
-
-class PartnerStatus(models.TextChoices):
-    ACTIVE = "active"
-    SUSPENDED = "suspended"
-
-
-class Partner(models.Model):
-    """External organisation that can receive NSR data — MDA, programme,
-    NGO. One Partner can hold multiple DSAs over time."""
-
-    id = ULIDField(primary_key=True)
-    code = models.CharField(max_length=32, unique=True)
-    name = models.CharField(max_length=128)
-    contact_email = models.EmailField(blank=True)
-    status = models.CharField(
-        max_length=16, choices=PartnerStatus.choices,
-        default=PartnerStatus.ACTIVE,
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name = "Partner"
-
-    def __str__(self) -> str:
-        return f"Partner {self.code} ({self.name})"
-
-
-class DsaStatus(models.TextChoices):
-    DRAFT = "draft"
-    ACTIVE = "active"
-    SUSPENDED = "suspended"
-    EXPIRED = "expired"
-
-
-class DataSharingAgreement(models.Model):
-    """Signed contract describing what a Partner is allowed to receive.
-
-    `allowed_scopes` is a JSON document of the form:
-        {
-          "fields": ["household.id", "household.sub_region_code", ...],
-          "sub_region_codes": ["SR-X", "SR-Y"],
-          "programme_codes": ["PDM"],
-          "max_rows_per_request": 50000
-        }
-
-    A DataRequest validates its request_payload against this on submit;
-    the requester sees a clean rejection if scope is exceeded rather
-    than getting partial data silently truncated.
-    """
-
-    id = ULIDField(primary_key=True)
-    partner = models.ForeignKey(
-        Partner, on_delete=models.PROTECT, related_name="agreements",
-    )
-    reference = models.CharField(max_length=64, unique=True)
-    purpose = models.TextField(blank=True)
-
-    allowed_scopes = models.JSONField(default=dict)
-
-    valid_from = models.DateField()
-    valid_to = models.DateField()
-
-    status = models.CharField(
-        max_length=16, choices=DsaStatus.choices, default=DsaStatus.DRAFT,
-    )
-    signed_by = models.CharField(max_length=64, blank=True)
-    signed_at = models.DateTimeField(null=True, blank=True)
-
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name = "Data sharing agreement"
-        indexes = [
-            models.Index(fields=["partner", "status"]),
-            models.Index(fields=["status", "valid_to"]),
-        ]
-
-    def __str__(self) -> str:
-        return f"DSA {self.reference} [{self.status}]"
 
 
 class RequestStatus(models.TextChoices):
@@ -127,7 +49,8 @@ class DataRequest(models.Model):
 
     id = ULIDField(primary_key=True)
     dsa = models.ForeignKey(
-        DataSharingAgreement, on_delete=models.PROTECT, related_name="requests",
+        "partners.DataSharingAgreement",
+        on_delete=models.PROTECT, related_name="requests",
     )
     requester = models.CharField(max_length=64)
     requester_note = models.TextField(blank=True)

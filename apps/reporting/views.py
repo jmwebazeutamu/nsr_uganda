@@ -692,7 +692,8 @@ class DataRequestsByStatus(APIView):
     requests for their partner; national/superuser sees all."""
 
     def get(self, request):
-        from apps.data_requests.models import DataRequest, Partner
+        from apps.data_requests.models import DataRequest
+        from apps.partners.models import Partner
         from apps.security.abac import _scoped_partner_codes
 
         partner_codes = _scoped_partner_codes(request.user)
@@ -1196,7 +1197,8 @@ class DataRequestRecords(APIView):
     """DRS request register. Partner-scoped users see only their partner."""
 
     def get(self, request):
-        from apps.data_requests.models import DataRequest, Partner
+        from apps.data_requests.models import DataRequest
+        from apps.partners.models import Partner
         from apps.security.abac import _scoped_partner_codes
 
         base = DataRequest.objects.select_related("dsa__partner").all().order_by("-created_at")

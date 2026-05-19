@@ -15,7 +15,7 @@ from apps.security.audit_views import AuditReadMixin, _client_ip
 
 from .builder_schema import build_schema
 from .bundles import get_bundle, prepare_and_deliver
-from .models import DataRequest, DataSharingAgreement, Partner, RequestStatus
+from .models import DataRequest, RequestStatus
 from .services import (
     DrsError,
     approve_data_request,
@@ -32,24 +32,6 @@ class DownloadRateThrottle(UserRateThrottle):
     defaults to 10/min, env-tunable via DRS_DOWNLOAD_THROTTLE_RATE."""
 
     scope = "drs-download"
-
-
-class PartnerSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Partner
-        fields = ("id", "code", "name", "contact_email", "status",
-                  "created_at", "updated_at")
-        read_only_fields = ("id", "created_at", "updated_at")
-
-
-class DsaSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = DataSharingAgreement
-        fields = ("id", "partner", "reference", "purpose",
-                  "allowed_scopes", "valid_from", "valid_to",
-                  "status", "signed_by", "signed_at",
-                  "created_at", "updated_at")
-        read_only_fields = ("id", "created_at", "updated_at")
 
 
 class DataRequestSerializer(serializers.ModelSerializer):
@@ -107,32 +89,9 @@ class _Deliver(serializers.Serializer):
     row_count = serializers.IntegerField(min_value=0)
 
 
-@extend_schema_view(
-    list=extend_schema(tags=["api-drs"], summary="List partners"),
-    retrieve=extend_schema(tags=["api-drs"], summary="Retrieve a partner"),
-)
-class PartnerViewSet(
-    AuditReadMixin, PartnerScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet,
-):
-    audit_entity_type = "partner"
-    partner_id_field = "id"
-    queryset = Partner.objects.all().order_by("code")
-    serializer_class = PartnerSerializer
-    filterset_fields = ["status"]
-
-
-@extend_schema_view(
-    list=extend_schema(tags=["api-drs"], summary="List data-sharing agreements"),
-    retrieve=extend_schema(tags=["api-drs"], summary="Retrieve a DSA"),
-)
-class DsaViewSet(
-    AuditReadMixin, PartnerScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet,
-):
-    audit_entity_type = "dsa"
-    partner_id_field = "partner_id"
-    queryset = DataSharingAgreement.objects.all().order_by("-valid_from")
-    serializer_class = DsaSerializer
-    filterset_fields = ["status", "partner"]
+# Partner + DSA endpoints moved to apps/partners/api.py per ADR-0013.
+# Consumers should call /api/v1/partners/ and /api/v1/dsas/ instead
+# of /api/v1/drs/partners/ + /api/v1/drs/dsas/.
 
 
 @extend_schema_view(

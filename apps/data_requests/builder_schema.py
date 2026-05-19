@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .models import DataSharingAgreement, DsaStatus
+from apps.partners.models import DataSharingAgreement
 
 # All known fields the registry exposes through DRS. Order matters
 # for display; group separates them in the UI's field-selector.
@@ -95,8 +95,8 @@ def _active_partner_dsa(user) -> DataSharingAgreement | None:
         return None
     return (
         DataSharingAgreement.objects.filter(
-            partner__code__in=partner_codes, status=DsaStatus.ACTIVE,
-        ).order_by("-valid_from").first()
+            partner__code__in=partner_codes, status="active",
+        ).order_by("-effective_from").first()
     )
 
 
@@ -110,12 +110,19 @@ def build_schema(user) -> dict[str, Any]:
     by ABAC on the underlying viewsets and the audit chain. The
     builder schema gives them the full field catalogue.
     """
-    is_partner = _active_partner_dsa(user) is not None
-    dsa = _active_partner_dsa(user) if is_partner else None
-    allowed_fields = (
-        set((dsa.allowed_scopes or {}).get("fields", []))
-        if is_partner else None
-    )
+    dsa = _active_partner_dsa(user)
+    is_partner = dsa is not None
+    # ADR-0013: read allowed field groups from the canonical field_scope.
+    # Legacy 'household.x' style fields are matched by group prefix.
+    if is_partner:
+        groups = {k for k, v in (dsa.field_scope or {}).items() if v}
+        allowed_fields = set()
+        for cat in FIELD_CATALOGUE:
+            group_root = cat["key"].partition(".")[0]
+            if group_root in groups or cat["group"] in groups:
+                allowed_fields.add(cat["key"])
+    else:
+        allowed_fields = None
 
     fields = []
     for entry in FIELD_CATALOGUE:

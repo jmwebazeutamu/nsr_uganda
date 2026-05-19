@@ -131,13 +131,38 @@ def render_bundle(req: DataRequest) -> tuple[bytes, int]:
     Returns (bytes, row_count). Empty queryset → b"" and row_count=0
     (still a valid delivery — partner gets confirmation that the
     cohort is empty under their criteria).
+
+    Per ADR-0013 the DSA is the canonical one from apps.partners;
+    field_scope, geographic_scope M2M, and monthly_row_budget drive
+    the clipping. Legacy 'household.id' / 'member.name' style fields
+    in request_payload.fields are mapped to canonical groups by
+    prefix at render time.
     """
-    scopes = req.dsa.allowed_scopes or {}
     payload = req.request_payload or {}
-    allowed_fields = scopes.get("fields")
-    dsa_sub_regions = scopes.get("sub_region_codes")
+    dsa = req.dsa
+
+    # Canonical field scope. Empty field_scope means unrestricted.
+    field_groups = {k for k, v in (dsa.field_scope or {}).items() if v}
+    # `allowed_fields` is the legacy-shaped list the projection helpers
+    # below consume; build it from FIELD_CATALOGUE filtered by group.
+    if field_groups:
+        from .builder_schema import FIELD_CATALOGUE
+        allowed_fields = [
+            cat["key"] for cat in FIELD_CATALOGUE
+            if cat["key"].partition(".")[0] in field_groups
+            or cat["group"] in field_groups
+        ]
+    else:
+        allowed_fields = None  # unrestricted
+
+    # Canonical geographic scope. Sub-region codes from the M2M.
+    dsa_sub_regions = list(
+        dsa.geographic_scope
+        .filter(level="sub_region")
+        .values_list("code", flat=True),
+    )
     payload_sub_regions = payload.get("sub_region_codes")
-    dsa_cap = scopes.get("max_rows_per_request")
+    dsa_cap = dsa.monthly_row_budget
     payload_cap = payload.get("max_rows")
 
     qs = Household.objects.all().order_by("id")

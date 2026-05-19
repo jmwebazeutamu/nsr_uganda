@@ -183,7 +183,8 @@ class PartnerScopedQuerysetMixin(ScopedQuerysetMixin):
             return ~Q(pk__in=[])  # wildcard
         if not codes:
             return Q(pk__in=[])
-        from apps.data_requests.models import Partner
+        # ADR-0013: canonical Partner lives in apps.partners.
+        from apps.partners.models import Partner
         partner_ids = list(
             Partner.objects.filter(code__in=codes).values_list("id", flat=True),
         )

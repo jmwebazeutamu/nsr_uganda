@@ -1159,24 +1159,23 @@ class TestAdditionalReportDashboards:
     ):
         from datetime import date
 
-        from apps.data_requests.models import (
-            DataRequest,
-            DataSharingAgreement,
-            DsaStatus,
-            Partner,
-            RequestStatus,
+        from apps.data_requests.models import DataRequest, RequestStatus
+        from apps.partners.models import DataSharingAgreement, Partner
+        p1 = Partner.objects.create(
+            code="P1", name="Partner 1", type="agency", status="active",
         )
-        p1 = Partner.objects.create(code="P1", name="Partner 1")
-        p2 = Partner.objects.create(code="P2", name="Partner 2")
+        p2 = Partner.objects.create(
+            code="P2", name="Partner 2", type="agency", status="active",
+        )
         dsa1 = DataSharingAgreement.objects.create(
-            partner=p1, reference="DSA-P1", allowed_scopes={},
-            valid_from=date(2026, 1, 1), valid_to=date(2030, 1, 1),
-            status=DsaStatus.ACTIVE,
+            partner=p1, reference="DSA-P1",
+            effective_from=date(2026, 1, 1), effective_to=date(2030, 1, 1),
+            status="active",
         )
         dsa2 = DataSharingAgreement.objects.create(
-            partner=p2, reference="DSA-P2", allowed_scopes={},
-            valid_from=date(2026, 1, 1), valid_to=date(2030, 1, 1),
-            status=DsaStatus.ACTIVE,
+            partner=p2, reference="DSA-P2",
+            effective_from=date(2026, 1, 1), effective_to=date(2030, 1, 1),
+            status="active",
         )
         DataRequest.objects.create(dsa=dsa1, requester="a", status=RequestStatus.SUBMITTED)
         DataRequest.objects.create(dsa=dsa2, requester="b", status=RequestStatus.DELIVERED)
@@ -1328,18 +1327,15 @@ class TestOperationalRecordExports:
     ):
         from datetime import date
 
-        from apps.data_requests.models import (
-            DataRequest,
-            DataSharingAgreement,
-            DsaStatus,
-            Partner,
-            RequestStatus,
+        from apps.data_requests.models import DataRequest, RequestStatus
+        from apps.partners.models import DataSharingAgreement, Partner
+        partner = Partner.objects.create(
+            code="PX", name="Partner X", type="agency", status="active",
         )
-        partner = Partner.objects.create(code="PX", name="Partner X")
         dsa = DataSharingAgreement.objects.create(
-            partner=partner, reference="DSA-PX", allowed_scopes={},
-            valid_from=date(2026, 1, 1), valid_to=date(2030, 1, 1),
-            status=DsaStatus.ACTIVE,
+            partner=partner, reference="DSA-PX",
+            effective_from=date(2026, 1, 1), effective_to=date(2030, 1, 1),
+            status="active",
         )
         DataRequest.objects.create(dsa=dsa, requester="x", status=RequestStatus.SUBMITTED)
         u = django_user_model.objects.create_user(username="drs-export", password="p")
