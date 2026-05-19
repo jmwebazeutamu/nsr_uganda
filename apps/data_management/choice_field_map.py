@@ -102,15 +102,17 @@ PAYLOAD_FIELDS: dict[tuple[str, ...], tuple[str, Kind]] = {
     ("members", "*", "employment", "not_working_reason"): ("not_working_reason", "single"),
     ("members", "*", "health", "chronic_illness"): ("yes_no", "single"),
     ("members", "*", "health", "difficulty"): ("difficulty", "multi"),
-    ("members", "*", "health", "severity"): ("severity", "single"),
-    # Washington-Group disability dimensions — each stores a severity
-    # code from the same `severity` seed list (01=None ... 04=Cannot).
-    ("members", "*", "health", "seeing"): ("severity", "single"),
-    ("members", "*", "health", "hearing"): ("severity", "single"),
-    ("members", "*", "health", "walking"): ("severity", "single"),
-    ("members", "*", "health", "remembering"): ("severity", "single"),
-    ("members", "*", "health", "self_care"): ("severity", "single"),
-    ("members", "*", "health", "communicating"): ("severity", "single"),
+    # OPEN ITEM OI-S22-3: the Washington Group disability dimensions
+    # (seeing/hearing/walking/remembering/self_care/communicating)
+    # and `severity` use codes 01/02/03/04 (None/Some/A lot/Cannot)
+    # for which no ChoiceList is seeded — the seed `severity` list
+    # carries codes 1/2/3 with different labels (Very severe / Severe /
+    # Mild/moderate). Wiring these through the resolver against the
+    # wrong list produced ref_data.unmapped_code log spam at every
+    # household read (US-S22-005f regression). They are deliberately
+    # left out of the map until a `wg_disability` ChoiceList is
+    # authored and approved through the dual-approval workflow.
+    # JSX falls back to the raw code, matching pre-005f behaviour.
     # Employment yes/no flags
     ("members", "*", "employment", "made_savings"): ("yes_no", "single"),
     # Top-level questionnaire yes/no flags

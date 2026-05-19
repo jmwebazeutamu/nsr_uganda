@@ -13,16 +13,30 @@ from .choice_field_map import (
 from .models import Household, Member
 
 
-def _intake_date(household):
-    """as_of date for label resolution on a Household. Falls back to
-    created_at (or today via the resolver) when no upstream
-    StageRecord is available."""
+def _stage_for(household):
+    """Cache the upstream StageRecord on the household instance so
+    get_source_payload, get_source_payload_labels, and _intake_date
+    share a single query. The attribute is set on the in-memory
+    Household object; it does not persist."""
+    cached = getattr(household, "_cached_stage", "__miss__")
+    if cached != "__miss__":
+        return cached
     from apps.ingestion_hub.models import StageRecord
     stage = (
-        StageRecord.objects.filter(provisional_registry_id=household.id)
-        .only("created_at")
+        StageRecord.objects
+        .filter(provisional_registry_id=household.id)
+        .only("canonical_payload", "created_at")
         .first()
     )
+    household._cached_stage = stage
+    return stage
+
+
+def _intake_date(household):
+    """as_of date for label resolution on a Household. Falls back to
+    Household.created_at (or today via the resolver) when no upstream
+    StageRecord is available."""
+    stage = _stage_for(household)
     src = stage or household
     ts = getattr(src, "created_at", None)
     return ts.date() if ts else None
@@ -152,11 +166,11 @@ class HouseholdSerializer(serializers.ModelSerializer):
         """Joins back to the StageRecord that promoted this
         household. provisional_registry_id matches Household.id by
         construction (AC-DIH-PROMOTE-ATOMIC — same ULID is reused
-        on promotion). Returns the canonical_payload JSON or None."""
-        from apps.ingestion_hub.models import StageRecord
-        stage = StageRecord.objects.filter(
-            provisional_registry_id=obj.id,
-        ).only("canonical_payload").first()
+        on promotion). Returns the canonical_payload JSON or None.
+        Caches the StageRecord on the household instance so
+        get_source_payload_labels and _intake_date share the same
+        query (US-S22-005j)."""
+        stage = _stage_for(obj)
         return stage.canonical_payload if stage else None
 
     def get_source_payload_labels(self, obj) -> dict:
