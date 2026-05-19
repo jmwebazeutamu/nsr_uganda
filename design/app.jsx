@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -150,10 +150,14 @@ function App() {
         {screen === "household" && <HouseholdScreen householdId={screenPayload?.householdId} onNavigate={navigate}/>}
         {screen === "partners" && <PartnersScreen
             onRegister={() => navigate("partner-new")}
+            onOpen={(partnerId) => navigate("partner-detail", { partnerId })}
             onNavigate={navigate}/>}
         {screen === "partner-new" && <PartnerRegistrationScreen
             onBack={() => navigate("partners")}
             onCreated={() => navigate("partners")}/>}
+        {screen === "partner-detail" && <PartnerDetailScreen
+            partnerId={screenPayload?.partnerId}
+            onBack={() => navigate("partners")}/>}
       </main>
 
       {/* Tweaks */}

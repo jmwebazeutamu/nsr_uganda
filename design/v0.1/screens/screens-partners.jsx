@@ -62,7 +62,7 @@ const _fmt = (n) =>
 /* ============================================================
    PARTNERS DASHBOARD
    ============================================================ */
-const PartnersScreen = ({ onRegister, onNavigate }) => {
+const PartnersScreen = ({ onRegister, onOpen, onNavigate }) => {
   const [q, setQ] = _p_useState("");
   const [typeFilter, setTypeFilter] = _p_useState("");
   const [statusFilter, setStatusFilter] = _p_useState("");
@@ -180,7 +180,8 @@ const PartnersScreen = ({ onRegister, onNavigate }) => {
                   const renewing = dsasByPartner[p.code] || [];
                   const earliest = renewing[0];
                   return (
-                    <tr key={p.id} style={{cursor: "pointer"}}>
+                    <tr key={p.id} style={{cursor: onOpen ? "pointer" : "default"}}
+                        onClick={() => onOpen && onOpen(p.id)}>
                       <td>
                         <div className="row gap-3">
                           <PartnerMark code={p.code} tone={p.tone}/>
@@ -204,7 +205,8 @@ const PartnersScreen = ({ onRegister, onNavigate }) => {
                       </td>
                       <td><Chip tone={p.tone || "neutral"}>{p.status_label || p.status}</Chip></td>
                       <td className="col-actions">
-                        <button className="btn btn-sm btn-ghost" title="Open">
+                        <button className="btn btn-sm btn-ghost" title="Open"
+                                onClick={(e) => { e.stopPropagation(); onOpen && onOpen(p.id); }}>
                           <Icon name="chevronRight" size={14}/>
                         </button>
                       </td>

@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PATHS = [
     ROOT / "apps" / "partners",
     ROOT / "design" / "v0.1" / "screens" / "screens-partners.jsx",
+    ROOT / "design" / "v0.1" / "screens" / "screens-partner-detail.jsx",
 ]
 
 # (regex, description). Regexes use Python's re module — \b is a
