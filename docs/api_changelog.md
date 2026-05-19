@@ -4,6 +4,100 @@ Notable changes to outbound API contracts. Entries are dated and tied to the com
 
 ---
 
+## 2026-05-19 — US-S25 / ADR-0014 — Programme registration wizard wired (POST /api/v1/programmes/)
+
+**Affected endpoints**: new `/api/v1/programmes/` namespace and the
+convenience `/api/v1/partners/{id}/programmes/` lister. Extends
+`/api/v1/reference-data/choice-list-bundle/` with 8 new lists.
+
+### New endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET    | `/api/v1/programmes/`                       | List programmes. Filters: `partner`, `status`, `kind`, `q`. ABAC-scoped per `PartnerScopedQuerysetMixin`. |
+| POST   | `/api/v1/programmes/`                       | Create a draft Programme. Gated by `PARTNERS_MODULE_ENABLED`. |
+| GET    | `/api/v1/programmes/{id}/`                  | Retrieve. |
+| PATCH  | `/api/v1/programmes/{id}/`                  | Update. |
+| GET    | `/api/v1/partners/{id}/programmes/`         | Convenience lister for the partner detail screen. |
+
+### POST shape
+
+The wizard submits a single JSON payload. Required: `partner`,
+`name`, `kind`. Optional fields drive the cohort, disbursement,
+geographic, lifecycle, and webhook strips:
+
+```json
+{
+  "partner":             "01J...",
+  "code":                "MGLSD-DVA",
+  "name":                "Direct Income Support · vulnerable adolescents",
+  "summary":             "Monthly cash to female-headed HHs",
+  "kind":                "cash_transfer",
+  "dsa":                 "01J...",
+  "unit_of_enrolment":   "household",
+  "cohort_target":       18000,
+  "sex_filter":          "2",
+  "age_min":             14,
+  "age_max":             18,
+  "pmt_bands":           ["poorest_20", "poorest_40"],
+  "composition_flags":   ["female_headed"],
+  "amount_ugx":          75000,
+  "disbursement_cycle":  "monthly",
+  "duration_months":     24,
+  "channel":             "MTN MoMo · agent",
+  "start_month":         "Aug 2026",
+  "geographic_units":    ["01J...","01J..."],
+  "exit_codes_allowed":  ["10","20","30","40","50","60","70"],
+  "auto_exit_triggers":  ["age_out","deceased","pmt_shift"],
+  "suspend_on_grievance": true,
+  "webhook_url":         "https://partner.example.go.ug/webhook"
+}
+```
+
+The create response echoes every coded field with its resolved
+`<field>_label` (Cash transfer, Household, Female, Monthly, …) per
+the ADR-0010 contract. The response also carries
+`webhook_secret_cleartext` — a one-shot field returned at create
+time only; only `sha256(secret)` is persisted on the row.
+
+### New ChoiceLists seeded at v1 / active
+
+```
+programme_unit_of_enrolment   (household, member, group)
+programme_disbursement_cycle  (monthly, quarterly, semi_annual, annual, one_off)
+programme_pmt_band            (poorest_20, poorest_40, middle_40, top_20)
+programme_exit_reason         (10..99 — graduated, transferred, deceased, ...)
+programme_composition_flag    (female_headed, under_five, elderly, pregnant, disabled, orphan)
+programme_auto_exit_trigger   (age_out, deceased, pmt_shift, missed_3)
+programme_webhook_event       (referral.sent, referral.accepted, enrolment.created, ...)
+programme_sex_filter          (any, 1=Male, 2=Female)
+```
+
+Two new options appended to existing `programme_kind`: `grant`, `subsidy`.
+Consumers caching the bundle offline pick them up via the ETag.
+
+### New audit-event action
+
+- `programme_created` — fired on every successful create. The
+  `field_changes` payload is structured:
+  `{partner_id, partner_code, code, kind, cohort_target}`. Same
+  shape as the Sprint 23 dashboard activity feed.
+
+### Feature flag
+
+`PARTNERS_MODULE_ENABLED` gates writes (POST / PATCH). Reads are
+open under the standard `IsAuthenticated` permission.
+
+### Unique-code semantics
+
+`Programme.code` is unique per partner *only when non-empty*. The
+serializer skips DRF's auto-generated `UniqueTogetherValidator`
+(which would mark `code` as required) and does a manual partial-
+uniqueness check in `validate()`. Empty-string `code` is permitted
+so partner Data Stewards can park a draft before naming it.
+
+---
+
 ## 2026-05-19 — US-S24 / ADR-0013 — DRS-side Partner + DSA endpoints removed; consolidated under /api/v1/partners/ and /api/v1/dsas/
 
 **Affected endpoints**:

@@ -25,6 +25,7 @@ PATHS = [
     ROOT / "apps" / "partners",
     ROOT / "design" / "v0.1" / "screens" / "screens-partners.jsx",
     ROOT / "design" / "v0.1" / "screens" / "screens-partner-detail.jsx",
+    ROOT / "design" / "v0.1" / "screens" / "screens-programme-new.jsx",
 ]
 
 # (regex, description). Regexes use Python's re module — \b is a
@@ -41,6 +42,15 @@ PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bconst\s+ORG_TYPE_HINT\b"),"inline ORG_TYPE_HINT map"),
     (re.compile(r"\bconst\s+FIELD_GROUPS\b"),"inline FIELD_GROUPS array"),
     (re.compile(r"\bconst\s+GEO_OPTIONS\b"), "inline GEO_OPTIONS array"),
+    # US-S25-005 — programme-wizard inline lists (the rule extends
+    # to every coded selector on the registration wizard).
+    (re.compile(r"\bconst\s+PROG_KINDS\b"),  "inline PROG_KINDS array"),
+    (re.compile(r"\bconst\s+PROG_UNITS\b"),  "inline PROG_UNITS array"),
+    (re.compile(r"\bconst\s+PROG_CYCLES\b"), "inline PROG_CYCLES array"),
+    (re.compile(r"\bconst\s+PMT_BANDS\b"),   "inline PMT_BANDS array"),
+    (re.compile(r"\bconst\s+SUB_REGIONS\b"), "inline SUB_REGIONS array"),
+    (re.compile(r"\bconst\s+EXIT_REASONS_LIST\b"), "inline EXIT_REASONS_LIST array"),
+    (re.compile(r"\bconst\s+PARTNER_OPTIONS\b"),   "inline PARTNER_OPTIONS array"),
 ]
 
 # This script itself defines the regexes; skip it.

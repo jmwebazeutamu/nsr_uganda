@@ -63,9 +63,10 @@ class TestBundleSchema:
             assert key in first_opt
 
     def test_includes_all_seeded_lists(self, api):
-        # 46 legacy (US-116) + 14 partner (US-S23-002) = 60.
+        # 46 legacy + 14 partner (US-S23-002) + 8 programme wizard
+        # (US-S25-001) = 68.
         r = api.get(URL)
-        assert len(r.data["lists"]) == 60
+        assert len(r.data["lists"]) == 68
 
     def test_sex_options_resolved(self, api):
         r = api.get(URL)
