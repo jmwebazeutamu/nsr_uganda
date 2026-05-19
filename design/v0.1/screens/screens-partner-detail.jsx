@@ -304,7 +304,7 @@ const PD_TABS = [
    the activity projection in parallel. Builds the `p` shape the
    tab components expect via _buildDetail.
    ============================================================ */
-const PartnerDetailScreen = ({ partnerId, onBack }) => {
+const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme }) => {
   const [partnerResp, partnerMeta] = useApi(
     partnerId ? `/api/v1/partners/${partnerId}/` : null,
   );
@@ -466,7 +466,7 @@ const PartnerDetailScreen = ({ partnerId, onBack }) => {
       <div className="card" style={{borderTopLeftRadius:0, borderTopRightRadius:0, padding:0, marginTop:0}}>
         {tab === "over" && <PDOverview p={p}/>}
         {tab === "dsa"  && <PDDsas p={p}/>}
-        {tab === "prog" && <PDProgrammes p={p}/>}
+        {tab === "prog" && <PDProgrammes p={p} onRegisterProgramme={onRegisterProgramme}/>}
         {tab === "con"  && <PDContacts p={p}/>}
         {tab === "use"  && <PDUsage p={p}/>}
         {tab === "act"  && <PDActivity p={p}/>}
@@ -741,17 +741,15 @@ const SignProgress = ({ sigs }) => {
 };
 
 /* ---------- Programmes ---------- */
-const PDProgrammes = ({ p }) => (
+const PDProgrammes = ({ p, onRegisterProgramme }) => (
   <div>
     <TabHeaderPD title={`Programmes — ${p.programmes.length}`}
       sub="Each programme is M2M-scoped under a DSA (ADR-0011). Adding a programme requires the existing DSA to allow it; otherwise a new DSA is drafted."
-      action={<button className="btn btn-sm btn-primary"><Icon name="plus" size={13}/> Add programme</button>}/>
+      action={<button className="btn btn-sm btn-primary" onClick={onRegisterProgramme}><Icon name="plus" size={13}/> Add programme</button>}/>
     <div>
       {p.programmes.length === 0 && (
         <div style={{padding:'24px 20px'}} className="muted t-bodysm">
-          Programmes endpoint is not yet wired
-          (Programme CRUD lands in a US-S23 follow-up). The Programme
-          model exists in apps/partners/models.py — add rows via admin.
+          No programmes yet for this partner. Click <strong>Add programme</strong> to launch the registration wizard (US-S25).
         </div>
       )}
       {p.programmes.map((pr, i) => (
