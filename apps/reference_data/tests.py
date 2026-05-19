@@ -21,17 +21,35 @@ from apps.reference_data.models import ChoiceList, ChoiceOption
 
 @pytest.mark.django_db
 class TestSeededChoiceLists:
-    """The data migration loads the 46 legacy choice lists. These
-    counts pin the seed contract — if a list goes away in a future
-    revision, the test fails and forces a deliberate update."""
+    """The data migrations load 46 legacy + 14 partner choice lists.
+    These counts pin the seed contract — if a list goes away in a
+    future revision, the test fails and forces a deliberate update.
+    """
 
-    def test_46_lists_seeded(self):
-        assert ChoiceList.objects.filter(version=1).count() == 46
+    def test_60_lists_seeded(self):
+        # 46 legacy (migration 0003) + 14 partner (migration 0004).
+        assert ChoiceList.objects.filter(version=1).count() == 60
 
     def test_options_seeded(self):
+        # 370 legacy (US-116) + 82 partner (US-S23-002) = 452 at version=1.
         assert ChoiceOption.objects.filter(
             choice_list__version=1,
-        ).count() == 370
+        ).count() == 452
+
+    def test_partner_lists_seeded(self):
+        names = set(
+            ChoiceList.objects
+            .filter(author="system-migration-partners", version=1)
+            .values_list("list_name", flat=True),
+        )
+        expected = {
+            "partner_type", "partner_sector", "partner_status", "ui_tone",
+            "partner_contact_role", "programme_kind", "programme_status",
+            "dsa_status", "sensitive_data_handling", "dsa_signer_role",
+            "signature_method", "signature_status", "partner_activity_kind",
+            "dsa_wizard_step",
+        }
+        assert names == expected
 
     def test_relationship_list_present(self):
         rel = ChoiceList.objects.get(list_name="relationship", version=1)

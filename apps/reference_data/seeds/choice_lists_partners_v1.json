@@ -1,0 +1,112 @@
+{
+  "partner_type": [
+    {"code": "ministry",     "label": "Ministry"},
+    {"code": "agency",       "label": "Agency"},
+    {"code": "multilateral", "label": "Multilateral"},
+    {"code": "ngo",          "label": "NGO"},
+    {"code": "private",      "label": "Private"},
+    {"code": "academic",     "label": "Academic"},
+    {"code": "office",       "label": "Office"}
+  ],
+  "partner_sector": [
+    {"code": "social_protection", "label": "Social Protection"},
+    {"code": "statistics",        "label": "Statistics"},
+    {"code": "health",            "label": "Health"},
+    {"code": "education",         "label": "Education"},
+    {"code": "identity",          "label": "Identity"},
+    {"code": "humanitarian",      "label": "Humanitarian"},
+    {"code": "child_welfare",     "label": "Child Welfare"},
+    {"code": "development",       "label": "Development"},
+    {"code": "livelihoods",       "label": "Livelihoods"},
+    {"code": "finance",           "label": "Finance"},
+    {"code": "research",          "label": "Research"},
+    {"code": "strategy",          "label": "Strategy"}
+  ],
+  "partner_status": [
+    {"code": "active",     "label": "Active"},
+    {"code": "renewing",   "label": "Renewing"},
+    {"code": "alert",      "label": "Alert"},
+    {"code": "onboarding", "label": "Onboarding"},
+    {"code": "provider",   "label": "Provider"},
+    {"code": "suspended",  "label": "Suspended"}
+  ],
+  "ui_tone": [
+    {"code": "primary",     "label": "Primary"},
+    {"code": "data",        "label": "Data"},
+    {"code": "quality",     "label": "Quality"},
+    {"code": "danger",      "label": "Danger"},
+    {"code": "update",      "label": "Update"},
+    {"code": "identity",    "label": "Identity"},
+    {"code": "neutral",     "label": "Neutral"},
+    {"code": "system",      "label": "System"},
+    {"code": "reference",   "label": "Reference"},
+    {"code": "programme",   "label": "Programme"},
+    {"code": "eligibility", "label": "Eligibility"},
+    {"code": "grm",         "label": "Grievance"}
+  ],
+  "partner_contact_role": [
+    {"code": "authorised_signatory", "label": "Authorised Signatory"},
+    {"code": "data_steward",         "label": "Data Steward"},
+    {"code": "partner_dpo",          "label": "Data Protection Officer (Partner)"},
+    {"code": "it_security_contact",  "label": "IT / Security contact"}
+  ],
+  "programme_kind": [
+    {"code": "cash_transfer", "label": "Cash transfer"},
+    {"code": "service",       "label": "Service"},
+    {"code": "in_kind",       "label": "In-kind"},
+    {"code": "voucher",       "label": "Voucher"},
+    {"code": "study",         "label": "Study"}
+  ],
+  "programme_status": [
+    {"code": "draft",  "label": "Draft"},
+    {"code": "active", "label": "Active"},
+    {"code": "closed", "label": "Closed"}
+  ],
+  "dsa_status": [
+    {"code": "draft",              "label": "Draft"},
+    {"code": "pending_signature",  "label": "Pending signature"},
+    {"code": "active",             "label": "Active"},
+    {"code": "expiring",           "label": "Expiring"},
+    {"code": "expired",            "label": "Expired"},
+    {"code": "suspended",          "label": "Suspended"},
+    {"code": "renewed",            "label": "Renewed"}
+  ],
+  "sensitive_data_handling": [
+    {"code": "none",     "label": "None"},
+    {"code": "specific", "label": "Specific clause"},
+    {"code": "full",     "label": "Full (case-by-case)"}
+  ],
+  "dsa_signer_role": [
+    {"code": "partner_auth_signatory", "label": "Partner Authorised Signatory"},
+    {"code": "nsr_unit_lead",          "label": "NSR Unit Lead"},
+    {"code": "dpo",                    "label": "Data Protection Officer (MGLSD)"}
+  ],
+  "signature_method": [
+    {"code": "docusign",         "label": "DocuSign"},
+    {"code": "in_console",       "label": "In-console"},
+    {"code": "wet_ink_scanned",  "label": "Wet ink (scanned PDF)"}
+  ],
+  "signature_status": [
+    {"code": "pending",  "label": "Pending"},
+    {"code": "signed",   "label": "Signed"},
+    {"code": "declined", "label": "Declined"}
+  ],
+  "partner_activity_kind": [
+    {"code": "dsa_breach",              "label": "DSA breach"},
+    {"code": "dsa_renewal_initiated",   "label": "DSA renewal initiated"},
+    {"code": "partner_onboarding",      "label": "Partner onboarding"},
+    {"code": "programme_added",         "label": "Programme added"},
+    {"code": "data_request_delivered",  "label": "Data request delivered"},
+    {"code": "dpia_reminder",           "label": "DPIA review reminder"},
+    {"code": "signature_received",      "label": "Signature received"},
+    {"code": "partner_status_change",   "label": "Partner status change"}
+  ],
+  "dsa_wizard_step": [
+    {"code": "org",    "label": "Organisation"},
+    {"code": "sign",   "label": "Signatories"},
+    {"code": "progs",  "label": "Programmes"},
+    {"code": "scope",  "label": "DSA scope"},
+    {"code": "compl",  "label": "Compliance"},
+    {"code": "review", "label": "Review & sign"}
+  ]
+}
