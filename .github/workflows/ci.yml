@@ -23,6 +23,16 @@ jobs:
       - run: pip install ".[dev]"
       - run: ruff check .
 
+  code-list-lint:
+    name: Lint — no hardcoded coded lists in partners surface (US-S23 / ADR-0010)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 scripts/lint/no_hardcoded_choice_lists.py
+
   test:
     name: Tests (pytest + Postgres+PostGIS)
     runs-on: ubuntu-latest
