@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, KPI, PageHeader, Modal, Toast */
+/* global React, Icon, Chip, KPI, PageHeader, Modal, Toast, ChangeRequestModal */
 // NSR MIS — Household detail (US-005, US-090)
 //
 // Visual design from the claude.ai/design redesign deposited at
@@ -170,34 +170,10 @@ const _hhCsrf = () => {
   return m ? m[1] : "";
 };
 
-// Whitelist of editable fields per entity type. Kept narrow on
-// purpose: these are the household / member ORM columns the live
-// HouseholdSerializer + MemberSerializer surface AND that operators
-// realistically correct from the registry view. Anything more
-// invasive (geo unit, NIN status, head_member swap) should go
-// through a dedicated workflow, not a one-shot field change.
-const _UPD_HH_FIELDS = [
-  { key: "urban_rural",       label: "Urban / rural" },
-  { key: "address_narrative", label: "Address narrative" },
-];
-const _UPD_MEMBER_FIELDS = [
-  { key: "surname",               label: "Surname" },
-  { key: "first_name",            label: "First name" },
-  { key: "other_name",            label: "Other name" },
-  { key: "relationship_to_head",  label: "Relationship to head" },
-  { key: "telephone_1",           label: "Phone (primary)" },
-  { key: "telephone_2",           label: "Phone (secondary)" },
-];
-
-const _UPD_CHANGE_TYPES = [
-  { value: "correction",        label: "Correction" },
-  { value: "addition",          label: "Roster: addition" },
-  { value: "removal",           label: "Roster: removal" },
-  { value: "vital_event",       label: "Roster: vital event" },
-  { value: "programme_state",   label: "Programme state" },
-  { value: "recertification",   label: "Recertification" },
-];
-
+// US-S22-002 — Grievance form vocabularies. The Open Update flow
+// no longer lives inline here; it's been replaced by the
+// ChangeRequestModal component (US-S22-004), which owns the field
+// catalog + change-type vocabulary + routing matrix.
 const _GRM_CATEGORIES = [
   { value: "data_correction",  label: "Data correction" },
   { value: "exclusion_error",  label: "Wrongly excluded" },
@@ -248,17 +224,6 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
   const [busy, setBusy] = useStateHH(false);
   const [me, setMe] = useStateHH(null);
   const [lastCreated, setLastCreated] = useStateHH(null);
-  const [updForm, setUpdForm] = useStateHH({
-    entity_type: "household",
-    entity_id: "",
-    member_id: "",
-    change_type: "correction",
-    pmt_relevant: false,
-    field: "",
-    old_value: "",
-    new_value: "",
-    requester_note: "",
-  });
   const [grmForm, setGrmForm] = useStateHH({
     category: "data_correction",
     tier: "l1_parish_chief",
@@ -312,24 +277,40 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
       .catch(() => {});
   }, []);
 
-  // Open the UPD modal pre-filled with this household as the target
-  // entity. Members dropdown lights up when the operator switches
-  // entity_type to "member".
+  // Open the rich Open-CR modal (US-S22-004). It owns its own state;
+  // we only flip our local `modal` flag.
   const openUpdate = () => {
     if (!h) return;
-    setUpdForm({
-      entity_type: "household",
-      entity_id: h.rid,
-      member_id: h.members[0]?.id || "",
-      change_type: "correction",
-      pmt_relevant: false,
-      field: _UPD_HH_FIELDS[0].key,
-      old_value: "",
-      new_value: "",
-      requester_note: "",
-    });
-    setFormErr("");
     setModal("upd");
+  };
+
+  // US-S22-004 — submit handler for ChangeRequestModal. POSTs the
+  // multi-row payload to /api/v1/upd/change-requests/bundle/ and
+  // returns the normalised response so the modal closes itself.
+  // Wrapped errors propagate as the modal's inline error banner.
+  const submitBundle = async (payload) => {
+    const r = await fetch("/api/v1/upd/change-requests/bundle/", {
+      method: "POST", credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": _hhCsrf(),
+        Accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.status !== 201) {
+      throw new Error(data.detail || JSON.stringify(data) || `HTTP ${r.status}`);
+    }
+    return data;
+  };
+
+  const onBundleSuccess = (result) => {
+    setLastCreated({ kind: "upd", id: result.cr_id });
+    setToast(
+      `Change request created · ${result.changes} change${result.changes === 1 ? "" : "s"} `
+      + `· routed to ${result.routed_to}`,
+    );
   };
 
   const openGrievance = () => {
@@ -345,93 +326,6 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
     });
     setFormErr("");
     setModal("grm");
-  };
-
-  // Resolve the "current" old value for the picked field. When
-  // entity_type=household the value comes from h.* projections that
-  // mirror the ORM column names; for member, look up the selected
-  // member and read the matching key.
-  const resolveOldValue = (form) => {
-    if (!h) return "";
-    if (form.entity_type === "household") {
-      // h is the projected view-model — only urban_rural is exposed
-      // directly; address_narrative isn't projected, so we fall back
-      // to "" (the server will accept old="" and rely on its own
-      // concurrent-edit guard when committing).
-      if (form.field === "urban_rural") return h.urban_rural || "";
-      return "";
-    }
-    const member = h.members.find(m => m.id === form.member_id);
-    if (!member) return "";
-    if (form.field === "telephone_1") return member.phone || "";
-    if (form.field === "surname")     return (member.name.split(" ")[0] || "");
-    if (form.field === "first_name")  return (member.name.split(" ").slice(1).join(" ") || "");
-    if (form.field === "relationship_to_head") return member.rel === "Head" ? "head" : "";
-    return "";
-  };
-
-  const submitOpenUpdate = () => {
-    if (!h) return;
-    const form = updForm;
-    if (!form.field || !form.new_value) {
-      setFormErr("Pick a field and provide the new value.");
-      return;
-    }
-    if (form.entity_type === "member" && !form.member_id) {
-      setFormErr("Pick which household member this change applies to.");
-      return;
-    }
-    const entity_id = form.entity_type === "household" ? h.rid : form.member_id;
-    const old_value = form.old_value || resolveOldValue(form);
-    const requester = me?.username || "console-operator";
-    setBusy(true);
-    setFormErr("");
-    fetch("/api/v1/upd/change-requests/", {
-      method: "POST", credentials: "same-origin",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRFToken": _hhCsrf(),
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        entity_type: form.entity_type,
-        entity_id,
-        change_type: form.change_type,
-        pmt_relevant: !!form.pmt_relevant,
-        changes: { [form.field]: { old: old_value, new: form.new_value } },
-        evidence: form.requester_note ? [{ kind: "note", label: form.requester_note }] : [],
-        source_channel: "web",
-        requester,
-        requester_note: form.requester_note,
-      }),
-    })
-      .then(async r => {
-        if (r.status === 201) return r.json();
-        const j = await r.json().catch(() => ({}));
-        throw new Error(j.detail || JSON.stringify(j) || `HTTP ${r.status}`);
-      })
-      .then(cr => fetch(`/api/v1/upd/change-requests/${cr.id}/submit/`, {
-        method: "POST", credentials: "same-origin",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRFToken": _hhCsrf(),
-          Accept: "application/json",
-        },
-      }).then(async r => {
-        if (r.ok) return r.json();
-        const j = await r.json().catch(() => ({}));
-        // CR was created (DRAFT) but submit failed — surface both
-        // pieces so the operator knows the row is on the workbench
-        // even though the submit transition didn't apply.
-        throw new Error(`Draft saved (${cr.id.slice(0, 8)}…) but submit failed: ${j.detail || r.status}`);
-      }))
-      .then(submitted => {
-        setLastCreated({ kind: "upd", id: submitted.id });
-        setToast(`Change request ${submitted.id.slice(0, 12)}… submitted.`);
-        setModal(null);
-      })
-      .catch(e => setFormErr(String(e.message || e)))
-      .finally(() => setBusy(false));
   };
 
   const submitOpenGrievance = () => {
@@ -623,117 +517,16 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
         Audit chain available under the Audit tab.
       </div>
 
-      {/* US-S22-002 — Open Update modal */}
-      <Modal open={modal === "upd"} onClose={() => !busy && setModal(null)}
-        title="Open a change request"
-        width={560}
-        footer={
-          <>
-            <button className="btn" disabled={busy} onClick={() => setModal(null)}>Cancel</button>
-            <button className="btn btn-success" disabled={busy} onClick={submitOpenUpdate}>
-              {busy ? "Submitting…" : "Create & submit"}
-            </button>
-          </>
-        }>
-        <div className="col gap-3">
-          <div className="t-bodysm muted">
-            Creates a DRAFT change request scoped to this household and
-            advances it to PENDING_APPROVAL. Reviewer routing comes from
-            the change_type × pmt_relevant matrix (SAD §4.4.4).
-          </div>
-
-          <div className="row gap-3">
-            <label style={{flex:1}}>
-              <div className="t-cap">Entity</div>
-              <select value={updForm.entity_type}
-                onChange={(e) => setUpdForm({...updForm,
-                  entity_type: e.target.value,
-                  field: (e.target.value === "household"
-                          ? _UPD_HH_FIELDS[0].key
-                          : _UPD_MEMBER_FIELDS[0].key),
-                })}>
-                <option value="household">This household</option>
-                <option value="member">A household member</option>
-              </select>
-            </label>
-            {updForm.entity_type === "member" && (
-              <label style={{flex:2}}>
-                <div className="t-cap">Member</div>
-                <select value={updForm.member_id}
-                  onChange={(e) => setUpdForm({...updForm, member_id: e.target.value})}>
-                  {(h?.members || []).map(m => (
-                    <option key={m.id} value={m.id}>
-                      Line {m.line} · {m.name}{m.rel === "Head" ? " (head)" : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-          </div>
-
-          <div className="row gap-3">
-            <label style={{flex:1}}>
-              <div className="t-cap">Change type</div>
-              <select value={updForm.change_type}
-                onChange={(e) => setUpdForm({...updForm, change_type: e.target.value})}>
-                {_UPD_CHANGE_TYPES.map(o => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </label>
-            <label className="row gap-2" style={{alignItems:"center", paddingTop:18}}>
-              <input type="checkbox" checked={updForm.pmt_relevant}
-                onChange={(e) => setUpdForm({...updForm, pmt_relevant: e.target.checked})}/>
-              <span className="t-bodysm">PMT-relevant</span>
-            </label>
-          </div>
-
-          <label>
-            <div className="t-cap">Field to change</div>
-            <select value={updForm.field}
-              onChange={(e) => setUpdForm({...updForm, field: e.target.value})}>
-              {(updForm.entity_type === "household" ? _UPD_HH_FIELDS : _UPD_MEMBER_FIELDS).map(f => (
-                <option key={f.key} value={f.key}>{f.label}</option>
-              ))}
-            </select>
-          </label>
-
-          <div className="row gap-3">
-            <label style={{flex:1}}>
-              <div className="t-cap">Current value</div>
-              <input type="text" value={updForm.old_value || resolveOldValue(updForm)}
-                onChange={(e) => setUpdForm({...updForm, old_value: e.target.value})}
-                placeholder="Old value (pre-filled when known)"/>
-            </label>
-            <label style={{flex:1}}>
-              <div className="t-cap">New value *</div>
-              <input type="text" value={updForm.new_value}
-                onChange={(e) => setUpdForm({...updForm, new_value: e.target.value})}
-                placeholder="What the field should become"/>
-            </label>
-          </div>
-
-          <label>
-            <div className="t-cap">Requester note</div>
-            <textarea rows={2} value={updForm.requester_note}
-              onChange={(e) => setUpdForm({...updForm, requester_note: e.target.value})}
-              placeholder="Why this change? (becomes the evidence note + audit reason.)"/>
-          </label>
-
-          {formErr && (
-            <div className="t-bodysm" style={{color:"var(--accent-danger)",
-              padding:"8px 10px", background:"var(--neutral-50)",
-              border:"1px solid var(--accent-danger)", borderRadius:6}}>
-              {formErr}
-            </div>
-          )}
-
-          <div className="t-cap muted">
-            Requester: <strong>{me?.username || "console-operator"}</strong> ·
-            Source: <strong>web</strong>
-          </div>
-        </div>
-      </Modal>
+      {/* US-S22-004 — rich multi-row Open-CR modal */}
+      <ChangeRequestModal
+        open={modal === "upd"}
+        onClose={() => setModal(null)}
+        household={h}
+        householdId={h?.rid || ""}
+        me={me}
+        addUx="composer"
+        onSubmit={submitBundle}
+        onSuccess={onBundleSuccess}/>
 
       {/* US-S22-002 — Open Grievance modal */}
       <Modal open={modal === "grm"} onClose={() => !busy && setModal(null)}
