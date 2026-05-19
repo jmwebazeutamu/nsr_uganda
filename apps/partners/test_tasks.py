@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 
@@ -82,6 +82,12 @@ class TestBreachDetector:
 
 @pytest.mark.django_db
 class TestRollup:
+    """AuditEvent is append-only on Postgres (a trigger forbids
+    UPDATE/DELETE per the audit-chain integrity rule). Tests use
+    today's date so auto_now_add captures the right window — no
+    backdating, no need to break the trigger.
+    """
+
     def test_skips_provider_partners(self):
         provider = Partner.objects.create(
             code="NIRA", name="NIRA", type="agency", status="provider",
@@ -91,11 +97,7 @@ class TestRollup:
             entity_type="data_request", entity_id="r1",
             reason="NIRA · 1000 rows",
         )
-        # Backdate to yesterday so the rollup picks it up.
-        AuditEvent.objects.filter(actor_id="drs").update(
-            occurred_at=date.today() - timedelta(days=1),
-        )
-        out = rollup_partner_usage_daily(target_day=date.today() - timedelta(days=1))
+        out = rollup_partner_usage_daily(target_day=date.today())
         # Provider was skipped → no PartnerUsageDaily row produced.
         assert PartnerUsageDaily.objects.filter(partner=provider).count() == 0
         assert out["partners_written"] == 0
@@ -104,17 +106,15 @@ class TestRollup:
         p = Partner.objects.create(
             code="OPM", name="OPM", type="ministry", status="active",
         )
-        yesterday = date.today() - timedelta(days=1)
         for _ in range(3):
-            ev = AuditEvent.objects.create(
+            AuditEvent.objects.create(
                 actor_id="drs", action="data_request_delivered",
                 entity_type="data_request", entity_id="r",
                 reason="OPM · 1000 rows",
             )
-            AuditEvent.objects.filter(pk=ev.pk).update(occurred_at=yesterday)
-        out = rollup_partner_usage_daily(target_day=yesterday)
+        out = rollup_partner_usage_daily(target_day=date.today())
         # Three deliveries → three requests; row count is 0 today
         # (row-count parsing is a follow-up).
-        row = PartnerUsageDaily.objects.get(partner=p, day=yesterday)
+        row = PartnerUsageDaily.objects.get(partner=p, day=date.today())
         assert row.requests_count == 3
         assert out["partners_written"] == 1
