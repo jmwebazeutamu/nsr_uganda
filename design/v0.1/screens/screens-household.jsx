@@ -82,6 +82,12 @@ const DEMO_HH = {
 
 // Project the API HouseholdSerializer payload into the view-model
 // the redesign's render tree consumes.
+//
+// US-S22-005f wiring: every coded field reads from the API's
+// resolved label (e.g. `m.sex_label`, `payloadLabels.housing.tenure`)
+// rather than from a hardcoded code-to-string map in this file.
+// Raw codes remain available on the view-model for the Audit tab
+// and for diagnostic display.
 const _hhApiToView = (h) => {
   const members = (h.members || []).slice().sort(
     (a, b) => (a.line_number || 0) - (b.line_number || 0),
@@ -90,11 +96,19 @@ const _hhApiToView = (h) => {
   const headName = [head.surname, head.first_name].filter(Boolean).join(" ")
                    || "(no head)";
   const payload = h.source_payload || null;
+  const payloadLabels = h.source_payload_labels || {};
   const qMembersByLine = {};
   if (payload?.members) {
     for (const qm of payload.members) {
       qMembersByLine[qm.line_number] = qm;
     }
+  }
+  const labelMembersByLine = {};
+  if (Array.isArray(payloadLabels?.members)) {
+    payloadLabels.members.forEach((lm, idx) => {
+      const lineNo = payload?.members?.[idx]?.line_number ?? (idx + 1);
+      labelMembersByLine[lineNo] = lm || {};
+    });
   }
 
   return {
@@ -102,7 +116,9 @@ const _hhApiToView = (h) => {
     head: headName,
     status: "Registered",
     hh: members.length,
-    sex: (head.sex || "").toUpperCase().startsWith("F") ? "F" : "M",
+    // Use head's resolved sex_label so the chip shows "Male" / "Female",
+    // not "M" / "F".
+    sex: head.sex_label || head.sex || "—",
     subreg:   h.sub_region_name || h.sub_region || "—",
     district: h.district_name   || h.district   || "—",
     parish:   h.parish_name     || h.parish     || "—",
@@ -126,37 +142,37 @@ const _hhApiToView = (h) => {
     programmes: [],  // populated when REF wires in
     members: members.map(m => {
       const qm = qMembersByLine[m.line_number] || {};
+      const lm = labelMembersByLine[m.line_number] || {};
       return {
         id: m.id,
         line: m.line_number,
         name: [m.surname, m.first_name].filter(Boolean).join(" ") || "—",
-        rel: (m.id === h.head_member) ? "Head" : (m.relationship_to_head || "—"),
-        sex: m.sex || "—",
+        rel: (m.id === h.head_member) ? "Head" : (m.relationship_to_head_label || m.relationship_to_head || "—"),
+        sex: m.sex_label || m.sex || "—",
         age: m.age_years ?? "—",
         nin: m.nin_last4 ? `…${m.nin_last4}` : "—",
         dob: m.date_of_birth || "—",
         phone: m.telephone_1 || "",
-        // Questionnaire blocks (per-member) — may be null when this
-        // household didn't come from Kobo.
-        literacy:           _eduLabel(qm.education?.literacy),
-        everSchool:         _yesNo(qm.education?.ever_school),
+        // Questionnaire blocks (per-member) — labels resolve against
+        // the same ChoiceList catalogue the API used.
+        literacy:           lm.education?.literacy           ?? qm.education?.literacy           ?? "—",
+        everSchool:         lm.education?.ever_school        ?? qm.education?.ever_school        ?? "—",
         highestGrade:       qm.education?.highest_grade || "—",
-        currentlyAttending: _yesNo(qm.education?.currently_attending),
-        neverReason:        qm.education?.never_school_reason || "—",
+        currentlyAttending: lm.education?.currently_attending ?? qm.education?.currently_attending ?? "—",
+        neverReason:        lm.education?.never_school_reason ?? qm.education?.never_school_reason ?? "—",
         health: qm.health || null,
+        healthLabels: lm.health || null,
         education: qm.education || null,
+        educationLabels: lm.education || null,
         employment: qm.employment || null,
+        employmentLabels: lm.employment || null,
       };
     }),
     questionnaire: payload,
+    questionnaireLabels: payloadLabels,
     sourcePayload: payload,
   };
 };
-
-const _yesNo = (code) => ({"1":"Yes","2":"No"}[String(code)] || (code ? `code ${code}` : "—"));
-const _eduLabel = (code) => ({
-  "1": "Reads + writes", "2": "Reads only", "3": "Neither",
-})[String(code)] || (code ? `code ${code}` : "—");
 
 
 // ────────────────────────────────────────────────────────────────
@@ -418,7 +434,7 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
                      gridTemplateColumns:"1.4fr 2fr 1.4fr 1fr 1fr", gap:24,
                      alignItems:"flex-start"}}>
           <Fact label="Head of household" big={h.head}
-            sub={`HH size ${h.hh} · ${h.members.filter(m => m.sex === "F").length}F / ${h.members.filter(m => m.sex === "M").length}M`}/>
+            sub={`HH size ${h.hh} · ${h.members.filter(m => m.sex === "Female").length}F / ${h.members.filter(m => m.sex === "Male").length}M`}/>
           <Fact label="Location"
             big={`${h.village}, ${h.parish}, ${h.district}`}
             sub={`${h.subreg}`}/>
@@ -729,7 +745,7 @@ const TabOverview = ({ h }) => (
     <div style={{padding:20, display:"grid", gridTemplateColumns:"1fr 1fr", gap:16}}>
       <KVCard title="Household composition" rows={[
         ["Members", h.hh],
-        ["Female / male", `${h.members.filter(m => m.sex === "F").length} / ${h.members.filter(m => m.sex === "M").length}`],
+        ["Female / male", `${h.members.filter(m => m.sex === "Female").length} / ${h.members.filter(m => m.sex === "Male").length}`],
         ["Children < 5",  h.members.filter(m => m.age !== "—" && m.age < 5).length],
         ["Children 5–17", h.members.filter(m => m.age !== "—" && m.age >= 5 && m.age < 18).length],
         ["Adults 18–59",  h.members.filter(m => m.age !== "—" && m.age >= 18 && m.age < 60).length],
@@ -755,8 +771,8 @@ const TabOverview = ({ h }) => (
         ["PMT score",   h.pmt ? <span className="t-mono">{h.pmt.score.toFixed(3)}</span> : null],
         ["PMT band",    h.pmt ? <Chip size="sm" tone="eligibility">{h.pmt.band}</Chip> : null],
         ["Source",      h.source.toLowerCase()],
-        ["Roof",        h.questionnaire?.housing?.roof_material || null],
-        ["Water source", h.questionnaire?.housing?.water_source || null],
+        ["Roof",        h.questionnaireLabels?.housing?.roof_material || h.questionnaire?.housing?.roof_material || null],
+        ["Water source", h.questionnaireLabels?.housing?.water_source  || h.questionnaire?.housing?.water_source  || null],
       ]}/>
     </div>
   </div>
@@ -811,7 +827,14 @@ const TabRoster = ({ h }) => (
 
 const TabHealth = ({ h }) => {
   if (!h.questionnaire) return <_NoQuestionnaire section="Health & Disability"/>;
-  const _disab = (c) => ({"01":"None","02":"Some","03":"A lot","04":"Cannot"}[String(c)] || "—");
+  // Labels resolve against the seeded severity list — 01=None, 02=Some,
+  // 03=A lot, 04=Cannot. Chronic illness is yes_no. ADR-0010 §6.
+  const _cell = (mh, mhL, key) => {
+    if (!mh) return <span className="muted">—</span>;
+    const label = mhL?.[key];
+    if (label) return label;
+    return mh[key] || <span className="muted">—</span>;
+  };
   return (
     <div>
       <TabHeader title="Health & Disability"
@@ -825,13 +848,13 @@ const TabHealth = ({ h }) => {
             <tr key={m.line}>
               <td>{m.line}</td>
               <td>{m.name}</td>
-              <td>{m.health ? _yesNo(m.health.chronic_illness) : <span className="muted">—</span>}</td>
-              <td>{m.health ? _disab(m.health.seeing) : <span className="muted">—</span>}</td>
-              <td>{m.health ? _disab(m.health.hearing) : <span className="muted">—</span>}</td>
-              <td>{m.health ? _disab(m.health.walking) : <span className="muted">—</span>}</td>
-              <td>{m.health ? _disab(m.health.remembering) : <span className="muted">—</span>}</td>
-              <td>{m.health ? _disab(m.health.self_care) : <span className="muted">—</span>}</td>
-              <td>{m.health ? _disab(m.health.communicating) : <span className="muted">—</span>}</td>
+              <td>{_cell(m.health, m.healthLabels, "chronic_illness")}</td>
+              <td>{_cell(m.health, m.healthLabels, "seeing")}</td>
+              <td>{_cell(m.health, m.healthLabels, "hearing")}</td>
+              <td>{_cell(m.health, m.healthLabels, "walking")}</td>
+              <td>{_cell(m.health, m.healthLabels, "remembering")}</td>
+              <td>{_cell(m.health, m.healthLabels, "self_care")}</td>
+              <td>{_cell(m.health, m.healthLabels, "communicating")}</td>
             </tr>
           ))}
         </tbody>
@@ -879,7 +902,7 @@ const TabEducation = ({ h }) => (
               ? <Chip size="sm" tone="data">Yes</Chip>
               : <span className="muted">{m.currentlyAttending}</span>}</td>
             <td>{m.neverReason && m.neverReason !== "—"
-              ? <span className="t-mono" style={{color:"var(--neutral-700)"}}>code {m.neverReason}</span>
+              ? <span style={{color:"var(--neutral-700)"}}>{m.neverReason}</span>
               : <span className="muted">—</span>}</td>
           </tr>
         ))}
@@ -890,6 +913,7 @@ const TabEducation = ({ h }) => (
 
 const TabEmployment = ({ h }) => {
   if (!h.questionnaire) return <_NoQuestionnaire section="Employment"/>;
+  const _emp = (m, key) => (m.employmentLabels?.[key]) || (m.employment?.[key]) || <span className="muted">—</span>;
   return (
     <div>
       <TabHeader title="Employment & livelihoods" sub="Activity and primary occupation per member."/>
@@ -902,12 +926,12 @@ const TabEmployment = ({ h }) => {
             <tr key={m.line}>
               <td>{m.line}</td>
               <td>{m.name}</td>
-              <td>{m.employment?.main_job || <span className="muted">—</span>}</td>
-              <td>{m.employment?.work_sector || <span className="muted">—</span>}</td>
-              <td>{m.employment?.work_frequency || <span className="muted">—</span>}</td>
-              <td>{m.employment?.work_status || <span className="muted">—</span>}</td>
+              <td>{_emp(m, "main_job")}</td>
+              <td>{_emp(m, "work_sector")}</td>
+              <td>{_emp(m, "work_frequency")}</td>
+              <td>{_emp(m, "work_status")}</td>
               <td>{m.employment?.programmes || <span className="muted">—</span>}</td>
-              <td>{m.employment?.made_savings ? _yesNo(m.employment.made_savings) : <span className="muted">—</span>}</td>
+              <td>{_emp(m, "made_savings")}</td>
             </tr>
           ))}
         </tbody>
@@ -919,41 +943,50 @@ const TabEmployment = ({ h }) => {
 const TabHousing = ({ h }) => {
   const hg = h.questionnaire?.housing;
   if (!hg) return <_NoQuestionnaire section="Housing & Assets"/>;
+  // ADR-0010 §6: every coded field reads its resolved label from
+  // h.questionnaireLabels — never from a hardcoded code-to-string
+  // map in this component. Raw codes remain in `hg` for the Audit
+  // tab (rendered separately in TabAudit).
+  const hgL = h.questionnaireLabels?.housing || {};
+  const agL = h.questionnaireLabels?.agriculture || {};
+  const ag = h.questionnaire?.agriculture || {};
   const assetCodes = (hg.assets_owned || "").split(/\s+/).filter(Boolean);
+  const assetLabels = Array.isArray(hgL.assets_owned) ? hgL.assets_owned : null;
   return (
     <div>
       <TabHeader title="Housing & Assets"/>
       <div style={{padding:20, display:"grid", gridTemplateColumns:"1fr 1fr", gap:16}}>
         <KVCard title="Dwelling" tint="eligibility" rows={[
-          ["Tenure", hg.tenure],
-          ["Roof",   hg.roof_material],
-          ["Walls",  hg.wall_material],
-          ["Floor",  hg.floor_material],
-          ["Rooms",  `${hg.rooms_total ?? "—"} (${hg.rooms_sleeping ?? "—"} sleeping)`],
-          ["Lighting", hg.lighting_source],
+          ["Tenure",   hgL.tenure          || hg.tenure          || "—"],
+          ["Roof",     hgL.roof_material   || hg.roof_material   || "—"],
+          ["Walls",    hgL.wall_material   || hg.wall_material   || "—"],
+          ["Floor",    hgL.floor_material  || hg.floor_material  || "—"],
+          ["Rooms",    `${hg.rooms_total ?? "—"} (${hg.rooms_sleeping ?? "—"} sleeping)`],
+          ["Lighting", hgL.lighting_source || hg.lighting_source || "—"],
         ]}/>
         <KVCard title="Water, sanitation & energy" tint="eligibility" rows={[
-          ["Drinking water", hg.water_source],
-          ["Toilet",         hg.toilet_type],
-          ["Share toilet",   _yesNo(hg.share_toilet)],
+          ["Drinking water",   hgL.water_source   || hg.water_source   || "—"],
+          ["Toilet",           hgL.toilet_type    || hg.toilet_type    || "—"],
+          ["Share toilet",     hgL.share_toilet   || hg.share_toilet   || "—"],
           ["Share-toilet HHs", hg.share_toilet_households],
-          ["Cooking fuel",   hg.cooking_fuel],
-          ["Waste disposal", hg.waste_disposal],
+          ["Cooking fuel",     hgL.cooking_fuel   || hg.cooking_fuel   || "—"],
+          ["Waste disposal",   hgL.waste_disposal || hg.waste_disposal || "—"],
         ]}/>
         <KVCard title="Assets owned" tint="programme" rows={[
           ["Codes recorded", assetCodes.length],
+          ["Items",          assetLabels ? assetLabels.join(", ") : (assetCodes.join(" ") || "—")],
           ...["mattress", "solar", "bed", "tv", "bicycle", "phone"].map(k => [
             k.charAt(0).toUpperCase() + k.slice(1),
             hg.asset_counts?.[k] != null ? `${hg.asset_counts[k]}` : "—",
           ]),
         ]}/>
         <KVCard title="Livelihoods" tint="programme" rows={[
-          ["Primary livelihood", hg.livelihood_source],
-          ["Crop production", h.questionnaire.agriculture?.crop_production],
-          ["Livestock", h.questionnaire.agriculture?.livestock],
-          ["Livestock counts", h.questionnaire.agriculture?.livestock_counts],
-          ["Crops grown", h.questionnaire.agriculture?.crops_grown],
-          ["Land ownership", h.questionnaire.agriculture?.land_ownership],
+          ["Primary livelihood", hgL.livelihood_source || hg.livelihood_source || "—"],
+          ["Crop production",    agL.crop_production   || ag.crop_production   || "—"],
+          ["Livestock",          agL.livestock         || ag.livestock         || "—"],
+          ["Livestock counts", ag.livestock_counts ?? "—"],
+          ["Crops grown",      ag.crops_grown      ?? "—"],
+          ["Land ownership",   agL.land_ownership || ag.land_ownership || "—"],
         ]}/>
       </div>
     </div>
@@ -1024,7 +1057,7 @@ const TabFood = ({ h }) => {
               <strong className="t-bodysm">Shocks & coping</strong>
             </div>
             <div className="t-bodysm muted">
-              Shock affected: <strong>{_yesNo(sc.shock_affected)}</strong> ·
+              Shock affected: <strong>{h.questionnaireLabels?.shocks_coping?.shock_affected || sc.shock_affected || "—"}</strong> ·
               {" "}{Object.keys(sc.coping || {}).length} coping strategies recorded.
               See `_source_keys` in the StageRecord for the per-strategy detail.
             </div>
@@ -1300,7 +1333,7 @@ const TabConsent = ({ h, live }) => {
         </div>
         <KVCard title="Evidence" rows={[
           ["Consent given", live && consent
-            ? <Chip size="sm" tone="data"><Icon name="check" size={11}/> {_yesNo(consent)}</Chip>
+            ? <Chip size="sm" tone="data"><Icon name="check" size={11}/> {h.questionnaireLabels?.interview?.consent || consent}</Chip>
             : (live ? <span className="muted">not recorded</span> : <Chip size="sm" tone="data">Yes</Chip>)],
           ["Respondent", respondent || (live ? <span className="muted">—</span> : "Sample respondent")],
           ["Captured at", h.capturedAt],

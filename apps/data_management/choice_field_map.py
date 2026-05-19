@@ -100,9 +100,21 @@ PAYLOAD_FIELDS: dict[tuple[str, ...], tuple[str, Kind]] = {
     ("members", "*", "employment", "work_sector"): ("work_sector", "single"),
     ("members", "*", "employment", "work_frequency"): ("work_frequency", "single"),
     ("members", "*", "employment", "not_working_reason"): ("not_working_reason", "single"),
-    ("members", "*", "health", "chronic_illness"): ("chronic_illness", "multi"),
+    ("members", "*", "health", "chronic_illness"): ("yes_no", "single"),
     ("members", "*", "health", "difficulty"): ("difficulty", "multi"),
     ("members", "*", "health", "severity"): ("severity", "single"),
+    # Washington-Group disability dimensions — each stores a severity
+    # code from the same `severity` seed list (01=None ... 04=Cannot).
+    ("members", "*", "health", "seeing"): ("severity", "single"),
+    ("members", "*", "health", "hearing"): ("severity", "single"),
+    ("members", "*", "health", "walking"): ("severity", "single"),
+    ("members", "*", "health", "remembering"): ("severity", "single"),
+    ("members", "*", "health", "self_care"): ("severity", "single"),
+    ("members", "*", "health", "communicating"): ("severity", "single"),
+    # Employment yes/no flags
+    ("members", "*", "employment", "made_savings"): ("yes_no", "single"),
+    # Top-level questionnaire yes/no flags
+    ("shocks_coping", "shock_affected"): ("yes_no", "single"),
 }
 
 
