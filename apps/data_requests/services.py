@@ -207,10 +207,15 @@ def _dsa_window_active(dsa: DataSharingAgreement) -> bool:
     return True
 
 
-@transaction.atomic
 def submit_data_request(req: DataRequest) -> DataRequest:
     """DRAFT -> SUBMITTED. Validates payload against parent DSA.
-    Per ADR-0013 also rejects when partner.status == suspended."""
+    Per ADR-0013 also rejects when partner.status == suspended.
+
+    Validation runs OUTSIDE the atomic state transition so audit
+    events written for scope violations / budget breaches survive
+    even when the submit is rejected (the transition would otherwise
+    roll back the audit row alongside the would-be save).
+    """
     if req.status != RequestStatus.DRAFT:
         raise DrsError(f"can only submit DRAFT (got {req.status})")
     if req.dsa.status != "active":
@@ -227,7 +232,11 @@ def submit_data_request(req: DataRequest) -> DataRequest:
             f"Partner {req.dsa.partner.code} is suspended"
         )
     validate_against_dsa(req.request_payload or {}, req.dsa)
+    return _submit_data_request_atomic(req)
 
+
+@transaction.atomic
+def _submit_data_request_atomic(req: DataRequest) -> DataRequest:
     req.status = RequestStatus.SUBMITTED
     req.submitted_at = timezone.now()
     req.save(update_fields=["status", "submitted_at", "updated_at"])
