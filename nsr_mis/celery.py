@@ -85,4 +85,19 @@ app.conf.beat_schedule = {
         # SOP we're replacing.
         "schedule": crontab(minute=0, hour=3),
     },
+    "rollup-partner-usage-daily": {
+        "task": "apps.partners.tasks.rollup_partner_usage_daily_task",
+        # Daily at 01:00 EAT — runs after midnight so the rollup
+        # picks up the full previous day of DRS deliveries. Feeds
+        # the UsageBar on the partners dashboard.
+        "schedule": crontab(minute=0, hour=1),
+    },
+    "detect-dsa-budget-breaches": {
+        "task": "apps.partners.tasks.detect_dsa_budget_breaches_task",
+        # Daily at 01:15 EAT — 15 minutes after the rollup so the
+        # detector sees the freshest day in the 30d window. Emits
+        # `breach_detected` AuditEvents + flips the partner status
+        # to "alert" per ADR-0011.
+        "schedule": crontab(minute=15, hour=1),
+    },
 }
