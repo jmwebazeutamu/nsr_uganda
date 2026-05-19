@@ -4,6 +4,76 @@ Notable changes to outbound API contracts. Entries are dated and tied to the com
 
 ---
 
+## 2026-05-19 — US-S23 — Partners + DSA registry API
+
+**Affected endpoints**: new namespace under `/api/v1/partners/` and `/api/v1/dsas/`. Also extends `/api/v1/reference-data/choice-list-bundle/`.
+
+### New endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET    | `/api/v1/partners/`                 | List partners; filters `q`, `type`, `status`, `sector`. |
+| POST   | `/api/v1/partners/`                 | Create a partner. Gated by `PARTNERS_MODULE_ENABLED`. |
+| GET    | `/api/v1/partners/{id}/`            | Retrieve. |
+| PATCH  | `/api/v1/partners/{id}/`            | Update. |
+| GET    | `/api/v1/partners/summary/`         | KPI counts for the dashboard. |
+| GET    | `/api/v1/partners/renewals/?days=`  | DSAs by days-until-expiry. |
+| GET    | `/api/v1/partners/sector-mix/`      | Partner counts + rows-delivered per sector. |
+| GET    | `/api/v1/partners/top-consumers/?n=`| Top N requesters by 30d row volume. |
+| GET    | `/api/v1/partners/{id}/activity/`   | Activity feed projection over `AuditEvent`. |
+| GET    | `/api/v1/partners/{id}/usage/?days=`| Per-day usage rollup. |
+| GET    | `/api/v1/dsas/`                     | List DSAs; filters `partner`, `status`. |
+| POST   | `/api/v1/dsas/`                     | Create a draft DSA. |
+| GET    | `/api/v1/dsas/{id}/`                | Retrieve with embedded signatures. |
+| PATCH  | `/api/v1/dsas/{id}/`                | Update. |
+| POST   | `/api/v1/dsas/{id}/submit-for-signoff/` | Workflow trigger (ADR-0012). |
+
+### Bundle endpoint extension
+
+`GET /api/v1/reference-data/choice-list-bundle/?lists=a,b,c` — new `lists` query param trims the bundle to the named ChoiceLists. The wizard fetches just the option sets it needs (`partner_type`, `partner_sector`, `partner_contact_role`, `programme_kind`, `dsa_signer_role`, `signature_method`, `sensitive_data_handling`, `dsa_wizard_step`) instead of the full 60-list catalogue. ETag differs per `lists` allowlist, so each slice caches independently.
+
+### ChoiceList catalogue additions
+
+14 new ChoiceLists seeded at v1/ACTIVE — these are the option sets every partner-module dropdown reads from:
+
+```
+partner_type, partner_sector, partner_status, ui_tone,
+partner_contact_role, programme_kind, programme_status,
+dsa_status, sensitive_data_handling, dsa_signer_role,
+signature_method, signature_status, partner_activity_kind,
+dsa_wizard_step
+```
+
+External consumers that resolve labels via the bundle endpoint pick them up automatically. Consumers caching the catalogue offline must re-fetch (ETag changes).
+
+### Coded-field response shape
+
+Every coded field on every partner-module response carries both raw `<field>` and resolved `<field>_label` — same contract as the household-detail payload from US-S22-005. For example:
+
+```json
+{
+  "id": "01...",
+  "code": "OPM",
+  "type": "ministry",
+  "type_label": "Ministry",
+  "sector": "social_protection",
+  "sector_label": "Social Protection",
+  "status": "active",
+  "status_label": "Active",
+  ...
+}
+```
+
+### Workflow contract
+
+`POST /api/v1/dsas/{id}/submit-for-signoff/` accepts `partner_signer_email`, `nsr_unit_lead_email`, `dpo_email` (and optional name fields). The three emails must be distinct (self-sign-off prohibition). Creates three `DsaSignature` rows; dispatches the first DocuSign envelope (or the stub, depending on `PARTNERS_DOCUSIGN_ENABLED`); emits `AuditEvent`s per ADR-0012.
+
+### Feature flag
+
+`PARTNERS_MODULE_ENABLED` (default `True` in dev; toggleable in production deployment settings) gates write endpoints (POST/PATCH). Reads remain open under the standard `IsAuthenticated` permission.
+
+---
+
 ## 2026-05-19 — US-S22-005 — Coded fields now serialise as raw `ChoiceOption.code` strings
 
 **Affected endpoints**: `GET /api/v1/data-management/households/{id}/` and `/members/{id}/`. Any DRS export bundle that includes these fields (per the active Data Sharing Agreement).
