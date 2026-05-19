@@ -36,4 +36,7 @@ urlpatterns = [
     path("api/v1/ref/", include("apps.referral.urls")),
     path("api/v1/rpt/", include("apps.reporting.urls")),
     path("api/v1/drs/", include("apps.data_requests.urls")),
+    # US-S23-008 — partners module (ADR-0011). Mounted at the bare
+    # /api/v1/ prefix because the router itself owns "partners/".
+    path("api/v1/", include("apps.partners.urls")),
 ]
