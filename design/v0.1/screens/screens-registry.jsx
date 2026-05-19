@@ -30,11 +30,13 @@ const MOCK_HOUSEHOLDS = [
 const _apiRowToView = (h) => {
   const members = h.members || [];
   const head = members.find(m => m.id === h.head_member) || members[0] || {};
-  const isF = (head.sex || "").toUpperCase().startsWith("F");
+  // ADR-0010: head.sex is a ChoiceOption.code ("1"/"2"); head.sex_label is
+  // the resolved display ("Male"/"Female"). Prefer the label; fall back to
+  // the raw code for the F-headed pill at line 244.
   return {
     rid: h.id,
     head: [head.surname, head.first_name].filter(Boolean).join(" ") || "(no head)",
-    sex: isF ? "F" : "M",
+    sex: head.sex_label || head.sex || "",
     hh: members.length,
     subreg: h.sub_region_name || h.sub_region || "",
     district: h.district_name || h.district || "",
@@ -241,7 +243,7 @@ const RegistryScreen = ({ onNavigate }) => {
                     </div>
                     <div>
                       <div style={{fontWeight:500}}>{h.head}</div>
-                      <div className="t-cap">{h.sex === "F" ? "Female" : "Male"}-headed</div>
+                      <div className="t-cap">{(h.sex || "—")}-headed</div>
                     </div>
                   </div>
                 </td>

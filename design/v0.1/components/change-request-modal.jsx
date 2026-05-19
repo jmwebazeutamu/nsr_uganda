@@ -32,7 +32,8 @@ const CATEGORIES = [
     { key: "gps",         label: "GPS coordinates",   type: "text",   pmt: false },
     { key: "ea",          label: "Enumeration area",  type: "text",   pmt: false },
     { key: "urban_rural", label: "Urban / rural",     type: "select", pmt: true,
-      options: ["urban","rural"] },
+      // ADR-0010 seed codes (rural_urban: 1=Urban, 2=Rural).
+      options: ["1","2"] },
     { key: "village",     label: "Village",           type: "text",   pmt: false },
     { key: "parish",      label: "Parish",            type: "text",   pmt: false },
   ]},
@@ -43,7 +44,8 @@ const CATEGORIES = [
     { key: "member_name",     label: "Member name",            type: "text",   pmt: false },
     { key: "member_dob",      label: "Member date of birth",   type: "date",   pmt: false },
     { key: "member_sex",      label: "Member sex",             type: "select", pmt: false,
-      options: ["M","F"] },
+      // ADR-0010 seed codes (sex: 1=Male, 2=Female).
+      options: ["1","2"] },
     { key: "member_relation", label: "Member relation to head", type: "text",   pmt: false },
   ]},
   { key: "hd", label: "Health & Disability",   tone: "danger",       fields: [

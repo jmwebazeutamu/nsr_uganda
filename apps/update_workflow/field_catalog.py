@@ -36,8 +36,11 @@ CATEGORIES: list[dict] = [
         "fields": [
             {"key": "gps",         "label": "GPS coordinates",   "type": "text",   "pmt": False},
             {"key": "ea",          "label": "Enumeration area",  "type": "text",   "pmt": False},
+            # ADR-0010: urban_rural is a coded ChoiceList field — options
+            # MUST be the seed codes (rural_urban: 1=Urban, 2=Rural). The
+            # display label is resolved by the resolver at render time.
             {"key": "urban_rural", "label": "Urban / rural",     "type": "select", "pmt": True,
-             "options": ["urban", "rural"]},
+             "options": ["1", "2"]},
             {"key": "village",     "label": "Village",           "type": "text",   "pmt": False},
             {"key": "parish",      "label": "Parish",            "type": "text",   "pmt": False},
         ],
@@ -50,8 +53,10 @@ CATEGORIES: list[dict] = [
             {"key": "remove_member",   "label": "Remove member (line #)",  "type": "number", "pmt": False},
             {"key": "member_name",     "label": "Member name",             "type": "text",   "pmt": False},
             {"key": "member_dob",      "label": "Member date of birth",    "type": "date",   "pmt": False},
+            # ADR-0010: member_sex is a coded ChoiceList field — options
+            # MUST be the seed codes (sex: 1=Male, 2=Female).
             {"key": "member_sex",      "label": "Member sex",              "type": "select", "pmt": False,
-             "options": ["M", "F"]},
+             "options": ["1", "2"]},
             {"key": "member_relation", "label": "Member relation to head", "type": "text",   "pmt": False},
         ],
     },
