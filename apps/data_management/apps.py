@@ -14,3 +14,5 @@ class DataManagementConfig(AppConfig):
         from .labels import attach_label_methods
         from .models import Household, Member
         attach_label_methods(Household, Member)
+        # data_management.E001 — coded fields must not declare choices=.
+        from . import checks  # noqa: F401
