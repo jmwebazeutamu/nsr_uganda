@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -23,6 +23,8 @@ const NAV = [
   { id: "drs",     label: "Data Requests", icon: "download",  count: 9 },
   { id: "partner-drs", label: "My requests", icon: "download", count: 5 },
   { id: "receipt", label: "Receipt slip",  icon: "print" },
+  { section: "PARTNERS" },
+  { id: "partners", label: "Partners",     icon: "users",     screen: true },
 ];
 
 function App() {
@@ -56,11 +58,12 @@ function App() {
   const visibleNav = NAV.filter(n => {
     if (n.section) {
       if (role === "partner-analyst" && n.section === "WORKFLOWS") return false;
+      if (role === "partner-analyst" && n.section === "PARTNERS") return false;
       return true;
     }
-    if (role === "parish" && ["dih","drs","dedup","partner-drs"].includes(n.id)) return false;
+    if (role === "parish" && ["dih","drs","dedup","partner-drs","partners"].includes(n.id)) return false;
     if (role === "dpo"    && ["capture","upd","dedup","grm","receipt","partner-drs"].includes(n.id)) return false;
-    if (role === "cdo"    && ["dih","drs","partner-drs"].includes(n.id)) return false;
+    if (role === "cdo"    && ["dih","drs","partner-drs","partners"].includes(n.id)) return false;
     if (role === "nsr-unit" && n.id === "partner-drs") return false;
     if (role === "partner-analyst" && !["home","partner-drs","kit"].includes(n.id)) return false;
     // Registry is operator-only — partners use the DRS portal to
@@ -145,6 +148,12 @@ function App() {
         {screen === "admin"   && <AdminScreen/>}
         {screen === "registry" && <RegistryScreen onNavigate={navigate}/>}
         {screen === "household" && <HouseholdScreen householdId={screenPayload?.householdId} onNavigate={navigate}/>}
+        {screen === "partners" && <PartnersScreen
+            onRegister={() => navigate("partner-new")}
+            onNavigate={navigate}/>}
+        {screen === "partner-new" && <PartnerRegistrationScreen
+            onBack={() => navigate("partners")}
+            onCreated={() => navigate("partners")}/>}
       </main>
 
       {/* Tweaks */}
