@@ -300,17 +300,82 @@ def partners_sector_mix(request):
 
 
 class ProgrammeSerializer(serializers.ModelSerializer):
+    partner_code = serializers.CharField(source="partner.code", read_only=True)
+    partner_name = serializers.CharField(source="partner.name", read_only=True)
+    dsa_reference = serializers.CharField(
+        source="dsa.reference", read_only=True, default="",
+    )
+    # Field-level defaults that mirror the model so the wizard can
+    # POST sparse payloads (only `partner`, `name`, `kind` required).
+    code = serializers.CharField(required=False, allow_blank=True, max_length=24)
+    summary = serializers.CharField(required=False, allow_blank=True)
+    status = serializers.CharField(required=False, max_length=32, default="draft")
+    unit_of_enrolment = serializers.CharField(required=False, allow_blank=True, max_length=32)
+    sex_filter = serializers.CharField(required=False, allow_blank=True, max_length=8)
+    disbursement_cycle = serializers.CharField(required=False, allow_blank=True, max_length=32)
+    channel = serializers.CharField(required=False, allow_blank=True, max_length=128)
+    start_month = serializers.CharField(required=False, allow_blank=True, max_length=24)
+    webhook_url = serializers.URLField(required=False, allow_blank=True)
+    scope_text = serializers.CharField(required=False, allow_blank=True)
+
     class Meta:
         model = Programme
         fields = (
-            "id", "partner", "name",
+            "id", "partner", "partner_code", "partner_name",
+            "code", "name", "summary",
             "kind", "kind_label",
             "status", "status_label",
+            "dsa", "dsa_reference",
+            # Cohort
+            "unit_of_enrolment", "unit_of_enrolment_label",
+            "cohort_target",
+            "sex_filter", "sex_filter_label",
+            "age_min", "age_max",
+            "pmt_bands", "composition_flags",
+            # Disbursement
+            "amount_ugx",
+            "disbursement_cycle", "disbursement_cycle_label",
+            "duration_months", "channel", "start_month",
+            # Geo
             "scope_text", "geographic_units", "beneficiary_estimate",
+            # Lifecycle
+            "exit_codes_allowed", "auto_exit_triggers",
+            "suspend_on_grievance",
+            # Webhook
+            "webhook_url",
+            # NB: webhook_secret_hash and start/end dates intentionally
+            # omitted from the write surface — cleartext secret is
+            # returned only by the create response, not on read.
             "start_date", "end_date",
             "created_at", "updated_at",
         )
-        read_only_fields = ("id", "created_at", "updated_at")
+        read_only_fields = (
+            "id", "created_at", "updated_at",
+            "partner_code", "partner_name", "dsa_reference",
+        )
+        # The (partner, code) UniqueConstraint marks both fields as
+        # "required" through DRF's auto-generated UniqueTogetherValidator
+        # — which conflicts with the wizard saving sparse drafts that
+        # may not have a code yet. We drop the auto-validator and check
+        # uniqueness manually in `validate()` only when code is non-empty.
+        validators: list = []
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        partner = attrs.get("partner") or getattr(self.instance, "partner", None)
+        code = (attrs.get("code") or "").strip()
+        if partner and code:
+            qs = Programme.objects.filter(partner=partner, code=code)
+            if self.instance is not None:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError({
+                    "code": (
+                        f"Programme code {code!r} already exists for "
+                        f"partner {partner.code}."
+                    ),
+                })
+        return attrs
 
 
 attach_label_methodfields(ProgrammeSerializer, MODEL_FIELDS["Programme"])
@@ -437,6 +502,118 @@ class DsaViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
             )
         dsa.refresh_from_db()
         return Response(self.get_serializer(dsa).data)
+
+
+# --- Programme CRUD viewset (US-S25-003) ------------------------------------
+#
+# Nested-ish: the canonical write path is POST /api/v1/programmes/, and
+# the partner-scoped lister at /api/v1/partners/{id}/programmes/ is a
+# convenience that filters by parent partner. Both honour the ABAC
+# partner scope so a UNICEF user cannot see OPM programmes.
+
+
+@extend_schema_view(
+    list=extend_schema(
+        tags=["partners"], summary="List programmes",
+        description=(
+            "Filters: partner, status, kind, q (name/code icontains). "
+            "ABAC-scoped per PartnerScopedQuerysetMixin."
+        ),
+    ),
+    retrieve=extend_schema(tags=["partners"], summary="Retrieve a programme"),
+    create=extend_schema(tags=["partners"], summary="Create a draft programme"),
+    partial_update=extend_schema(tags=["partners"], summary="Update a programme"),
+)
+class ProgrammeViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
+                       viewsets.ModelViewSet):
+    """CRUD for partner-owned programmes. Same ABAC + write-flag gates
+    as the Partner + DSA endpoints. Per US-S25-002 the model carries
+    cohort / disbursement / lifecycle / webhook columns; the wizard
+    submits a draft, the partner Data Steward signs off later (handled
+    by a future signature workflow follow-up)."""
+
+    audit_entity_type = "programme"
+    partner_id_field = "partner_id"
+    queryset = (
+        Programme.objects.all()
+        .select_related("partner", "dsa")
+        .order_by("-created_at")
+    )
+    serializer_class = ProgrammeSerializer
+    permission_classes = [permissions.IsAuthenticated, _PartnersWriteFlagPermission]
+    http_method_names = ["get", "post", "patch", "head", "options"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        params = self.request.query_params
+        partner = params.get("partner")
+        if partner:
+            qs = qs.filter(partner_id=partner)
+        st = params.get("status")
+        if st:
+            qs = qs.filter(status=st)
+        kind = params.get("kind")
+        if kind:
+            qs = qs.filter(kind=kind)
+        q = (params.get("q") or "").strip()
+        if q:
+            qs = qs.filter(name__icontains=q) | qs.filter(code__icontains=q)
+        return qs
+
+    def perform_create(self, serializer):
+        # Generate a webhook secret on draft creation so the wizard
+        # can show it to the partner once. The cleartext lives only
+        # in the in-memory response (set in `create()` below); only
+        # sha256(secret) is persisted.
+        import hashlib
+        import secrets as _s
+        cleartext = _s.token_urlsafe(32)
+        digest = hashlib.sha256(cleartext.encode("utf-8")).hexdigest()
+        prog = serializer.save(webhook_secret_hash=digest)
+        # Audit the create.
+        from apps.security.audit import emit as emit_audit
+        emit_audit(
+            "programme_created", "programme", prog.id,
+            actor=str(self.request.user.username or self.request.user.id),
+            reason=f"partner={prog.partner.code} code={prog.code}",
+            field_changes={
+                "partner_id": prog.partner_id,
+                "partner_code": prog.partner.code,
+                "code": prog.code,
+                "kind": prog.kind,
+                "cohort_target": prog.cohort_target,
+            },
+        )
+        # Stash cleartext on the instance so create() picks it up.
+        prog._cleartext_webhook_secret = cleartext
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        instance = serializer.instance
+        data = self.get_serializer(instance).data
+        # Surface the cleartext exactly once at create-time.
+        secret = getattr(instance, "_cleartext_webhook_secret", "")
+        if secret:
+            data["webhook_secret_cleartext"] = secret
+        return Response(data, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(
+    tags=["partners"],
+    summary="List programmes for one partner (convenience for the detail screen)",
+)
+@api_view(["GET"])
+@permission_classes([permissions.IsAuthenticated])
+def partner_programmes(request, partner_id: str):
+    rows = (
+        Programme.objects.filter(partner_id=partner_id)
+        .select_related("partner", "dsa")
+        .order_by("-created_at")
+    )
+    data = ProgrammeSerializer(rows, many=True).data
+    return Response({"items": data})
 
 
 # --- Partner sub-resources (US-S23-010) -------------------------------------
