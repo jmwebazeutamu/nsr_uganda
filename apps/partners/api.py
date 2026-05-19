@@ -26,8 +26,8 @@ from drf_spectacular.utils import (
     extend_schema,
     extend_schema_view,
 )
-from rest_framework import permissions, serializers, viewsets
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework import permissions, serializers, status, viewsets
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
@@ -35,7 +35,15 @@ from apps.data_management.serializer_labels import attach_label_methodfields
 from apps.security.audit_views import AuditReadMixin
 
 from .choice_field_map import MODEL_FIELDS
-from .models import DataSharingAgreement, Partner, PartnerUsageDaily
+from .models import (
+    DataSharingAgreement,
+    DsaSignature,
+    Partner,
+    PartnerUsageDaily,
+    Programme,
+)
+from .services import signature as signature_service
+from .services.activity import for_partner as activity_for_partner
 
 
 class PartnerSerializer(serializers.ModelSerializer):
@@ -281,6 +289,198 @@ def partners_sector_mix(request):
             "rows_delivered_30d": rows_delivered,
         })
     return Response({"items": out})
+
+
+# --- Programme + DSA + Signature serializers (US-S23-010) -------------------
+
+
+class ProgrammeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Programme
+        fields = (
+            "id", "partner", "name",
+            "kind", "kind_label",
+            "status", "status_label",
+            "scope_text", "geographic_units", "beneficiary_estimate",
+            "start_date", "end_date",
+            "created_at", "updated_at",
+        )
+        read_only_fields = ("id", "created_at", "updated_at")
+
+
+attach_label_methodfields(ProgrammeSerializer, MODEL_FIELDS["Programme"])
+
+
+class DsaSignatureSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DsaSignature
+        fields = (
+            "id", "dsa", "sequence_order",
+            "signer_role", "signer_role_label",
+            "signer_name", "signer_email",
+            "method", "method_label",
+            "status", "status_label",
+            "signed_at", "decline_reason",
+            "docusign_envelope_id", "evidence_doc_ref",
+            "created_at", "updated_at",
+        )
+        read_only_fields = (
+            "id", "signed_at", "docusign_envelope_id",
+            "created_at", "updated_at",
+        )
+
+
+attach_label_methodfields(DsaSignatureSerializer, MODEL_FIELDS["DsaSignature"])
+
+
+class DsaSerializer(serializers.ModelSerializer):
+    signatures = DsaSignatureSerializer(many=True, read_only=True)
+    partner_code = serializers.CharField(source="partner.code", read_only=True)
+    partner_name = serializers.CharField(source="partner.name", read_only=True)
+    partner_tone = serializers.CharField(source="partner.tone", read_only=True)
+
+    class Meta:
+        model = DataSharingAgreement
+        fields = (
+            "id", "reference", "partner",
+            "partner_code", "partner_name", "partner_tone",
+            "programmes", "version",
+            "status", "status_label",
+            "effective_from", "effective_to", "monthly_row_budget",
+            "entities_scope", "field_scope", "geographic_scope",
+            "sensitive_data_handling", "sensitive_data_handling_label",
+            "retention_days", "classification",
+            "dpia_document_ref", "breach_sla_hours",
+            "created_at", "signed_at", "updated_at",
+            "signatures",
+        )
+        read_only_fields = (
+            "id", "created_at", "signed_at", "updated_at",
+            "version",
+        )
+
+
+attach_label_methodfields(
+    DsaSerializer, MODEL_FIELDS["DataSharingAgreement"],
+)
+
+
+# --- DSA + signature viewsets ----------------------------------------------
+
+
+@extend_schema_view(
+    list=extend_schema(tags=["partners"], summary="List DSAs"),
+    retrieve=extend_schema(tags=["partners"], summary="Retrieve a DSA"),
+    create=extend_schema(tags=["partners"], summary="Create a draft DSA"),
+    partial_update=extend_schema(tags=["partners"], summary="Update a DSA"),
+)
+class DsaViewSet(AuditReadMixin, viewsets.ModelViewSet):
+    """CRUD + submit-for-signoff action on Data Sharing Agreements."""
+
+    audit_entity_type = "dsa"
+    queryset = (
+        DataSharingAgreement.objects.all()
+        .select_related("partner")
+        .prefetch_related("signatures")
+        .order_by("-created_at")
+    )
+    serializer_class = DsaSerializer
+    permission_classes = [permissions.IsAuthenticated, _PartnersWriteFlagPermission]
+    http_method_names = ["get", "post", "patch", "head", "options"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        partner = self.request.query_params.get("partner")
+        if partner:
+            qs = qs.filter(partner_id=partner)
+        st = self.request.query_params.get("status")
+        if st:
+            qs = qs.filter(status=st)
+        return qs
+
+    @extend_schema(
+        tags=["partners"],
+        summary="Submit a DSA for the three-step sign-off chain",
+        description=(
+            "Implements ADR-0012's transition: status=draft → "
+            "pending_signature, three DsaSignature rows created, "
+            "first envelope dispatched. Requires partner_signer_email, "
+            "nsr_unit_lead_email, dpo_email — all distinct."
+        ),
+    )
+    @action(detail=True, methods=["post"], url_path="submit-for-signoff")
+    def submit_for_signoff(self, request, pk=None):
+        dsa = self.get_object()
+        try:
+            signature_service.submit_for_signoff(
+                dsa,
+                actor=str(request.user.username or request.user.id),
+                partner_signer_email=request.data.get("partner_signer_email", ""),
+                partner_signer_name=request.data.get("partner_signer_name", ""),
+                nsr_unit_lead_email=request.data.get("nsr_unit_lead_email", ""),
+                nsr_unit_lead_name=request.data.get("nsr_unit_lead_name", ""),
+                dpo_email=request.data.get("dpo_email", ""),
+                dpo_name=request.data.get("dpo_name", ""),
+            )
+        except signature_service.SignatureError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        dsa.refresh_from_db()
+        return Response(self.get_serializer(dsa).data)
+
+
+# --- Partner sub-resources (US-S23-010) -------------------------------------
+
+
+@extend_schema(
+    tags=["partners"],
+    summary="Recent AuditEvent-derived activity for a partner",
+)
+@api_view(["GET"])
+@permission_classes([permissions.IsAuthenticated])
+def partner_activity(request, partner_id: str):
+    events = activity_for_partner(partner_id, limit=50)
+    return Response({"items": [e.as_dict() for e in events]})
+
+
+@extend_schema(
+    tags=["partners"],
+    summary="Per-day usage for a partner (30 day window by default)",
+    parameters=[
+        OpenApiParameter(
+            name="days", type=OpenApiTypes.INT, required=False,
+            description="Window in days (default 30).",
+        ),
+    ],
+)
+@api_view(["GET"])
+@permission_classes([permissions.IsAuthenticated])
+def partner_usage(request, partner_id: str):
+    from datetime import date, timedelta
+    try:
+        days = max(1, int(request.query_params.get("days") or 30))
+    except ValueError:
+        days = 30
+    start = date.today() - timedelta(days=days - 1)
+    rows = (
+        PartnerUsageDaily.objects
+        .filter(partner_id=partner_id, day__gte=start)
+        .order_by("day")
+        .values("day", "rows_delivered", "requests_count")
+    )
+    return Response({
+        "window_days": days,
+        "items": [
+            {
+                "day": r["day"].isoformat(),
+                "rows_delivered": r["rows_delivered"],
+                "requests_count": r["requests_count"],
+            }
+            for r in rows
+        ],
+    })
 
 
 @extend_schema(
