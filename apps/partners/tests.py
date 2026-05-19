@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from apps.partners.models import Partner, PartnerContact, Programme
+from apps.partners.models import (
+    DataSharingAgreement,
+    DsaSignature,
+    Partner,
+    PartnerContact,
+    Programme,
+)
 from apps.reference_data.services import clear_resolver_cache
 
 
@@ -125,3 +131,107 @@ class TestProgramme:
         )
         prog.geographic_units.add(gu)
         assert list(prog.geographic_units.all()) == [gu]
+
+
+@pytest.mark.django_db
+class TestDataSharingAgreement:
+    def _partner(self):
+        return Partner.objects.create(code="X", name="X", type="ministry")
+
+    def test_create_with_codes_and_labels(self):
+        p = self._partner()
+        dsa = DataSharingAgreement.objects.create(
+            reference="DSA-X-2026-001", partner=p,
+            status="draft", sensitive_data_handling="none",
+            monthly_row_budget=100_000,
+        )
+        assert dsa.get_status_label() == "Draft"
+        assert dsa.get_sensitive_data_handling_label() == "None"
+
+    def test_effective_window_constraint(self):
+        from datetime import date
+
+        from django.db.utils import IntegrityError
+        p = self._partner()
+        with pytest.raises(IntegrityError):
+            DataSharingAgreement.objects.create(
+                reference="DSA-X-2026-002", partner=p,
+                status="draft",
+                effective_from=date(2026, 5, 19),
+                effective_to=date(2026, 5, 18),  # before
+            )
+
+    def test_reference_version_unique(self):
+        from django.db.utils import IntegrityError
+        p = self._partner()
+        DataSharingAgreement.objects.create(
+            reference="DSA-X-2026-001", partner=p, version=1, status="draft",
+        )
+        with pytest.raises(IntegrityError):
+            DataSharingAgreement.objects.create(
+                reference="DSA-X-2026-001", partner=p, version=1,
+                status="draft",
+            )
+
+    def test_provider_partners_allow_null_budget(self):
+        # ADR-0011 decision 3: provider-status partners (NIRA) skip
+        # budget/usage. The column is nullable; create one to prove.
+        p = self._partner()
+        dsa = DataSharingAgreement.objects.create(
+            reference="DSA-X-PROV", partner=p, status="active",
+            monthly_row_budget=None,
+        )
+        assert dsa.monthly_row_budget is None
+
+
+@pytest.mark.django_db
+class TestDsaSignature:
+    def _dsa(self):
+        p = Partner.objects.create(code="X", name="X", type="ministry")
+        return DataSharingAgreement.objects.create(
+            reference="DSA-X-2026-001", partner=p, status="draft",
+        )
+
+    def test_sequence_order_unique_per_dsa(self):
+        from django.db.utils import IntegrityError
+        dsa = self._dsa()
+        DsaSignature.objects.create(
+            dsa=dsa, sequence_order=1,
+            signer_role="partner_auth_signatory",
+            signer_email="a@x.go.ug", method="docusign", status="pending",
+        )
+        with pytest.raises(IntegrityError):
+            DsaSignature.objects.create(
+                dsa=dsa, sequence_order=1,
+                signer_role="nsr_unit_lead",
+                signer_email="b@nsr.go.ug", method="in_console",
+                status="pending",
+            )
+
+    def test_signer_email_unique_per_dsa(self):
+        from django.db.utils import IntegrityError
+        dsa = self._dsa()
+        DsaSignature.objects.create(
+            dsa=dsa, sequence_order=1,
+            signer_role="partner_auth_signatory",
+            signer_email="a@x.go.ug", method="docusign", status="pending",
+        )
+        with pytest.raises(IntegrityError):
+            DsaSignature.objects.create(
+                dsa=dsa, sequence_order=2,
+                signer_role="nsr_unit_lead",
+                signer_email="a@x.go.ug",  # same email — self-sign-off
+                method="in_console", status="pending",
+            )
+
+    def test_signature_labels_resolve(self):
+        dsa = self._dsa()
+        sig = DsaSignature.objects.create(
+            dsa=dsa, sequence_order=1,
+            signer_role="dpo",
+            signer_email="dpo@mglsd.go.ug", method="in_console",
+            status="signed",
+        )
+        assert sig.get_signer_role_label() == "Data Protection Officer (MGLSD)"
+        assert sig.get_method_label() == "In-console"
+        assert sig.get_status_label() == "Signed"

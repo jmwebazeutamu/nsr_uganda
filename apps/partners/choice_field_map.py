@@ -30,5 +30,13 @@ MODEL_FIELDS: dict[str, dict[str, tuple[str, Kind]]] = {
         "kind":   ("programme_kind",   "single"),
         "status": ("programme_status", "single"),
     },
-    # DataSharingAgreement / DsaSignature land in US-S23-006.
+    "DataSharingAgreement": {
+        "status":                   ("dsa_status",              "single"),
+        "sensitive_data_handling":  ("sensitive_data_handling", "single"),
+    },
+    "DsaSignature": {
+        "signer_role": ("dsa_signer_role",   "single"),
+        "method":      ("signature_method",  "single"),
+        "status":      ("signature_status",  "single"),
+    },
 }

@@ -183,3 +183,160 @@ class Programme(models.Model):
 
     def __str__(self) -> str:
         return f"{self.partner.code} · {self.name}"
+
+
+class DataSharingAgreement(models.Model):
+    """The legal envelope between MGLSD's NSR Unit and a Partner.
+    Carries the entity / field / geographic scope, the volume cap,
+    and the breach SLA. Per ADR-0011 decision 2, monthly_row_budget
+    counts rows DELIVERED. Per decision 3, provider-status partners
+    have NULL budget (the breach detector skips them).
+    """
+
+    id = ULIDField(primary_key=True)
+    reference = models.CharField(
+        max_length=64, unique=True,
+        help_text="Human-readable identifier (DSA-OPM-2026-001).",
+    )
+    partner = models.ForeignKey(
+        Partner, on_delete=models.PROTECT, related_name="dsas",
+    )
+    programmes = models.ManyToManyField(
+        Programme, related_name="dsas", blank=True,
+    )
+    version = models.PositiveIntegerField(default=1)
+
+    # Coded — dsa_status ChoiceList (draft, pending_signature,
+    # active, expiring, expired, suspended, renewed).
+    status = models.CharField(max_length=32, default="draft")
+
+    effective_from = models.DateField(null=True, blank=True)
+    effective_to = models.DateField(null=True, blank=True)
+
+    # Volume cap — rows delivered per calendar month. NULL for
+    # provider-type partners (NIRA) per ADR-0011 decision 3.
+    monthly_row_budget = models.PositiveIntegerField(null=True, blank=True)
+
+    # Scope payloads. ChoiceList-backed fields render as raw codes;
+    # JSON shapes carry richer structure (entity flags, field-group
+    # toggles) without polluting the ChoiceOption catalogue.
+    entities_scope = models.JSONField(
+        default=dict, blank=True,
+        help_text='e.g. {"household": true, "member": false, '
+                  '"referral": true, "grievance": false}',
+    )
+    field_scope = models.JSONField(
+        default=dict, blank=True,
+        help_text='e.g. {"Identifiers": true, "PMT": true, ...}',
+    )
+    geographic_scope = models.ManyToManyField(
+        "reference_data.GeographicUnit",
+        related_name="dsas",
+        blank=True,
+        help_text="DSA scope at any geographic level (ADR-0011 decision 4).",
+    )
+
+    # Coded — sensitive_data_handling ChoiceList (none, specific, full).
+    sensitive_data_handling = models.CharField(
+        max_length=32, default="none",
+    )
+    retention_days = models.PositiveIntegerField(default=180)
+    classification = models.CharField(max_length=128, blank=True)
+
+    dpia_document_ref = models.CharField(
+        max_length=128, blank=True,
+        help_text="DPIA PDF reference (storage abstraction lands "
+                  "with DRS-O-02).",
+    )
+    breach_sla_hours = models.PositiveIntegerField(
+        default=72,
+        help_text="Hours from breach detection to partner-side "
+                  "notification of the NSR DPO.",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    signed_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Data Sharing Agreement"
+        verbose_name_plural = "Data Sharing Agreements"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["reference", "version"],
+                name="dsa_reference_version_unique",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(effective_to__isnull=True)
+                    | models.Q(effective_from__isnull=True)
+                    | models.Q(effective_to__gt=models.F("effective_from"))
+                ),
+                name="dsa_effective_to_after_from",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["partner", "status"]),
+            models.Index(fields=["effective_to"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.reference} v{self.version}"
+
+
+class DsaSignature(models.Model):
+    """One of the three signatures required to activate a DSA. The
+    sign-off chain runs sequentially in `sequence_order` (1=Partner
+    Authorised Signatory via DocuSign, 2=NSR Unit Lead, 3=DPO).
+    Per ADR-0012 the same signer_email cannot appear twice on a
+    single DSA — enforced by the service layer at submit-for-signoff.
+    """
+
+    id = ULIDField(primary_key=True)
+    dsa = models.ForeignKey(
+        DataSharingAgreement, on_delete=models.CASCADE,
+        related_name="signatures",
+    )
+
+    sequence_order = models.PositiveSmallIntegerField(
+        help_text="1, 2, 3 — order in which the signature is collected.",
+    )
+
+    # Coded fields — dsa_signer_role / signature_method / signature_status.
+    signer_role = models.CharField(max_length=32)
+    signer_name = models.CharField(max_length=128, blank=True)
+    signer_email = models.EmailField()
+    method = models.CharField(max_length=32, default="docusign")
+    status = models.CharField(max_length=32, default="pending")
+
+    signed_at = models.DateTimeField(null=True, blank=True)
+    decline_reason = models.TextField(blank=True)
+
+    # DocuSign envelope ID once dispatched; allows webhook lookups.
+    docusign_envelope_id = models.CharField(max_length=64, blank=True)
+    evidence_doc_ref = models.CharField(max_length=128, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "DSA signature"
+        verbose_name_plural = "DSA signatures"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["dsa", "sequence_order"],
+                name="dsa_signature_unique_order_per_dsa",
+            ),
+            models.UniqueConstraint(
+                fields=["dsa", "signer_email"],
+                name="dsa_signature_unique_email_per_dsa",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["dsa", "status"]),
+            models.Index(fields=["docusign_envelope_id"]),
+        ]
+        ordering = ("dsa", "sequence_order")
+
+    def __str__(self) -> str:
+        return f"{self.dsa.reference} · step {self.sequence_order} · {self.signer_role}"
