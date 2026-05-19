@@ -1,0 +1,21 @@
+{
+  "name": "nsr-mis-design",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "JS test harness for design/v0.1 React components served by the Django dev server. The browser harness still uses Babel-standalone — these tests are for unit coverage of pure helpers + RTL renders of components like the Open-CR modal.",
+  "scripts": {
+    "test:js": "vitest run",
+    "test:js:watch": "vitest"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.4.5",
+    "@testing-library/react": "^16.0.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@vitejs/plugin-react": "^4.3.1",
+    "jsdom": "^24.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vitest": "^2.0.4"
+  }
+}

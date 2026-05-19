@@ -49,3 +49,7 @@ htmlcov/
 # Misc
 *.pid
 *.sock
+
+# Node (Vitest + RTL — see package.json)
+node_modules/
+.vitest-cache/
