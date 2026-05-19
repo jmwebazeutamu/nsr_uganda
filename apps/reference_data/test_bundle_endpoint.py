@@ -160,6 +160,32 @@ class TestAsOfFiltering:
 
 
 @pytest.mark.django_db
+class TestListsFilter:
+    """US-S23-011 — ?lists=a,b,c trims the bundle to the named
+    ChoiceLists. ETag still stable per (lists, as_of, lang)."""
+
+    def test_lists_filter_returns_only_named(self, api):
+        r = api.get(URL, {"lists": "sex,partner_type"})
+        names = {lst["list_name"] for lst in r.data["lists"]}
+        assert names == {"sex", "partner_type"}
+
+    def test_empty_lists_param_returns_full_bundle(self, api):
+        a = api.get(URL).data["lists"]
+        b = api.get(URL, {"lists": ""}).data["lists"]
+        assert len(a) == len(b)
+
+    def test_unknown_list_silently_omitted(self, api):
+        r = api.get(URL, {"lists": "sex,not_a_list"})
+        names = [lst["list_name"] for lst in r.data["lists"]]
+        assert names == ["sex"]
+
+    def test_etag_differs_when_lists_filter_differs(self, api):
+        full = api.get(URL)["ETag"]
+        scoped = api.get(URL, {"lists": "sex"})["ETag"]
+        assert full != scoped
+
+
+@pytest.mark.django_db
 class TestLanguageFallback:
     def test_missing_language_falls_back_to_en(self, api):
         r = api.get(URL, {"lang": "lg"})

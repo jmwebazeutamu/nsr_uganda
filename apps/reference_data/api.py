@@ -88,15 +88,25 @@ class ChoiceListViewSet(viewsets.ReadOnlyModelViewSet):
 # §6). An ETag (sha256 of the JSON bytes) lets clients short-circuit
 # unchanged-payload responses to 304.
 
-def _build_bundle(as_of: date, lang: str) -> dict:
+def _build_bundle(as_of: date, lang: str, names: list[str] | None = None) -> dict:
     """Compute the bundle deterministically — sorted by list_name —
-    so the ETag is stable across calls when nothing has changed."""
-    active_lists = (
+    so the ETag is stable across calls when nothing has changed.
+
+    `names` (US-S23-011) optionally restricts the bundle to a subset
+    of list_names. The wizard fetches only the lists it needs
+    (`partner_type`, `partner_sector`, etc.) instead of the whole
+    60-list catalogue.
+    """
+    qs = (
         ChoiceList.objects
         .filter(status=ChoiceListStatus.ACTIVE)
         .filter(Q(effective_from__isnull=True) | Q(effective_from__lte=as_of))
         .filter(Q(effective_to__isnull=True) | Q(effective_to__gt=as_of))
-        .prefetch_related("options")
+    )
+    if names is not None:
+        qs = qs.filter(list_name__in=names)
+    active_lists = (
+        qs.prefetch_related("options")
         .order_by("list_name", "-version")
     )
     # Keep only the highest version per list_name (active overlap is
@@ -180,6 +190,16 @@ def _bundle_etag(bundle: dict) -> str:
             required=False,
             description="Language code (defaults to en).",
         ),
+        OpenApiParameter(
+            name="lists",
+            type=OpenApiTypes.STR,
+            required=False,
+            description=(
+                "Comma-separated list_name allowlist. When omitted the "
+                "full catalogue is returned; when set only the named "
+                "lists ship. Useful for the wizard's targeted fetches."
+            ),
+        ),
     ],
 )
 class ChoiceListBundleView(APIView):
@@ -199,8 +219,13 @@ class ChoiceListBundleView(APIView):
             from django.utils import timezone
             as_of = timezone.localdate()
         lang = request.query_params.get("lang") or "en"
+        names_param = (request.query_params.get("lists") or "").strip()
+        names = (
+            [n.strip() for n in names_param.split(",") if n.strip()]
+            if names_param else None
+        )
 
-        bundle = _build_bundle(as_of, lang)
+        bundle = _build_bundle(as_of, lang, names=names)
         etag = _bundle_etag(bundle)
 
         if_none_match = request.META.get("HTTP_IF_NONE_MATCH")
