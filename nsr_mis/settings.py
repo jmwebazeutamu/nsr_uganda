@@ -52,11 +52,20 @@ INSTALLED_APPS = [
     "apps.api_gateway",
     "apps.data_requests",
     "apps.ingestion_hub",
+    "apps.partners",
     # NSR cross-cutting modules
     "apps.security",
     "apps.reporting",
     "apps.reference_data",
 ]
+
+# US-S23 — gate the partners-module UI surfaces and write endpoints
+# behind a flag so the rollout can stage. Read endpoints stay open
+# (they're harmless until partner rows exist).
+PARTNERS_MODULE_ENABLED = True
+# DocuSign client off by default; the in-memory stub provider is the
+# default per ADR-0012. CI keeps this false.
+PARTNERS_DOCUSIGN_ENABLED = False
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
