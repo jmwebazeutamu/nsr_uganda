@@ -9,6 +9,7 @@ from .models import (
     DsaSignature,
     Partner,
     PartnerContact,
+    PartnerUsageDaily,
     Programme,
 )
 
@@ -100,3 +101,13 @@ class DsaSignatureAdmin(admin.ModelAdmin):
     readonly_fields = ("id", "created_at", "updated_at", "signed_at",
                        "docusign_envelope_id")
     raw_id_fields = ("dsa",)
+
+
+@admin.register(PartnerUsageDaily)
+class PartnerUsageDailyAdmin(admin.ModelAdmin):
+    list_display = ("partner", "day", "rows_delivered", "requests_count")
+    list_filter = ("day",)
+    search_fields = ("partner__code", "partner__name")
+    readonly_fields = ("id", "created_at", "updated_at")
+    raw_id_fields = ("partner",)
+    date_hierarchy = "day"

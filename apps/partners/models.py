@@ -340,3 +340,43 @@ class DsaSignature(models.Model):
 
     def __str__(self) -> str:
         return f"{self.dsa.reference} · step {self.sequence_order} · {self.signer_role}"
+
+
+class PartnerUsageDaily(models.Model):
+    """Per-day rollup of rows delivered + requests count, per partner.
+    Populated by a Celery beat task (lands in US-S23-017). The
+    dashboard's UsageBar reads a 30-day window of these rows for the
+    `used / budget` ratio shown in the partners table. Per ADR-0011
+    decision 3, provider partners (NIRA) have NO PartnerUsageDaily
+    rows — the rollup skips them.
+    """
+
+    id = ULIDField(primary_key=True)
+    partner = models.ForeignKey(
+        Partner, on_delete=models.PROTECT, related_name="usage_daily",
+    )
+    day = models.DateField()
+
+    rows_delivered = models.PositiveIntegerField(default=0)
+    requests_count = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Partner usage (daily)"
+        verbose_name_plural = "Partner usage (daily)"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["partner", "day"],
+                name="partner_usage_daily_unique_per_day",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["partner", "day"]),
+            models.Index(fields=["day"]),
+        ]
+        ordering = ("-day", "partner")
+
+    def __str__(self) -> str:
+        return f"{self.partner.code} · {self.day} · {self.rows_delivered} rows"

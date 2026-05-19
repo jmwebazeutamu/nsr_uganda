@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+
 import pytest
 
 from apps.partners.models import (
@@ -9,6 +11,7 @@ from apps.partners.models import (
     DsaSignature,
     Partner,
     PartnerContact,
+    PartnerUsageDaily,
     Programme,
 )
 from apps.reference_data.services import clear_resolver_cache
@@ -235,3 +238,57 @@ class TestDsaSignature:
         assert sig.get_signer_role_label() == "Data Protection Officer (MGLSD)"
         assert sig.get_method_label() == "In-console"
         assert sig.get_status_label() == "Signed"
+
+
+@pytest.mark.django_db
+class TestPartnerUsageDaily:
+    def test_unique_day_per_partner(self):
+        from datetime import date
+
+        from django.db.utils import IntegrityError
+        p = Partner.objects.create(code="OPM", name="OPM", type="ministry")
+        PartnerUsageDaily.objects.create(
+            partner=p, day=date(2026, 5, 19),
+            rows_delivered=1000, requests_count=3,
+        )
+        with pytest.raises(IntegrityError):
+            PartnerUsageDaily.objects.create(
+                partner=p, day=date(2026, 5, 19),
+                rows_delivered=999, requests_count=1,
+            )
+
+
+@pytest.mark.django_db
+class TestActivityProjection:
+    def test_unknown_action_falls_back_to_status_change(self):
+        from datetime import datetime
+
+        from apps.partners.services.activity import project
+        from apps.security.models import AuditEvent
+
+        evt = AuditEvent(
+            action="random_unmapped_action",
+            entity_type="partner", entity_id="X",
+            actor_id="tester", reason="r",
+            occurred_at=datetime(2026, 5, 19, 12, 0, tzinfo=UTC),
+        )
+        out = project(evt, partner_code="OPM")
+        assert out.kind == "partner_status_change"
+        assert out.severity_tone == "neutral"
+
+    def test_known_action_maps_to_kind(self):
+        from datetime import datetime
+
+        from apps.partners.services.activity import project
+        from apps.security.models import AuditEvent
+
+        evt = AuditEvent(
+            action="breach_detected",
+            entity_type="dsa", entity_id="d",
+            actor_id="system", reason="30d > budget",
+            occurred_at=datetime(2026, 5, 19, 12, 0, tzinfo=UTC),
+        )
+        out = project(evt, partner_code="MoH")
+        assert out.kind == "dsa_breach"
+        assert out.severity_tone == "danger"
+        assert out.partner_code == "MoH"
