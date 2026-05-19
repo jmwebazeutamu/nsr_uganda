@@ -898,3 +898,216 @@ class TestMeEndpoint:
         from rest_framework.test import APIClient
         r = APIClient().get("/api/v1/upd/change-requests/me/")
         assert r.status_code in (401, 403)
+
+
+# --- US-S22-003 — Open-CR modal bundle endpoint + routing ---------------
+
+
+class TestRoutingMatrixExtensions:
+    """The Open-CR modal vocabulary (life_event / verification /
+    address_move / roster_change / asset_change) has its own routing
+    rows. The label-only map is operator-facing; the canonical
+    required_role stays in DEFAULT_MATRIX for downstream sweeps."""
+
+    def test_default_matrix_has_every_new_change_type(self):
+        from apps.update_workflow.routing import DEFAULT_MATRIX
+        for ct in [
+            ChangeType.LIFE_EVENT, ChangeType.VERIFICATION,
+            ChangeType.ADDRESS_MOVE, ChangeType.ROSTER_CHANGE,
+            ChangeType.ASSET_CHANGE,
+        ]:
+            assert (ct, False) in DEFAULT_MATRIX
+            assert (ct, True) in DEFAULT_MATRIX
+
+    def test_route_label_spec_matrix(self):
+        from apps.update_workflow.routing import route_label
+        # Spec table: correction / life_event / verification
+        assert route_label(ChangeType.CORRECTION, pmt_relevant=False) == "CDO (parish)"
+        assert route_label(ChangeType.CORRECTION, pmt_relevant=True)  == "M&E Officer"
+        assert route_label(ChangeType.LIFE_EVENT,  pmt_relevant=False) == "CDO (parish)"
+        assert route_label(ChangeType.LIFE_EVENT,  pmt_relevant=True)  == "M&E Officer"
+        assert route_label(ChangeType.VERIFICATION, pmt_relevant=False) == "CDO (parish)"
+        assert route_label(ChangeType.VERIFICATION, pmt_relevant=True)  == "M&E Officer"
+
+    def test_route_label_address_move(self):
+        from apps.update_workflow.routing import route_label
+        assert (route_label(ChangeType.ADDRESS_MOVE, pmt_relevant=False)
+                == "CDO + receiving CDO")
+        assert (route_label(ChangeType.ADDRESS_MOVE, pmt_relevant=True)
+                == "District M&E")
+
+    def test_route_label_roster_and_asset_changes(self):
+        from apps.update_workflow.routing import route_label
+        for ct in [ChangeType.ROSTER_CHANGE, ChangeType.ASSET_CHANGE]:
+            assert route_label(ct, pmt_relevant=False) == "CDO (parish)"
+            assert route_label(ct, pmt_relevant=True)  == "District M&E"
+
+    def test_route_label_falls_back_to_role_for_legacy(self):
+        from apps.update_workflow.routing import route_label
+        # ADDITION isn't in the spec matrix; falls back to the
+        # canonical role name from DEFAULT_MATRIX.
+        assert route_label(ChangeType.ADDITION, pmt_relevant=False) == "parish_chief"
+
+
+class TestFieldCatalog:
+    """Server-side catalog matches the spec's minimum field list."""
+
+    def test_catalog_has_every_required_category(self):
+        from apps.update_workflow.field_catalog import category_keys
+        assert category_keys() == {"iden", "loc", "rost", "hd", "ed", "emp", "hous", "food"}
+
+    def test_pmt_relevance_on_housing_fields(self):
+        from apps.update_workflow.field_catalog import is_pmt_relevant
+        for f in ["roof", "wall", "floor", "water", "toilet", "fuel", "light",
+                  "tenure", "land_acres", "cattle", "goats", "radio", "tv",
+                  "phone_owned"]:
+            assert is_pmt_relevant("hous", f), f
+
+    def test_pmt_relevance_negative_on_iden(self):
+        from apps.update_workflow.field_catalog import is_pmt_relevant
+        for f in ["phone", "email", "head_name", "head_nin", "lang"]:
+            assert not is_pmt_relevant("iden", f), f
+
+    def test_validate_row_raises_on_unknown(self):
+        from apps.update_workflow.field_catalog import validate_row
+        with pytest.raises(ValueError, match="unknown category"):
+            validate_row("nope", "roof")
+        with pytest.raises(ValueError, match="unknown field"):
+            validate_row("hous", "rooftop")
+
+
+class TestBundleEndpoint:
+    """POST /api/v1/upd/change-requests/bundle/ — accepts the modal
+    payload, builds one ChangeRequest in PENDING_APPROVAL, returns
+    {cr_id, audit_id, routed_to, ...}."""
+
+    @pytest.fixture
+    def staff_user(self, db, django_user_model):
+        return django_user_model.objects.create_user(
+            username="reviewer", password="p",
+            is_staff=True, is_superuser=True,
+        )
+
+    @pytest.fixture
+    def api_client(self, staff_user):
+        from rest_framework.test import APIClient
+        c = APIClient()
+        c.force_authenticate(user=staff_user)
+        return c
+
+    def _payload(self, household, **over):
+        base = {
+            "household_id": household.id,
+            "entity": "household",
+            "change_type": "correction",
+            "pmt_relevant": False,
+            "rows": [{"category": "iden", "field": "phone",
+                       "new_value": "+256 700 000 000"}],
+            "note": "Phone updated per field visit.",
+        }
+        base.update(over)
+        return base
+
+    def test_creates_pending_approval_cr_and_returns_routing(self, household, api_client):
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=self._payload(household), format="json")
+        assert r.status_code == 201, r.data
+        assert r.data["status"] == ChangeStatus.PENDING_APPROVAL
+        assert r.data["routed_to"] == "CDO (parish)"
+        assert r.data["pmt_relevant"] is False
+        assert r.data["changes"] == 1
+        # CR persisted with the changes JSON.
+        cr = ChangeRequest.objects.get(pk=r.data["cr_id"])
+        assert cr.changes == {"phone": {"old": "", "new": "+256 700 000 000"}}
+        assert cr.status == ChangeStatus.PENDING_APPROVAL
+
+    def test_auto_derives_pmt_relevant_from_rows(self, household, api_client):
+        payload = self._payload(household, rows=[
+            {"category": "hous", "field": "roof", "new_value": "Tiles"},
+        ])
+        # pmt_relevant=False at the API layer; server auto-bumps to
+        # True because roof is PMT-relevant in the catalog.
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 201, r.data
+        assert r.data["pmt_relevant"] is True
+        assert r.data["routed_to"] == "M&E Officer"
+
+    def test_emits_audit_event_and_returns_audit_id(self, household, api_client):
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=self._payload(household), format="json")
+        assert r.data["audit_id"]  # non-empty
+        ev = AuditEvent.objects.get(id=r.data["audit_id"])
+        assert ev.entity_type == "change_request"
+        assert ev.entity_id == r.data["cr_id"]
+        assert ev.action == "submit"
+
+    def test_address_move_label(self, household, api_client):
+        payload = self._payload(household, change_type="address_move", rows=[
+            {"category": "loc", "field": "village", "new_value": "Lopuwapuwa B"},
+        ])
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 201
+        assert r.data["routed_to"] == "CDO + receiving CDO"
+
+    def test_rejects_empty_rows(self, household, api_client):
+        payload = self._payload(household, rows=[])
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 400
+
+    def test_rejects_short_note(self, household, api_client):
+        payload = self._payload(household, note="hi")
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 400
+
+    def test_rejects_unknown_field(self, household, api_client):
+        payload = self._payload(household, rows=[
+            {"category": "hous", "field": "rooftop", "new_value": "x"},
+        ])
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 400
+
+    def test_rejects_duplicate_rows(self, household, api_client):
+        payload = self._payload(household, rows=[
+            {"category": "iden", "field": "phone", "new_value": "+256 700 111 111"},
+            {"category": "iden", "field": "phone", "new_value": "+256 700 222 222"},
+        ])
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 400
+        assert "duplicate" in str(r.data).lower()
+
+    def test_member_entity_returns_400_until_picker_lands(self, household, api_client):
+        payload = self._payload(household, entity="member")
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 400
+        assert "member picker" in r.data["detail"]
+
+    def test_all_members_entity_records_intent_in_note(self, household, api_client):
+        payload = self._payload(household, entity="all_members",
+                                 note="Family migrated; update everyone")
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 201
+        cr = ChangeRequest.objects.get(pk=r.data["cr_id"])
+        assert cr.entity_type == EntityType.HOUSEHOLD
+        assert "all_members" in cr.requester_note
+
+    def test_multi_row_multi_category_payload(self, household, api_client):
+        payload = self._payload(household, change_type="correction", rows=[
+            {"category": "iden", "field": "phone",   "new_value": "+256 700 333 333"},
+            {"category": "loc",  "field": "village", "new_value": "Lopuwapuwa A"},
+            {"category": "hous", "field": "roof",    "new_value": "Tiles"},
+        ])
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 201
+        assert r.data["changes"] == 3
+        cr = ChangeRequest.objects.get(pk=r.data["cr_id"])
+        assert set(cr.changes.keys()) == {"phone", "village", "roof"}
+        assert r.data["pmt_relevant"] is True  # roof is PMT-relevant

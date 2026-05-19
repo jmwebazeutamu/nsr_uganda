@@ -33,7 +33,54 @@ DEFAULT_MATRIX: dict[tuple[str, bool], tuple[str, int]] = {
     (ChangeType.PROGRAMME_STATE, True):  ("programme_auto",    0),
     (ChangeType.RECERTIFICATION, False): ("district_m_and_e", 168),
     (ChangeType.RECERTIFICATION, True):  ("district_m_and_e", 168),
+    # US-S22-003 — operator-named change_type routing per the Open-CR
+    # modal spec. Roles use the existing vocabulary so existing
+    # dashboards / sweeps keep working; the spec's display labels
+    # ("CDO (parish)" etc.) are surfaced separately by route_label().
+    (ChangeType.LIFE_EVENT,      False): ("cdo",              72),
+    (ChangeType.LIFE_EVENT,      True):  ("me_officer",       48),
+    (ChangeType.VERIFICATION,    False): ("cdo",              72),
+    (ChangeType.VERIFICATION,    True):  ("me_officer",       48),
+    (ChangeType.ADDRESS_MOVE,    False): ("cdo_receiving",    96),
+    (ChangeType.ADDRESS_MOVE,    True):  ("district_m_and_e", 48),
+    (ChangeType.ROSTER_CHANGE,   False): ("cdo",              72),
+    (ChangeType.ROSTER_CHANGE,   True):  ("district_m_and_e", 48),
+    (ChangeType.ASSET_CHANGE,    False): ("cdo",              72),
+    (ChangeType.ASSET_CHANGE,    True):  ("district_m_and_e", 48),
 }
+
+
+# US-S22-003 — display labels echoed back in `routed_to` on the bundle
+# endpoint. The system-side `required_role` (above) stays canonical
+# for downstream sweeps; this map is the operator-facing surface.
+ROUTE_LABEL: dict[tuple[str, bool], str] = {
+    (ChangeType.CORRECTION,      False): "CDO (parish)",
+    (ChangeType.CORRECTION,      True):  "M&E Officer",
+    (ChangeType.LIFE_EVENT,      False): "CDO (parish)",
+    (ChangeType.LIFE_EVENT,      True):  "M&E Officer",
+    (ChangeType.VERIFICATION,    False): "CDO (parish)",
+    (ChangeType.VERIFICATION,    True):  "M&E Officer",
+    (ChangeType.ADDRESS_MOVE,    False): "CDO + receiving CDO",
+    (ChangeType.ADDRESS_MOVE,    True):  "District M&E",
+    (ChangeType.ROSTER_CHANGE,   False): "CDO (parish)",
+    (ChangeType.ROSTER_CHANGE,   True):  "District M&E",
+    (ChangeType.ASSET_CHANGE,    False): "CDO (parish)",
+    (ChangeType.ASSET_CHANGE,    True):  "District M&E",
+}
+
+
+def route_label(change_type: str, *, pmt_relevant: bool) -> str:
+    """Operator-facing reviewer label for the (change_type, pmt) pair.
+
+    Falls back to the canonical role name when no spec label is
+    defined (the legacy ADDITION / REMOVAL / VITAL_EVENT /
+    PROGRAMME_STATE / RECERTIFICATION rows have no spec label).
+    """
+    spec = ROUTE_LABEL.get((change_type, pmt_relevant))
+    if spec is not None:
+        return spec
+    role, _ = DEFAULT_MATRIX[(change_type, pmt_relevant)]
+    return role
 
 
 def route(change_type: str, *, pmt_relevant: bool) -> tuple[str, timedelta]:

@@ -21,15 +21,30 @@ from nsr_mis.common.fields import ULIDField
 class EntityType(models.TextChoices):
     HOUSEHOLD = "household"
     MEMBER = "member"
+    # US-S22-003 — bundle submissions can target every member of a
+    # household in one request. Commit-time fan-out is a follow-up;
+    # for now the value is accepted on the API surface so the React
+    # modal can expose it without lying to the operator.
+    ALL_MEMBERS = "all_members"
 
 
 class ChangeType(models.TextChoices):
     CORRECTION = "correction"
     ADDITION = "addition"
     REMOVAL = "removal"
-    VITAL_EVENT = "vital_event"        # NIRA push
+    VITAL_EVENT = "vital_event"        # NIRA push (system-named life event)
     PROGRAMME_STATE = "programme_state"  # partner MIS push
     RECERTIFICATION = "recertification"
+    # US-S22-003 — operator-named change_type vocabulary used by the
+    # rich Open-CR modal. Distinct from the existing system-event
+    # types above: LIFE_EVENT is the operator-driven counterpart of
+    # VITAL_EVENT; VERIFICATION, ADDRESS_MOVE, ROSTER_CHANGE,
+    # ASSET_CHANGE are new categories the operator picks consciously.
+    LIFE_EVENT = "life_event"
+    VERIFICATION = "verification"
+    ADDRESS_MOVE = "address_move"
+    ROSTER_CHANGE = "roster_change"
+    ASSET_CHANGE = "asset_change"
 
 
 class SourceChannel(models.TextChoices):

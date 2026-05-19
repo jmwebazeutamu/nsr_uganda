@@ -5,8 +5,12 @@ from rest_framework.response import Response
 
 from apps.security.abac import ChangeRequestScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
+from apps.security.models import AuditEvent
 
-from .models import ChangeRequest
+from .field_catalog import field_keys_by_category
+from .field_catalog import is_pmt_relevant as _catalog_is_pmt_relevant
+from .models import ChangeRequest, ChangeType, EntityType, SourceChannel
+from .routing import route_label
 from .services import (
     UpdError,
     commit_change_request,
@@ -57,6 +61,50 @@ class _BulkRequest(serializers.Serializer):
     )
     actor = serializers.CharField(max_length=64)
     reason = serializers.CharField(required=False, allow_blank=True)
+
+
+# --- US-S22-003 — bundle serializer for the Open-CR modal. Validates
+# rows against the field catalog, requires note >= 6 chars, rejects
+# duplicate (category, field) pairs.
+
+class _BundleRow(serializers.Serializer):
+    category = serializers.CharField(max_length=24)
+    field = serializers.CharField(max_length=48)
+    new_value = serializers.CharField(allow_blank=False, max_length=1024)
+
+
+class _BundleRequest(serializers.Serializer):
+    household_id = serializers.CharField(max_length=26, min_length=26)
+    entity = serializers.ChoiceField(choices=[t.value for t in EntityType])
+    change_type = serializers.ChoiceField(choices=[t.value for t in ChangeType])
+    pmt_relevant = serializers.BooleanField(required=False, default=False)
+    rows = _BundleRow(many=True)
+    note = serializers.CharField(min_length=6, max_length=2048)
+
+    def validate_rows(self, value):
+        if not value:
+            raise serializers.ValidationError("at least one row is required")
+        seen: set[tuple[str, str]] = set()
+        catalog = field_keys_by_category()
+        for row in value:
+            cat, fld = row["category"], row["field"]
+            if cat not in catalog:
+                raise serializers.ValidationError(f"unknown category {cat!r}")
+            if fld not in catalog[cat]:
+                raise serializers.ValidationError(
+                    f"unknown field {fld!r} for category {cat!r}",
+                )
+            key = (cat, fld)
+            if key in seen:
+                raise serializers.ValidationError(
+                    f"duplicate row for ({cat!r}, {fld!r})",
+                )
+            seen.add(key)
+            if not row["new_value"].strip():
+                raise serializers.ValidationError(
+                    f"new_value is required for ({cat!r}, {fld!r})",
+                )
+        return value
 
 
 @extend_schema_view(
@@ -210,6 +258,110 @@ class ChangeRequestViewSet(
             "is_staff": bool(u.is_staff),
             "is_superuser": bool(u.is_superuser),
         })
+
+    # --- US-S22-003 — bundle endpoint -------------------------------------
+    #
+    # Accepts the rich Open-CR modal's payload (multi-row, multi-
+    # category) and creates a single ChangeRequest in PENDING_APPROVAL.
+    # Rows are validated against the field catalog; the changes JSON
+    # is `{field: {old: "", new: row.new_value}}` since the modal
+    # captures only the new value (old comes from the household
+    # snapshot at the modal layer for display, not authoritative).
+    # The concurrent-edit guard on commit_change_request still
+    # protects the actual apply step.
+
+    @extend_schema(
+        tags=["upd"],
+        summary="Create a multi-row change request from the Open-CR modal",
+        request=None,
+        responses={201: OpenApiResponse(
+            description="{cr_id: ULID, audit_id: ULID, routed_to: str, "
+                        "pmt_relevant: bool, changes: int}",
+        )},
+    )
+    @action(detail=False, methods=["post"], url_path="bundle")
+    def bundle(self, request):
+        ser = _BundleRequest(data=request.data)
+        ser.is_valid(raise_exception=True)
+        data = ser.validated_data
+
+        # Derive pmt_relevant from rows when not forced. The modal
+        # mirrors this; sending pmt_relevant=true overrides upward
+        # (operator can flag a cosmetic-looking row as PMT), but
+        # sending false when any row is PMT-relevant is auto-bumped
+        # to keep the audit honest.
+        derived_pmt = any(
+            _catalog_is_pmt_relevant(r["category"], r["field"]) for r in data["rows"]
+        )
+        pmt_relevant = bool(data.get("pmt_relevant", False)) or derived_pmt
+
+        # Build the changes JSON. Old is "" (the commit-time
+        # concurrent-edit guard will re-read live values and refuse
+        # to apply if the diff doesn't line up — protects against
+        # stale-snapshot submissions).
+        changes: dict[str, dict[str, str]] = {}
+        for r in data["rows"]:
+            changes[r["field"]] = {"old": "", "new": r["new_value"]}
+
+        # Map "all_members" to household for storage; commit-time
+        # fan-out is the follow-up slice. Surface the operator's
+        # intent in requester_note so reviewers can see it.
+        if data["entity"] == EntityType.ALL_MEMBERS:
+            entity_type = EntityType.HOUSEHOLD
+            entity_id = data["household_id"]
+            note = f"[entity=all_members] {data['note']}"
+        elif data["entity"] == EntityType.MEMBER:
+            # Member roster picker is OOS for this slice — the modal
+            # exposes the option but submission against entity=member
+            # requires a follow-up that adds member_id resolution.
+            return Response(
+                {"detail": "entity=member requires a member picker (follow-up slice)"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        else:
+            entity_type = EntityType.HOUSEHOLD
+            entity_id = data["household_id"]
+            note = data["note"]
+
+        actor = getattr(request.user, "username", "") or "console-operator"
+
+        cr = ChangeRequest.objects.create(
+            entity_type=entity_type,
+            entity_id=entity_id,
+            change_type=data["change_type"],
+            pmt_relevant=pmt_relevant,
+            changes=changes,
+            evidence=[{"kind": "note", "label": note}],
+            source_channel=SourceChannel.WEB,
+            requester=actor,
+            requester_note=note,
+        )
+        try:
+            submit_change_request(cr)
+        except UpdError as e:
+            cr.delete()
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Resolve the AuditEvent id stamped by submit_change_request
+        # so the response carries the audit ULID per the spec.
+        audit = (
+            AuditEvent.objects
+            .filter(entity_type="change_request", entity_id=cr.id, action="submit")
+            .order_by("-id")
+            .first()
+        )
+        return Response(
+            {
+                "cr_id": cr.id,
+                "audit_id": audit.id if audit else "",
+                "routed_to": route_label(cr.change_type, pmt_relevant=cr.pmt_relevant),
+                "pmt_relevant": cr.pmt_relevant,
+                "changes": len(changes),
+                "status": cr.status,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
 
     # --- US-S10-004 — bulk actions ----------------------------------------
     #
