@@ -4,6 +4,56 @@ Notable changes to outbound API contracts. Entries are dated and tied to the com
 
 ---
 
+## 2026-05-19 — US-S24 / ADR-0013 — DRS-side Partner + DSA endpoints removed; consolidated under /api/v1/partners/ and /api/v1/dsas/
+
+**Affected endpoints**:
+
+| Removed | Replacement |
+|---|---|
+| `GET /api/v1/drs/partners/` | `GET /api/v1/partners/` (US-S23-008) |
+| `GET /api/v1/drs/partners/{id}/` | `GET /api/v1/partners/{id}/` |
+| `GET /api/v1/drs/agreements/` | `GET /api/v1/dsas/` (US-S23-010) |
+| `GET /api/v1/drs/agreements/{id}/` | `GET /api/v1/dsas/{id}/` |
+
+### What changed
+
+- Two parallel `DataSharingAgreement` (and two `Partner`) classes coexisted on `main` after Sprint 23 — one in `apps/data_requests/` (pre-existing US-S19), one in `apps/partners/` (Sprint 23). ADR-0013 consolidates onto `apps/partners/`. The DRS-side classes are deleted; their endpoints with them.
+- `DataRequest.dsa` FK now targets `apps.partners.DataSharingAgreement`. Response shapes for `GET /api/v1/drs/requests/...` are unchanged (the FK reference is opaque to the consumer).
+- The canonical endpoints already carry the same ABAC scoping (`PartnerScopedQuerysetMixin`) the DRS-side endpoints did. Partner-affiliated users see only their own partner; NSR Unit / national / superuser see all.
+
+### DSA scope shape change
+
+The canonical DSA shape differs from the legacy DRS-side one. External consumers that GET a DSA see a different JSON:
+
+| Legacy field | Canonical field |
+|---|---|
+| `allowed_scopes.fields` | `field_scope` dict (`{"household": true, "member": true}`) |
+| `allowed_scopes.sub_region_codes` | `geographic_scope` M2M to GeographicUnit (response includes resolved sub_region codes) |
+| `allowed_scopes.programme_codes` | `entities_scope.programmes_allowed` until the structured Programme M2M lands |
+| `allowed_scopes.max_rows_per_request` | `monthly_row_budget` |
+| `valid_from` / `valid_to` | `effective_from` / `effective_to` |
+
+### Field-scope granularity (read carefully)
+
+The canonical `field_scope` gates at **group level** (`household`, `member`, `pmt`, ...) rather than per-field. A DSA granting the `member` group exposes every `member.*` field in `apps/data_requests/builder_schema.FIELD_CATALOGUE` — including the masked `nin_hash` / `nin_last4`. The legacy `allowed_scopes.fields` supported per-field gating.
+
+Partners with sensitive per-field requirements: please raise; a tighter gating story is `OI-S24-3` in ADR-0013.
+
+### New audit-event actions
+
+Two new AuditEvent action codes land:
+
+- `dsa_scope_violation` — fired by the validator when a request asks for a field group, sub-region, or programme outside the DSA.
+- `dsa_budget_exceeded` — fired when trailing-30d rows + this request's `max_rows` would push the partner over their `monthly_row_budget`.
+- `data_request_delivered` — renamed from `deliver`. The `field_changes` payload is now structured: `{partner_code, partner_id, dsa_reference, rows_delivered, manifest_sha256, expires_at}`. Consumers reading the audit chain should expect both names during the transition window and switch to `data_request_delivered` going forward.
+
+### New gates (Partners module)
+
+- **Partner-status gate**: `POST /api/v1/drs/requests/{id}/submit/` returns 400 with `detail: "Partner X is suspended"` when the partner's status is `suspended`. The DPO operationally pauses a partner by setting the status via `/admin/partners/partner/`.
+- **Budget gate**: returns 400 with `detail: "trailing-30d usage N + this request M would exceed DSA budget B"` when the submit would breach the partner's monthly row budget.
+
+---
+
 ## 2026-05-19 — US-S23 — Partners + DSA registry API
 
 **Affected endpoints**: new namespace under `/api/v1/partners/` and `/api/v1/dsas/`. Also extends `/api/v1/reference-data/choice-list-bundle/`.
