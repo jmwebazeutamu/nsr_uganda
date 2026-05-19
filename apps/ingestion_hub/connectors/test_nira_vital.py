@@ -83,12 +83,12 @@ def member_with_nin(db):
         region=nodes["region"], sub_region=nodes["sub_region"],
         district=nodes["district"], county=nodes["county"],
         sub_county=nodes["sub_county"], parish=nodes["parish"],
-        village=nodes["village"], urban_rural="rural",
+        village=nodes["village"], urban_rural="2",
     )
     nin = "CM1234567890AB"
     m = Member.objects.create(
         household=hh, line_number=1, surname="Okot", first_name="James",
-        sex="M", nin_hash=_h(nin), nin_value=nin.encode("ascii"),
+        sex="1", nin_hash=_h(nin), nin_value=nin.encode("ascii"),
     )
     return m, nin
 

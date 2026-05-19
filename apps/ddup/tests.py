@@ -55,7 +55,7 @@ def household(db, geo):
     return Household.objects.create(
         region=geo["r"], sub_region=geo["sr"], district=geo["d"], county=geo["c"],
         sub_county=geo["sc"], parish=geo["p"], village=geo["v"],
-        urban_rural="rural",
+        urban_rural="2",
     )
 
 
@@ -109,9 +109,9 @@ class TestNinDiscovery:
     def test_two_members_with_same_nin_hash_create_pair(self, household, active_model):
         h = _hash("CM1234567890AB")
         m1 = Member.objects.create(household=household, line_number=1, surname="A",
-                                   first_name="One", sex="M", nin_hash=h)
+                                   first_name="One", sex="1", nin_hash=h)
         m2 = Member.objects.create(household=household, line_number=2, surname="B",
-                                   first_name="Two", sex="F", nin_hash=h)
+                                   first_name="Two", sex="2", nin_hash=h)
         created = discover_nin_pairs(actor="system")
         assert len(created) == 1
         pair = created[0]
@@ -123,9 +123,9 @@ class TestNinDiscovery:
     def test_idempotent(self, household, active_model):
         h = _hash("CM1234567890AB")
         Member.objects.create(household=household, line_number=1, surname="A", first_name="One",
-                              sex="M", nin_hash=h)
+                              sex="1", nin_hash=h)
         Member.objects.create(household=household, line_number=2, surname="B", first_name="Two",
-                              sex="F", nin_hash=h)
+                              sex="2", nin_hash=h)
         first = discover_nin_pairs(actor="system")
         second = discover_nin_pairs(actor="system")
         assert len(first) == 1
@@ -135,24 +135,24 @@ class TestNinDiscovery:
         h = _hash("CM1234567890AB")
         for i in range(3):
             Member.objects.create(household=household, line_number=i + 1,
-                                  surname=f"S{i}", first_name=f"F{i}", sex="M", nin_hash=h)
+                                  surname=f"S{i}", first_name=f"F{i}", sex="1", nin_hash=h)
         created = discover_nin_pairs(actor="system")
         assert len(created) == 3  # 3-choose-2
 
     def test_soft_deleted_member_ignored(self, household, active_model):
         h = _hash("CM1234567890AB")
         Member.objects.create(household=household, line_number=1, surname="A", first_name="One",
-                              sex="M", nin_hash=h)
+                              sex="1", nin_hash=h)
         Member.objects.create(household=household, line_number=2, surname="B",
-                              first_name="Two", sex="F", nin_hash=h, is_deleted=True)
+                              first_name="Two", sex="2", nin_hash=h, is_deleted=True)
         created = discover_nin_pairs(actor="system")
         assert created == []
 
     def test_no_nin_hash_excluded(self, household, active_model):
         Member.objects.create(household=household, line_number=1, surname="A", first_name="One",
-                              sex="M", nin_hash=None)
+                              sex="1", nin_hash=None)
         Member.objects.create(household=household, line_number=2, surname="B", first_name="Two",
-                              sex="F", nin_hash=None)
+                              sex="2", nin_hash=None)
         assert discover_nin_pairs(actor="system") == []
 
 
@@ -162,10 +162,10 @@ class TestMergeCommit:
     def _build_pair(self, household):
         h = _hash("CM1234567890AB")
         a = Member.objects.create(household=household, line_number=1, surname="OLDsurname",
-                                  first_name="James", sex="M", nin_hash=h, nin_last4="00AB",
+                                  first_name="James", sex="1", nin_hash=h, nin_last4="00AB",
                                   telephone_1="+256700000001")
         b = Member.objects.create(household=household, line_number=2, surname="Okot",
-                                  first_name="James", sex="M", nin_hash=h, nin_last4="00AB",
+                                  first_name="James", sex="1", nin_hash=h, nin_last4="00AB",
                                   telephone_1="+256700000002")
         return discover_nin_pairs(actor="system")[0], a, b
 
@@ -233,9 +233,9 @@ class TestReject:
     def test_reject_records_reason_and_prevents_requeue(self, household, active_model):
         h = _hash("CM1234567890AB")
         Member.objects.create(household=household, line_number=1, surname="A", first_name="One",
-                              sex="M", nin_hash=h)
+                              sex="1", nin_hash=h)
         Member.objects.create(household=household, line_number=2, surname="B", first_name="Two",
-                              sex="F", nin_hash=h)
+                              sex="2", nin_hash=h)
         pair = discover_nin_pairs(actor="system")[0]
         reject_pair(pair, actor="op-1", reason="legitimate-name-sharing")
         pair.refresh_from_db()
@@ -248,9 +248,9 @@ class TestReject:
     def test_reject_requires_reason(self, household, active_model):
         h = _hash("CM1234567890AB")
         Member.objects.create(household=household, line_number=1, surname="A", first_name="One",
-                              sex="M", nin_hash=h)
+                              sex="1", nin_hash=h)
         Member.objects.create(household=household, line_number=2, surname="B", first_name="Two",
-                              sex="F", nin_hash=h)
+                              sex="2", nin_hash=h)
         pair = discover_nin_pairs(actor="system")[0]
         with pytest.raises(MergeError, match="reason"):
             reject_pair(pair, actor="op-1", reason="")
@@ -284,9 +284,9 @@ class TestPhoneNormalisation:
 class TestPhoneDiscovery:
     def test_two_members_with_same_phone_create_tier2_pair(self, household, active_model):
         Member.objects.create(household=household, line_number=1, surname="A", first_name="One",
-                              sex="M", telephone_1="+256700000001")
+                              sex="1", telephone_1="+256700000001")
         Member.objects.create(household=household, line_number=2, surname="B", first_name="Two",
-                              sex="F", telephone_1="0700000001")  # equivalent normalised
+                              sex="2", telephone_1="0700000001")  # equivalent normalised
         created = discover_phone_pairs(actor="system")
         assert len(created) == 1
         assert created[0].tier == 2
@@ -294,16 +294,16 @@ class TestPhoneDiscovery:
 
     def test_unparseable_phone_excluded(self, household, active_model):
         Member.objects.create(household=household, line_number=1, surname="A", first_name="One",
-                              sex="M", telephone_1="abc")
+                              sex="1", telephone_1="abc")
         Member.objects.create(household=household, line_number=2, surname="B", first_name="Two",
-                              sex="F", telephone_1="abc")
+                              sex="2", telephone_1="abc")
         assert discover_phone_pairs(actor="system") == []
 
     def test_idempotent(self, household, active_model):
         Member.objects.create(household=household, line_number=1, surname="A", first_name="One",
-                              sex="M", telephone_1="+256700000001")
+                              sex="1", telephone_1="+256700000001")
         Member.objects.create(household=household, line_number=2, surname="B", first_name="Two",
-                              sex="F", telephone_1="+256700000001")
+                              sex="2", telephone_1="+256700000001")
         first = discover_phone_pairs(actor="system")
         second = discover_phone_pairs(actor="system")
         assert len(first) == 1 and second == []
@@ -313,9 +313,9 @@ class TestPhoneDiscovery:
         # constraint blocks a second tier-2 row for the same pair.
         h = _hash("CM1234567890AB")
         Member.objects.create(household=household, line_number=1, surname="A", first_name="One",
-                              sex="M", nin_hash=h, telephone_1="+256700000001")
+                              sex="1", nin_hash=h, telephone_1="+256700000001")
         Member.objects.create(household=household, line_number=2, surname="B", first_name="Two",
-                              sex="F", nin_hash=h, telephone_1="+256700000001")
+                              sex="2", nin_hash=h, telephone_1="+256700000001")
         tier1 = discover_nin_pairs(actor="system")
         tier2 = discover_phone_pairs(actor="system")
         assert len(tier1) == 1 and tier1[0].tier == 1
@@ -334,11 +334,11 @@ class TestReverseMerge:
         h = _nin_hash("CM1234567890AB")
         a = Member.objects.create(
             household=household, line_number=1, surname="OriginalSurname",
-            first_name="James", sex="M", nin_hash=h, nin_last4="00AB",
+            first_name="James", sex="1", nin_hash=h, nin_last4="00AB",
         )
         b = Member.objects.create(
             household=household, line_number=2, surname="Okot",
-            first_name="James", sex="M", nin_hash=h, nin_last4="00AB",
+            first_name="James", sex="1", nin_hash=h, nin_last4="00AB",
         )
         pair = discover_nin_pairs(actor="system")[0]
         # b is the survivor; capture the surviving's pre-merge surname
@@ -387,11 +387,11 @@ class TestReverseMerge:
         h = _nin_hash("CM1234567890AB")
         a = Member.objects.create(
             household=household, line_number=1, surname="X", first_name="A",
-            sex="M", nin_hash=h, nin_last4="00AB",
+            sex="1", nin_hash=h, nin_last4="00AB",
         )
         b = Member.objects.create(
             household=household, line_number=2, surname="X", first_name="B",
-            sex="M", nin_hash=h, nin_last4="00AB",
+            sex="1", nin_hash=h, nin_last4="00AB",
         )
         household.head_member = a
         household.save()
@@ -457,9 +457,9 @@ class TestReverseMerge:
         from apps.security.hashing import nin_hash as _nin_hash
         h = _nin_hash("CM1234567890AB")
         Member.objects.create(household=household, line_number=1, surname="X",
-                              first_name="A", sex="M", nin_hash=h)
+                              first_name="A", sex="1", nin_hash=h)
         Member.objects.create(household=household, line_number=2, surname="X",
-                              first_name="B", sex="M", nin_hash=h)
+                              first_name="B", sex="1", nin_hash=h)
         pair = discover_nin_pairs(actor="system")[0]
         decision = reject_pair(pair, actor="op", reason="not duplicates")
         with pytest.raises(MergeError, match="only MERGE"):
@@ -478,9 +478,9 @@ class TestReverseMergeApi:
         from apps.security.hashing import nin_hash as _nin_hash
         h = _nin_hash("CM1234567890AB")
         Member.objects.create(household=household, line_number=1, surname="A",
-                              first_name="X", sex="M", nin_hash=h, nin_last4="00AB")
+                              first_name="X", sex="1", nin_hash=h, nin_last4="00AB")
         b = Member.objects.create(household=household, line_number=2, surname="B",
-                                  first_name="Y", sex="M", nin_hash=h, nin_last4="00AB")
+                                  first_name="Y", sex="1", nin_hash=h, nin_last4="00AB")
         pair = discover_nin_pairs(actor="system")[0]
         return merge_member_pair(pair, surviving_id=b.id,
                                  chosen_field_values={}, actor="op-1", note="")
@@ -555,9 +555,9 @@ class TestMergePairApi:
         from apps.security.hashing import nin_hash as _nh
         h = _nh("CM1234567890AB")
         Member.objects.create(household=household, line_number=1, surname="A",
-                              first_name="X", sex="M", nin_hash=h, nin_last4="00AB")
+                              first_name="X", sex="1", nin_hash=h, nin_last4="00AB")
         b = Member.objects.create(household=household, line_number=2, surname="B",
-                                  first_name="Y", sex="M", nin_hash=h, nin_last4="00AB")
+                                  first_name="Y", sex="1", nin_hash=h, nin_last4="00AB")
         pair = discover_nin_pairs(actor="system")[0]
         return pair, b
 
@@ -651,9 +651,9 @@ class TestReverseMergeAdmin:
         from apps.security.hashing import nin_hash as _nin_hash
         h = _nin_hash("CM1234567890AB")
         Member.objects.create(household=household, line_number=1, surname="A",
-                              first_name="X", sex="M", nin_hash=h, nin_last4="00AB")
+                              first_name="X", sex="1", nin_hash=h, nin_last4="00AB")
         b = Member.objects.create(household=household, line_number=2, surname="B",
-                                  first_name="Y", sex="M", nin_hash=h, nin_last4="00AB")
+                                  first_name="Y", sex="1", nin_hash=h, nin_last4="00AB")
         pair = discover_nin_pairs(actor="system")[0]
         decision = merge_member_pair(pair, surviving_id=b.id,
                                      chosen_field_values={}, actor="op-1", note="")
@@ -674,9 +674,9 @@ class TestReverseMergeAdmin:
         from apps.security.hashing import nin_hash as _nin_hash
         h = _nin_hash("CM1234567890AB")
         Member.objects.create(household=household, line_number=1, surname="A",
-                              first_name="X", sex="M", nin_hash=h)
+                              first_name="X", sex="1", nin_hash=h)
         Member.objects.create(household=household, line_number=2, surname="B",
-                              first_name="Y", sex="M", nin_hash=h)
+                              first_name="Y", sex="1", nin_hash=h)
         pair = discover_nin_pairs(actor="system")[0]
         decision = reject_pair(pair, actor="op", reason="not duplicates")
         admin_client.post("/admin/ddup/mergedecision/", data={
@@ -699,13 +699,13 @@ class TestModelVersionFeedbackCounters:
     def _build_pair_for_merge(self, household, active_model, h):
         m1 = Member.objects.create(
             household=household, line_number=1, surname="X",
-            first_name="A", sex="M", nin_hash=h,
+            first_name="A", sex="1", nin_hash=h,
         )
         # Second member needs to exist in the DB so discover_nin_pairs
         # picks them up as a pair; the variable is for clarity only.
         Member.objects.create(
             household=household, line_number=2, surname="X",
-            first_name="B", sex="M", nin_hash=h,
+            first_name="B", sex="1", nin_hash=h,
         )
         from apps.ddup.services import discover_nin_pairs, merge_member_pair
         pair = discover_nin_pairs(actor="system")[0]
@@ -737,11 +737,11 @@ class TestModelVersionFeedbackCounters:
         h = _hash("CM1234567890AB")
         m1 = Member.objects.create(
             household=household, line_number=1, surname="X",
-            first_name="A", sex="M", nin_hash=h,
+            first_name="A", sex="1", nin_hash=h,
         )
         m2 = Member.objects.create(
             household=household, line_number=2, surname="X",
-            first_name="B", sex="M", nin_hash=h,
+            first_name="B", sex="1", nin_hash=h,
         )
         pair = discover_nin_pairs(actor="system")[0]
         MergeDecision.objects.create(
@@ -794,17 +794,17 @@ class TestModelVersionFeedbackCounters:
         h2 = _hash("CM2222222222AB")
         # Pair 1: two members on h1.
         m1a = Member.objects.create(household=household, line_number=1,
-                                     surname="A", first_name="X1", sex="M",
+                                     surname="A", first_name="X1", sex="1",
                                      nin_hash=h1)
         m1b = Member.objects.create(household=household, line_number=2,
-                                     surname="A", first_name="X2", sex="M",
+                                     surname="A", first_name="X2", sex="1",
                                      nin_hash=h1)
         # Pair 2: two members on h2.
         m2a = Member.objects.create(household=household, line_number=3,
-                                     surname="B", first_name="Y1", sex="M",
+                                     surname="B", first_name="Y1", sex="1",
                                      nin_hash=h2)
         m2b = Member.objects.create(household=household, line_number=4,
-                                     surname="B", first_name="Y2", sex="M",
+                                     surname="B", first_name="Y2", sex="1",
                                      nin_hash=h2)
         pair1 = MatchPair.objects.create(
             record_type="member",
@@ -843,9 +843,9 @@ class TestMatchPairAdminScoresTable:
     def _make_tier3_pair_with_scores(self, household, active_model, scores):
         from apps.ddup.models import MatchPair, PairStatus
         m1 = Member.objects.create(household=household, line_number=1,
-                                    surname="OKELLO", first_name="X", sex="M")
+                                    surname="OKELLO", first_name="X", sex="1")
         m2 = Member.objects.create(household=household, line_number=2,
-                                    surname="OKELLO", first_name="Y", sex="M")
+                                    surname="OKELLO", first_name="Y", sex="1")
         a, b = sorted([m1.id, m2.id])
         return MatchPair.objects.create(
             record_type="member", record_a_id=a, record_b_id=b,
@@ -982,12 +982,12 @@ class TestProbabilisticDiscovery:
         h1 = Household.objects.create(
             region=geo["r"], sub_region=geo["sr"], district=geo["d"],
             county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
-            village=geo["v"], urban_rural="rural",
+            village=geo["v"], urban_rural="2",
         )
         h2 = Household.objects.create(
             region=geo["r"], sub_region=geo["sr"], district=geo["d"],
             county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
-            village=geo["v"], urban_rural="rural",
+            village=geo["v"], urban_rural="2",
         )
         return h1, h2
 
@@ -1001,7 +1001,7 @@ class TestProbabilisticDiscovery:
         return Household.objects.create(
             region=geo["r"], sub_region=geo["sr"], district=geo["d"],
             county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
-            village=v2, urban_rural="rural",
+            village=v2, urban_rural="2",
         )
 
     def test_high_similarity_pair_within_village(
@@ -1011,11 +1011,11 @@ class TestProbabilisticDiscovery:
         h1, h2 = two_households_same_village
         m1 = Member.objects.create(
             household=h1, line_number=1, surname="OKELLO",
-            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+            first_name="JAMES", sex="1", date_of_birth=date(1980, 1, 1),
         )
         m2 = Member.objects.create(
             household=h2, line_number=1, surname="OKELLO",
-            first_name="JAMES", sex="M", date_of_birth=date(1980, 6, 15),
+            first_name="JAMES", sex="1", date_of_birth=date(1980, 6, 15),
         )
         created = discover_probabilistic_pairs(actor="system")
         assert len(created) == 1
@@ -1038,11 +1038,11 @@ class TestProbabilisticDiscovery:
         h1, h2 = two_households_same_village
         Member.objects.create(
             household=h1, line_number=1, surname="OKELLO",
-            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+            first_name="JAMES", sex="1", date_of_birth=date(1980, 1, 1),
         )
         Member.objects.create(
             household=h2, line_number=1, surname="NAKATO",
-            first_name="ALICE", sex="F", date_of_birth=date(1995, 1, 1),
+            first_name="ALICE", sex="2", date_of_birth=date(1995, 1, 1),
         )
         assert discover_probabilistic_pairs(actor="system") == []
 
@@ -1057,11 +1057,11 @@ class TestProbabilisticDiscovery:
         h_other = other_village_household
         Member.objects.create(
             household=h1, line_number=1, surname="OKELLO",
-            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+            first_name="JAMES", sex="1", date_of_birth=date(1980, 1, 1),
         )
         Member.objects.create(
             household=h_other, line_number=1, surname="OKELLO",
-            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+            first_name="JAMES", sex="1", date_of_birth=date(1980, 1, 1),
         )
         # Each village now has 1 member — no within-village comparison
         # possible.
@@ -1080,12 +1080,12 @@ class TestProbabilisticDiscovery:
         h = _hash("CM1234567890AB")
         Member.objects.create(
             household=h1, line_number=1, surname="OKELLO",
-            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+            first_name="JAMES", sex="1", date_of_birth=date(1980, 1, 1),
             nin_hash=h,
         )
         Member.objects.create(
             household=h2, line_number=1, surname="OKELLO",
-            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+            first_name="JAMES", sex="1", date_of_birth=date(1980, 1, 1),
             nin_hash=h,
         )
         tier1 = discover_nin_pairs(actor="system")
@@ -1099,7 +1099,7 @@ class TestProbabilisticDiscovery:
         for hh in (h1, h2):
             Member.objects.create(
                 household=hh, line_number=1, surname="OKELLO",
-                first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+                first_name="JAMES", sex="1", date_of_birth=date(1980, 1, 1),
             )
         first = discover_probabilistic_pairs(actor="system")
         second = discover_probabilistic_pairs(actor="system")
@@ -1124,11 +1124,11 @@ class TestProbabilisticDiscovery:
         # Names diverge enough to score < 0.85 but probably > 0.5.
         Member.objects.create(
             household=h1, line_number=1, surname="OKELLO",
-            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+            first_name="JAMES", sex="1", date_of_birth=date(1980, 1, 1),
         )
         Member.objects.create(
             household=h2, line_number=1, surname="OKELO",
-            first_name="JAMS", sex="M", date_of_birth=date(1985, 1, 1),
+            first_name="JAMS", sex="1", date_of_birth=date(1985, 1, 1),
         )
         created = discover_probabilistic_pairs(actor="system")
         assert len(created) == 1
@@ -1147,20 +1147,20 @@ class TestAutoMergeHighConfidence:
         h1 = Household.objects.create(
             region=geo["r"], sub_region=geo["sr"], district=geo["d"],
             county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
-            village=geo["v"], urban_rural="rural",
+            village=geo["v"], urban_rural="2",
         )
         h2 = Household.objects.create(
             region=geo["r"], sub_region=geo["sr"], district=geo["d"],
             county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
-            village=geo["v"], urban_rural="rural",
+            village=geo["v"], urban_rural="2",
         )
         m1 = Member.objects.create(
             household=h1, line_number=1, surname="OKELLO",
-            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+            first_name="JAMES", sex="1", date_of_birth=date(1980, 1, 1),
         )
         m2 = Member.objects.create(
             household=h2, line_number=1, surname="OKELLO",
-            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+            first_name="JAMES", sex="1", date_of_birth=date(1980, 1, 1),
         )
         return m1, m2
 
@@ -1198,20 +1198,20 @@ class TestAutoMergeHighConfidence:
         h1 = Household.objects.create(
             region=geo["r"], sub_region=geo["sr"], district=geo["d"],
             county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
-            village=geo["v"], urban_rural="rural",
+            village=geo["v"], urban_rural="2",
         )
         h2 = Household.objects.create(
             region=geo["r"], sub_region=geo["sr"], district=geo["d"],
             county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
-            village=geo["v"], urban_rural="rural",
+            village=geo["v"], urban_rural="2",
         )
         Member.objects.create(
             household=h1, line_number=1, surname="OKELLO",
-            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+            first_name="JAMES", sex="1", date_of_birth=date(1980, 1, 1),
         )
         Member.objects.create(
             household=h2, line_number=1, surname="OKELO",
-            first_name="JAMS", sex="M", date_of_birth=date(1985, 1, 1),
+            first_name="JAMS", sex="1", date_of_birth=date(1985, 1, 1),
         )
         created = discover_probabilistic_pairs(actor="system")
         assert len(created) == 1
@@ -1255,20 +1255,20 @@ class TestAutoMergeHighConfidence:
         h1 = Household.objects.create(
             region=geo["r"], sub_region=geo["sr"], district=geo["d"],
             county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
-            village=geo["v"], urban_rural="rural",
+            village=geo["v"], urban_rural="2",
         )
         h2 = Household.objects.create(
             region=geo["r"], sub_region=geo["sr"], district=geo["d"],
             county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
-            village=geo["v"], urban_rural="rural",
+            village=geo["v"], urban_rural="2",
         )
         Member.objects.create(
             household=h1, line_number=1, surname="OKELLO",
-            first_name="JAMES", sex="M", date_of_birth=date(1980, 1, 1),
+            first_name="JAMES", sex="1", date_of_birth=date(1980, 1, 1),
         )
         Member.objects.create(
             household=h2, line_number=1, surname="OKELO",
-            first_name="JAMS", sex="M", date_of_birth=date(1985, 1, 1),
+            first_name="JAMS", sex="1", date_of_birth=date(1985, 1, 1),
         )
         discover_probabilistic_pairs(actor="system")
         counts = auto_merge_high_confidence_pairs()

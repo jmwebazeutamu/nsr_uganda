@@ -51,7 +51,7 @@ def household(db, geo):
     return Household.objects.create(
         region=geo["r"], sub_region=geo["sr"], district=geo["d"], county=geo["c"],
         sub_county=geo["sc"], parish=geo["p"], village=geo["v"],
-        urban_rural="rural", address_narrative="Plot 1",
+        urban_rural="2", address_narrative="Plot 1",
     )
 
 
@@ -59,7 +59,7 @@ def household(db, geo):
 def member(db, household):
     return Member.objects.create(
         household=household, line_number=1, surname="Okot", first_name="James",
-        sex="M", telephone_1="+256700000001",
+        sex="1", telephone_1="+256700000001",
     )
 
 
@@ -335,7 +335,7 @@ class TestAutoCommit:
     def test_vital_event_auto_commits(self, member):
         req = _draft(
             member, requester="nira-system", ctype=ChangeType.VITAL_EVENT,
-            changes={"nin_status": {"old": "unknown", "new": "verified"}},
+            changes={"nin_status": {"old": "8", "new": "verified"}},
         )
         auto_commit_change_request(req)
         req.refresh_from_db()
@@ -376,7 +376,7 @@ class TestAutoCommit:
     def test_auto_commit_emits_audit_chain(self, member):
         req = _draft(
             member, ctype=ChangeType.VITAL_EVENT,
-            changes={"nin_status": {"old": "unknown", "new": "verified"}},
+            changes={"nin_status": {"old": "8", "new": "verified"}},
         )
         auto_commit_change_request(req)
         events = AuditEvent.objects.filter(
@@ -389,7 +389,7 @@ class TestAutoCommit:
     def test_sample_rate_1_always_flags(self, member):
         req = _draft(
             member, ctype=ChangeType.VITAL_EVENT,
-            changes={"nin_status": {"old": "unknown", "new": "verified"}},
+            changes={"nin_status": {"old": "8", "new": "verified"}},
         )
         auto_commit_change_request(req, sample_rate=1.0)
         req.refresh_from_db()
@@ -398,7 +398,7 @@ class TestAutoCommit:
     def test_sample_rate_0_never_flags(self, member):
         req = _draft(
             member, ctype=ChangeType.VITAL_EVENT,
-            changes={"nin_status": {"old": "unknown", "new": "verified"}},
+            changes={"nin_status": {"old": "8", "new": "verified"}},
         )
         auto_commit_change_request(req, sample_rate=0.0)
         req.refresh_from_db()

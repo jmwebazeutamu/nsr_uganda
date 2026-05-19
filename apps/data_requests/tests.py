@@ -415,7 +415,7 @@ class TestBundleRendering:
                     region=nodes["region"], sub_region=nodes["sub_region"],
                     district=nodes["district"], county=nodes["county"],
                     sub_county=nodes["sub_county"], parish=nodes["parish"],
-                    village=nodes["village"], urban_rural="rural",
+                    village=nodes["village"], urban_rural="2",
                 )
                 out[sr_key].append(hh)
         return out
@@ -657,20 +657,20 @@ class TestBundleMembersEmbedding:
             region=nodes["region"], sub_region=nodes["sub_region"],
             district=nodes["district"], county=nodes["county"],
             sub_county=nodes["sub_county"], parish=nodes["parish"],
-            village=nodes["village"], urban_rural="rural",
+            village=nodes["village"], urban_rural="2",
         )
         Member.objects.create(
             household=hh, line_number=1, surname="Okello",
-            first_name="James", sex="M", nin_last4="00AB",
+            first_name="James", sex="1", nin_last4="00AB",
         )
         Member.objects.create(
             household=hh, line_number=2, surname="Okello",
-            first_name="Mary", sex="F",
+            first_name="Mary", sex="2",
         )
         # Soft-deleted member — must NOT appear in the bundle.
         Member.objects.create(
             household=hh, line_number=3, surname="Okello",
-            first_name="Deleted", sex="M",
+            first_name="Deleted", sex="1",
             is_deleted=True,
         )
         return hh
@@ -1088,7 +1088,7 @@ class TestPartnerDownload:
             region=nodes["region"], sub_region=nodes["sub_region"],
             district=nodes["district"], county=nodes["county"],
             sub_county=nodes["sub_county"], parish=nodes["parish"],
-            village=nodes["village"], urban_rural="rural",
+            village=nodes["village"], urban_rural="2",
         )
         dsa = DataSharingAgreement.objects.create(
             partner=partner, reference="DSA-DL-1",

@@ -390,7 +390,7 @@ class TestProcessOrchestrator:
         seed_hh = promote_stage_record(seed_stage, actor="seed")
         nin = "CM1234567890AB"
         Member.objects.create(household=seed_hh, line_number=99, surname="Existing",
-                              first_name="One", sex="M", nin_hash=nin_hash(nin))
+                              first_name="One", sex="1", nin_hash=nin_hash(nin))
         payload = _payload(geo_codes)
         payload["members"][0]["nin"] = nin
         stage = _make_stage(connector, geo_codes, payload=payload)

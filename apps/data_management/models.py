@@ -24,24 +24,11 @@ from __future__ import annotations
 from django.db import models
 from nsr_mis.common.fields import EncryptedBinaryField, ULIDField
 
-
-class Sex(models.TextChoices):
-    MALE = "M", "Male"
-    FEMALE = "F", "Female"
-
-
-class UrbanRural(models.TextChoices):
-    URBAN = "urban"
-    RURAL = "rural"
-    PERI_URBAN = "peri_urban"
-
-
-class NinStatus(models.TextChoices):
-    HAS_CARD = "has_card"
-    LOST = "lost"
-    NOT_ISSUED = "not_issued"
-    NO = "no"
-    UNKNOWN = "unknown"
+# NOTE: Coded fields on Household and Member are plain CharField and
+# resolve through apps/reference_data/services.py against the
+# ChoiceList catalogue (ADR-0010). TextChoices enums were removed in
+# US-S22-005c; the migration maps old enum values to ChoiceOption
+# codes ("M" -> "1", "rural" -> "2", "has_card" -> "1", etc.).
 
 
 class Household(models.Model):
@@ -89,7 +76,7 @@ class Household(models.Model):
         related_name="households_in_village",
     )
 
-    urban_rural = models.CharField(max_length=16, choices=UrbanRural.choices)
+    urban_rural = models.CharField(max_length=32, blank=True)
     enumeration_area = models.CharField(max_length=32, blank=True)
     household_number = models.CharField(max_length=32, blank=True)
 
@@ -156,7 +143,7 @@ class Member(models.Model):
     other_name = models.CharField(max_length=64, blank=True)
 
     relationship_to_head = models.CharField(max_length=32)
-    sex = models.CharField(max_length=1, choices=Sex.choices)
+    sex = models.CharField(max_length=32)
     date_of_birth = models.DateField(null=True, blank=True)
     age_years = models.PositiveSmallIntegerField(null=True, blank=True)
 
@@ -167,7 +154,7 @@ class Member(models.Model):
 
     # NIN trio per ADR-0002. nin_value is encrypted; nin_hash is the join key;
     # nin_last4 is the masked display value.
-    nin_status = models.CharField(max_length=16, choices=NinStatus.choices, default=NinStatus.UNKNOWN)
+    nin_status = models.CharField(max_length=32, blank=True, default="8")
     nin_value = EncryptedBinaryField(null=True, blank=True)
     nin_hash = models.BinaryField(max_length=32, null=True, blank=True)
     nin_last4 = models.CharField(max_length=4, blank=True)

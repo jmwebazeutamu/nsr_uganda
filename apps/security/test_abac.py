@@ -41,7 +41,7 @@ def households_in_each(two_sub_regions):
         hh = Household.objects.create(
             region=nodes["r"], sub_region=nodes["sr"], district=nodes["d"],
             county=nodes["c"], sub_county=nodes["sc"], parish=nodes["p"], village=nodes["v"],
-            urban_rural="rural",
+            urban_rural="2",
         )
         result[sr_key] = hh
     return result
@@ -344,7 +344,7 @@ class TestChangeRequestEntityTypeUnion:
 
         m = Member.objects.create(
             household=households_in_each["SR-BUGANDA"], line_number=1,
-            surname="Okot", first_name="J", sex="M",
+            surname="Okot", first_name="J", sex="1",
         )
         ChangeRequest.objects.create(
             entity_type=EntityType.MEMBER, entity_id=m.id,
@@ -400,7 +400,7 @@ class TestMatchPairBothEndsInScope:
         for sr_key, hh in households_in_each.items():
             out[sr_key] = Member.objects.create(
                 household=hh, line_number=1,
-                surname=f"Surname-{sr_key}", first_name="A", sex="M",
+                surname=f"Surname-{sr_key}", first_name="A", sex="1",
             )
         return out
 
@@ -445,9 +445,9 @@ class TestMatchPairBothEndsInScope:
 
         hh = households_in_each["SR-BUGANDA"]
         m1 = Member.objects.create(household=hh, line_number=2, surname="X",
-                                   first_name="One", sex="M")
+                                   first_name="One", sex="1")
         m2 = Member.objects.create(household=hh, line_number=3, surname="X",
-                                   first_name="Two", sex="M")
+                                   first_name="Two", sex="1")
         a, b = sorted([m1.id, m2.id])
         MatchPair.objects.create(
             record_type="member", record_a_id=a, record_b_id=b,

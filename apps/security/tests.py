@@ -60,7 +60,7 @@ class TestEncryptedField:
     def test_member_nin_value_roundtrips_via_field(self, db):
         from datetime import date
 
-        from apps.data_management.models import Household, Member, NinStatus
+        from apps.data_management.models import Household, Member
         from apps.reference_data.models import GeographicUnit
 
         # Minimal 7-level ladder.
@@ -76,13 +76,13 @@ class TestEncryptedField:
             )
         hh = Household.objects.create(
             region=nodes["r"], sub_region=nodes["sr"], district=nodes["d"], county=nodes["c"],
-            sub_county=nodes["sc"], parish=nodes["p"], village=nodes["v"], urban_rural="rural",
+            sub_county=nodes["sc"], parish=nodes["p"], village=nodes["v"], urban_rural="2",
         )
         plaintext = b"CM1234567890AB"
         m = Member.objects.create(
-            household=hh, line_number=1, surname="Okot", first_name="J", sex="M",
+            household=hh, line_number=1, surname="Okot", first_name="J", sex="1",
             nin_value=plaintext, nin_hash=nin_hash("CM1234567890AB"),
-            nin_last4="90AB", nin_status=NinStatus.HAS_CARD,
+            nin_last4="90AB", nin_status="1",
         )
 
         fetched = Member.objects.get(pk=m.pk)
@@ -179,13 +179,13 @@ class TestMemberPagination:
             region=nodes["r"], sub_region=nodes["sr"],
             district=nodes["d"], county=nodes["c"],
             sub_county=nodes["sc"], parish=nodes["p"],
-            village=nodes["v"], urban_rural="rural",
+            village=nodes["v"], urban_rural="2",
         )
         # 120 members — past the 100 cap so we can probe the clamp.
         for i in range(120):
             Member.objects.create(
                 household=hh, line_number=i + 1,
-                surname=f"S{i}", first_name=f"F{i}", sex="M",
+                surname=f"S{i}", first_name=f"F{i}", sex="1",
             )
         return 120
 

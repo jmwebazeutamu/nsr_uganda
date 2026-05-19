@@ -29,7 +29,7 @@ from django.db.models import F
 from django.utils import timezone
 from nsr_mis.common.fields import generate_ulid
 
-from apps.data_management.models import Household, Member, NinStatus
+from apps.data_management.models import Household, Member
 from apps.dqa.engine import evaluate_all as dqa_evaluate_all
 from apps.identity_verification.mock import NiraError, verify_nin
 from apps.reference_data.models import GeographicUnit
@@ -186,7 +186,10 @@ def promote_stage_record(
         region=_geo("region"), sub_region=_geo("sub_region"),
         district=_geo("district"), county=_geo("county"),
         sub_county=_geo("sub_county"), parish=_geo("parish"), village=_geo("village"),
-        urban_rural=payload.get("urban_rural", "rural"),
+        # Stored as ChoiceOption.code on the rural_urban list (ADR-0010);
+        # canonical_payload writers (e.g. Kobo connector) supply the
+        # raw code. Default to blank rather than guessing "rural".
+        urban_rural=payload.get("urban_rural", ""),
         address_narrative=payload.get("address_narrative", ""),
         gps_lat=payload.get("gps_lat"),
         gps_lng=payload.get("gps_lng"),
@@ -217,7 +220,8 @@ def promote_stage_record(
             member_kwargs["nin_value"] = nin.encode("utf-8")
             member_kwargs["nin_hash"] = compute_nin_hash(nin)
             member_kwargs["nin_last4"] = compute_nin_last4(nin)
-            member_kwargs["nin_status"] = NinStatus.HAS_CARD
+            # ChoiceOption code for "Yes, has card" on the nin_status list (ADR-0010).
+            member_kwargs["nin_status"] = "1"
         member = Member.objects.create(**member_kwargs)
         if m.get("is_head") and head_member is None:
             head_member = member

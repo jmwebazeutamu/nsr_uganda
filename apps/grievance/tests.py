@@ -534,10 +534,10 @@ class TestGrmUpdLinkage:
         hh = Household.objects.create(
             region=nodes["r"], sub_region=nodes["sr"], district=nodes["d"],
             county=nodes["c"], sub_county=nodes["sc"], parish=nodes["p"], village=nodes["v"],
-            urban_rural="rural",
+            urban_rural="2",
         )
         m = Member.objects.create(
-            household=hh, line_number=1, surname="Okot", first_name="James", sex="M",
+            household=hh, line_number=1, surname="Okot", first_name="James", sex="1",
         )
         return hh, m
 

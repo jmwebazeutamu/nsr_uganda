@@ -39,7 +39,7 @@ def household(db):
     return Household.objects.create(
         region=nodes["r"], sub_region=nodes["sr"], district=nodes["d"],
         county=nodes["c"], sub_county=nodes["sc"], parish=nodes["p"], village=nodes["v"],
-        urban_rural="rural",
+        urban_rural="2",
     )
 
 
@@ -81,7 +81,7 @@ class TestAuditReadMixinOnMember:
     def test_member_retrieve_emits_event_with_member_entity_type(self, auth_client, household):
         client, _ = auth_client
         m = Member.objects.create(
-            household=household, line_number=1, surname="Okot", first_name="J", sex="M",
+            household=household, line_number=1, surname="Okot", first_name="J", sex="1",
         )
         before = AuditEvent.objects.filter(action="read", entity_type="member").count()
         r = client.get(f"/api/v1/data-management/members/{m.id}/")

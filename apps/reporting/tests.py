@@ -42,7 +42,7 @@ def households(two_sub_regions):
         hh = Household.objects.create(
             region=nodes["r"], sub_region=nodes["sr"], district=nodes["d"],
             county=nodes["c"], sub_county=nodes["sc"], parish=nodes["p"],
-            village=nodes["v"], urban_rural="rural",
+            village=nodes["v"], urban_rural="2",
         )
         out[sr_key] = hh
     return out
@@ -384,11 +384,11 @@ class TestPendingDedupPairsByTier:
         # Two members in Buganda → 1 pending pair both-in-scope
         m1 = Member.objects.create(
             household=households["SR-BUGANDA"], line_number=11,
-            surname="A", first_name="One", sex="M",
+            surname="A", first_name="One", sex="1",
         )
         m2 = Member.objects.create(
             household=households["SR-BUGANDA"], line_number=12,
-            surname="A", first_name="Two", sex="M",
+            surname="A", first_name="Two", sex="1",
         )
         a, b = sorted([m1.id, m2.id])
         MatchPair.objects.create(
@@ -399,11 +399,11 @@ class TestPendingDedupPairsByTier:
         # A merged pair should NOT count.
         m3 = Member.objects.create(
             household=households["SR-BUGANDA"], line_number=13,
-            surname="A", first_name="Three", sex="M",
+            surname="A", first_name="Three", sex="1",
         )
         m4 = Member.objects.create(
             household=households["SR-BUGANDA"], line_number=14,
-            surname="A", first_name="Four", sex="M",
+            surname="A", first_name="Four", sex="1",
         )
         a2, b2 = sorted([m3.id, m4.id])
         MatchPair.objects.create(
@@ -1131,7 +1131,7 @@ class TestAdditionalReportDashboards:
         )
         buganda_member = Member.objects.create(
             household=households["SR-BUGANDA"], line_number=31,
-            surname="A", first_name="B", sex="M",
+            surname="A", first_name="B", sex="1",
         )
         ChangeRequest.objects.create(
             entity_type=EntityType.MEMBER, entity_id=buganda_member.id,
@@ -1275,7 +1275,7 @@ class TestOperationalRecordExports:
         )
         member = Member.objects.create(
             household=households["SR-BUGANDA"], line_number=41,
-            surname="Scope", first_name="Member", sex="F",
+            surname="Scope", first_name="Member", sex="2",
         )
         ChangeRequest.objects.create(
             entity_type=EntityType.MEMBER, entity_id=member.id,
@@ -1302,11 +1302,11 @@ class TestOperationalRecordExports:
         )
         m1 = Member.objects.create(
             household=households["SR-BUGANDA"], line_number=51,
-            surname="A", first_name="One", sex="M",
+            surname="A", first_name="One", sex="1",
         )
         m2 = Member.objects.create(
             household=households["SR-BUGANDA"], line_number=52,
-            surname="A", first_name="Two", sex="M",
+            surname="A", first_name="Two", sex="1",
         )
         a, b = sorted([m1.id, m2.id])
         MatchPair.objects.create(
@@ -1640,7 +1640,7 @@ class TestDqaViolationsDashboard:
 
         Member.objects.create(
             household=households["SR-BUGANDA"], line_number=1,
-            surname="Okello", first_name="Grace", sex="F",
+            surname="Okello", first_name="Grace", sex="2",
         )
         self._seed_results(db, households, two_sub_regions, seeded_rules)
         su = django_user_model.objects.create_user(

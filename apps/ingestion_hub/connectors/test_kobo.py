@@ -363,13 +363,17 @@ class TestKoboCanonicalMapper:
         assert sk["kobo_subregion_name"] == "kigezi"
         assert sk["kobo_village_name"] == "Akello Village"
 
-    def test_urban_rural_code_maps_to_label(self):
+    def test_urban_rural_code_maps_to_seed_code(self):
+        # Post-ADR-0010, canonical_payload carries the ChoiceOption.code
+        # from the seeded rural_urban list (1=Urban, 2=Rural). Kobo's
+        # a7_rural_urban is inverted on the questionnaire instrument:
+        # "2" means urban, "1" means rural.
         from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
         out = kobo_to_canonical(SAMPLE_KOBO_PAYLOAD)
-        assert out["urban_rural"] == "rural"  # a7_rural_urban = "1"
+        assert out["urban_rural"] == "2"  # a7_rural_urban = "1" → Rural (seed 2)
 
         urban = {**SAMPLE_KOBO_PAYLOAD, "a7_rural_urban": "2"}
-        assert kobo_to_canonical(urban)["urban_rural"] == "urban"
+        assert kobo_to_canonical(urban)["urban_rural"] == "1"  # Urban (seed 1)
 
     def test_gps_string_parses_lat_lng_accuracy(self):
         from apps.ingestion_hub.connectors.kobo import kobo_to_canonical

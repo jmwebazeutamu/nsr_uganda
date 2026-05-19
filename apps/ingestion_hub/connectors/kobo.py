@@ -465,7 +465,10 @@ def kobo_to_canonical(raw: dict) -> dict:
         raise KeyError("Kobo submission has no household_members rows")
 
     lat, lng, gps_acc = _parse_kobo_gps(raw.get("a11_12_gps"))
-    urban_rural = "urban" if str(raw.get("a7_rural_urban") or "").strip() == "2" else "rural"
+    # Kobo's a7_rural_urban is "2" for urban / "1" for rural — the inverse of
+    # the seeded rural_urban list (1=Urban, 2=Rural). Emit the seed code per
+    # ADR-0010 so canonical_payload carries raw ChoiceOption codes.
+    urban_rural = "1" if str(raw.get("a7_rural_urban") or "").strip() == "2" else "2"
 
     geographic = _canonicalize_kobo_geo(raw)
     # The lineage block stays inside _source_keys so the

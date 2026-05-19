@@ -13,10 +13,12 @@ class TestVerifyNin:
         assert result["status"] == "match"
         demo = result["demographics"]
         assert demo["nin"] == "CM1234567890AB"
-        assert demo["sex"] == "M"
+        # ChoiceOption code on the seeded sex list (1=Male).
+        assert demo["sex"] == "1"
 
     def test_female_prefix_returns_f(self):
-        assert verify_nin("CF1234567890AB")["demographics"]["sex"] == "F"
+        # ChoiceOption code on the seeded sex list (2=Female).
+        assert verify_nin("CF1234567890AB")["demographics"]["sex"] == "2"
 
     def test_no_match_suffix(self):
         assert verify_nin("CM1234567890NM") == {"status": "no_match"}
@@ -342,12 +344,12 @@ class TestCeleryTask:
             region=nodes["region"], sub_region=nodes["sub_region"],
             district=nodes["district"], county=nodes["county"],
             sub_county=nodes["sub_county"], parish=nodes["parish"],
-            village=nodes["village"], urban_rural="rural",
+            village=nodes["village"], urban_rural="2",
         )
         good_nin = "CM1234567890AB"
         Member.objects.create(
             household=hh, line_number=1, surname="X", first_name="Y",
-            sex="M", nin_hash=_h(good_nin),
+            sex="1", nin_hash=_h(good_nin),
             nin_value=good_nin.encode("ascii"),
         )
         NiraVerificationAttempt.objects.create(

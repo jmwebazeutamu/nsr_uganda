@@ -31,7 +31,8 @@ class NiraError(Exception):
 
 def _demographics(nin: str) -> dict[str, Any]:
     """Deterministic stub keyed off the NIN."""
-    sex = "F" if nin.startswith("CF") else "M"
+    # ChoiceOption codes on the seeded sex list: 1=Male, 2=Female (ADR-0010).
+    sex = "2" if nin.startswith("CF") else "1"
     # Treat last 4 chars as a year-of-birth seed. Maps into [1940, 2010].
     seed = sum(ord(c) for c in nin[-4:])
     yob = 1940 + (seed % 71)

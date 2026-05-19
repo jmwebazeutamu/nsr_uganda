@@ -524,14 +524,14 @@ class TestPreviewEndpoint:
             region=nodes["r"], sub_region=nodes["sr"],
             district=nodes["d"], county=nodes["c"],
             sub_county=nodes["sc"], parish=nodes["p"],
-            village=nodes["v"], urban_rural="rural",
+            village=nodes["v"], urban_rural="2",
         )
         out = []
         for i in range(12):
             out.append(Member.objects.create(
                 household=hh, line_number=i + 1,
                 surname="" if i % 3 == 0 else f"S{i}",
-                first_name=f"F{i}", sex="M",
+                first_name=f"F{i}", sex="1",
             ))
         return out
 
@@ -588,12 +588,12 @@ class TestPreviewEndpoint:
             region=nodes["r"], sub_region=nodes["sr"],
             district=nodes["d"], county=nodes["c"],
             sub_county=nodes["sc"], parish=nodes["p"],
-            village=nodes["v"], urban_rural="rural",
+            village=nodes["v"], urban_rural="2",
         )
         for i in range(15):
             Member.objects.create(
                 household=hh, line_number=i + 1,
-                surname="", first_name=f"F{i}", sex="M",
+                surname="", first_name=f"F{i}", sex="1",
             )
         client, _ = _client
         url = self.URL_FMT.format(id=draft_rule.id)
@@ -985,12 +985,12 @@ class TestRulesOnUpdCommit:
         hh = Household.objects.create(
             region=_geo["r"], sub_region=_geo["sr"], district=_geo["d"],
             county=_geo["c"], sub_county=_geo["sc"], parish=_geo["p"],
-            village=_geo["v"], urban_rural="rural",
+            village=_geo["v"], urban_rural="2",
             address_narrative="Plot 7",
         )
         return Member.objects.create(
             household=hh, line_number=1, surname="Okot",
-            first_name="James", sex="M",
+            first_name="James", sex="1",
         )
 
     @pytest.fixture
@@ -1150,12 +1150,12 @@ class TestBackfillRulePack:
             hh = Household.objects.create(
                 region=_geo["r"], sub_region=_geo["sr"], district=_geo["d"],
                 county=_geo["c"], sub_county=_geo["sc"], parish=_geo["p"],
-                village=_geo["v"], urban_rural="rural",
+                village=_geo["v"], urban_rural="2",
                 address_narrative=f"Plot {i + 1}",
             )
             Member.objects.create(
                 household=hh, line_number=1, surname=f"Family{i}",
-                first_name="Head", sex="M",
+                first_name="Head", sex="1",
             )
             hhs.append(hh)
         return hhs

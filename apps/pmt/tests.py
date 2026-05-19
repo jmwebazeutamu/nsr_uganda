@@ -45,7 +45,7 @@ def geo(db):
 def household(db, geo):
     return Household.objects.create(
         region=geo["r"], sub_region=geo["sr"], district=geo["d"], county=geo["c"],
-        sub_county=geo["sc"], parish=geo["p"], village=geo["v"], urban_rural="rural",
+        sub_county=geo["sc"], parish=geo["p"], village=geo["v"], urban_rural="2",
     )
 
 
@@ -53,7 +53,7 @@ def _add_members(household, n: int) -> None:
     for i in range(n):
         Member.objects.create(
             household=household, line_number=i + 1,
-            surname=f"S{i}", first_name=f"F{i}", sex="M" if i % 2 else "F",
+            surname=f"S{i}", first_name=f"F{i}", sex="1" if i % 2 else "F",
         )
 
 

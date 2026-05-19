@@ -33,7 +33,7 @@ class TestSubRegionCodeInvariant:
         hh = Household.objects.create(
             region=geo["r"], sub_region=geo["sr"], district=geo["d"],
             county=geo["c"], sub_county=geo["sc"], parish=geo["p"], village=geo["v"],
-            urban_rural="rural",
+            urban_rural="2",
         )
         hh.refresh_from_db()
         assert hh.sub_region_code == geo["sr"].code
@@ -42,10 +42,10 @@ class TestSubRegionCodeInvariant:
         hh = Household.objects.create(
             region=geo["r"], sub_region=geo["sr"], district=geo["d"],
             county=geo["c"], sub_county=geo["sc"], parish=geo["p"], village=geo["v"],
-            urban_rural="rural",
+            urban_rural="2",
         )
         m = Member.objects.create(
-            household=hh, line_number=1, surname="Okot", first_name="J", sex="M",
+            household=hh, line_number=1, surname="Okot", first_name="J", sex="1",
         )
         m.refresh_from_db()
         assert m.sub_region_code == hh.sub_region_code
@@ -56,7 +56,7 @@ class TestSubRegionCodeInvariant:
         hh = Household.objects.create(
             region=geo["r"], sub_region=geo["sr"], district=geo["d"],
             county=geo["c"], sub_county=geo["sc"], parish=geo["p"], village=geo["v"],
-            urban_rural="rural", sub_region_code="CUSTOM",
+            urban_rural="2", sub_region_code="CUSTOM",
         )
         hh.refresh_from_db()
         assert hh.sub_region_code == "CUSTOM"

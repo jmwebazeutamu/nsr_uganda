@@ -45,7 +45,7 @@ def geo(db):
 def household(db, geo):
     return Household.objects.create(
         region=geo["r"], sub_region=geo["sr"], district=geo["d"], county=geo["c"],
-        sub_county=geo["sc"], parish=geo["p"], village=geo["v"], urban_rural="rural",
+        sub_county=geo["sc"], parish=geo["p"], village=geo["v"], urban_rural="2",
     )
 
 
