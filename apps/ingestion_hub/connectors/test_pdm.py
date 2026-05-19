@@ -44,7 +44,10 @@ class TestPdmMapping:
         }
         out = pdm_to_canonical(raw)
         assert out["geographic"]["district"] == "DOKOLO"
-        assert out["urban_rural"] == "rural"
+        # Post-ADR-0010: connector defaults urban_rural to blank when
+        # upstream omits the field. The raw fixture above does not
+        # carry an explicit urban_rural — DQA flags the gap.
+        assert out["urban_rural"] == ""
         # Head detection + NIN uppercased.
         head = out["members"][0]
         assert head["is_head"] is True

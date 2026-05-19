@@ -406,10 +406,14 @@ class TestKoboCanonicalMapper:
             ("Achen", "Brian"),
         ]
 
-    def test_sex_code_maps_to_m_or_f(self):
+    def test_sex_code_passthrough_to_seed_code(self):
+        # Post-ADR-0010, the canonical_payload carries the raw
+        # ChoiceOption.code from the seeded sex list (1=Male, 2=Female).
+        # Kobo's UBOS coding is identical, so the connector is a
+        # passthrough — no translation to "M"/"F".
         from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
         out = kobo_to_canonical(SAMPLE_KOBO_PAYLOAD)
-        assert all(m["sex"] == "M" for m in out["members"])
+        assert all(m["sex"] == "1" for m in out["members"])
 
     def test_nin_populated_only_when_status_indicates_card(self):
         """c8_nin_status='1' (has card) → nin field populated.

@@ -68,7 +68,10 @@ def wfp_scope_to_canonical(raw: dict) -> dict:
             "parish": geo["parish"],
             "village": geo["village"],
         },
-        "urban_rural": raw.get("urban_rural", "rural"),
+        # Per ADR-0010, urban_rural is the raw ChoiceOption.code from the
+        # rural_urban list (1=Urban, 2=Rural). Default to blank when
+        # upstream omits the field — DQA will flag the gap.
+        "urban_rural": raw.get("urban_rural", ""),
         "address_narrative": raw.get("address_narrative", ""),
         "gps_lat": raw.get("gps_lat"),
         "gps_lng": raw.get("gps_lng"),

@@ -126,10 +126,11 @@ def _new_session() -> requests.Session:
 # the caller (stage_from_landing) routes the row to Quarantine
 # per AC-DIH-QUARANTINE.
 
-# Kobo field code → NSR canonical sex value. The form uses UBOS's
-# 1=male / 2=female convention; the NSR Member.sex column convention
-# (see the four shipped connectors) is "M"/"F".
-_KOBO_SEX_TO_CANONICAL = {"1": "M", "2": "F"}
+# Kobo's c4_sex carries UBOS's 1=male / 2=female convention, which
+# is identical to the seeded `sex` ChoiceList. Per ADR-0010, the
+# canonical_payload carries raw ChoiceOption codes — so this is a
+# passthrough, not a translation. (Pre-ADR-0010 the connector
+# converted to "M"/"F"; that mapping was removed in US-S22-005h.)
 
 
 def _split_full_name(full: str) -> tuple[str, str]:
@@ -191,7 +192,7 @@ def _kobo_member_to_canonical(raw: dict, line_number: int) -> dict:
         "surname": surname,
         "first_name": first_name,
         "other_name": "",
-        "sex": _KOBO_SEX_TO_CANONICAL.get(str(m.get("c4_sex") or "").strip(), ""),
+        "sex": str(m.get("c4_sex") or "").strip(),
         "date_of_birth": m.get("c5_date_of_birth") or None,
         "age_years": _to_int(m.get("c6_age_years")),
         "relationship_to_head": "" if is_head else (m.get("c2_relationship") or ""),
