@@ -1,5 +1,5 @@
 /* global React, Icon, Chip, PageHeader, KPI, Toast, TweaksPanel, TweakSection, TweakToggle, TweakRadio, useTweaks, useChoiceList, useApi */
-// NSR MIS — Beneficiary registry (US-180 / US-S25-007 · per-programme enrolment ledger)
+// NSR MIS — Beneficiary registry (US-180 / US-S25-007 / US-S26-007)
 //
 // Distinct from the household registry:
 //   • Household Registry  → universe of households surveyed in NSR (PMT + identity).
@@ -10,16 +10,18 @@
 // One row = one (entity, programme) enrolment record. The same household may
 // appear in two programmes; exits are recorded per-programme.
 //
-// Wiring (US-S25-007):
+// Wiring:
 //   • Status segmented tabs read from `programme_enrolment_status` ChoiceList
 //   • Programme rollup cards read /api/v1/programmes/?status=active
 //   • Unit filter reads `programme_unit_of_enrolment` ChoiceList
 //   • Exit-reason chart reads `programme_exit_reason` ChoiceList
-//   • Sub-region filter reads /api/v1/reference-data/geographic-units/ (level=sub_region)
-//   • Beneficiary rows are still demo data — the consolidated enrolment
-//     listing endpoint lands in Sprint 26 (OI-S25-4: referral.Programme
-//     consolidation). The demo rows are visually labelled so consumers
-//     don't mistake them for live records.
+//   • Sub-region filter reads /api/v1/reference-data/geographic-units/
+//     (level=sub_region)
+//   • **Beneficiary rows feed from /api/v1/beneficiaries/ (US-S26-006)** —
+//     ABAC-scoped server-side; the apiClient hook fires one request
+//     with page_size=500 so the table, KPIs, and per-programme rollup
+//     all derive from the same response. A dedicated aggregate endpoint
+//     replaces this approach at production scale (OI-S26-5).
 
 const { useState: useStateBen, useMemo: useMemoBen } = React;
 
@@ -78,55 +80,40 @@ const KIND_TONE = {
 };
 
 /* ============================================================
-   DEMO BENEFICIARIES — kept as design preview rows pending the
-   real ProgrammeEnrolment listing endpoint (OI-S25-4 / Sprint 26).
-   The status values use ChoiceList codes (active/suspended/...)
-   so when the live endpoint lands, the visual contract is the
-   same; only the data source changes.
+   API → render-shape mapper.
+   The endpoint at /api/v1/beneficiaries/ (US-S26-006) returns
+   snake_case rows; the screen body still references the legacy
+   camelCase shape so we normalise here at the boundary instead
+   of touching every td. Update this mapper if either side moves.
    ============================================================ */
-const DEMO_BENEFICIARIES = [
-  // === OPM-PDM (Active majority, 1 suspended, 1 graduated) ===
-  { id:"BEN-PDM-00021", rid:"01KRPPW6WRGRJZY0N4XN8R1YC2", entity:"Nsubuga Ruth",        unit:"household", hh:7, sex:"F", district:"Lyantonde", parish:"Kibalinga", subreg:"Buganda South", progCode:"OPM-PDM",  cohort:"2026·Q2-C4", status:"active",    enrolledAt:"10 Apr 2026", monthsIn:1,  lastPayAt:"15 May 2026", lastPayAmt:250000, totalPaid:500000,   nextPayAt:"15 Aug 2026", channel:"Kibalinga SACCO", pmt:0.39 },
-  { id:"BEN-PDM-00022", rid:"01HX91KPNRMQ0F2B7K6FZRWS10", entity:"Byaruhanga Charles",  unit:"household", hh:5, sex:"M", district:"Lyantonde", parish:"Kibalinga", subreg:"Buganda South", progCode:"OPM-PDM",  cohort:"2026·Q1-C3", status:"active",    enrolledAt:"22 Jan 2026", monthsIn:3,  lastPayAt:"15 May 2026", lastPayAmt:250000, totalPaid:1000000,  nextPayAt:"15 Aug 2026", channel:"Kibalinga SACCO", pmt:0.44 },
-  { id:"BEN-PDM-00023", rid:"01HX91KPNRMQ0F2B7K6FZRWS44", entity:"Namutebi Sarah",      unit:"household", hh:6, sex:"F", district:"Lyantonde", parish:"Kibalinga", subreg:"Buganda South", progCode:"OPM-PDM",  cohort:"2026·Q1-C3", status:"active",    enrolledAt:"22 Jan 2026", monthsIn:3,  lastPayAt:"15 May 2026", lastPayAmt:250000, totalPaid:1000000,  nextPayAt:"15 Aug 2026", channel:"Kibalinga SACCO", pmt:0.31 },
-  { id:"BEN-PDM-00024", rid:"01HX91KPNRMQ0F2B7K6FZRWS77", entity:"Kintu Ronald",        unit:"household", hh:6, sex:"M", district:"Lyantonde", parish:"Kibalinga", subreg:"Buganda South", progCode:"OPM-PDM",  cohort:"2026·Q1-C3", status:"suspended", enrolledAt:"02 Feb 2026", monthsIn:3,  lastPayAt:"15 Apr 2026", lastPayAmt:250000, totalPaid:500000,   nextPayAt:"hold",        channel:"Kibalinga SACCO", pmt:0.49, suspendReason:"Grievance GRV-2026-04-18-00081 open · disbursement on hold pending review", suspendAt:"24 Apr 2026" },
-  { id:"BEN-PDM-00025", rid:"01HY09KRS1P9MN6FB7K6FZRWS84", entity:"Lopuwa John",        unit:"household", hh:7, sex:"M", district:"Moroto",    parish:"Tapac",     subreg:"Karamoja",      progCode:"OPM-PDM",  cohort:"2026·Q2-C4", status:"active",    enrolledAt:"08 Apr 2026", monthsIn:1,  lastPayAt:"15 May 2026", lastPayAmt:250000, totalPaid:500000,   nextPayAt:"15 Aug 2026", channel:"Tapac SACCO",     pmt:0.36 },
-  { id:"BEN-PDM-00026", rid:"01HXP02CN4QFB7K6FZRWS00111", entity:"Mukasa Patrick",     unit:"household", hh:4, sex:"M", district:"Arua",      parish:"Anyiribu",  subreg:"West Nile",     progCode:"OPM-PDM",  cohort:"2026·Q1-C3", status:"active",    enrolledAt:"03 Feb 2026", monthsIn:3,  lastPayAt:"15 May 2026", lastPayAmt:250000, totalPaid:1000000,  nextPayAt:"15 Aug 2026", channel:"Arua SACCO",      pmt:0.55 },
-  { id:"BEN-PDM-00018", rid:"01HY0AMNT8P2N6FB7K6FZRWS92", entity:"Acheng Rose",         unit:"household", hh:3, sex:"F", district:"Gulu",      parish:"Bobi",      subreg:"Acholi",        progCode:"OPM-PDM",  cohort:"2025·Q4-C2", status:"exited",    enrolledAt:"22 Sep 2025", monthsIn:7,  lastPayAt:"15 Mar 2026", lastPayAmt:250000, totalPaid:1500000,  exitedAt:"02 May 2026", exitCode:"10", exitNote:"Met PDM enterprise milestone — 3 cycles, full repayment recorded by Bobi SACCO." },
-
-  // === NUSAF3 close-out (mostly exited because the programme is closing) ===
-  { id:"BEN-NUS-00099", rid:"01HXP02CN4QFB7K6FZRWS00111", entity:"Mukasa Patrick",     unit:"household", hh:4, sex:"M", district:"Arua",      parish:"Anyiribu",  subreg:"West Nile",     progCode:"NUSAF3",   cohort:"2018·C5",     status:"exited",    enrolledAt:"14 Aug 2018", monthsIn:92, lastPayAt:"30 Jun 2023", lastPayAmt:840000, totalPaid:9420000,  exitedAt:"12 Feb 2026", exitCode:"10", exitNote:"Full sub-project close-out report signed. Audit clean." },
-  { id:"BEN-NUS-00112", rid:"01HX91KPNRMQ0F2B7K6FZRWS66", entity:"Apio Joyce",          unit:"household", hh:5, sex:"F", district:"Lira",      parish:"Adekokwok", subreg:"Lango",         progCode:"NUSAF3",   cohort:"2019·C7",     status:"active",    enrolledAt:"22 May 2019", monthsIn:84, lastPayAt:"30 Jun 2023", lastPayAmt:740000, totalPaid:6802000,  nextPayAt:"close-out tranche", channel:"Adekokwok SACCO", pmt:0.38, note:"Awaiting close-out audit tranche · scheduled Jun 2026" },
-  { id:"BEN-NUS-00114", rid:"01HY02FNQ9P8MN6FB7K6FZRWS67", entity:"Mugisha James",     unit:"household", hh:6, sex:"M", district:"Napak",     parish:"Lokopo",    subreg:"Karamoja",      progCode:"NUSAF3",   cohort:"2018·C5",     status:"exited",    enrolledAt:"14 Aug 2018", monthsIn:78, lastPayAt:"15 Feb 2025", lastPayAmt:520000, totalPaid:4810000,  exitedAt:"15 Feb 2025", exitCode:"30", exitNote:"Head of household deceased — UPD-2025-02-12-00091. Surviving spouse referred to SAGE." },
-  { id:"BEN-NUS-00115", rid:"01HY04MQR0N8P2FB7K6FZRWS73", entity:"Auma Beatrice",     unit:"household", hh:8, sex:"F", district:"Napak",     parish:"Lokopo",    subreg:"Karamoja",      progCode:"NUSAF3",   cohort:"2018·C5",     status:"exited",    enrolledAt:"14 Aug 2018", monthsIn:69, lastPayAt:"30 Jun 2023", lastPayAmt:520000, totalPaid:4290000,  exitedAt:"04 Jun 2024", exitCode:"40", exitNote:"Household unreachable 2 cycles · last seen migrated to Moroto town. Re-survey requested." },
-  { id:"BEN-NUS-00118", rid:"01HXZ9MR4N8P2QFB7K6FZRWS33", entity:"Akello Grace",       unit:"household", hh:5, sex:"F", district:"Gulu",      parish:"Pageya",    subreg:"Acholi",        progCode:"NUSAF3",   cohort:"2019·C7",     status:"exited",    enrolledAt:"01 Jul 2019", monthsIn:81, lastPayAt:"30 Jun 2023", lastPayAmt:480000, totalPaid:4120000,  exitedAt:"30 Apr 2026", exitCode:"70", exitNote:"Programme close-out · cohort sunset per OPM directive 2026-014." },
-
-  // === SAGE (per-member, 65+) ===
-  { id:"BEN-SCG-00541", rid:"01KRPPW6WRGRJZY0N4XN8R1YC2", entity:"Nsubuga Esau (M07)",  unit:"member",    hh:7, sex:"M", district:"Lyantonde", parish:"Kibalinga", subreg:"Buganda South", progCode:"SAGE",     cohort:"2024·M-04",   status:"active",    enrolledAt:"04 Apr 2024", monthsIn:25, lastPayAt:"30 Apr 2026", lastPayAmt:25000,  totalPaid:625000,   nextPayAt:"30 May 2026", channel:"MTN MoMo · 0772-558-219", age:67 },
-  { id:"BEN-SCG-00718", rid:"01HX91KPNRMQ0F2B7K6FZRWS10", entity:"Byaruhanga Yowana (M03)", unit:"member", hh:5, sex:"M", district:"Lyantonde", parish:"Kibalinga", subreg:"Buganda South", progCode:"SAGE",     cohort:"2024·M-04",   status:"active",    enrolledAt:"04 Apr 2024", monthsIn:25, lastPayAt:"30 Apr 2026", lastPayAmt:25000,  totalPaid:625000,   nextPayAt:"30 May 2026", channel:"MTN MoMo · 0701-220-414", age:72 },
-  { id:"BEN-SCG-00822", rid:"01HXY7K3B2N9PVQE4M6FZRWS18", entity:"Lokol Akiru (M04)",   unit:"member",    hh:6, sex:"F", district:"Moroto",    parish:"Nakiloro",  subreg:"Karamoja",      progCode:"SAGE",     cohort:"2026·M-05",   status:"pending",   enrolledAt:"14 May 2026", monthsIn:0,  lastPayAt:"—",            lastPayAmt:0,      totalPaid:0,        nextPayAt:"30 May 2026", channel:"NIN verification queued", age:69 },
-  { id:"BEN-SCG-00614", rid:"01HX91KPNRMQ0F2B7K6FZRWS55", entity:"Tumuhairwe Erina (M02)", unit:"member", hh:4, sex:"F", district:"Lyantonde", parish:"Kasaana",   subreg:"Buganda South", progCode:"SAGE",     cohort:"2023·M-12",   status:"exited",    enrolledAt:"05 Dec 2023", monthsIn:24, lastPayAt:"30 Nov 2025", lastPayAmt:25000,  totalPaid:600000,   exitedAt:"06 Dec 2025", exitCode:"30", exitNote:"Member deceased — civil registry confirmation 06 Dec 2025. SCG ledger closed." },
-  { id:"BEN-SCG-00917", rid:"01HXP02CN4QFB7K6FZRWS00118", entity:"Onyango Esther (M02)", unit:"member",   hh:7, sex:"F", district:"Arua",      parish:"Logiri",    subreg:"West Nile",     progCode:"SAGE",     cohort:"2025·M-09",   status:"active",    enrolledAt:"30 Sep 2025", monthsIn:7,  lastPayAt:"30 Apr 2026", lastPayAmt:25000,  totalPaid:175000,   nextPayAt:"30 May 2026", channel:"Stanbic Agent · Logiri", age:71 },
-
-  // === UWEP (women's groups) ===
-  { id:"BEN-UWE-00081", rid:"01HX91KPNRMQ0F2B7K6FZRWS44", entity:"Namutebi Sarah",     unit:"group",     hh:6, sex:"F", district:"Lyantonde", parish:"Kibalinga", subreg:"Buganda South", progCode:"UWEP",     cohort:"2025·Cyc-3",  status:"active",    enrolledAt:"04 Jan 2025", monthsIn:16, lastPayAt:"14 Jan 2026", lastPayAmt:4500000,totalPaid:9000000,  nextPayAt:"01 Aug 2026", channel:"Kibalinga Tweragale Group · 12 mbrs · revolving fund", note:"Cycle 2 fully repaid · cycle 3 in disbursement" },
-  { id:"BEN-UWE-00112", rid:"01HX91KPNRMQ0F2B7K6FZRWS66", entity:"Apio Joyce",         unit:"group",     hh:5, sex:"F", district:"Lira",      parish:"Adekokwok", subreg:"Lango",         progCode:"UWEP",     cohort:"2024·Cyc-2",  status:"exited",    enrolledAt:"14 Mar 2024", monthsIn:18, lastPayAt:"20 Sep 2025", lastPayAmt:3000000,totalPaid:7500000,  exitedAt:"01 Oct 2025", exitCode:"10", exitNote:"Group fully repaid 2 cycles · graduated · referred to BRAC Ultra-Poor cohort 7." },
-  { id:"BEN-UWE-00207", rid:"01HXZ9MR4N8P2QFB7K6FZRWS33", entity:"Akello Grace",       unit:"group",     hh:5, sex:"F", district:"Gulu",      parish:"Pageya",    subreg:"Acholi",        progCode:"UWEP",     cohort:"2026·Cyc-1",  status:"pending",   enrolledAt:"14 May 2026", monthsIn:0,  lastPayAt:"—",            lastPayAmt:0,      totalPaid:0,        nextPayAt:"01 Jul 2026", channel:"Pageya Women's Coop · 9 mbrs · awaiting MoU", note:"MoU signature pending · Akello G. is chairperson" },
-
-  // === WFP Karamoja Food Security (food voucher) ===
-  { id:"BEN-WFP-00301", rid:"01HXY7K3B2N9PVQE4M6FZRWS18", entity:"Lokol Naume",        unit:"household", hh:6, sex:"F", district:"Moroto",    parish:"Nakiloro",  subreg:"Karamoja",      progCode:"WFP-KFS",  cohort:"2026·KFS-Q2", status:"active",    enrolledAt:"01 Apr 2026", monthsIn:1,  lastPayAt:"05 May 2026", lastPayAmt:0,      totalPaid:0,        nextPayAt:"05 Jun 2026", channel:"e-voucher · M-Sente",     note:"Food basket value UGX 95,000/cycle (non-cash)" },
-  { id:"BEN-WFP-00308", rid:"01HY09KRS1P9MN6FB7K6FZRWS84", entity:"Lopuwa John",       unit:"household", hh:7, sex:"M", district:"Moroto",    parish:"Tapac",     subreg:"Karamoja",      progCode:"WFP-KFS",  cohort:"2026·KFS-Q2", status:"active",    enrolledAt:"01 Apr 2026", monthsIn:1,  lastPayAt:"05 May 2026", lastPayAmt:0,      totalPaid:0,        nextPayAt:"05 Jun 2026", channel:"e-voucher · M-Sente" },
-  { id:"BEN-WFP-00314", rid:"01HY04MQR0N8P2FB7K6FZRWS73", entity:"Auma Beatrice",     unit:"household", hh:8, sex:"F", district:"Napak",     parish:"Lokopo",    subreg:"Karamoja",      progCode:"WFP-KFS",  cohort:"2025·KFS-Q4", status:"exited",    enrolledAt:"01 Oct 2025", monthsIn:6,  lastPayAt:"05 Mar 2026", lastPayAmt:0,      totalPaid:0,        exitedAt:"31 Mar 2026", exitCode:"50", exitNote:"PMT band re-computed v2.4 · moved from Poorest 20% to Poorest 40% — out of KFS scope." },
-  { id:"BEN-WFP-00319", rid:"01HY02FNQ9P8MN6FB7K6FZRWS67", entity:"Mugisha James",    unit:"household", hh:6, sex:"M", district:"Napak",     parish:"Lokopo",    subreg:"Karamoja",      progCode:"WFP-KFS",  cohort:"2025·KFS-Q4", status:"active",    enrolledAt:"01 Oct 2025", monthsIn:7,  lastPayAt:"05 May 2026", lastPayAmt:0,      totalPaid:0,        nextPayAt:"05 Jun 2026", channel:"e-voucher · M-Sente",   pmt:0.28 },
-  { id:"BEN-WFP-00321", rid:"01HXZBVK6QN8M2PFB7K6FZRWS41", entity:"Nakato Sarah",     unit:"household", hh:4, sex:"F", district:"Yumbe",     parish:"Romogi",    subreg:"West Nile",     progCode:"WFP-KFS",  cohort:"2025·KFS-Q4", status:"exited",    enrolledAt:"15 Oct 2025", monthsIn:4,  lastPayAt:"05 Feb 2026", lastPayAmt:0,      totalPaid:0,        exitedAt:"20 Feb 2026", exitCode:"80", exitNote:"Voucher re-sold for cash on three consecutive cycles — flagged by partner, sanction applied." },
-
-  // === UNICEF Child Grant Karamoja (per child <4, cash to caregiver) ===
-  { id:"BEN-UCG-00041", rid:"01HXY7K3B2N9PVQE4M6FZRWS18", entity:"Lokol Yacobo (M05, age 2)", unit:"member", hh:6, sex:"M", district:"Moroto", parish:"Nakiloro",  subreg:"Karamoja",      progCode:"UN-CGK",   cohort:"2024·CGK-A",  status:"active",    enrolledAt:"08 Jul 2024", monthsIn:22, lastPayAt:"30 Apr 2026", lastPayAmt:50000,  totalPaid:1100000,  nextPayAt:"30 May 2026", channel:"Caregiver: Lokol Naume · MTN MoMo", age:2 },
-  { id:"BEN-UCG-00078", rid:"01HY09KRS1P9MN6FB7K6FZRWS84", entity:"Lopuwa Cherop (M06, age 3)", unit:"member", hh:7, sex:"F", district:"Moroto", parish:"Tapac",     subreg:"Karamoja",      progCode:"UN-CGK",   cohort:"2024·CGK-A",  status:"active",    enrolledAt:"08 Jul 2024", monthsIn:22, lastPayAt:"30 Apr 2026", lastPayAmt:50000,  totalPaid:1100000,  nextPayAt:"30 May 2026", channel:"Caregiver: Lopuwa John · MTN MoMo", age:3 },
-  { id:"BEN-UCG-00091", rid:"01HY02FNQ9P8MN6FB7K6FZRWS67", entity:"Mugisha Auma (M05, age 5)",  unit:"member", hh:6, sex:"F", district:"Napak",  parish:"Lokopo",    subreg:"Karamoja",      progCode:"UN-CGK",   cohort:"2023·CGK-A",  status:"exited",    enrolledAt:"04 Jan 2023", monthsIn:36, lastPayAt:"31 Jan 2026", lastPayAmt:50000,  totalPaid:1800000,  exitedAt:"01 Feb 2026", exitCode:"10", exitNote:"Child turned 5 · aged out of cohort A · referred to UPE conditional support." },
-  { id:"BEN-UCG-00094", rid:"01HY04MQR0N8P2FB7K6FZRWS73", entity:"Auma Lokal (M07, age 1)",    unit:"member", hh:8, sex:"M", district:"Napak",  parish:"Lokopo",    subreg:"Karamoja",      progCode:"UN-CGK",   cohort:"2025·CGK-B",  status:"suspended", enrolledAt:"20 Nov 2025", monthsIn:5,  lastPayAt:"31 Mar 2026", lastPayAmt:50000,  totalPaid:200000,   nextPayAt:"hold",          channel:"Caregiver: Auma Beatrice · MTN MoMo", age:1, suspendReason:"Caregiver unreachable last 2 cycles — partner field visit scheduled 30 May 2026", suspendAt:"15 Apr 2026" },
-  { id:"BEN-UCG-00112", rid:"01HX91KPNRMQ0F2B7K6FZRWS44", entity:"Namutebi Joel (M04, age 3)", unit:"member", hh:6, sex:"M", district:"Lyantonde", parish:"Kibalinga", subreg:"Buganda South", progCode:"UN-CGK",   cohort:"2025·CGK-B",  status:"exited",    enrolledAt:"20 Nov 2025", monthsIn:3,  lastPayAt:"31 Jan 2026", lastPayAmt:50000,  totalPaid:150000,   exitedAt:"15 Feb 2026", exitCode:"60", exitNote:"Caregiver withdrew consent · concerns about partner data-sharing — UN-CGK is pilot. Honoured." },
-];
+const _mapApiRow = (r) => ({
+  id:            r.id,
+  rid:           r.household_id,
+  entity:        r.household_head_name || "—",
+  unit:          r.unit_of_enrolment || "household",
+  hh:            r.household_size || 0,
+  sex:           r.household_sex || "",
+  district:      r.district || "",
+  parish:        r.parish || "",
+  subreg:        r.sub_region_name || "",
+  progCode:      r.programme_code || r.programme_id || "—",
+  cohort:        r.cohort || "",
+  status:        r.status,
+  enrolledAt:    r.enrolled_at || "",
+  monthsIn:      r.months_in || 0,
+  lastPayAt:     r.last_pay_at || "—",
+  lastPayAmt:    r.last_pay_amt || 0,
+  totalPaid:     r.total_paid || 0,
+  nextPayAt:     r.next_pay_at || "",
+  channel:       r.channel || "",
+  exitedAt:      r.exited_at || "",
+  exitCode:      r.exit_code || "",
+  exitNote:      r.exit_note || "",
+  suspendReason: r.suspend_reason || "",
+  suspendAt:     r.suspend_at || "",
+  pmt:           r.pmt_score,
+  note:          r.note || "",
+});
 
 /* ============================================================
    helpers
@@ -194,13 +181,26 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
 
   const [t, setTweak] = (typeof useTweaks === 'function' ? useTweaks(BEN_TWEAK_DEFAULTS) : [BEN_TWEAK_DEFAULTS, () => {}]);
 
+  /* ---- Live beneficiaries feed ----
+     Single fetch with page_size large enough to serve both the
+     filterable table and the per-programme rollup tallies. The
+     endpoint is ABAC-scoped server-side (US-S26-006); we still
+     apply UI filters client-side so the table reflects the chips
+     without re-fetching every keystroke. A dedicated aggregate
+     endpoint replaces this approach at production scale. */
+  const [beneficiariesResp, beneficiariesMeta] = useApi(
+    "/api/v1/beneficiaries/?page_size=500",
+  );
+  const allRows = useMemoBen(
+    () => ((beneficiariesResp && beneficiariesResp.results) || []).map(_mapApiRow),
+    [beneficiariesResp],
+  );
+
   /* ---- Compose programme list ----
-     Each demo row carries a free-text `progCode` (e.g. OPM-PDM). Real
-     partners-side programmes (post US-S25-001) carry the canonical
-     `code` from the registration wizard. The rollup builds one card
-     per live programme, plus a card per demo `progCode` that isn't
-     in the live set — so design preview rows render alongside real
-     ones until the enrolment endpoint lands. */
+     One card per live partners.Programme (US-S25-001 catalogue) +
+     a fallback card per programme code that appears in beneficiary
+     rows but isn't in the partners table yet (covers legacy
+     GoU-LEGACY attributions from US-S26-004). */
   const programmesForRollup = useMemoBen(() => {
     const livePartial = livePartnerProgrammes.map(p => ({
       code: p.code || p.id.slice(0, 8),
@@ -210,45 +210,45 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
       tone: KIND_TONE[p.kind] || "programme",
       isLive: true,
     }));
-    const demoCodes = Array.from(new Set(DEMO_BENEFICIARIES.map(b => b.progCode)));
-    const demoOnly = demoCodes
-      .filter(c => !livePartial.some(p => p.code === c))
+    const codesInRows = Array.from(new Set(allRows.map(b => b.progCode)));
+    const orphanCodes = codesInRows
+      .filter(c => c && !livePartial.some(p => p.code === c))
       .map(c => {
-        const sample = DEMO_BENEFICIARIES.find(b => b.progCode === c);
+        const sample = allRows.find(b => b.progCode === c);
         return {
           code: c, name: c, isLive: false,
-          unit_label: labelOf(unitOpts, sample.unit, "—"),
+          unit_label: labelOf(unitOpts, sample ? sample.unit : "", "—"),
           modality_label: "—",
           tone: "neutral",
         };
       });
-    return [...livePartial, ...demoOnly];
-  }, [livePartnerProgrammes, unitOpts]);
+    return [...livePartial, ...orphanCodes];
+  }, [livePartnerProgrammes, unitOpts, allRows]);
 
   const PROG_BY_CODE = useMemoBen(
     () => Object.fromEntries(programmesForRollup.map(p => [p.code, p])),
     [programmesForRollup],
   );
 
-  // Status counts (across full demo set; not filtered)
+  // Status counts — derived from the live feed.
   const counts = useMemoBen(() => {
     const c = {};
     statusOpts.forEach(s => { c[s.code] = 0; });
-    DEMO_BENEFICIARIES.forEach(b => { c[b.status] = (c[b.status] || 0) + 1; });
+    allRows.forEach(b => { c[b.status] = (c[b.status] || 0) + 1; });
     return c;
-  }, [statusOpts]);
+  }, [allRows, statusOpts]);
 
-  // Per-programme rollup (active / exited / others / total)
+  // Per-programme rollup — same source, client-side tally.
   const progRollup = useMemoBen(() => programmesForRollup.map(p => {
-    const recs = DEMO_BENEFICIARIES.filter(b => b.progCode === p.code);
+    const recs = allRows.filter(b => b.progCode === p.code);
     const tally = { active: 0, suspended: 0, pending: 0, exited: 0 };
     for (const r of recs) tally[r.status] = (tally[r.status] || 0) + 1;
     const paid = recs.reduce((acc, r) => acc + (r.totalPaid || 0), 0);
     return { ...p, ...tally, total: recs.length, paid };
-  }), [programmesForRollup]);
+  }), [programmesForRollup, allRows]);
 
   const rows = useMemoBen(() => {
-    let r = DEMO_BENEFICIARIES.filter(b => {
+    let r = allRows.filter(b => {
       if (statusTab && b.status !== statusTab) return false;
       if (q) {
         const hay = `${b.entity} ${b.rid} ${b.parish} ${b.district} ${b.id}`.toLowerCase();
@@ -267,7 +267,7 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
     if (sortBy === "enrolled")  r = [...r].sort((a,b) => a.enrolledAt.localeCompare(b.enrolledAt));
     if (sortBy === "monthsIn")  r = [...r].sort((a,b) => (b.monthsIn||0) - (a.monthsIn||0));
     return r;
-  }, [statusTab, q, progCode, subreg, unit, cohort, exitCode, sortBy]);
+  }, [allRows, statusTab, q, progCode, subreg, unit, cohort, exitCode, sortBy]);
 
   const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
   const visible = rows.slice(page * pageSize, page * pageSize + pageSize);
@@ -275,15 +275,15 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
   const reset = () => { setQ(""); setProgCode(""); setSubreg(""); setUnit(""); setCohort(""); setExitCode(""); setPage(0); };
 
   const cohorts = useMemoBen(
-    () => [...new Set(DEMO_BENEFICIARIES.filter(b => !progCode || b.progCode === progCode).map(b => b.cohort))].sort(),
-    [progCode],
+    () => [...new Set(allRows.filter(b => !progCode || b.progCode === progCode).map(b => b.cohort).filter(Boolean))].sort(),
+    [allRows, progCode],
   );
 
   // KPIs
   const totalActive = counts.active || 0;
   const totalExited = counts.exited || 0;
   const exitRate    = totalExited / (totalActive + totalExited) || 0;
-  const ytdPaid     = DEMO_BENEFICIARIES.reduce((acc, r) => acc + (r.totalPaid || 0), 0);
+  const ytdPaid     = allRows.reduce((acc, r) => acc + (r.totalPaid || 0), 0);
   const pendingPay  = (counts.pending || 0) + (counts.suspended || 0);
 
   return (
@@ -300,17 +300,19 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
         </>}
       />
 
-      {/* Backend-pending banner — design preview rows are not yet live. */}
-      <div className="mt-3" style={{padding:"10px 14px", background:"var(--accent-update-bg)", borderLeft:"3px solid var(--accent-update)", borderRadius:4, display:"flex", alignItems:"center", gap:10}}>
-        <Icon name="info" size={14} color="var(--accent-update)"/>
-        <span className="t-bodysm" style={{color:"var(--neutral-900)"}}>
-          <strong>Design preview rows.</strong>{" "}
-          Programme rollup cards reflect live{" "}
-          <span className="t-mono">/api/v1/programmes/</span> data; the
-          enrolment table below is a static preview pending the
-          ProgrammeEnrolment listing endpoint (OI-S25-4, Sprint 26).
-        </span>
-      </div>
+      {/* Status banner — render only while the first fetch is in flight
+          or when the server reported an error. Once data is back this
+          slot collapses to nothing. */}
+      {(beneficiariesMeta.loading || beneficiariesMeta.error) && (
+        <div className="mt-3" style={{padding:"10px 14px", background: beneficiariesMeta.error ? "var(--accent-danger-bg)" : "var(--accent-update-bg)", borderLeft:`3px solid var(${beneficiariesMeta.error ? "--accent-danger" : "--accent-update"})`, borderRadius:4, display:"flex", alignItems:"center", gap:10}}>
+          <Icon name={beneficiariesMeta.error ? "alert" : "clock"} size={14} color={`var(${beneficiariesMeta.error ? "--accent-danger" : "--accent-update"})`}/>
+          <span className="t-bodysm" style={{color:"var(--neutral-900)"}}>
+            {beneficiariesMeta.error
+              ? <>Failed to load beneficiaries: <span className="t-mono">{beneficiariesMeta.error}</span></>
+              : <>Loading beneficiaries from <span className="t-mono">/api/v1/beneficiaries/</span>…</>}
+          </span>
+        </div>
+      )}
 
       {/* KPI grid */}
       <div className="grid grid-4 mt-4">

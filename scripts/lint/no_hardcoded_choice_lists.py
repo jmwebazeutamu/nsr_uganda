@@ -56,6 +56,11 @@ PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bconst\s+BEN_STATUS\b"),        "inline BEN_STATUS array"),
     (re.compile(r"\bconst\s+EXIT_REASONS\s*="),    "inline EXIT_REASONS map"),
     (re.compile(r"\bconst\s+PROGRAMMES\s*=\s*\["), "inline PROGRAMMES catalogue"),
+    # US-S26-007 — once the live /api/v1/beneficiaries/ feed wires
+    # the screen, any reintroduction of the static fixture is a
+    # regression.
+    (re.compile(r"\bconst\s+DEMO_BENEFICIARIES\b"),         "inline DEMO_BENEFICIARIES fixture"),
+    (re.compile(r"\bconst\s+_LEGACY_FIXTURE_PLACEHOLDER\b"), "inline beneficiary placeholder fixture"),
 ]
 
 # This script itself defines the regexes; skip it.
