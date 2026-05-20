@@ -1,0 +1,8 @@
+{
+  "programme_enrolment_status": [
+    { "code": "active",    "label": "Active" },
+    { "code": "suspended", "label": "Suspended" },
+    { "code": "pending",   "label": "Pending" },
+    { "code": "exited",    "label": "Exited" }
+  ]
+}
