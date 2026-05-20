@@ -19,7 +19,8 @@ const NAV = [
   { id: "dedup",   label: "Duplicates",    icon: "duplicate", count: 47 },
   { id: "grm",     label: "Grievances",    icon: "message",   count: 7 },
   { section: "DATA" },
-  { id: "registry", label: "Registry",     icon: "users",     screen: true },
+  { id: "registry",      label: "Single Registry", icon: "users", screen: true },
+  { id: "beneficiaries", label: "Beneficiaries",   icon: "book",  screen: true },
   { id: "drs",     label: "Data Requests", icon: "download",  count: 9 },
   { id: "partner-drs", label: "My requests", icon: "download", count: 5 },
   { id: "receipt", label: "Receipt slip",  icon: "print" },
@@ -61,14 +62,14 @@ function App() {
       if (role === "partner-analyst" && n.section === "PARTNERS") return false;
       return true;
     }
-    if (role === "parish" && ["dih","drs","dedup","partner-drs","partners"].includes(n.id)) return false;
+    if (role === "parish" && ["dih","drs","dedup","partner-drs","partners","beneficiaries"].includes(n.id)) return false;
     if (role === "dpo"    && ["capture","upd","dedup","grm","receipt","partner-drs"].includes(n.id)) return false;
     if (role === "cdo"    && ["dih","drs","partner-drs","partners"].includes(n.id)) return false;
     if (role === "nsr-unit" && n.id === "partner-drs") return false;
     if (role === "partner-analyst" && !["home","partner-drs","kit"].includes(n.id)) return false;
-    // Registry is operator-only — partners use the DRS portal to
-    // request data, not browse the registry directly.
-    if (n.id === "registry" && role === "partner-analyst") return false;
+    // Registry + Beneficiaries are operator-only — partners use the
+    // DRS portal to request data, not browse the registry directly.
+    if (["registry","beneficiaries"].includes(n.id) && role === "partner-analyst") return false;
     return true;
   });
 
