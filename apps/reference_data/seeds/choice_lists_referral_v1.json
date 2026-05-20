@@ -1,0 +1,9 @@
+{
+  "referral_status": [
+    { "code": "sent",     "label": "Sent" },
+    { "code": "accepted", "label": "Accepted" },
+    { "code": "enrolled", "label": "Enrolled" },
+    { "code": "rejected", "label": "Rejected" },
+    { "code": "exited",   "label": "Exited" }
+  ]
+}
