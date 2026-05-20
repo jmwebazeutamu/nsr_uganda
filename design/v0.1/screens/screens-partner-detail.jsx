@@ -308,7 +308,7 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme }) => {
   const [partnerResp, partnerMeta] = useApi(
     partnerId ? `/api/v1/partners/${partnerId}/` : null,
   );
-  const [dsasResp] = useApi(
+  const [dsasResp, dsasMeta] = useApi(
     partnerId ? `/api/v1/dsas/?partner=${partnerId}` : null,
   );
   const [usageResp] = useApi(
@@ -465,7 +465,7 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme }) => {
       {/* Tab body */}
       <div className="card" style={{borderTopLeftRadius:0, borderTopRightRadius:0, padding:0, marginTop:0}}>
         {tab === "over" && <PDOverview p={p}/>}
-        {tab === "dsa"  && <PDDsas p={p}/>}
+        {tab === "dsa"  && <PDDsas p={p} onToast={setToast} onRefresh={dsasMeta.refresh}/>}
         {tab === "prog" && <PDProgrammes p={p} onRegisterProgramme={onRegisterProgramme}/>}
         {tab === "con"  && <PDContacts p={p}/>}
         {tab === "use"  && <PDUsage p={p}/>}
@@ -609,15 +609,46 @@ const BigSpark = ({ points }) => {
 };
 
 /* ---------- DSAs ---------- */
-const PDDsas = ({ p }) => {
+const PDDsas = ({ p, onToast, onRefresh }) => {
   const [openIdx, setOpenIdx] = useStatePD(0);
+  const [creating, setCreating] = useStatePD(false);
+
+  const createDraftDsa = async () => {
+    if (creating) return;
+    setCreating(true);
+    // Reference shape mirrors the partner-registration wizard's
+    // convention: DSA-{partner.code}-{YYYY}-{seq}. The seq is the
+    // count of existing DSAs +1 so we don't collide with the
+    // wizard-created "...-DRAFT" placeholder.
+    const seq = String((p.dsas?.length || 0) + 1).padStart(3, "0");
+    const ref = `DSA-${p.code}-${new Date().getFullYear()}-${seq}`;
+    try {
+      const draft = await nsrApi.post("/api/v1/dsas/", {
+        partner: p.id,
+        reference: ref,
+        status: "draft",
+      });
+      onToast && onToast(`Draft DSA ${draft.reference} created · open to set scope + submit for sign-off`);
+      onRefresh && onRefresh();
+    } catch (err) {
+      onToast && onToast(`Couldn't create DSA: ${err.body?.detail || err.message || err}`);
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <div>
       <TabHeaderPD title={`Data Sharing Agreements — ${p.dsas.length}`}
-        sub="Open any DSA to inspect its scope, signature chain, and version history. Scope edits route through the DSA editor."
+        sub="Open any DSA to inspect its scope, signature chain, and version history. Scope edits route through the DSA editor (Sprint 27)."
         action={<>
-          <button className="btn btn-sm"><Icon name="download" size={13}/> Export DSA register</button>
-          <button className="btn btn-sm btn-primary"><Icon name="plus" size={13}/> New DSA</button>
+          <button className="btn btn-sm"
+                  onClick={() => onToast && onToast("DSA register export not yet wired (OI-S27 candidate).")}>
+            <Icon name="download" size={13}/> Export DSA register
+          </button>
+          <button className="btn btn-sm btn-primary" onClick={createDraftDsa} disabled={creating}>
+            <Icon name="plus" size={13}/> {creating ? "Creating…" : "New DSA"}
+          </button>
         </>}/>
 
       <div>
