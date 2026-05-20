@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -9,6 +9,11 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "stretchStrings": false
 }/*EDITMODE-END*/;
 
+// `count` here is just the fallback shown when the live counter hook
+// (useNavCounts → /api/v1/...) hasn't responded or the endpoint isn't
+// reachable. Live values replace these at render time. `capture` has
+// no API yet so it stays on the fallback until the intake endpoint
+// lands.
 const NAV = [
   { id: "home",    label: "Home",          icon: "home" },
   { id: "kit",     label: "Design system", icon: "sliders" },
@@ -32,6 +37,9 @@ function App() {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const [screen, setScreen] = useStateApp("home");
   const [device, setDevice] = useStateApp("desktop");
+  // Live nav counters keyed by nav id. Falls back to NAV.count when
+  // the API is unreachable so the design preview still renders.
+  const [navCounts] = useNavCounts();
   // Cross-screen handoff payload — set by `navigate(screen, payload)`,
   // consumed by the destination screen on mount, cleared when the
   // user navigates away. Lets GRM → UPD pass a changeRequestId
@@ -108,11 +116,16 @@ function App() {
             return <div key={i} className="nav-section-label">{n.section}</div>;
           }
           const active = n.id === screen;
+          // Live counter takes priority over the hardcoded fallback.
+          // We only render the badge if the original NAV entry had one
+          // (i.e. it's a workflow link, not a plain navigation link).
+          const liveCount = navCounts ? navCounts[n.id] : undefined;
+          const displayCount = liveCount !== undefined ? liveCount : n.count;
           return (
             <button key={n.id} className={`nav-item ${active ? 'active' : ''}`} onClick={() => navigate(n.id)}>
               <Icon name={n.icon} size={18}/>
               <span className="nav-label">{n.label}</span>
-              {n.count !== undefined && <span className="nav-count">{n.count}</span>}
+              {n.count !== undefined && <span className="nav-count">{displayCount}</span>}
             </button>
           );
         })}

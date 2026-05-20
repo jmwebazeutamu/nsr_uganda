@@ -53,3 +53,6 @@ htmlcov/
 # Node (Vitest + RTL — see package.json)
 node_modules/
 .vitest-cache/
+
+# Design — local scratch backups (e.g. partners-source/, screens-source/)
+design/v0.1/*-source/
