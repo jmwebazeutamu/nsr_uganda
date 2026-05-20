@@ -202,7 +202,7 @@ const DIHScreen = () => {
     { who: "System DQA", action: "evaluated", detail: "Ruleset DQA-v3.4 · 2 warnings raised · 0 blocking", time: "1h 11m ago", audit: "A-2026-05-14-00472", tone: "system" },
     { who: "System IDV", action: "matched to NIRA", detail: "NIN CM89241023ABCD · confidence 0.97 (AC-IDV-MATCH)", time: "1h 11m ago", audit: "A-2026-05-14-00473", tone: "system" },
     { who: "System DDUP", action: "found candidate", detail: "Match 01HXP2KR3N8M2QF · composite 0.83 · weak queue", time: "1h 10m ago", audit: "A-2026-05-14-00474", tone: "system" },
-    { who: "Akello Patience", action: "opened for review", detail: "NSR Unit Coordinator · viewed three-column compare", time: "12m ago", audit: "A-2026-05-14-00501", tone: "user" },
+    { who: "Johnson Mwebaze", action: "opened for review", detail: "NSR Unit Coordinator · viewed three-column compare", time: "12m ago", audit: "A-2026-05-14-00501", tone: "user" },
   ];
 
   const reasonsReject = [

@@ -145,7 +145,7 @@ const HOME_KPI_LIVE_MAP = {
 const ROLE_CONTENT = {
   "nsr-unit": {
     name: "NSR Unit Coordinator",
-    person: "Akello Patience",
+    person: "Johnson Mwebaze",
     org: "MGLSD · NSR Unit",
     kpis: [
       { title: "DIH review queue", value: "342", trend: "up", trendValue: "+38 today", foot: "vs. 7-day avg 287", spark: [180,210,250,235,280,310,342] },
