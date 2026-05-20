@@ -249,6 +249,18 @@ class Programme(models.Model):
         help_text="sha256(webhook_secret). The cleartext secret is "
                   "returned in the create response and never persisted.",
     )
+    # ADR-0015 §"Decision 3": HMAC webhook signing needs the cleartext
+    # at send time, which ADR-0014 ruled out for new programmes. The
+    # encrypted column carries the cleartext for legacy referral.Programme
+    # rows that get lifted in US-S26-004 + any future call site that
+    # needs the cleartext. The WebhookCredential factoring (OI-S26-3)
+    # supersedes this column when it lands.
+    webhook_secret_encrypted = EncryptedBinaryField(null=True, blank=True)
+
+    # Preserves the free-text DSA reference from apps.referral.Programme
+    # for lifted rows. The structured FK + M2M to DataSharingAgreement
+    # remain the canonical join; this column is read-only history.
+    dsa_reference_legacy = models.CharField(max_length=64, blank=True)
 
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
