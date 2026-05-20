@@ -1280,7 +1280,7 @@ class TestBuilderSchema:
     is invariant — frontend renders one component regardless of role."""
 
     EXPECTED_TOP_LEVEL_KEYS = {
-        "role", "dsa_reference", "fields",
+        "role", "dsa_id", "dsa_reference", "fields",
         "filter_operators", "delivery_methods",
     }
     EXPECTED_FIELD_KEYS = {
@@ -1359,6 +1359,27 @@ class TestBuilderSchema:
         r = operator_client.get("/api/v1/drs/requests/builder-schema/")
         for f in r.data["fields"]:
             assert set(f.keys()) == self.EXPECTED_FIELD_KEYS
+
+    def test_partner_dsa_id_is_populated(
+        self, partner_client, partner_with_narrow_dsa,
+    ):
+        # US-S27-010: the wizard needs the DSA's ULID to POST a
+        # DataRequest (the reference alone isn't enough). Partner
+        # roles get the active DSA's id; the reference travels
+        # alongside it for human-readable display.
+        r = partner_client.get("/api/v1/drs/requests/builder-schema/")
+        assert r.status_code == 200
+        assert r.data["dsa_id"]
+        assert r.data["dsa_reference"] == "DSA-NARROW-1"
+        dsa = partner_with_narrow_dsa.dsas.get(reference="DSA-NARROW-1")
+        assert r.data["dsa_id"] == str(dsa.id)
+
+    def test_operator_dsa_id_is_empty(self, operator_client):
+        # Operators don't have a partner DSA — the field is present
+        # but empty. Frontend uses this to gate the submit action.
+        r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        assert r.status_code == 200
+        assert r.data["dsa_id"] == ""
 
     def test_operator_sees_all_fields_enabled(self, operator_client):
         r = operator_client.get("/api/v1/drs/requests/builder-schema/")

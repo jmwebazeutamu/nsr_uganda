@@ -148,6 +148,7 @@ def build_schema(user) -> dict[str, Any]:
 
     return {
         "role": role,
+        "dsa_id": str(dsa.id) if dsa else "",
         "dsa_reference": dsa.reference if dsa else "",
         "fields": fields,
         "filter_operators": list(FILTER_OPERATORS),

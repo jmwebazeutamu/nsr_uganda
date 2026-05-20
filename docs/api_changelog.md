@@ -4,6 +4,77 @@ Notable changes to outbound API contracts. Entries are dated and tied to the com
 
 ---
 
+## 2026-05-20 — US-S27-010 — DRS pipeline wiring (builder-schema `dsa_id`, submit, download)
+
+**Affected endpoints**: `/api/v1/drs/requests/builder-schema/` adds one field; the request submit + bundle download flows are now wired end-to-end from the DRS wizard and partner portal.
+
+### What changed
+
+- **`GET /api/v1/drs/requests/builder-schema/` now returns `dsa_id`**
+  alongside `dsa_reference`. The id is the ULID of the user's active
+  DSA (partner roles) or the empty string (operator roles). The
+  wizard needs the id to `POST /api/v1/drs/requests/` and the
+  reference for human-readable display. The
+  `TestBuilderSchema.EXPECTED_TOP_LEVEL_KEYS` contract test was
+  widened to include the new key — frontends that destructure the
+  response should add it. The role-parity tests still pass (the
+  shape is identical across roles; values differ).
+
+- **DRS wizard now submits real DataRequests.** Previously the
+  wizard's "Submit for approval" button only fired a toast. It now:
+  1. Reads `dsa_id` from the builder-schema response.
+  2. POSTs `{dsa, request_payload}` to `/api/v1/drs/requests/` —
+     `request_payload.fields` carries the dotted keys
+     (`household.id`, `member.first_name`) the validator
+     understands; the wizard collects them directly from the live
+     schema.
+  3. POSTs `/api/v1/drs/requests/{id}/submit/` which runs
+     `validate_against_dsa`. A scope violation surfaces the server's
+     exact reason in the wizard's toast (e.g. "`fields=['member.nin_hash']
+     outside DSA scope (allowed field_scope=['Identifiers'])`").
+  4. On success, exits the wizard to the host's list view.
+  Behaviour when there is no active DSA (operator role, partner
+  with no `OperatorScope`): the submit modal opens but the Submit
+  button surfaces "No active DSA for your account — submission
+  unavailable" rather than fabricating a successful toast.
+
+- **Partner DRS portal "Download" button now downloads.** Previously
+  it just toasted the row count. It now fetches the credentialed
+  `GET /api/v1/drs/requests/{id}/download/` endpoint, converts the
+  NDJSON bytes to a blob, and triggers a browser download as
+  `drs-{id}.ndjson`. When DRS-O-02 closes (MinIO + signed URLs) the
+  endpoint will return a 302 to the signed URL; the partner-side
+  UX is unchanged because anchor-driven downloads follow redirects.
+
+### What hasn't changed yet (honest deferral)
+
+- **Filter editor**: the wizard's BuildStep still renders hardcoded
+  filter rows (Karamoja + West Nile, PMT band, etc.). They're
+  presentation-only — submit doesn't include any `sub_region_codes`
+  or `programme_codes` because the wizard doesn't collect them. The
+  submit modal flags this as "filter editor wiring pending".
+- **Row cap**: `request_payload.max_rows` is omitted on submit. The
+  DSA's `monthly_row_budget` still gates delivery server-side.
+- **Delivery method**: the DeliveryStep is presentation-only;
+  `delivery_methods` from the builder-schema isn't consumed yet.
+- **Operator-side wizard**: operators don't have an active partner
+  DSA, so the wizard surfaces "Operators submit on behalf of
+  partners; no DSA bound to this session". The operator-side
+  approve/reject actions on the inbox list (US-S14-002) continue
+  to work as before.
+
+These three are the remaining wizard slice for a future ticket;
+they need real form state on entity choice, filter expression,
+max_rows, and delivery method.
+
+### No audit-event vocabulary changes
+
+The submit chain emits the existing `submit` action via
+`apps.data_requests.services.submit_data_request`; the download
+emits the existing `download` action via the bundle endpoint.
+
+---
+
 ## 2026-05-20 — US-S27-005 / ADR-0016 — DSA renewal endpoint + supersession on activation
 
 **Affected endpoints**:

@@ -216,14 +216,9 @@ const PartnerDRSScreen = () => {
     }
   };
 
-  const onBuilderSubmit = (payload) => {
-    // Real wiring: POST /api/v1/drs/requests/ with payload, then
-    // POST /api/v1/drs/requests/{id}/submit/. Mockup toasts and
-    // returns to the list.
-    setToast(`Request submitted — ${payload.fields.length} fields · ` +
-             `cap ${payload.max_rows.toLocaleString()} rows · awaiting NSR Unit approval`);
-    setMode("list");
-  };
+  // Note: the prior `onBuilderSubmit` helper was dead code — the
+  // actual submit lives inside DRSWizard (screens-drs.jsx) which
+  // POSTs to /api/v1/drs/requests/ + /submit/ directly (US-S27-010).
 
   // Hooks must run in the same order every render — compute the
   // list-mode memos unconditionally, then branch on mode below.
@@ -284,11 +279,42 @@ const PartnerDRSScreen = () => {
     return <DRSScreen role="partner" onExit={() => setMode("list")}/>;
   }
 
-  const onDownload = (r) => {
-    // Real wiring: hit r.download_url; the response is NDJSON
-    // application/x-ndjson with Content-Disposition attachment from
-    // S8-003. For the mockup we just toast.
-    setToast(`Download started — ${r.row_count_delivered.toLocaleString()} rows · NDJSON · manifest ${r.manifest_sha256.slice(0,12)}…`);
+  const onDownload = async (r) => {
+    // US-S27-010 — real wiring. Fetch the NDJSON bundle bytes via
+    // the credentialed endpoint, then trigger a browser download
+    // through an anchor with a synthetic object URL so the partner
+    // gets a real .ndjson file. Once DRS-O-02 closes (MinIO +
+    // signed URLs), the endpoint returns 302 and the browser
+    // follows the redirect directly — same UX from the partner's
+    // perspective, less data through Django.
+    const url = r.download_url || `/api/v1/drs/requests/${r.id}/download/`;
+    setToast(`Download starting · ${r.row_count_delivered?.toLocaleString() || ""} rows · NDJSON…`);
+    try {
+      const resp = await fetch(url, {
+        credentials: "same-origin",
+        headers: { Accept: "application/x-ndjson, application/json" },
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${resp.status}`);
+      }
+      const blob = await resp.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = `drs-${r.id}.ndjson`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Release the blob after the click — the browser owns the
+      // download by this point so revoking is safe.
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      setToast(
+        `Downloaded · manifest ${r.manifest_sha256?.slice(0, 12) || "—"}…`,
+      );
+    } catch (e) {
+      setToast(`Download failed: ${e.message}`);
+    }
   };
 
   return (

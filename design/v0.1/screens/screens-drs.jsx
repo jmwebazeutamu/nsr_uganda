@@ -514,22 +514,29 @@ const DRSScreen = ({ role = "operator", onExit } = {}) => {
 const DRSWizard = ({ role = "operator", onExit } = {}) => {
   const isPartner = role === "partner";
   const [step, setStep] = useStateDRS("build");
-  const [selectedFields, setSel] = useStateDRS(new Set(["registry_id","subregion","district","parish","household_size","pmt_band","roof_material"]));
+  // Selected fields hold whatever the effective catalogue's `name`
+  // column is. When `schema` arrives the catalogue switches to the
+  // backend's dotted keys ("household.id"); until then the mock
+  // tail-names ("registry_id") are the placeholder. Defaults are
+  // empty — the user picks intentionally.
+  const [selectedFields, setSel] = useStateDRS(new Set());
   const [submitOpen, setSubmitOpen] = useStateDRS(false);
+  const [submitting, setSubmitting] = useStateDRS(false);
   const [toast, setToast] = useStateDRS("");
   const stepIdx = STEPS.findIndex(s => s.id === step);
 
   const next = () => setStep(STEPS[Math.min(stepIdx + 1, STEPS.length - 1)].id);
   const prev = () => setStep(STEPS[Math.max(stepIdx - 1, 0)].id);
 
-  // US-S18-003 — DSA-driven field disabling. Fetch the role-aware
-  // schema from /api/v1/drs/requests/builder-schema/ (BUG-S11-002a)
-  // and overlay its `disabled` / `disabled_reason` flags on the
-  // hardcoded FIELDS mock. Backend returns dotted keys
-  // ("member.nin_value"); mock uses flat names ("nin_value"). Match
-  // by trailing segment so the overlay works without renaming the
-  // mock catalogue. Fetch failure (file:// preview, no auth, no
-  // active DSA) leaves the static mock in place.
+  // US-S18-003 / US-S27-010 — fetch the role-aware schema from
+  // /api/v1/drs/requests/builder-schema/ on mount. Partner roles
+  // get the live catalogue scoped to their active DSA (with
+  // `disabled: true` flags on out-of-scope fields); operator roles
+  // see the full catalogue with everything enabled. The response
+  // also carries `dsa_id` so the wizard can POST a real
+  // DataRequest at submit time. When the fetch fails (file://
+  // preview, unauthenticated session) the wizard falls back to
+  // the hardcoded FIELDS mock for design-time rendering only.
   const [schema, setSchema] = useStateDRS(null);
   React.useEffect(() => {
     let cancelled = false;
@@ -543,28 +550,20 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
     return () => { cancelled = true; };
   }, []);
 
-  // Compose the effective FIELDS list: when schema is loaded, copy
-  // the mock tuple and replace [disabled, reason] with the backend's
-  // verdict for matching keys. The contract guarantee (ADR-0007 / BUG-
-  // S11-002a) is that the top-level shape is invariant across roles,
-  // so we can rely on `disabled` + `disabled_reason` being present.
+  // Compose the effective FIELDS catalogue. When the schema is
+  // loaded the catalogue comes straight from the backend — the
+  // tuple's `name` column carries the dotted key ("household.id")
+  // so it can be POSTed verbatim. When the schema isn't reachable
+  // (offline preview), the hardcoded mock FIELDS catalogue takes
+  // over with its short tail-names — submit is disabled in that
+  // case anyway because `schema.dsa_id` won't exist.
   const effectiveFields = React.useMemo(() => {
     if (!schema || !schema.fields) return FIELDS;
-    const byKey = {};
-    for (const f of schema.fields) {
-      const tail = (f.key || "").split(".").pop();
-      if (tail) byKey[tail] = f;
-    }
-    return FIELDS.map(tuple => {
-      const [group, name, sens, mockDisabled, mockReason] = tuple;
-      const live = byKey[name];
-      if (!live) return tuple;
-      return [
-        group, name, sens,
-        Boolean(live.disabled),
-        live.disabled_reason || mockReason || "",
-      ];
-    });
+    return schema.fields.map(f => [
+      f.group, f.key, f.sensitivity,
+      Boolean(f.disabled),
+      f.disabled_reason || "",
+    ]);
   }, [schema]);
 
   const toggleField = (name, disabled, reason) => {
@@ -572,6 +571,81 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
     const next = new Set(selectedFields);
     if (next.has(name)) next.delete(name); else next.add(name);
     setSel(next);
+  };
+
+  // US-S27-010 — real submit chain replaces the prior toast-only
+  // mock. POST creates a DRAFT row, then POST /submit/ runs the
+  // DSA-scope validator. Either step can fail; the failure surfaces
+  // verbatim in the toast so the user sees the actual server
+  // message (e.g. "fields=['member.nin_hash'] outside DSA scope").
+  // On success the wizard exits to its host's list view via
+  // onExit; no onExit (legacy mount) keeps the wizard open with a
+  // success toast.
+  const confirmSubmit = async () => {
+    if (submitting) return;
+    if (!schema || !schema.dsa_id) {
+      setSubmitOpen(false);
+      setToast(
+        isPartner
+          ? "No active DSA for your account — submission unavailable."
+          : "Operators submit on behalf of partners; no DSA bound to this session.",
+      );
+      return;
+    }
+    if (selectedFields.size === 0) {
+      setToast("Pick at least one field before submitting.");
+      return;
+    }
+    setSubmitting(true);
+    const payload = {
+      fields: [...selectedFields],
+      // max_rows is not yet captured by the wizard — the row cap
+      // editor lands when filter UI does. Send no cap; the DSA's
+      // monthly_row_budget still applies on the delivery side.
+    };
+    try {
+      const createR = await fetch("/api/v1/drs/requests/", {
+        method: "POST", credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": _odrsCsrf(),
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ dsa: schema.dsa_id, request_payload: payload }),
+      });
+      if (!createR.ok) {
+        const body = await createR.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${createR.status}`);
+      }
+      const draft = await createR.json();
+      const submitR = await fetch(
+        `/api/v1/drs/requests/${draft.id}/submit/`,
+        {
+          method: "POST", credentials: "same-origin",
+          headers: {
+            "X-CSRFToken": _odrsCsrf(),
+            Accept: "application/json",
+          },
+        },
+      );
+      if (!submitR.ok) {
+        const body = await submitR.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${submitR.status}`);
+      }
+      const submitted = await submitR.json();
+      setSubmitOpen(false);
+      setToast(
+        `Submitted · ${submitted.id.slice(0, 16)}… — awaiting NSR Unit approval`,
+      );
+      if (onExit) {
+        // Small delay so the toast is visible on the way out.
+        window.setTimeout(() => onExit(), 600);
+      }
+    } catch (e) {
+      setToast(`Submit failed: ${e.message}`);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -583,9 +657,11 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
           + (schema ? " · LIVE SCHEMA" : "")
         }
         title={isPartner ? "Build data request" : "DRS query builder"}
-        sub={isPartner
-          ? <>Requester: you · Active DSA <span className="t-mono">DSA-PDM-2026-01</span> · valid through 31 Dec 2026</>
-          : <>Requester: OPM Data Office · Active DSA <span className="t-mono">DSA-OPM-PDM-2026</span> · valid 01 Jan 2026 — 31 Dec 2026</>}
+        sub={schema
+          ? (schema.dsa_reference
+              ? <>Requester: {isPartner ? "you" : "operator"} · Active DSA <span className="t-mono">{schema.dsa_reference}</span></>
+              : <>Requester: {isPartner ? "you" : "operator"} · No active DSA on this session — submit unavailable</>)
+          : <>Loading session…</>}
         right={<>
           <button className="btn"><Icon name="save" size={14}/> Save as template</button>
           <button className="btn btn-ghost" onClick={onExit}>
@@ -640,24 +716,44 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
         }
       </div>
 
-      <Modal open={submitOpen} onClose={() => setSubmitOpen(false)} title="Submit data request" width={520}
+      <Modal open={submitOpen} onClose={() => submitting ? null : setSubmitOpen(false)} title="Submit data request" width={520}
         footer={<>
-          <button className="btn" onClick={() => setSubmitOpen(false)}>Cancel</button>
-          <button className="btn btn-primary" onClick={() => { setSubmitOpen(false); setToast("Data request submitted. DRS Reviewer will approve within 2 working days."); }}><Icon name="check" size={14}/> Submit</button>
+          <button className="btn" onClick={() => setSubmitOpen(false)} disabled={submitting}>Cancel</button>
+          <button className="btn btn-primary" onClick={confirmSubmit} disabled={submitting}>
+            <Icon name="check" size={14}/> {submitting ? "Submitting…" : "Submit"}
+          </button>
         </>}>
         <div className="col gap-3">
-          <p style={{margin:0}}>Request <span className="t-mono">DRS-2026-05-14-00088</span> will be sent to <strong>NSR Unit DRS Reviewer</strong> and the <strong>DPO</strong> for approval.</p>
+          <p style={{margin:0}}>
+            A draft DataRequest will be created on
+            {schema?.dsa_reference
+              ? <> DSA <span className="t-mono">{schema.dsa_reference}</span></>
+              : " your active DSA"}
+            {" "}and submitted for NSR Unit DRS Reviewer + DPO approval.
+            Server-side validation runs on submit; if the request includes
+            fields or geographies outside the DSA scope, the submit will
+            fail with a precise reason.
+          </p>
           <div style={{display:'grid', gridTemplateColumns:'130px 1fr', rowGap:6, fontSize:13}}>
-            <div className="muted">Entity</div><div>Household</div>
-            <div className="muted">Filters</div><div>3 rows (AND) · Karamoja + West Nile · Poorest 40% · updated since 1 Apr</div>
-            <div className="muted">Fields</div><div>{selectedFields.size} of {effectiveFields.length} ({effectiveFields.filter(f => f[3]).length} disabled by DSA)</div>
-            <div className="muted">Match estimate</div><div>~47,233 rows</div>
-            <div className="muted">DSA budget</div><div>1.8M / 2.5M rows for May 2026</div>
-            <div className="muted">Delivery</div><div>Excel · password-protected · 7-day TTL</div>
+            <div className="muted">DSA</div>
+            <div className="t-mono">{schema?.dsa_reference || "—"}</div>
+            <div className="muted">Fields</div>
+            <div>
+              {selectedFields.size} selected
+              {effectiveFields.length > 0 && ` of ${effectiveFields.length}`}
+              {effectiveFields.filter(f => f[3]).length > 0 &&
+                ` (${effectiveFields.filter(f => f[3]).length} disabled by DSA)`}
+            </div>
+            <div className="muted">Filters</div>
+            <div className="muted">— <span className="t-cap">(filter editor wiring pending — submitting unfiltered)</span></div>
+            <div className="muted">Row cap</div>
+            <div className="muted">— <span className="t-cap">(row-cap input wiring pending — DSA monthly budget still applies)</span></div>
+            <div className="muted">Delivery</div>
+            <div className="muted">— <span className="t-cap">(delivery method wiring pending — defaults apply)</span></div>
           </div>
           <div className="tint-update" style={{padding:12, borderRadius:6, borderLeft:'3px solid var(--accent-update)'}}>
             <div className="row gap-2"><Icon name="shield" size={14} color="var(--accent-update)"/><strong className="t-bodysm">DPIA + DPO review required</strong></div>
-            <p className="t-bodysm" style={{margin:'4px 0 0', color:'var(--neutral-700)'}}>The DPO is notified automatically. Query hash and field selection are logged for the cumulative-volume console (US-103).</p>
+            <p className="t-bodysm" style={{margin:'4px 0 0', color:'var(--neutral-700)'}}>The DPO is notified automatically once the request enters the SUBMITTED state. Query hash and field selection are logged on the audit chain.</p>
           </div>
         </div>
       </Modal>
