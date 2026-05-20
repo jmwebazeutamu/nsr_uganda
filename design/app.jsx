@@ -19,7 +19,7 @@ const NAV = [
   { id: "dedup",   label: "Duplicates",    icon: "duplicate", count: 47 },
   { id: "grm",     label: "Grievances",    icon: "message",   count: 7 },
   { section: "DATA" },
-  { id: "registry",      label: "Single Registry", icon: "users", screen: true },
+  { id: "registry",      label: "Social Registry", icon: "users", screen: true },
   { id: "beneficiaries", label: "Beneficiaries",   icon: "book",  screen: true },
   { id: "drs",     label: "Data Requests", icon: "download",  count: 9 },
   { id: "partner-drs", label: "My requests", icon: "download", count: 5 },
