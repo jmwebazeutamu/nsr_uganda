@@ -4,6 +4,100 @@ Notable changes to outbound API contracts. Entries are dated and tied to the com
 
 ---
 
+## 2026-05-20 — US-S26 / ADR-0015 — referral.Programme consolidation + /api/v1/beneficiaries/
+
+**Affected endpoints**:
+
+| Removed                          | Replacement                                  |
+|----------------------------------|----------------------------------------------|
+| `GET /api/v1/ref/programmes/`    | `GET /api/v1/programmes/` (US-S23-008, S25)  |
+
+Plus the new `/api/v1/beneficiaries/` listing, two new ChoiceLists,
+and `<field>_label` companions on `/api/v1/ref/referrals/` and
+`/api/v1/ref/enrolments/`.
+
+### What changed
+
+- **Two `Programme` classes were collapsed into one.** Per ADR-0015,
+  the legacy `apps.referral.Programme` model is gone; the canonical
+  `apps.partners.Programme` (Sprint 23 + 25) is now the only
+  Programme row in the registry. `Referral.programme` and
+  `ProgrammeEnrolment.programme` FKs were repointed; existing rows
+  (zero in dev / staging) get their FK values rewritten by a
+  remap+repoint migration.
+- **`apps.referral.ReferralStatus` and `EnrolmentStatus` TextChoices
+  were dropped** (the last live TextChoices in the active codepath).
+  Both fields are now plain `CharField(max_length=32)` resolving
+  against ChoiceLists per ADR-0010. The data migration also
+  renames `ProgrammeEnrolment.status='enrolled'` rows to `'active'`
+  to match the seeded `programme_enrolment_status` ChoiceList
+  vocabulary (ADR-0015 §"Decision 4").
+- **Webhook signing now reads the cleartext from
+  `Programme.webhook_secret_encrypted`** (an `EncryptedBinaryField`
+  using the same KMS path as `PartnerContact.nin_value`). This is
+  a documented exception to ADR-0014's hash-only stance because
+  HMAC signing needs the cleartext at send time. The
+  `WebhookCredential` factoring (OI-S26-3) is the long-term
+  successor; the encrypted column is interim.
+
+### New endpoint
+
+| Method | Path                       | Purpose |
+|--------|----------------------------|---------|
+| GET    | `/api/v1/beneficiaries/`   | Per-programme enrolment ledger. One row per (household, programme). Status synthesised: explicit ProgrammeEnrolment status, or `pending` for sent/accepted Referrals without an enrolment yet. ABAC: combined partner + geographic. |
+
+Filter parameters: `programme`, `programme_code`, `status`,
+`sub_region`, `exit_code`, `kind`, `q` (search across head name +
+household id + parish + district). Page-number pagination,
+default page_size=50, max=200. A cursor-paginated aggregate
+endpoint replaces this approach at production scale (OI-S26-5).
+
+### Response shape (excerpt)
+
+Every row carries both raw `<field>` and resolved `<field>_label`:
+
+```json
+{
+  "id": "01...",
+  "household_id": "01...",
+  "household_head_name": "Nsubuga Ruth",
+  "household_sex": "2",
+  "district": "Lyantonde",
+  "parish": "Kibalinga",
+  "sub_region_name": "Buganda South",
+  "programme_code": "OPM-PDM",
+  "programme_kind": "cash_transfer",
+  "programme_kind_label": "Cash transfer",
+  "unit_of_enrolment": "household",
+  "unit_of_enrolment_label": "Household",
+  "status": "active",
+  "status_label": "Active",
+  "enrolled_at": "2026-04-10",
+  "months_in": 1,
+  "exit_code": null,
+  "exit_code_label": null,
+  "pmt_score": 0.42,
+  ...
+}
+```
+
+### New ChoiceList seeded at v1 / active
+
+```
+referral_status   (sent, accepted, enrolled, rejected, exited)
+```
+
+External consumers who resolve labels via the bundle endpoint
+pick this up automatically. The ETag changes.
+
+### `<field>_label` companions on REF endpoints
+
+`GET /api/v1/ref/referrals/` and `GET /api/v1/ref/enrolments/`
+now return `status_label` alongside the raw `status`. Same
+shape as Sprint 23's partner-module endpoints.
+
+---
+
 ## 2026-05-19 — US-S25-006/007 — Beneficiary registry screen wired; programme_enrolment_status ChoiceList
 
 **Affected endpoints**: extends `/api/v1/reference-data/choice-list-bundle/` with one new list.
