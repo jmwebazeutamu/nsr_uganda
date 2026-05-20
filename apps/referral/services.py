@@ -18,13 +18,10 @@ from datetime import date
 from django.db import transaction
 from django.utils import timezone
 
+from apps.partners.models import Programme  # canonical per ADR-0015
 from apps.security.audit import emit as emit_audit
 
-from .models import (
-    Programme,
-    ProgrammeEnrolment,
-    Referral,
-)
+from .models import ProgrammeEnrolment, Referral
 
 # Coded values — sourced from the referral_status and
 # programme_enrolment_status ChoiceLists (US-S26-002 / US-S25-006).
@@ -57,8 +54,13 @@ def send_referral(*, programme: Programme, household, actor: str,
                   eligibility_rule_version: int = 1) -> Referral:
     """Open a new referral with status=SENT. The webhook delivery is a
     follow-up via send_referral_webhook (Celery-driven in Sprint 3)."""
-    if not programme.is_active:
-        raise ReferralError(f"programme {programme.code} is inactive")
+    # Per ADR-0015 the canonical Programme exposes `status` (coded)
+    # rather than `is_active`. Only `status == "active"` programmes
+    # accept new referrals.
+    if programme.status != "active":
+        raise ReferralError(
+            f"programme {programme.code} is not active (status={programme.status})"
+        )
     referral = Referral.objects.create(
         programme=programme, household=household,
         eligibility_rule_version=eligibility_rule_version,
@@ -85,7 +87,16 @@ def send_referral_webhook(referral: Referral) -> str:
         "eligibility_rule_version": referral.eligibility_rule_version,
         "sent_at": referral.sent_at.isoformat(),
     }
-    signature = sign_payload(payload, referral.programme.webhook_secret or "dev-secret")
+    # Webhook secret cleartext lives in webhook_secret_encrypted on the
+    # canonical Programme (ADR-0015 §"Decision 3"). The EncryptedBinaryField
+    # round-trips through bytes; decode to str for HMAC keying. Dev fallback
+    # matches the previous behaviour when neither column is populated.
+    encrypted = referral.programme.webhook_secret_encrypted
+    if encrypted:
+        secret = encrypted.decode("utf-8") if isinstance(encrypted, (bytes, bytearray, memoryview)) else str(encrypted)
+    else:
+        secret = "dev-secret"
+    signature = sign_payload(payload, secret)
     delivery_id = f"dly-{uuid.uuid4().hex[:16]}"
     referral.last_delivery_id = delivery_id
     referral.last_delivery_at = timezone.now()

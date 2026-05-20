@@ -1192,8 +1192,15 @@ class TestAdditionalReportDashboards:
     def test_referrals_by_programme_status_is_scope_filtered(
         self, db, households, two_sub_regions, django_user_model,
     ):
-        from apps.referral.models import Programme, Referral
-        programme = Programme.objects.create(code="PDM", name="PDM")
+        from apps.partners.models import Partner, Programme
+        from apps.referral.models import Referral
+        opm = Partner.objects.create(
+            code="OPM", name="OPM", type="ministry", status="active",
+        )
+        programme = Programme.objects.create(
+            partner=opm, code="PDM", name="PDM",
+            kind="cash_transfer", status="active",
+        )
         Referral.objects.create(
             programme=programme, household=households["SR-BUGANDA"],
             status="sent",

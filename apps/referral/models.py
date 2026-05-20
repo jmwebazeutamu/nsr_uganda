@@ -1,46 +1,25 @@
 """REF models — outbound programme referral and inbound enrolment.
 
 SAD §5.1:
-- Referral: programme FK, eligibility rule version, status (sent,
-  accepted, enrolled, rejected, exited), timestamps, programme-side ID.
-- ProgrammeEnrolment: programme FK, household FK, status (enrolled,
-  suspended, exited), effective date, exit reason, payment metadata.
+- Referral: programme FK (-> apps.partners.Programme per ADR-0015),
+  eligibility rule version, status (sent, accepted, enrolled,
+  rejected, exited via the referral_status ChoiceList), timestamps,
+  programme-side ID.
+- ProgrammeEnrolment: programme FK (-> apps.partners.Programme),
+  household FK, status (active, suspended, pending, exited via the
+  programme_enrolment_status ChoiceList), effective date, exit
+  reason, payment metadata.
 
-Sprint 2 scope: one pilot programme end-to-end. Webhook signing per
-SAD §6.1; the actual HTTP delivery is via a Celery task that we leave
-as a TODO (apps.referral.services.send_referral_webhook returns a stub
-delivery_id today).
+Per ADR-0015 (US-S26-005) the legacy apps.referral.Programme model
+was dropped; both FKs now resolve to the canonical
+apps.partners.Programme. Webhook signing reads
+`programme.webhook_secret_encrypted` (ADR-0015 §"Decision 3").
 """
 
 from __future__ import annotations
 
 from django.db import models
 from nsr_mis.common.fields import ULIDField
-
-
-class Programme(models.Model):
-    """One row per partner programme MIS (e.g., PDM, NUSAF). The
-    webhook_url + webhook_secret describe how we push referrals; the
-    DSA reference ties this to the data-sharing agreement on file."""
-
-    id = ULIDField(primary_key=True)
-    code = models.CharField(max_length=32, unique=True)
-    name = models.CharField(max_length=128)
-    description = models.TextField(blank=True)
-
-    webhook_url = models.URLField(blank=True)
-    webhook_secret = models.CharField(max_length=64, blank=True)
-    dsa_reference = models.CharField(max_length=64, blank=True)
-
-    is_active = models.BooleanField(default=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name = "Programme"
-
-    def __str__(self) -> str:
-        return f"{self.code} ({self.name})"
 
 
 class Referral(models.Model):
@@ -53,7 +32,10 @@ class Referral(models.Model):
     """
 
     id = ULIDField(primary_key=True)
-    programme = models.ForeignKey(Programme, on_delete=models.PROTECT, related_name="referrals")
+    programme = models.ForeignKey(
+        "partners.Programme", on_delete=models.PROTECT,
+        related_name="referrals",
+    )
     household = models.ForeignKey(
         "data_management.Household", on_delete=models.PROTECT, related_name="referrals",
     )
@@ -98,7 +80,10 @@ class ProgrammeEnrolment(models.Model):
     """
 
     id = ULIDField(primary_key=True)
-    programme = models.ForeignKey(Programme, on_delete=models.PROTECT, related_name="enrolments")
+    programme = models.ForeignKey(
+        "partners.Programme", on_delete=models.PROTECT,
+        related_name="enrolments",
+    )
     household = models.ForeignKey(
         "data_management.Household", on_delete=models.PROTECT, related_name="enrolments",
     )

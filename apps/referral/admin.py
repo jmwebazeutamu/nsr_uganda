@@ -1,14 +1,9 @@
 from django.contrib import admin
 
-from .models import Programme, ProgrammeEnrolment, Referral
+from .models import ProgrammeEnrolment, Referral
 
-
-@admin.register(Programme)
-class ProgrammeAdmin(admin.ModelAdmin):
-    list_display = ("code", "name", "is_active", "dsa_reference", "updated_at")
-    list_filter = ("is_active",)
-    search_fields = ("code", "name", "dsa_reference")
-    readonly_fields = ("id", "created_at", "updated_at")
+# US-S26-005 / ADR-0015: apps.referral.Programme is gone; the
+# canonical Programme admin is registered under apps.partners.
 
 
 @admin.register(Referral)

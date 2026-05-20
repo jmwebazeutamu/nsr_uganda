@@ -5,11 +5,12 @@ from rest_framework.response import Response
 
 from apps.data_management.models import Household
 from apps.data_management.serializer_labels import attach_label_methodfields
+from apps.partners.models import Programme
 from apps.security.abac import ScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
 from .choice_field_map import MODEL_FIELDS
-from .models import Programme, ProgrammeEnrolment, Referral
+from .models import ProgrammeEnrolment, Referral
 from .services import (
     ReferralError,
     accept_referral,
@@ -19,13 +20,6 @@ from .services import (
     send_referral,
     send_referral_webhook,
 )
-
-
-class ProgrammeSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Programme
-        fields = ("id", "code", "name", "description", "webhook_url",
-                  "dsa_reference", "is_active")
 
 
 class ReferralSerializer(serializers.ModelSerializer):
@@ -95,13 +89,9 @@ class _EnrolReq(serializers.Serializer):
     payment_metadata = serializers.JSONField(required=False)
 
 
-@extend_schema_view(
-    list=extend_schema(tags=["ref"], summary="List programmes"),
-)
-class ProgrammeViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Programme.objects.all().order_by("code")
-    serializer_class = ProgrammeSerializer
-    filterset_fields = ["is_active"]
+# NOTE: The legacy `ProgrammeViewSet` (at /api/v1/ref/programmes/)
+# was removed in US-S26-005. Programme reads now go through the
+# canonical /api/v1/programmes/ endpoint on the partners app.
 
 
 @extend_schema_view(

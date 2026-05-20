@@ -7,8 +7,9 @@ from datetime import date
 import pytest
 
 from apps.data_management.models import Household
+from apps.partners.models import Partner, Programme
 from apps.reference_data.models import GeographicUnit
-from apps.referral.models import Programme, Referral
+from apps.referral.models import Referral
 from apps.referral.services import (
     ENROL_ACTIVE,
     ENROL_EXITED,
@@ -53,11 +54,21 @@ def household(db, geo):
 
 @pytest.fixture
 def programme(db):
+    # Canonical Programme (ADR-0015) requires a Partner FK and uses
+    # `status` instead of `is_active`. Webhook secret cleartext lives
+    # in webhook_secret_encrypted; the field's prep code accepts str.
+    opm = Partner.objects.create(
+        code="OPM", name="Office of the Prime Minister",
+        type="ministry", status="active",
+    )
     return Programme.objects.create(
+        partner=opm,
         code="PDM", name="Parish Development Model",
+        kind="cash_transfer",
+        status="active",
         webhook_url="https://pdm.example/incoming",
-        webhook_secret="test-secret",
-        dsa_reference="DSA-OPM-PDM-2026-001",
+        webhook_secret_encrypted=b"test-secret",
+        dsa_reference_legacy="DSA-OPM-PDM-2026-001",
     )
 
 
@@ -71,9 +82,9 @@ class TestSendReferral:
         assert r.household_id == household.id
 
     def test_inactive_programme_refused(self, household, programme):
-        programme.is_active = False
-        programme.save()
-        with pytest.raises(ReferralError, match="inactive"):
+        programme.status = "draft"
+        programme.save(update_fields=["status"])
+        with pytest.raises(ReferralError, match="not active"):
             send_referral(programme=programme, household=household, actor="op-1")
 
 

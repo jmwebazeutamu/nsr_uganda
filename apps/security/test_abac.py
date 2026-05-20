@@ -128,11 +128,17 @@ class TestScopeAcrossFKRelations:
     def test_referral_visible_only_when_household_in_scope(
         self, db, django_user_model, two_sub_regions, households_in_each,
     ):
-        from apps.referral.models import Programme
+        from apps.partners.models import Partner, Programme
         from apps.referral.services import send_referral
 
+        opm = Partner.objects.create(
+            code="OPM", name="OPM", type="ministry", status="active",
+        )
         prog = Programme.objects.create(
-            code="PDM-T", name="PDM (test)", webhook_url="https://x", webhook_secret="s",
+            partner=opm, code="PDM-T", name="PDM (test)",
+            kind="cash_transfer", status="active",
+            webhook_url="https://x",
+            webhook_secret_encrypted=b"s",
         )
         # One referral per household — one in each sub-region.
         for hh in households_in_each.values():
@@ -153,11 +159,17 @@ class TestScopeAcrossFKRelations:
     def test_referral_invisible_to_unscoped_user(
         self, db, django_user_model, households_in_each,
     ):
-        from apps.referral.models import Programme
+        from apps.partners.models import Partner, Programme
         from apps.referral.services import send_referral
 
+        opm = Partner.objects.create(
+            code="OPM", name="OPM", type="ministry", status="active",
+        )
         prog = Programme.objects.create(
-            code="NUSAF-T", name="NUSAF (test)", webhook_url="https://x", webhook_secret="s",
+            partner=opm, code="NUSAF-T", name="NUSAF (test)",
+            kind="cash_transfer", status="active",
+            webhook_url="https://x",
+            webhook_secret_encrypted=b"s",
         )
         for hh in households_in_each.values():
             send_referral(programme=prog, household=hh, actor="op")
