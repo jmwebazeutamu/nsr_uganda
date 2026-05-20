@@ -4,6 +4,34 @@ Notable changes to outbound API contracts. Entries are dated and tied to the com
 
 ---
 
+## 2026-05-20 — US-S27-011 — DRS query builder wired end-to-end
+
+**Affected endpoints**: no API contract changes. The wiring is purely on the design harness — the wizard now collects real query-builder state and POSTs it into the existing `request_payload` shape.
+
+### What changed
+
+- **`ScopeStep` is a real controlled radio.** Entity choice (`household` | `member`) is captured in wizard state. Referral / grievance entities remain disabled per MVP DRS scope. The selected entity travels into the request via the `requester_note` field (see below).
+- **`BuildStep` is now a real filter builder**, scoped to what `validate_against_dsa` actually accepts:
+  - **Sub-region multi-select** populated from `GET /api/v1/reference-data/geographic-units/?level=sub_region`. Selected codes flow into `request_payload.sub_region_codes`.
+  - **Programme multi-select** populated from `GET /api/v1/programmes/?status=active`. Selected codes flow into `request_payload.programme_codes`.
+  - **Row cap** numeric input. Flows into `request_payload.max_rows`. Blank → omitted; the DSA's `monthly_row_budget` still gates delivery server-side.
+  - The prior "AND group / nested group / type-aware operator" stub was removed. That UI would need a query AST evaluator the backend doesn't have; intentionally left for a follow-up beyond MVP.
+- **`DeliveryStep` lists the live `schema.delivery_methods`**. Selected method does NOT flow into `request_payload` (the validator doesn't have a delivery slot — DRS-O-02 will add one); it travels via `requester_note` so the operator can honour it at delivery time.
+- **`SubmitStep` summary card** mirrors the captured state (DSA reference, entity, sub-regions, programmes, row cap, field count, delivery). No more "~47,233 rows" fiction.
+- **`confirmSubmit` posts a real payload**: `request_payload = {fields, sub_region_codes?, programme_codes?, max_rows?}`, top-level `dsa` and `requester_note = "entity=… · delivery=…"` so the audit chain captures the partner's intent.
+
+### Backend behaviour observed by this slice
+
+- The existing `DataRequestSerializer` already exposes `requester_note` as a writable field at create time. No backend code change in this slice.
+- `validate_against_dsa` enforces sub-region codes against the DSA's `geographic_scope` and programme codes against the DSA's `programmes` relation; field groups against `field_scope`; `max_rows` against `monthly_row_budget` plus the trailing-30d cumulative budget. Any violation surfaces verbatim in the wizard's toast.
+
+### What still isn't wired
+
+- **Purpose / retention / recipient list inputs on the SubmitStep**. The DataRequest model carries `requester_note` (one free-text field) but not separate columns for these. Adding them is a model change that belongs in the DPO review surface slice, not the wizard.
+- **PreviewStep** still renders hardcoded household rows. A real match-estimate / sample endpoint would need to live in `apps/data_requests` first.
+
+---
+
 ## 2026-05-20 — US-S27-010 — DRS pipeline wiring (builder-schema `dsa_id`, submit, download)
 
 **Affected endpoints**: `/api/v1/drs/requests/builder-schema/` adds one field; the request submit + bundle download flows are now wired end-to-end from the DRS wizard and partner portal.

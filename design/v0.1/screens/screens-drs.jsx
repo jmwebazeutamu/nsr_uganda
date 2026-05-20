@@ -520,6 +520,18 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
   // tail-names ("registry_id") are the placeholder. Defaults are
   // empty — the user picks intentionally.
   const [selectedFields, setSel] = useStateDRS(new Set());
+  // US-S27-011 — captured query-builder state that flows into the
+  // submit payload. Backend validator (validate_against_dsa) only
+  // recognises fields / sub_region_codes / programme_codes /
+  // max_rows; entity is derived from field prefix; delivery method
+  // is metadata for the operator to honour at delivery time.
+  const [entity, setEntity] = useStateDRS("household");
+  const [subRegionCodes, setSubRegionCodes] = useStateDRS(new Set());
+  const [programmeCodes, setProgrammeCodes] = useStateDRS(new Set());
+  const [maxRows, setMaxRows] = useStateDRS("");
+  const [deliveryMethod, setDeliveryMethod] = useStateDRS("");
+  const [subRegions, setSubRegions] = useStateDRS([]);  // [{code, name}]
+  const [programmes, setProgrammes] = useStateDRS([]);  // [{code, name, status}]
   const [submitOpen, setSubmitOpen] = useStateDRS(false);
   const [submitting, setSubmitting] = useStateDRS(false);
   const [toast, setToast] = useStateDRS("");
@@ -545,7 +557,51 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
       headers: { Accept: "application/json" },
     })
       .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
-      .then(data => { if (!cancelled) setSchema(data); })
+      .then(data => {
+        if (cancelled) return;
+        setSchema(data);
+        // Pre-pick the first delivery method the schema offers so
+        // the partner doesn't see a blank picker.
+        if ((data.delivery_methods || []).length > 0) {
+          setDeliveryMethod(data.delivery_methods[0].id);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // US-S27-011 — live reference data for the BuildStep filters.
+  // Geographic units at sub_region level back the geographic
+  // filter; programmes back the programme filter. Both fall back
+  // to empty arrays so offline preview just renders empty pickers
+  // with an "(offline)" hint rather than fabricated data.
+  React.useEffect(() => {
+    let cancelled = false;
+    fetch(
+      "/api/v1/reference-data/geographic-units/?level=sub_region&status=current&page_size=200",
+      { credentials: "same-origin", headers: { Accept: "application/json" } },
+    )
+      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then(data => {
+        if (cancelled) return;
+        const rows = (data.results || data || []).map(u => ({
+          code: u.code, name: u.name,
+        }));
+        setSubRegions(rows);
+      })
+      .catch(() => {});
+    fetch(
+      "/api/v1/programmes/?status=active&page_size=200",
+      { credentials: "same-origin", headers: { Accept: "application/json" } },
+    )
+      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then(data => {
+        if (cancelled) return;
+        const rows = (data.results || data || []).map(p => ({
+          code: p.code, name: p.name,
+        })).filter(p => p.code);
+        setProgrammes(rows);
+      })
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
@@ -599,10 +655,25 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
     setSubmitting(true);
     const payload = {
       fields: [...selectedFields],
-      // max_rows is not yet captured by the wizard — the row cap
-      // editor lands when filter UI does. Send no cap; the DSA's
-      // monthly_row_budget still applies on the delivery side.
     };
+    if (subRegionCodes.size > 0) {
+      payload.sub_region_codes = [...subRegionCodes];
+    }
+    if (programmeCodes.size > 0) {
+      payload.programme_codes = [...programmeCodes];
+    }
+    if (maxRows && Number(maxRows) > 0) {
+      payload.max_rows = Number(maxRows);
+    }
+    // entity + deliveryMethod aren't on validate_against_dsa's
+    // contract today (entity is inferred from field prefix;
+    // delivery method awaits DRS-O-02). They travel via the
+    // top-level DataRequest.requester_note column so the operator
+    // can see what the partner intended at review time.
+    const noteBits = [];
+    if (entity) noteBits.push(`entity=${entity}`);
+    if (deliveryMethod) noteBits.push(`delivery=${deliveryMethod}`);
+    const requesterNote = noteBits.join(" · ");
     try {
       const createR = await fetch("/api/v1/drs/requests/", {
         method: "POST", credentials: "same-origin",
@@ -611,7 +682,11 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
           "X-CSRFToken": _odrsCsrf(),
           Accept: "application/json",
         },
-        body: JSON.stringify({ dsa: schema.dsa_id, request_payload: payload }),
+        body: JSON.stringify({
+          dsa: schema.dsa_id,
+          request_payload: payload,
+          requester_note: requesterNote,
+        }),
       });
       if (!createR.ok) {
         const body = await createR.json().catch(() => ({}));
@@ -698,12 +773,46 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
         })}
       </div>
 
-      {step === 'scope' && <ScopeStep/>}
-      {step === 'build' && <BuildStep/>}
+      {step === 'scope' && <ScopeStep value={entity} onChange={setEntity}/>}
+      {step === 'build' && <BuildStep
+        subRegions={subRegions}
+        programmes={programmes}
+        subRegionCodes={subRegionCodes}
+        programmeCodes={programmeCodes}
+        maxRows={maxRows}
+        onToggleSubRegion={code => {
+          const next = new Set(subRegionCodes);
+          next.has(code) ? next.delete(code) : next.add(code);
+          setSubRegionCodes(next);
+        }}
+        onToggleProgramme={code => {
+          const next = new Set(programmeCodes);
+          next.has(code) ? next.delete(code) : next.add(code);
+          setProgrammeCodes(next);
+        }}
+        onMaxRows={setMaxRows}
+        dsaBudget={schema?.dsa_reference}
+      />}
       {step === 'fields' && <FieldStep selected={selectedFields} onToggle={toggleField} fields={effectiveFields}/>}
       {step === 'preview' && <PreviewStep selected={selectedFields}/>}
-      {step === 'delivery' && <DeliveryStep/>}
-      {step === 'submit' && <SubmitStep onSubmit={() => setSubmitOpen(true)} selected={selectedFields}/>}
+      {step === 'delivery' && <DeliveryStep
+        methods={schema?.delivery_methods || []}
+        value={deliveryMethod}
+        onChange={setDeliveryMethod}
+      />}
+      {step === 'submit' && <SubmitStep
+        onSubmit={() => setSubmitOpen(true)}
+        entity={entity}
+        selected={selectedFields}
+        subRegionCodes={subRegionCodes}
+        programmeCodes={programmeCodes}
+        maxRows={maxRows}
+        deliveryMethod={deliveryMethod}
+        subRegions={subRegions}
+        programmes={programmes}
+        deliveryMethods={schema?.delivery_methods || []}
+        dsaReference={schema?.dsa_reference}
+      />}
 
       {/* Action bar */}
       <div style={{margin:'16px -24px 0', position:'sticky', bottom:0, zIndex:20, background:'var(--neutral-0)', borderTop:'1px solid var(--neutral-300)', padding:'12px 20px', display:'flex', gap:12, alignItems:'center', boxShadow:'0 -2px 8px rgba(0,0,0,0.04)'}}>
@@ -737,6 +846,8 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
           <div style={{display:'grid', gridTemplateColumns:'130px 1fr', rowGap:6, fontSize:13}}>
             <div className="muted">DSA</div>
             <div className="t-mono">{schema?.dsa_reference || "—"}</div>
+            <div className="muted">Entity</div>
+            <div style={{textTransform:'capitalize'}}>{entity}</div>
             <div className="muted">Fields</div>
             <div>
               {selectedFields.size} selected
@@ -744,12 +855,19 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
               {effectiveFields.filter(f => f[3]).length > 0 &&
                 ` (${effectiveFields.filter(f => f[3]).length} disabled by DSA)`}
             </div>
-            <div className="muted">Filters</div>
-            <div className="muted">— <span className="t-cap">(filter editor wiring pending — submitting unfiltered)</span></div>
+            <div className="muted">Sub-regions</div>
+            <div>{subRegionCodes.size === 0 ? "(any)" : `${subRegionCodes.size} selected`}</div>
+            <div className="muted">Programmes</div>
+            <div>{programmeCodes.size === 0 ? "(any)" : `${programmeCodes.size} selected`}</div>
             <div className="muted">Row cap</div>
-            <div className="muted">— <span className="t-cap">(row-cap input wiring pending — DSA monthly budget still applies)</span></div>
+            <div>{maxRows ? Number(maxRows).toLocaleString() : "(unbounded — DSA monthly budget applies)"}</div>
             <div className="muted">Delivery</div>
-            <div className="muted">— <span className="t-cap">(delivery method wiring pending — defaults apply)</span></div>
+            <div>
+              {deliveryMethod
+                ? <span className="t-mono">{deliveryMethod}</span>
+                : <span className="muted">(none selected)</span>}
+              <span className="t-cap"> · travels via requester_note until DRS-O-02</span>
+            </div>
           </div>
           <div className="tint-update" style={{padding:12, borderRadius:6, borderLeft:'3px solid var(--accent-update)'}}>
             <div className="row gap-2"><Icon name="shield" size={14} color="var(--accent-update)"/><strong className="t-bodysm">DPIA + DPO review required</strong></div>
@@ -766,67 +884,164 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
 /* ============================================================
    Step 1 — Scope
    ============================================================ */
-const ScopeStep = () => (
-  <div style={{display:'grid', gridTemplateColumns:'1fr 360px', gap:16}}>
-    <div className="card">
-      <div className="card-header"><h3 className="t-h3" style={{margin:0}}>Choose entity</h3><span className="t-cap">Only entities allowed by your active DSA</span></div>
-      <div style={{padding:20, display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:12}}>
-        {[
-          ["Household","12.1M records · primary entity", true, true],
-          ["Member","48.1M records · per-individual",   true, false],
-          ["Referral summary","Programme referrals · aggregated", true, false],
-          ["Grievance summary","Case-level summary",   false, false],
-        ].map(([name, sub, allowed, selected]) => (
-          <button key={name} disabled={!allowed} style={{
-            textAlign:'left', padding:16, borderRadius:6,
-            border: `2px solid ${selected ? 'var(--accent-system)' : 'var(--neutral-300)'}`,
-            background: selected ? 'var(--accent-system-bg)' : !allowed ? 'var(--neutral-100)' : 'var(--neutral-0)',
-            opacity: allowed ? 1 : 0.5, cursor: allowed ? 'pointer' : 'not-allowed',
-          }}>
-            <div className="row gap-2"><strong>{name}</strong>{selected && <Icon name="check" size={14} color="var(--accent-system)"/>}</div>
-            <div className="t-cap mt-1">{sub}</div>
-            {!allowed && <div className="t-cap mt-2" style={{color:'var(--accent-danger)'}}><Icon name="lock" size={11}/> Not in DSA scope</div>}
-          </button>
-        ))}
+// US-S27-011 — controlled entity radio. The backend infers the
+// entity from field-prefix on the request_payload.fields list, so
+// `entity` is a UI hint rather than a separate payload field —
+// switching to "member" surfaces member-prefixed fields in the
+// field selector while household-prefixed ones get filtered out
+// on the FieldStep. Referral and grievance entities are out of
+// the MVP DRS scope; greyed out per ADR-0011's narrow MVP grant.
+const ScopeStep = ({ value, onChange }) => {
+  const options = [
+    { id: "household", label: "Household", sub: "Primary entity · one row per registered household", enabled: true },
+    { id: "member",    label: "Member",    sub: "One row per individual within a household", enabled: true },
+    { id: "referral",  label: "Referral summary", sub: "Programme referrals · aggregated", enabled: false },
+    { id: "grievance", label: "Grievance summary", sub: "Case-level summary", enabled: false },
+  ];
+  return (
+    <div style={{display:'grid', gridTemplateColumns:'1fr 360px', gap:16}}>
+      <div className="card">
+        <div className="card-header"><h3 className="t-h3" style={{margin:0}}>Choose entity</h3><span className="t-cap">Field selector adapts to this choice</span></div>
+        <div style={{padding:20, display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:12}}>
+          {options.map(o => {
+            const selected = value === o.id;
+            return (
+              <button
+                key={o.id}
+                disabled={!o.enabled}
+                onClick={() => o.enabled && onChange(o.id)}
+                style={{
+                  textAlign:'left', padding:16, borderRadius:6,
+                  border: `2px solid ${selected ? 'var(--accent-system)' : 'var(--neutral-300)'}`,
+                  background: selected ? 'var(--accent-system-bg)' : !o.enabled ? 'var(--neutral-100)' : 'var(--neutral-0)',
+                  opacity: o.enabled ? 1 : 0.5, cursor: o.enabled ? 'pointer' : 'not-allowed',
+                }}
+              >
+                <div className="row gap-2"><strong>{o.label}</strong>{selected && <Icon name="check" size={14} color="var(--accent-system)"/>}</div>
+                <div className="t-cap mt-1">{o.sub}</div>
+                {!o.enabled && <div className="t-cap mt-2" style={{color:'var(--accent-danger)'}}><Icon name="lock" size={11}/> Outside MVP DRS scope</div>}
+              </button>
+            );
+          })}
+        </div>
       </div>
+      <DSACard/>
     </div>
-    <DSACard/>
-  </div>
-);
+  );
+};
 
 /* ============================================================
    Step 2 — Build
    ============================================================ */
-const BuildStep = () => (
+// US-S27-011 — controlled filter builder. Three real scopes the
+// backend validator (validate_against_dsa) recognises:
+//   - sub_region_codes: list of UBOS sub-region codes
+//   - programme_codes:  list of programme codes
+//   - max_rows:         numeric ceiling
+// Anything else (PMT band ranges, updated-at windows, arbitrary
+// AND-groups) would need a query-AST evaluator the backend doesn't
+// have yet; intentionally left out of MVP per ADR §11.4.
+const BuildStep = ({
+  subRegions, programmes,
+  subRegionCodes, programmeCodes, maxRows,
+  onToggleSubRegion, onToggleProgramme, onMaxRows,
+}) => (
   <div style={{display:'grid', gridTemplateColumns:'1fr 360px', gap:16}}>
     <div className="card">
       <div className="card-header">
         <div>
           <h3 className="t-h3" style={{margin:0}}>Filter expression</h3>
-          <div className="t-cap">Group: AND · type-aware operators</div>
+          <div className="t-cap">Sub-region + programme scopes · row cap · combined with AND</div>
         </div>
-        <button className="btn btn-sm"><Icon name="plus" size={14}/> Add filter</button>
       </div>
-      <div style={{padding:16, position:'relative'}}>
-        <div style={{position:'absolute', left:36, top:32, bottom:32, width:2, background:'var(--neutral-200)', borderRadius:1}}/>
-
-        <FilterRow op="AND" first field="Sub-region" cmp="IN" value={["Karamoja","West Nile"]}/>
-        <FilterRow op="AND" field="PMT band" cmp="IN" value={["Poorest 40%","Poorest 20%"]}/>
-        <FilterRow op="AND" field="Updated at" cmp="BETWEEN" value={["1 Apr 2026","14 May 2026"]}/>
-
-        <div style={{paddingLeft:64, marginTop:8}}>
-          <button className="btn btn-sm btn-ghost"><Icon name="plus" size={13}/> Add condition</button>
-          <button className="btn btn-sm btn-ghost" style={{marginLeft:6}}><Icon name="git" size={13}/> Add nested group</button>
+      <div style={{padding:16, display:'flex', flexDirection:'column', gap:18}}>
+        {/* Sub-region multi-select */}
+        <div>
+          <div className="row gap-2" style={{justifyContent:'space-between', alignItems:'baseline', marginBottom:8}}>
+            <strong className="t-bodysm">Sub-regions</strong>
+            <span className="t-cap">{subRegionCodes.size} of {subRegions.length} selected</span>
+          </div>
+          {subRegions.length === 0
+            ? <div className="t-cap muted">(no sub-regions loaded — reference data unreachable)</div>
+            : <div style={{display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:8}}>
+                {subRegions.map(u => {
+                  const on = subRegionCodes.has(u.code);
+                  return (
+                    <label key={u.code} style={{
+                      display:'flex', alignItems:'center', gap:8, cursor:'pointer',
+                      padding:'8px 10px', borderRadius:4,
+                      background: on ? 'var(--accent-system-bg)' : 'var(--neutral-50)',
+                      border: `1px solid ${on ? 'var(--accent-system)' : 'var(--neutral-200)'}`,
+                    }}>
+                      <input type="checkbox" checked={on}
+                        onChange={() => onToggleSubRegion(u.code)}/>
+                      <div style={{flex:1}}>
+                        <div className="t-bodysm" style={{fontWeight: on ? 600 : 400}}>{u.name}</div>
+                        <div className="t-cap t-mono">{u.code}</div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>}
         </div>
 
         <div className="divider"/>
 
-        <div className="t-cap mb-2" style={{marginBottom:6}}>EXPRESSION PREVIEW</div>
+        {/* Programme multi-select */}
+        <div>
+          <div className="row gap-2" style={{justifyContent:'space-between', alignItems:'baseline', marginBottom:8}}>
+            <strong className="t-bodysm">Programmes</strong>
+            <span className="t-cap">{programmeCodes.size} of {programmes.length} selected</span>
+          </div>
+          {programmes.length === 0
+            ? <div className="t-cap muted">(no programmes available on your DSA scope)</div>
+            : <div style={{display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap:8}}>
+                {programmes.map(p => {
+                  const on = programmeCodes.has(p.code);
+                  return (
+                    <label key={p.code} style={{
+                      display:'flex', alignItems:'center', gap:8, cursor:'pointer',
+                      padding:'8px 10px', borderRadius:4,
+                      background: on ? 'var(--accent-system-bg)' : 'var(--neutral-50)',
+                      border: `1px solid ${on ? 'var(--accent-system)' : 'var(--neutral-200)'}`,
+                    }}>
+                      <input type="checkbox" checked={on}
+                        onChange={() => onToggleProgramme(p.code)}/>
+                      <div style={{flex:1}}>
+                        <div className="t-bodysm" style={{fontWeight: on ? 600 : 400}}>{p.name}</div>
+                        <div className="t-cap t-mono">{p.code}</div>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>}
+        </div>
+
+        <div className="divider"/>
+
+        {/* Row cap */}
+        <div>
+          <div className="row gap-2" style={{justifyContent:'space-between', alignItems:'baseline', marginBottom:8}}>
+            <strong className="t-bodysm">Row cap (max_rows)</strong>
+            <span className="t-cap">Optional · DSA monthly budget applies even if blank</span>
+          </div>
+          <input
+            className="field-input"
+            type="number" min={1} step={1000} placeholder="e.g. 10000"
+            value={maxRows}
+            onChange={e => onMaxRows(e.target.value.replace(/[^0-9]/g, ""))}
+            style={{maxWidth:240}}
+          />
+        </div>
+
+        <div className="divider"/>
+
+        <div className="t-cap" style={{marginBottom:6}}>EXPRESSION PREVIEW</div>
         <div className="t-mono" style={{padding:12, background:'var(--neutral-50)', borderRadius:4, fontSize:12, lineHeight:1.6, color:'var(--neutral-900)', whiteSpace:'pre-wrap', border:'1px solid var(--neutral-200)'}}>
 {`AND (
-  subregion IN ('Karamoja', 'West Nile'),
-  pmt_band IN ('Poorest 40%', 'Poorest 20%'),
-  updated_at BETWEEN '2026-04-01' AND '2026-05-14'
+  sub_region_codes IN ${subRegionCodes.size === 0 ? '(any)' : `(${[...subRegionCodes].map(c => `'${c}'`).join(", ")})`},
+  programme_codes  IN ${programmeCodes.size === 0 ? '(any)' : `(${[...programmeCodes].map(c => `'${c}'`).join(", ")})`},
+  max_rows = ${maxRows || "(unbounded — DSA budget applies)"}
 )`}
         </div>
       </div>
@@ -834,52 +1049,7 @@ const BuildStep = () => (
 
     <div className="col gap-3">
       <DSACard/>
-      <div className="card">
-        <div className="card-header" style={{padding:'12px 16px'}}><h3 className="t-h3" style={{margin:0}}>Geographic tree picker</h3><span className="t-cap">UBOS 2024 frame</span></div>
-        <div style={{padding:14}}>
-          <GeoTree/>
-        </div>
-      </div>
     </div>
-  </div>
-);
-
-const FilterRow = ({ op, field, cmp, value, first }) => (
-  <div style={{display:'flex', gap:10, marginBottom:8, alignItems:'center'}}>
-    <div style={{width:56, textAlign:'right'}}>
-      {first ? <span className="t-cap">WHERE</span>
-        : <Chip size="sm" tone="system">{op}</Chip>}
-    </div>
-    <div style={{flex:1, display:'grid', gridTemplateColumns:'180px 130px 1fr auto', gap:8, padding:'8px 10px', background:'var(--neutral-0)', border:'1px solid var(--neutral-300)', borderRadius:4}}>
-      <select className="field-select" style={{height:28, fontSize:12.5}}><option>{field}</option></select>
-      <select className="field-select" style={{height:28, fontSize:12.5}}><option>{cmp}</option></select>
-      <div className="row-wrap" style={{padding:'4px 8px', background:'var(--neutral-50)', borderRadius:3, border:'1px solid var(--neutral-200)'}}>
-        {value.map((v, i) => <Chip key={i} size="sm">{v}</Chip>)}
-        <span className="t-cap">+ add value</span>
-      </div>
-      <button className="btn btn-sm btn-ghost"><Icon name="x" size={14}/></button>
-    </div>
-  </div>
-);
-
-const GeoTree = () => (
-  <div className="t-bodysm">
-    {[
-      ["Karamoja", true, "selected · 4 districts"],
-      ["West Nile", true, "selected · 5 districts"],
-      ["Acholi", false, ""],
-      ["Lango", false, ""],
-      ["Teso", false, ""],
-    ].map(([name, on, sub]) => (
-      <div key={name} style={{padding:'6px 8px', borderRadius:3, background: on ? 'var(--accent-system-bg)' : 'transparent', display:'flex', alignItems:'center', gap:8, marginBottom:2}}>
-        <input type="checkbox" checked={on} readOnly/>
-        <div style={{flex:1}}>
-          <div style={{fontWeight: on ? 600 : 400}}>{name}</div>
-          {sub && <div className="t-cap">{sub}</div>}
-        </div>
-        <Icon name="chevronRight" size={14} color="var(--neutral-500)"/>
-      </div>
-    ))}
   </div>
 );
 
@@ -1063,41 +1233,47 @@ const PreviewStep = ({ selected }) => {
 /* ============================================================
    Step 5 — Delivery
    ============================================================ */
-const DeliveryStep = () => {
-  const [choice, setChoice] = useStateDRS("excel");
-  const opts = [
-    { id: "excel", title: "Excel · password-protected",      sub: "Single .xlsx · sent to recipient list · ~18 MB · 7d TTL", icon: "file" },
-    { id: "csv",   title: "CSV · 7z password-protected",     sub: "UTF-8 CSV inside 7-zip archive · ~5 MB · 7d TTL", icon: "file" },
-    { id: "api",   title: "Paginated API · token endpoint",  sub: "Pull pages of 1,000 · 30d token · throttled 60 req/min", icon: "database" },
-  ];
+// US-S27-011 — delivery channel pulled from the live builder-
+// schema response (apps.data_requests.builder_schema.DELIVERY_METHODS).
+// Today the captured `deliveryMethod` is metadata for the operator
+// to honour at delivery time; the DRS submit endpoint doesn't have
+// a slot for it (DRS-O-02 wiring will add one). Until then the
+// chosen method just travels via the audit chain via the request's
+// `requester_note` field — explicit gap, not silent fudge.
+const DeliveryStep = ({ methods, value, onChange }) => {
+  const iconFor = id => id === "portal_download" ? "download"
+    : id === "sftp_push" ? "database"
+    : id === "webhook"   ? "git"
+    : "file";
   return (
     <div style={{display:'grid', gridTemplateColumns:'1fr 360px', gap:16}}>
       <div className="card">
         <div className="card-header"><h3 className="t-h3" style={{margin:0}}>Delivery channel</h3></div>
         <div style={{padding:16, display:'flex', flexDirection:'column', gap:10}}>
-          {opts.map(o => (
-            <button key={o.id} onClick={() => setChoice(o.id)} style={{
-              textAlign:'left', padding:16, borderRadius:6,
-              border:`2px solid ${choice === o.id ? 'var(--accent-system)' : 'var(--neutral-300)'}`,
-              background: choice === o.id ? 'var(--accent-system-bg)' : 'var(--neutral-0)',
-              display:'flex', alignItems:'center', gap:14, cursor:'pointer',
-            }}>
-              <div style={{width:36, height:36, borderRadius:6, background:'var(--neutral-100)', display:'grid', placeItems:'center'}}><Icon name={o.icon} size={18}/></div>
-              <div style={{flex:1}}>
-                <div className="row gap-2"><strong>{o.title}</strong>{choice === o.id && <Icon name="check" size={14} color="var(--accent-system)"/>}</div>
-                <div className="t-cap">{o.sub}</div>
-              </div>
-            </button>
-          ))}
-
-          <div className="divider"/>
-
-          <Field label="Recipient list (must match DSA)" required>
-            <input className="field-input" defaultValue="data@opm.go.ug; steward.opm@pdm.go.ug"/>
-          </Field>
-          <Field label="Password (sent via separate channel)" required>
-            <input className="field-input t-mono" type="password" defaultValue="P5!nKLqV2x"/>
-          </Field>
+          {methods.length === 0
+            ? <div className="t-cap muted">(no delivery methods available — schema offline)</div>
+            : methods.map(m => {
+                const on = value === m.id;
+                return (
+                  <button key={m.id} onClick={() => onChange(m.id)} style={{
+                    textAlign:'left', padding:16, borderRadius:6,
+                    border:`2px solid ${on ? 'var(--accent-system)' : 'var(--neutral-300)'}`,
+                    background: on ? 'var(--accent-system-bg)' : 'var(--neutral-0)',
+                    display:'flex', alignItems:'center', gap:14, cursor:'pointer',
+                  }}>
+                    <div style={{width:36, height:36, borderRadius:6, background:'var(--neutral-100)', display:'grid', placeItems:'center'}}><Icon name={iconFor(m.id)} size={18}/></div>
+                    <div style={{flex:1}}>
+                      <div className="row gap-2"><strong>{m.label}</strong>{on && <Icon name="check" size={14} color="var(--accent-system)"/>}</div>
+                      <div className="t-cap t-mono">{m.id}</div>
+                    </div>
+                  </button>
+                );
+              })}
+          <div className="t-cap muted" style={{marginTop:6}}>
+            The DRS submit endpoint doesn't carry a delivery-method
+            field yet (DRS-O-02). Your selection is recorded for the
+            operator to honour at delivery time.
+          </div>
         </div>
       </div>
       <DSACard/>
@@ -1108,42 +1284,64 @@ const DeliveryStep = () => {
 /* ============================================================
    Step 6 — Submit
    ============================================================ */
-const SubmitStep = ({ onSubmit, selected }) => (
-  <div style={{display:'grid', gridTemplateColumns:'1fr 360px', gap:16}}>
-    <div className="card">
-      <div className="card-header"><h3 className="t-h3" style={{margin:0}}>Purpose, retention, recipients</h3></div>
-      <div style={{padding:16}}>
-        <Field label="Purpose of use" required hint="Will be reviewed by DPO under US-101.">
-          <textarea className="field-textarea" rows={3} defaultValue="Identify candidate households in Karamoja and West Nile for the OPM-PDM Q2 2026 supplementary disbursement, restricted to the Poorest 40% PMT band updated in the last 6 weeks."/>
-        </Field>
-        <div className="field-row mt-4">
-          <Field label="Retention pledge" required>
-            <select className="field-select"><option>Retain 90 days, then destroy</option><option>Retain 180 days</option><option>Retain 12 months</option></select>
-          </Field>
-          <Field label="Aggregation level" required>
-            <select className="field-select"><option>Row-level (PII masked)</option><option>Parish aggregate</option><option>District aggregate</option></select>
-          </Field>
-        </div>
-        <Field label="Recipient list (DSA-linked)" required>
-          <input className="field-input" defaultValue="data@opm.go.ug; steward.opm@pdm.go.ug; nsr-unit@mglsd.go.ug"/>
-        </Field>
-      </div>
-    </div>
-    <div className="col gap-3">
+// US-S27-011 — summary card mirrors the captured query-builder
+// state instead of fabricated numbers. The purpose / retention /
+// recipient inputs on the left are still presentational — none
+// of those fields are persisted by /api/v1/drs/requests/ today;
+// the DPO-side review surface for them lands later. Marked
+// honestly with a small banner so the user sees what isn't yet
+// flowing through.
+const SubmitStep = ({
+  onSubmit, entity, selected,
+  subRegionCodes, programmeCodes, maxRows, deliveryMethod,
+  subRegions, programmes, deliveryMethods, dsaReference,
+}) => {
+  const deliveryLabel = (deliveryMethods.find(m => m.id === deliveryMethod) || {}).label || "—";
+  const subRegionLabel = subRegionCodes.size === 0
+    ? "(any — DSA scope applies)"
+    : [...subRegionCodes].slice(0, 4).join(", ") + (subRegionCodes.size > 4 ? `, +${subRegionCodes.size - 4} more` : "");
+  const programmeLabel = programmeCodes.size === 0
+    ? "(any — DSA scope applies)"
+    : [...programmeCodes].slice(0, 4).join(", ") + (programmeCodes.size > 4 ? `, +${programmeCodes.size - 4} more` : "");
+  return (
+    <div style={{display:'grid', gridTemplateColumns:'1fr 360px', gap:16}}>
       <div className="card">
-        <div className="card-header" style={{padding:'12px 16px'}}><h3 className="t-h3" style={{margin:0}}>Summary</h3></div>
-        <div style={{padding:16, display:'grid', gridTemplateColumns:'130px 1fr', rowGap:6, fontSize:13}}>
-          <div className="muted">Entity</div><div>Household</div>
-          <div className="muted">Filters</div><div>3 (AND group)</div>
-          <div className="muted">Fields</div><div>{selected.size}</div>
-          <div className="muted">Match estimate</div><div>~47,233</div>
-          <div className="muted">Delivery</div><div>Excel · 7d TTL</div>
-          <div className="muted">Query hash</div><div className="t-mono">a4e9d2f1…b7c3</div>
+        <div className="card-header"><h3 className="t-h3" style={{margin:0}}>Purpose, retention, recipients</h3></div>
+        <div style={{padding:16}}>
+          <Field label="Purpose of use" hint="DPO-facing note; not yet persisted by the DRS submit endpoint.">
+            <textarea className="field-textarea" rows={3} placeholder="State the legal basis and use case in your own words. The DPO will review on the operator side."/>
+          </Field>
+          <div className="t-cap muted" style={{marginTop:8}}>
+            Purpose / retention pledge / recipient list controls are
+            placeholders — the DRS submit endpoint will accept them in
+            a follow-up slice (the DPO review surface).
+          </div>
         </div>
       </div>
-      <DSACard/>
+      <div className="col gap-3">
+        <div className="card">
+          <div className="card-header" style={{padding:'12px 16px'}}><h3 className="t-h3" style={{margin:0}}>Summary</h3></div>
+          <div style={{padding:16, display:'grid', gridTemplateColumns:'130px 1fr', rowGap:6, fontSize:13}}>
+            <div className="muted">DSA</div>
+            <div className="t-mono">{dsaReference || "—"}</div>
+            <div className="muted">Entity</div>
+            <div style={{textTransform:'capitalize'}}>{entity}</div>
+            <div className="muted">Sub-regions</div>
+            <div>{subRegionLabel}</div>
+            <div className="muted">Programmes</div>
+            <div>{programmeLabel}</div>
+            <div className="muted">Row cap</div>
+            <div>{maxRows ? Number(maxRows).toLocaleString() : "(unbounded)"}</div>
+            <div className="muted">Fields</div>
+            <div>{selected.size}</div>
+            <div className="muted">Delivery</div>
+            <div>{deliveryLabel}</div>
+          </div>
+        </div>
+        <DSACard/>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 Object.assign(window, { DRSScreen });
