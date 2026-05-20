@@ -4,6 +4,83 @@ Notable changes to outbound API contracts. Entries are dated and tied to the com
 
 ---
 
+## 2026-05-20 — US-S27-003 / ADR-0016 — DSA scope-edit endpoint + version-bump on active
+
+**Affected endpoints**:
+
+| New                                            | Effect on existing                                 |
+|------------------------------------------------|----------------------------------------------------|
+| `POST /api/v1/dsas/{id}/edit-scope/`           | `PATCH /api/v1/dsas/{id}/` now rejects active rows |
+
+### What changed
+
+- **`POST /api/v1/dsas/{id}/edit-scope/`** is the new orchestrating
+  action for scope changes. Body: any subset of `field_scope`,
+  `entities_scope`, `monthly_row_budget`, `sensitive_data_handling`,
+  `retention_days`, `classification`, `dpia_document_ref`,
+  `breach_sla_hours`, `geographic_scope_ids`. Unknown keys are
+  ignored. Returns the DSA row the operator should display.
+
+  - **Draft DSAs**: changes land in place. Same `id`, same `version`,
+    no signature requirement. One `dsa_scope_changed` audit event
+    is emitted with `field_changes={before, after, version, editor}`.
+  - **Active DSAs**: per ADR-0016 §"Decision 2", an active DSA is a
+    signed legal instrument and its scope cannot mutate. The action
+    clones v(N) into a fresh v(N+1) **draft** (same `reference`,
+    `version+1`, programmes + geographic_scope M2M copied verbatim,
+    `effective_from`/`effective_to`/`signed_at` reset to NULL,
+    signatures empty). The requested changes apply to the clone;
+    v(N) is left untouched at `status="active"`. The returned row
+    is the new draft, ready for the existing
+    `/submit-for-signoff/` flow. Two audit events are emitted:
+    `clone` on the new row (with `source_dsa_id`, `source_version`,
+    `new_version`) and `dsa_scope_changed` on the new row.
+  - **Any other status** (`pending_signature`, `expiring`, `expired`,
+    `suspended`, `renewed`) → 400 with the message
+    "`DSA {reference} v{version} cannot be scope-edited in status {status!r}`".
+
+- **`PATCH /api/v1/dsas/{id}/` now rejects active rows** with HTTP
+  400 and a body `{detail, edit_scope_url}` pointing to the
+  `/edit-scope/` action. Drafts continue to PATCH in place as
+  before. This is the supporting guard for ADR-0016 §"Decision 2".
+
+- **`DataSharingAgreement.reference` is no longer `unique=True`**.
+  Uniqueness is now enforced solely by the existing composite
+  `UniqueConstraint(reference, version)`. Required so a v(N+1)
+  clone can share the partner-stable reference of v(N) (per
+  ADR-0011 + ADR-0016 §"Decision 3"). Migration
+  `partners/0007_dsa_reference_unique_drop.py` (forward-only).
+
+### New audit-event actions
+
+| Action               | Fired on                                    | `field_changes` keys                                  |
+|----------------------|---------------------------------------------|-------------------------------------------------------|
+| `dsa_scope_changed`  | Successful `/edit-scope/` on any allowed status | `before`, `after`, `version`, `editor`            |
+| `clone`              | Successful clone of v(N) → v(N+1) draft     | `source_dsa_id`, `source_version`, `new_version`      |
+
+`AuditEvent.action` is a 64-char `CharField` whose `choices=` list
+is an authoring-time hint only (the column accepts any string up
+to its `max_length` — see the comment in `apps/security/models.py`).
+Both new actions slot in without a schema change.
+
+### What hasn't changed yet
+
+- **`Programme.dsa` FK is NOT re-pointed on `/edit-scope/`**. Per
+  ADR-0016 §"Decision 4" the re-point happens only when the new
+  v(N+1) reaches `status="active"`. That step lands with US-S27-005
+  (renewal supersession) alongside the `dsa_superseded` audit
+  action.
+- **No new endpoint accepts the `programmes` M2M as a scope
+  change.** Programme attachments / detachments are a separate
+  workflow and stay on the canonical `/api/v1/programmes/` write
+  surface.
+- **`POST /api/v1/dsas/{id}/renew/`** is documented in ADR-0016
+  but lands with US-S27-005. The internal `clone_to_draft` helper
+  this story added in `apps.partners.services.scope` is the shared
+  primitive both endpoints call.
+
+---
+
 ## 2026-05-20 — US-S26 / ADR-0015 — referral.Programme consolidation + /api/v1/beneficiaries/
 
 **Affected endpoints**:

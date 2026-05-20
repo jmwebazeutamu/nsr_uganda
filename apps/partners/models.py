@@ -298,8 +298,13 @@ class DataSharingAgreement(models.Model):
 
     id = ULIDField(primary_key=True)
     reference = models.CharField(
-        max_length=64, unique=True,
-        help_text="Human-readable identifier (DSA-OPM-2026-001).",
+        max_length=64,
+        help_text=(
+            "Human-readable identifier (DSA-OPM-2026-001). Stable "
+            "across versions: v(N+1) shares the reference of v(N); "
+            "uniqueness is enforced by the (reference, version) "
+            "composite constraint."
+        ),
     )
     partner = models.ForeignKey(
         Partner, on_delete=models.PROTECT, related_name="dsas",

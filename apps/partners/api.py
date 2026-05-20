@@ -43,6 +43,7 @@ from .models import (
     PartnerUsageDaily,
     Programme,
 )
+from .services import scope as scope_service
 from .services import signature as signature_service
 from .services.activity import for_partner as activity_for_partner
 
@@ -446,8 +447,8 @@ attach_label_methodfields(
 )
 class DsaViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
                  viewsets.ModelViewSet):
-    """CRUD + submit-for-signoff action on Data Sharing Agreements.
-    ABAC-scoped by partner — see PartnerScopedQuerysetMixin."""
+    """CRUD + submit-for-signoff + edit-scope actions on Data Sharing
+    Agreements. ABAC-scoped by partner — see PartnerScopedQuerysetMixin."""
 
     audit_entity_type = "dsa"
     partner_id_field = "partner_id"
@@ -470,6 +471,26 @@ class DsaViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
         if st:
             qs = qs.filter(status=st)
         return qs
+
+    def partial_update(self, request, *args, **kwargs):
+        # Per ADR-0016 §"Decision 2", an active DSA is a signed legal
+        # instrument; its scope cannot change in place. Operators
+        # must go through /edit-scope/ which clones to a fresh v+1
+        # draft and forces the ADR-0012 sign-off chain.
+        instance = self.get_object()
+        if instance.status == "active":
+            return Response(
+                {
+                    "detail": (
+                        "Active DSAs cannot be patched in place. "
+                        "POST to /api/v1/dsas/{id}/edit-scope/ to clone "
+                        "to a draft v+1."
+                    ),
+                    "edit_scope_url": f"/api/v1/dsas/{instance.id}/edit-scope/",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().partial_update(request, *args, **kwargs)
 
     @extend_schema(
         tags=["partners"],
@@ -502,6 +523,47 @@ class DsaViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
             )
         dsa.refresh_from_db()
         return Response(self.get_serializer(dsa).data)
+
+    @extend_schema(
+        tags=["partners"],
+        summary="Edit a DSA's scope (ADR-0016)",
+        description=(
+            "Applies scope changes to a DSA. On a draft DSA the "
+            "changes land in place. On an active DSA the row is "
+            "cloned to a v+1 draft (the original is left untouched) "
+            "and the caller is expected to dispatch the new draft "
+            "through the ADR-0012 sign-off chain. Other statuses "
+            "(pending_signature, expired, suspended, renewed) are "
+            "rejected. Mutable fields: field_scope, entities_scope, "
+            "monthly_row_budget, sensitive_data_handling, "
+            "retention_days, classification, dpia_document_ref, "
+            "breach_sla_hours, geographic_scope_ids."
+        ),
+    )
+    @action(detail=True, methods=["post"], url_path="edit-scope")
+    def edit_scope(self, request, pk=None):
+        dsa = self.get_object()
+        try:
+            result = scope_service.edit_scope(
+                dsa,
+                actor=str(request.user.username or request.user.id),
+                **{
+                    k: v for k, v in request.data.items()
+                    if k in {
+                        "field_scope", "entities_scope",
+                        "monthly_row_budget", "sensitive_data_handling",
+                        "retention_days", "classification",
+                        "dpia_document_ref", "breach_sla_hours",
+                        "geographic_scope_ids",
+                    }
+                },
+            )
+        except scope_service.ScopeEditError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(self.get_serializer(result).data)
 
 
 # --- Programme CRUD viewset (US-S25-003) ------------------------------------
