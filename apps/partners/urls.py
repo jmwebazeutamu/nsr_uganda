@@ -13,6 +13,7 @@ from .api import (
     partners_summary,
     partners_top_consumers,
 )
+from .beneficiaries import beneficiaries_list
 
 router = DefaultRouter()
 router.register(r"partners", PartnerViewSet, basename="partner")
@@ -32,5 +33,6 @@ urlpatterns = [
          name="partner-usage"),
     path("partners/<str:partner_id>/programmes/", partner_programmes,
          name="partner-programmes"),
+    path("beneficiaries/", beneficiaries_list, name="beneficiaries-list"),
     *router.urls,
 ]
