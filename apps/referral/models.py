@@ -43,16 +43,14 @@ class Programme(models.Model):
         return f"{self.code} ({self.name})"
 
 
-class ReferralStatus(models.TextChoices):
-    SENT = "sent"
-    ACCEPTED = "accepted"
-    ENROLLED = "enrolled"
-    REJECTED = "rejected"
-    EXITED = "exited"
-
-
 class Referral(models.Model):
-    """One referral of a Household to a Programme."""
+    """One referral of a Household to a Programme.
+
+    Per ADR-0015 (US-S26-003) `status` is a plain CharField resolved
+    against the `referral_status` ChoiceList (sent / accepted /
+    enrolled / rejected / exited). The TextChoices class that used
+    to declare these values was removed.
+    """
 
     id = ULIDField(primary_key=True)
     programme = models.ForeignKey(Programme, on_delete=models.PROTECT, related_name="referrals")
@@ -61,8 +59,8 @@ class Referral(models.Model):
     )
 
     eligibility_rule_version = models.PositiveIntegerField(default=1)
-    status = models.CharField(max_length=24, choices=ReferralStatus.choices,
-                              default=ReferralStatus.SENT)
+    # Coded — referral_status ChoiceList (US-S26-002).
+    status = models.CharField(max_length=32, default="sent")
 
     sent_at = models.DateTimeField(auto_now_add=True)
     accepted_at = models.DateTimeField(null=True, blank=True)
@@ -88,14 +86,16 @@ class Referral(models.Model):
         return f"Referral {self.id} {self.household_id}->{self.programme_id} [{self.status}]"
 
 
-class EnrolmentStatus(models.TextChoices):
-    ENROLLED = "enrolled"
-    SUSPENDED = "suspended"
-    EXITED = "exited"
-
-
 class ProgrammeEnrolment(models.Model):
-    """Programme-side enrolment events pushed back to the NSR."""
+    """Programme-side enrolment events pushed back to the NSR.
+
+    Per ADR-0015 (US-S26-003) `status` is a plain CharField resolved
+    against the `programme_enrolment_status` ChoiceList (active /
+    suspended / pending / exited). The TextChoices class that used
+    to declare these values was removed; the data migration renames
+    existing 'enrolled' rows to 'active' to align with the
+    ChoiceList vocabulary (see ADR-0015 §"Decision 4").
+    """
 
     id = ULIDField(primary_key=True)
     programme = models.ForeignKey(Programme, on_delete=models.PROTECT, related_name="enrolments")
@@ -106,7 +106,8 @@ class ProgrammeEnrolment(models.Model):
         Referral, on_delete=models.PROTECT, related_name="enrolments", null=True, blank=True,
     )
 
-    status = models.CharField(max_length=24, choices=EnrolmentStatus.choices)
+    # Coded — programme_enrolment_status ChoiceList (US-S25-006).
+    status = models.CharField(max_length=32, default="active")
     effective_date = models.DateField()
     exit_reason = models.CharField(max_length=128, blank=True)
     payment_metadata = models.JSONField(default=dict, blank=True)

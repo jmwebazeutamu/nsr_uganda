@@ -21,12 +21,25 @@ from django.utils import timezone
 from apps.security.audit import emit as emit_audit
 
 from .models import (
-    EnrolmentStatus,
     Programme,
     ProgrammeEnrolment,
     Referral,
-    ReferralStatus,
 )
+
+# Coded values — sourced from the referral_status and
+# programme_enrolment_status ChoiceLists (US-S26-002 / US-S25-006).
+# Per ADR-0015 the TextChoices enums were removed; service code
+# uses the bare codes alongside the ChoiceList catalogue.
+REF_SENT     = "sent"
+REF_ACCEPTED = "accepted"
+REF_ENROLLED = "enrolled"  # terminal — referral became an enrolment
+REF_REJECTED = "rejected"
+REF_EXITED   = "exited"
+
+ENROL_ACTIVE    = "active"     # renamed from 'enrolled' per ADR-0015 §"Decision 4"
+ENROL_SUSPENDED = "suspended"
+ENROL_PENDING   = "pending"
+ENROL_EXITED    = "exited"
 
 
 class ReferralError(Exception):
@@ -49,7 +62,7 @@ def send_referral(*, programme: Programme, household, actor: str,
     referral = Referral.objects.create(
         programme=programme, household=household,
         eligibility_rule_version=eligibility_rule_version,
-        status=ReferralStatus.SENT,
+        status=REF_SENT,
     )
     emit_audit(
         "create", "referral", referral.id, actor=actor,
@@ -88,9 +101,9 @@ def send_referral_webhook(referral: Referral) -> str:
 @transaction.atomic
 def accept_referral(referral: Referral, *, actor: str,
                     programme_side_id: str = "") -> Referral:
-    if referral.status != ReferralStatus.SENT:
+    if referral.status != REF_SENT:
         raise ReferralError(f"only SENT can be accepted (got {referral.status})")
-    referral.status = ReferralStatus.ACCEPTED
+    referral.status = REF_ACCEPTED
     referral.accepted_at = timezone.now()
     if programme_side_id:
         referral.programme_side_id = programme_side_id
@@ -101,11 +114,11 @@ def accept_referral(referral: Referral, *, actor: str,
 
 @transaction.atomic
 def reject_referral(referral: Referral, *, actor: str, reason: str) -> Referral:
-    if referral.status not in (ReferralStatus.SENT, ReferralStatus.ACCEPTED):
+    if referral.status not in (REF_SENT, REF_ACCEPTED):
         raise ReferralError(f"cannot reject from {referral.status}")
     if not reason:
         raise ReferralError("reject requires a non-empty reason")
-    referral.status = ReferralStatus.REJECTED
+    referral.status = REF_REJECTED
     referral.rejected_at = timezone.now()
     referral.reason = reason
     referral.save(update_fields=["status", "rejected_at", "reason"])
@@ -120,17 +133,17 @@ def enrol_household(
     payment_metadata: dict | None = None,
 ) -> ProgrammeEnrolment:
     """ACCEPTED -> ENROLLED, and create the ProgrammeEnrolment row."""
-    if referral.status != ReferralStatus.ACCEPTED:
+    if referral.status != REF_ACCEPTED:
         raise ReferralError(f"only ACCEPTED can enrol (got {referral.status})")
     enrolment = ProgrammeEnrolment.objects.create(
         programme=referral.programme,
         household=referral.household,
         referral=referral,
-        status=EnrolmentStatus.ENROLLED,
+        status=ENROL_ACTIVE,
         effective_date=effective_date or timezone.now().date(),
         payment_metadata=payment_metadata or {},
     )
-    referral.status = ReferralStatus.ENROLLED
+    referral.status = REF_ENROLLED
     referral.enrolled_at = timezone.now()
     referral.save(update_fields=["status", "enrolled_at"])
     emit_audit(
@@ -146,17 +159,17 @@ def enrol_household(
 
 @transaction.atomic
 def exit_enrolment(enrolment: ProgrammeEnrolment, *, actor: str, reason: str) -> ProgrammeEnrolment:
-    if enrolment.status == EnrolmentStatus.EXITED:
+    if enrolment.status == ENROL_EXITED:
         raise ReferralError("already EXITED")
     if not reason:
         raise ReferralError("exit requires a reason")
-    enrolment.status = EnrolmentStatus.EXITED
+    enrolment.status = ENROL_EXITED
     enrolment.exit_reason = reason
     enrolment.save(update_fields=["status", "exit_reason", "updated_at"])
     # Bubble up to the originating referral if any.
     if enrolment.referral_id:
         ref = enrolment.referral
-        ref.status = ReferralStatus.EXITED
+        ref.status = REF_EXITED
         ref.exited_at = timezone.now()
         ref.reason = reason
         ref.save(update_fields=["status", "exited_at", "reason"])

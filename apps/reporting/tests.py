@@ -1192,15 +1192,15 @@ class TestAdditionalReportDashboards:
     def test_referrals_by_programme_status_is_scope_filtered(
         self, db, households, two_sub_regions, django_user_model,
     ):
-        from apps.referral.models import Programme, Referral, ReferralStatus
+        from apps.referral.models import Programme, Referral
         programme = Programme.objects.create(code="PDM", name="PDM")
         Referral.objects.create(
             programme=programme, household=households["SR-BUGANDA"],
-            status=ReferralStatus.SENT,
+            status="sent",
         )
         Referral.objects.create(
             programme=programme, household=households["SR-KARAMOJA"],
-            status=ReferralStatus.ACCEPTED,
+            status="accepted",
         )
         u = django_user_model.objects.create_user(username="ref-op", password="p")
         OperatorScope.objects.create(
@@ -1210,7 +1210,7 @@ class TestAdditionalReportDashboards:
         r = _client_for(u).get("/api/v1/rpt/dashboards/referrals-by-programme-status/")
         assert r.status_code == 200
         assert {row["key"]: row["count"] for row in r.data} == {
-            f"PDM / {ReferralStatus.SENT}": 1,
+            "PDM / sent": 1,
         }
 
     def test_audit_events_by_action_is_national_only(

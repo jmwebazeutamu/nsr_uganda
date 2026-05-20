@@ -49,6 +49,17 @@ def _registered_field_maps() -> list[tuple[str, str, dict]]:
                 ("partners", model_name,
                  partners_map.MODEL_FIELDS[model_name]),
             )
+    # Referral app field map (lands in US-S26-003 / ADR-0015).
+    try:
+        from apps.referral import choice_field_map as referral_map  # type: ignore
+    except ImportError:
+        referral_map = None
+    if referral_map is not None:
+        for model_name in getattr(referral_map, "MODEL_FIELDS", {}):
+            pairs.append(
+                ("referral", model_name,
+                 referral_map.MODEL_FIELDS[model_name]),
+            )
     return pairs
 
 

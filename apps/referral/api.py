@@ -4,9 +4,11 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.data_management.models import Household
+from apps.data_management.serializer_labels import attach_label_methodfields
 from apps.security.abac import ScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
+from .choice_field_map import MODEL_FIELDS
 from .models import Programme, ProgrammeEnrolment, Referral
 from .services import (
     ReferralError,
@@ -38,7 +40,8 @@ class ReferralSerializer(serializers.ModelSerializer):
         fields = (
             "id", "programme", "programme_code", "programme_name",
             "household", "eligibility_rule_version",
-            "status", "sent_at", "accepted_at", "enrolled_at",
+            "status", "status_label",
+            "sent_at", "accepted_at", "enrolled_at",
             "rejected_at", "exited_at",
             "programme_side_id", "reason",
             "last_delivery_id", "last_delivery_at",
@@ -50,6 +53,9 @@ class ReferralSerializer(serializers.ModelSerializer):
         )
 
 
+attach_label_methodfields(ReferralSerializer, MODEL_FIELDS["Referral"])
+
+
 class EnrolmentSerializer(serializers.ModelSerializer):
     programme_code = serializers.CharField(source="programme.code", read_only=True)
     programme_name = serializers.CharField(source="programme.name", read_only=True)
@@ -57,9 +63,13 @@ class EnrolmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProgrammeEnrolment
         fields = ("id", "programme", "programme_code", "programme_name",
-                  "household", "referral", "status",
+                  "household", "referral",
+                  "status", "status_label",
                   "effective_date", "exit_reason", "payment_metadata",
                   "created_at", "updated_at")
+
+
+attach_label_methodfields(EnrolmentSerializer, MODEL_FIELDS["ProgrammeEnrolment"])
 
 
 class _SendReq(serializers.Serializer):
