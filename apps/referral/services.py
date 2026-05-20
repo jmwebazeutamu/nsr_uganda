@@ -15,6 +15,7 @@ import json
 import uuid
 from datetime import date
 
+from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.utils import timezone
 
@@ -89,13 +90,14 @@ def send_referral_webhook(referral: Referral) -> str:
     }
     # Webhook secret cleartext lives in webhook_secret_encrypted on the
     # canonical Programme (ADR-0015 §"Decision 3"). The EncryptedBinaryField
-    # round-trips through bytes; decode to str for HMAC keying. Dev fallback
-    # matches the previous behaviour when neither column is populated.
+    # round-trips through bytes; decode to str for HMAC keying. An empty
+    # value is a configuration error post-US-S26-005, not a runtime path.
     encrypted = referral.programme.webhook_secret_encrypted
-    if encrypted:
-        secret = encrypted.decode("utf-8") if isinstance(encrypted, (bytes, bytearray, memoryview)) else str(encrypted)
-    else:
-        secret = "dev-secret"
+    if not encrypted:
+        raise ImproperlyConfigured(
+            f"Programme {referral.programme.code} has no webhook_secret_encrypted"
+        )
+    secret = encrypted.decode("utf-8") if isinstance(encrypted, (bytes, bytearray, memoryview)) else str(encrypted)
     signature = sign_payload(payload, secret)
     delivery_id = f"dly-{uuid.uuid4().hex[:16]}"
     referral.last_delivery_id = delivery_id
