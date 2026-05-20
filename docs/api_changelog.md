@@ -4,6 +4,82 @@ Notable changes to outbound API contracts. Entries are dated and tied to the com
 
 ---
 
+## 2026-05-20 — US-S27-005 / ADR-0016 — DSA renewal endpoint + supersession on activation
+
+**Affected endpoints**:
+
+| New                                  | Behavioural change                                    |
+|--------------------------------------|-------------------------------------------------------|
+| `POST /api/v1/dsas/{id}/renew/`      | Sign-off activation now supersedes prior active v(N) |
+
+### What changed
+
+- **`POST /api/v1/dsas/{id}/renew/`** is the new renewal action.
+  - **Active source**: clones v(N) into a fresh v(N+1) draft. Scope
+    is copied verbatim — no edits. `programmes` + `geographic_scope`
+    M2M are copied. `effective_from` and `effective_to` are reset
+    to NULL so the operator can fill in the next effective window.
+    `signed_at` is NULL. Signatures are empty. Returns the new draft.
+    Emits two audit events on the new row: `clone` (from the shared
+    primitive) and `dsa_renewed` with `field_changes={source_dsa_id,
+    source_version, new_version}`.
+  - **Renewed source** (OI-S27-2): silently redirects to the latest
+    active version of the same `reference` (no new clone, no audit).
+    If no active successor exists, returns 400.
+  - **Any other status** (`draft`, `pending_signature`, `expiring`,
+    `expired`, `suspended`) → 400 with the message
+    "`DSA {reference} v{version} cannot be renewed in status {status!r}`".
+
+- **Sign-off activation now supersedes the prior active version.**
+  When `record_signature` flips a DSA to `status="active"` (i.e. all
+  three signatures are signed per ADR-0012), the activation step
+  now also:
+  1. Finds every DSA whose `reference` matches and whose `status` is
+     currently `active`, excluding the row that just activated.
+  2. For each prior, re-points every `Programme.dsa` FK pointing at
+     that prior to the newly active row.
+  3. Flips the prior's `status` to `renewed` (terminal).
+  4. Emits a `dsa_superseded` audit event on the prior with
+     `field_changes={superseded_by, new_version,
+     programme_ids_repointed}`.
+
+  The entire transition runs inside the existing `@transaction.atomic`
+  on `record_signature`. Per ADR-0011 there is at most one active
+  version per reference at any moment; the implementation handles N
+  defensively (e.g. a manual DB edit that left two priors active).
+
+- **DRS enforcement is unchanged.** `apps.data_requests.services.validate_against_dsa`
+  already filters by `status="active"`, so v(N) drops out of
+  validation the instant supersession flips its status. The
+  `monthly_row_budget` double-counting risk during a renewal overlap
+  window is structurally impossible — there's exactly one row with
+  `status="active"` per reference once the new v+1 lands.
+
+### New audit-event actions
+
+| Action            | Fired on                                              | `field_changes` keys                                          |
+|-------------------|-------------------------------------------------------|---------------------------------------------------------------|
+| `dsa_renewed`     | Successful `POST /renew/` on an active DSA            | `source_dsa_id`, `source_version`, `new_version`              |
+| `dsa_superseded`  | A prior-version DSA transitioning to `renewed` because its successor activated | `superseded_by`, `new_version`, `programme_ids_repointed` |
+
+(`clone` was added in US-S27-003 and continues to fire from the
+shared `clone_to_draft` primitive on both `/edit-scope/` and
+`/renew/`.)
+
+### What hasn't changed
+
+- **No new `dsa_status` ChoiceList codes** — `renewed` was already
+  seeded in `choice_lists_partners_v1.json` from Sprint 23.
+- **`/api/v1/dsas/{id}/submit-for-signoff/`** still drives the
+  sign-off chain unchanged. The activation step inside
+  `record_signature` is the only thing that gained behaviour.
+- **The informational `renewing` indicator** from ADR-0016 (a
+  derived state showing "v+1 draft pending" on the parent active
+  row) is not implemented in this slice — it lands with US-S27-004
+  (cross-partner workbench) where the dashboard surface needs it.
+
+---
+
 ## 2026-05-20 — US-S27-003 / ADR-0016 — DSA scope-edit endpoint + version-bump on active
 
 **Affected endpoints**:

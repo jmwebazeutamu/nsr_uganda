@@ -565,6 +565,36 @@ class DsaViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
             )
         return Response(self.get_serializer(result).data)
 
+    @extend_schema(
+        tags=["partners"],
+        summary="Renew a DSA (ADR-0016)",
+        description=(
+            "Clones an active DSA into a v+1 draft, scope copied "
+            "verbatim, signatures empty, effective_from/effective_to "
+            "reset to NULL for the operator to fill in. Renewing a "
+            "DSA whose status is already `renewed` silently redirects "
+            "to the latest active version of the same reference "
+            "(OI-S27-2). Other statuses (draft, pending_signature, "
+            "expired, suspended) are rejected with 400. Supersession "
+            "of the prior active version happens when the new draft "
+            "reaches `status=active` (see record_signature)."
+        ),
+    )
+    @action(detail=True, methods=["post"], url_path="renew")
+    def renew(self, request, pk=None):
+        dsa = self.get_object()
+        try:
+            result = scope_service.renew(
+                dsa,
+                actor=str(request.user.username or request.user.id),
+            )
+        except scope_service.ScopeEditError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(self.get_serializer(result).data)
+
 
 # --- Programme CRUD viewset (US-S25-003) ------------------------------------
 #

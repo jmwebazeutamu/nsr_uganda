@@ -244,8 +244,64 @@ def record_signature(
             entity_type="dsa", entity_id=dsa.id,
             reason="all three signatures complete",
         )
+        # Supersession (ADR-0016 §"Decision 4"): if this newly
+        # active DSA is the v(N+1) of an existing reference, the
+        # prior active version must transition to `renewed` and
+        # any Programme.dsa FKs pointing at it must re-point to
+        # the new version. Done in the same transaction so a
+        # crash mid-way is impossible.
+        _supersede_prior_active(dsa, actor=actor)
 
     return signature
+
+
+def _supersede_prior_active(
+    new_active: DataSharingAgreement,
+    *,
+    actor: str,
+) -> None:
+    """If `new_active` shares its `reference` with one or more
+    prior active versions, flip each prior to `renewed`, re-point
+    every `Programme.dsa` FK pointing at the prior, and emit one
+    `dsa_superseded` audit event per prior.
+
+    Per ADR-0011 there is at most one active version per
+    reference at any moment, but the implementation handles N
+    just in case (a manual db edit, a misconfigured renewal,
+    etc.). Each prior is processed independently.
+    """
+    from apps.partners.models import DataSharingAgreement, Programme
+
+    priors = (
+        DataSharingAgreement.objects
+        .filter(reference=new_active.reference, status="active")
+        .exclude(id=new_active.id)
+    )
+    for prior in priors:
+        programme_ids = list(
+            Programme.objects
+            .filter(dsa=prior)
+            .values_list("id", flat=True),
+        )
+        if programme_ids:
+            Programme.objects.filter(dsa=prior).update(dsa=new_active)
+
+        prior.status = "renewed"
+        prior.save(update_fields=["status", "updated_at"])
+
+        emit_audit(
+            actor=actor, action="dsa_superseded",
+            entity_type="dsa", entity_id=prior.id,
+            reason=(
+                f"superseded by v{new_active.version} on "
+                f"{new_active.reference}"
+            ),
+            field_changes={
+                "superseded_by": str(new_active.id),
+                "new_version": new_active.version,
+                "programme_ids_repointed": [str(p) for p in programme_ids],
+            },
+        )
 
 
 @transaction.atomic

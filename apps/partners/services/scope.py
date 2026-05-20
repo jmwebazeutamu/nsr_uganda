@@ -1,7 +1,7 @@
-"""DSA scope-edit + clone helpers — US-S27-003 / ADR-0016.
+"""DSA scope-edit + renewal helpers — US-S27-003 / US-S27-005 / ADR-0016.
 
-`edit_scope(dsa, *, actor, **changes)` is the single orchestrating
-call the `/api/v1/dsas/{id}/edit-scope/` endpoint surfaces.
+`edit_scope(dsa, *, actor, **changes)` is the orchestrating call
+the `/api/v1/dsas/{id}/edit-scope/` endpoint surfaces.
 
   - On a draft DSA: applies the requested changes in place and
     emits one `dsa_scope_changed` audit event with the before/after
@@ -12,14 +12,20 @@ call the `/api/v1/dsas/{id}/edit-scope/` endpoint surfaces.
     the new draft. v(N) is untouched. The caller is then expected
     to dispatch the new draft through the ADR-0012 sign-off chain.
 
+`renew(dsa, *, actor)` is the renewal counterpart: it clones an
+active DSA into a v(N+1) draft with the scope copied verbatim
+(no edits) and emits a `dsa_renewed` audit event. Renewing a
+DSA whose status is already `renewed` silently redirects to the
+latest active version (OI-S27-2). Any other status raises.
+
 ADR-0016 §"Decision 2" makes the version bump on an active DSA
 mandatory because the original is a signed legal instrument under
 DPPA 2019; any scope change creates a new instrument needing the
-same three signatures.
+same three signatures. §"Decision 3" mirrors that for renewal —
+a new effective window is a new instrument.
 
-`clone_to_draft(dsa, *, actor, reason)` is exported for reuse by
-the renewal endpoint (US-S27-005). Both paths share the same
-copy-the-scope-and-reset-signatures behaviour.
+`clone_to_draft(dsa, *, actor, reason)` is the shared primitive
+both `edit_scope` (active path) and `renew` call.
 """
 
 from __future__ import annotations
@@ -216,3 +222,63 @@ def edit_scope(
         },
     )
     return target
+
+
+@transaction.atomic
+def renew(
+    source: DataSharingAgreement,
+    *,
+    actor: str,
+) -> DataSharingAgreement:
+    """Renew a DSA into a fresh v(N+1) draft.
+
+    Per ADR-0016 §"Decision 3":
+      - source.status == "active": clone via `clone_to_draft`,
+        scope copied verbatim, signatures empty, effective dates
+        NULL. Emit `dsa_renewed`. Return the new draft.
+      - source.status == "renewed" (OI-S27-2): silently redirect
+        to the latest active version of the same reference. If no
+        active version exists (edge case — every version has been
+        renewed/expired/suspended), raise.
+      - any other status: raise. You don't renew a draft, a
+        pending-signature row, or an expired/suspended row.
+    """
+    from apps.partners.models import DataSharingAgreement
+
+    if source.status == "renewed":
+        latest_active = (
+            DataSharingAgreement.objects
+            .filter(reference=source.reference, status="active")
+            .order_by("-version")
+            .first()
+        )
+        if latest_active is None:
+            raise ScopeEditError(
+                f"DSA {source.reference} v{source.version} is renewed but no "
+                "active successor exists to redirect to.",
+            )
+        return latest_active
+
+    if source.status != "active":
+        raise ScopeEditError(
+            f"DSA {source.reference} v{source.version} cannot be renewed "
+            f"in status {source.status!r}; only active DSAs are renewable.",
+        )
+
+    draft = clone_to_draft(
+        source, actor=actor,
+        reason=f"renew v{source.version} → v{source.version + 1}",
+    )
+    emit_audit(
+        "dsa_renewed",
+        "dsa",
+        str(draft.id),
+        actor=actor,
+        reason=f"renewal of {source.reference} v{source.version}",
+        field_changes={
+            "source_dsa_id": str(source.id),
+            "source_version": source.version,
+            "new_version": draft.version,
+        },
+    )
+    return draft
