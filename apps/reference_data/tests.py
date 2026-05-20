@@ -28,17 +28,16 @@ class TestSeededChoiceLists:
 
     def test_60_lists_seeded(self):
         # 46 legacy (migration 0003) + 14 partner (migration 0004)
-        # + 8 programme (migration 0005, US-S25-001) = 68.
-        assert ChoiceList.objects.filter(version=1).count() == 68
+        # + 8 programme (migration 0005, US-S25-001)
+        # + 1 beneficiary (migration 0006, US-S25-006) = 69.
+        assert ChoiceList.objects.filter(version=1).count() == 69
 
     def test_options_seeded(self):
-        # 370 legacy (US-116) + 82 partner (US-S23-002) + 41 programme
-        # wizard (US-S25-001: 3+5+4+9+6+4+7+3 = 41 new options) + 2
-        # programme_kind additions (grant, subsidy) = 495.
-        # See apps/reference_data/seeds/choice_lists_programmes_v1.json.
+        # 495 (after US-S25-001) + 4 enrolment-status options
+        # (US-S25-006) = 499.
         assert ChoiceOption.objects.filter(
             choice_list__version=1,
-        ).count() == 495
+        ).count() == 499
 
     def test_partner_lists_seeded(self):
         names = set(

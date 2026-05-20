@@ -126,6 +126,7 @@ const RegistryScreen = ({ onNavigate }) => {
           ? `Live ABAC-scoped data — ${households.length.toLocaleString()} households in your scope.`
           : "Search, browse, and open any household. Read-only — edits go through the UPD workflow."}
         right={<>
+          <button className="btn" onClick={() => onNavigate && onNavigate("beneficiaries")}><Icon name="book" size={14}/> Beneficiary registry</button>
           <button className="btn"><Icon name="download" size={14}/> Export CSV</button>
           <button className="btn btn-primary"><Icon name="plus" size={14}/> Start capture</button>
         </>}

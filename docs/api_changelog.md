@@ -4,6 +4,35 @@ Notable changes to outbound API contracts. Entries are dated and tied to the com
 
 ---
 
+## 2026-05-19 — US-S25-006/007 — Beneficiary registry screen wired; programme_enrolment_status ChoiceList
+
+**Affected endpoints**: extends `/api/v1/reference-data/choice-list-bundle/` with one new list.
+
+### New ChoiceList seeded at v1 / active
+
+```
+programme_enrolment_status   (active, suspended, pending, exited)
+```
+
+The beneficiary registry screen at
+`design/v0.1/screens/screens-beneficiaries.jsx` reads status tabs,
+chips, and the tweaks-panel radio from this list. Adding a new
+status (e.g. `terminated`) becomes a single ChoiceList row plus
+three lines in the UI tone/icon/sub maps; no JSX code change to
+the screen itself.
+
+### No new endpoints
+
+The screen reads `/api/v1/programmes/?status=active` (Sprint 25)
+to populate the programme rollup strip, and
+`/api/v1/reference-data/geographic-units/` to populate the
+sub-region filter. The enrolment listing itself is design-preview
+data pending the consolidated enrolment endpoint (OI-S25-4 —
+slated for Sprint 26 alongside the `apps.referral.Programme` →
+`apps.partners.Programme` consolidation).
+
+---
+
 ## 2026-05-19 — US-S25 / ADR-0014 — Programme registration wizard wired (POST /api/v1/programmes/)
 
 **Affected endpoints**: new `/api/v1/programmes/` namespace and the

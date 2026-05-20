@@ -26,6 +26,7 @@ PATHS = [
     ROOT / "design" / "v0.1" / "screens" / "screens-partners.jsx",
     ROOT / "design" / "v0.1" / "screens" / "screens-partner-detail.jsx",
     ROOT / "design" / "v0.1" / "screens" / "screens-programme-new.jsx",
+    ROOT / "design" / "v0.1" / "screens" / "screens-beneficiaries.jsx",
 ]
 
 # (regex, description). Regexes use Python's re module — \b is a
@@ -51,6 +52,10 @@ PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bconst\s+SUB_REGIONS\b"), "inline SUB_REGIONS array"),
     (re.compile(r"\bconst\s+EXIT_REASONS_LIST\b"), "inline EXIT_REASONS_LIST array"),
     (re.compile(r"\bconst\s+PARTNER_OPTIONS\b"),   "inline PARTNER_OPTIONS array"),
+    # US-S25-007 — beneficiary-registry inline lists.
+    (re.compile(r"\bconst\s+BEN_STATUS\b"),        "inline BEN_STATUS array"),
+    (re.compile(r"\bconst\s+EXIT_REASONS\s*="),    "inline EXIT_REASONS map"),
+    (re.compile(r"\bconst\s+PROGRAMMES\s*=\s*\["), "inline PROGRAMMES catalogue"),
 ]
 
 # This script itself defines the regexes; skip it.
