@@ -4,6 +4,45 @@ Notable changes to outbound API contracts. Entries are dated and tied to the com
 
 ---
 
+## 2026-05-21 — US-S27-012 — DRS query builder is now schema-driven
+
+**Affected endpoints**: `/api/v1/drs/requests/builder-schema/` adds one top-level key.
+
+### What changed
+
+- **`GET /api/v1/drs/requests/builder-schema/` now returns `filter_fields`** — a catalogue of the predicates `validate_against_dsa` actually evaluates. Each entry:
+
+  ```json
+  {
+    "key": "household.sub_region_code",
+    "label": "Sub-region",
+    "operators": ["in"],
+    "value_source": "/api/v1/reference-data/geographic-units/?level=sub_region&status=current&page_size=200",
+    "value_type": "multi_code",
+    "payload_key": "sub_region_codes",
+    "value_code_field": "code",
+    "value_label_field": "name"
+  }
+  ```
+
+  Today the catalogue is `household.sub_region_code` and `programme`. The UI grows automatically when the backend gains a new predicate — append an entry to `FILTER_FIELDS` in `apps/data_requests/builder_schema.py`.
+
+- **`TestBuilderSchema` is widened** to pin the catalogue's shape (`EXPECTED_FILTER_FIELD_KEYS`) and to assert every `payload_key` is one the validator actually reads. The latter is the contract: schema can advertise only what the backend can act on.
+
+- **The wizard's Step 2 is now a real query builder.** Each predicate is a row: field dropdown (from `filter_fields`), operator label (from `field.operators`), value multi-select (lazy-fetched from `value_source`). Rows AND together. "Add filter" appends a row; per-row × removes it. Row-cap (`max_rows`) stays as a separate input below the predicate rows because it's a LIMIT, not a WHERE.
+
+- **Submit translation**: each row maps to its field's `payload_key`. Multiple rows on the same field union their values. The result is the same flat `request_payload` shape `validate_against_dsa` already accepts — no backend protocol change.
+
+- **Submit modal + summary card** walk `filterRows` to show real predicates rather than counts of two specific dimensions.
+
+### What hasn't changed
+
+- **The validator contract**. `validate_against_dsa` still reads `fields / sub_region_codes / programme_codes / max_rows`. The schema-driven UI emits the same shape.
+- **Operators**. Today every `filter_field` advertises `["in"]`. The wizard renders the operator as a fixed label; when a future predicate offers more than one operator, the row gains a real operator dropdown — no UI restructuring needed.
+- **Custom AST / nested groups / OR**. Out of MVP scope. The current "all rows AND together" semantic is what the validator supports; richer expression evaluation would need a query planner on `apps/data_requests`.
+
+---
+
 ## 2026-05-20 — US-S27-011 — DRS query builder wired end-to-end
 
 **Affected endpoints**: no API contract changes. The wiring is purely on the design harness — the wizard now collects real query-builder state and POSTs it into the existing `request_payload` shape.

@@ -62,6 +62,39 @@ FILTER_OPERATORS: list[dict[str, str]] = [
     {"op": "is_null",     "label": "is missing",        "applies_to": "any"},
 ]
 
+# Filter predicates the backend's validate_against_dsa actually
+# recognises. The frontend query builder renders rows over this
+# catalogue — `payload_key` is where the row's values land in
+# request_payload, `value_source` is the URL the UI fetches to
+# populate the value picker. When the backend learns a new
+# predicate, add an entry here and the UI follows automatically
+# (US-S27-012).
+FILTER_FIELDS: list[dict[str, Any]] = [
+    {
+        "key": "household.sub_region_code",
+        "label": "Sub-region",
+        "operators": ["in"],
+        "value_source": (
+            "/api/v1/reference-data/geographic-units/"
+            "?level=sub_region&status=current&page_size=200"
+        ),
+        "value_type": "multi_code",
+        "payload_key": "sub_region_codes",
+        "value_code_field": "code",
+        "value_label_field": "name",
+    },
+    {
+        "key": "programme",
+        "label": "Programme",
+        "operators": ["in"],
+        "value_source": "/api/v1/programmes/?status=active&page_size=200",
+        "value_type": "multi_code",
+        "payload_key": "programme_codes",
+        "value_code_field": "code",
+        "value_label_field": "name",
+    },
+]
+
 # Delivery channels — partner-facing differ from operator-facing.
 DELIVERY_METHODS: list[dict[str, Any]] = [
     {"id": "portal_download",
@@ -152,5 +185,6 @@ def build_schema(user) -> dict[str, Any]:
         "dsa_reference": dsa.reference if dsa else "",
         "fields": fields,
         "filter_operators": list(FILTER_OPERATORS),
+        "filter_fields": [dict(f) for f in FILTER_FIELDS],
         "delivery_methods": delivery_methods,
     }

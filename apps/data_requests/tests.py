@@ -1281,7 +1281,11 @@ class TestBuilderSchema:
 
     EXPECTED_TOP_LEVEL_KEYS = {
         "role", "dsa_id", "dsa_reference", "fields",
-        "filter_operators", "delivery_methods",
+        "filter_operators", "filter_fields", "delivery_methods",
+    }
+    EXPECTED_FILTER_FIELD_KEYS = {
+        "key", "label", "operators", "value_source", "value_type",
+        "payload_key", "value_code_field", "value_label_field",
     }
     EXPECTED_FIELD_KEYS = {
         "group", "key", "sensitivity", "disabled", "disabled_reason",
@@ -1380,6 +1384,31 @@ class TestBuilderSchema:
         r = operator_client.get("/api/v1/drs/requests/builder-schema/")
         assert r.status_code == 200
         assert r.data["dsa_id"] == ""
+
+    def test_filter_fields_catalogue_shape(self, operator_client):
+        # US-S27-012: builder-schema advertises the predicates the
+        # backend actually validates. Each entry tells the query
+        # builder where to fetch values from and where the resulting
+        # values land in request_payload.
+        r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        assert r.status_code == 200
+        assert isinstance(r.data["filter_fields"], list)
+        assert len(r.data["filter_fields"]) >= 2
+        for entry in r.data["filter_fields"]:
+            assert set(entry.keys()) == self.EXPECTED_FILTER_FIELD_KEYS
+            assert isinstance(entry["operators"], list)
+            assert all(isinstance(o, str) for o in entry["operators"])
+
+    def test_filter_fields_payload_keys_match_validator(
+        self, operator_client,
+    ):
+        # The payload_key on each filter_field must be a key the
+        # apps.data_requests.services.validate_against_dsa function
+        # actually reads. Today: sub_region_codes, programme_codes.
+        # Add to this set as the validator gains new predicates.
+        r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        keys = {f["payload_key"] for f in r.data["filter_fields"]}
+        assert keys <= {"sub_region_codes", "programme_codes"}
 
     def test_operator_sees_all_fields_enabled(self, operator_client):
         r = operator_client.get("/api/v1/drs/requests/builder-schema/")
