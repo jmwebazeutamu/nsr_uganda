@@ -15,6 +15,7 @@ from django.utils import timezone
 from apps.data_management.models import Household
 from apps.security.audit import emit as emit_audit
 
+from .constants import PMT_TRIGGER_MANUAL
 from .engine import compute_pmt
 from .models import ModelStatus, PMTModelVersion, PMTResult
 
@@ -48,7 +49,9 @@ def get_active_model_version() -> PMTModelVersion | None:
 
 @transaction.atomic
 def recompute_for_household(
-    household: Household, *, triggered_by: str = "manual", actor: str = "system",
+    household: Household, *,
+    triggered_by: str = PMT_TRIGGER_MANUAL,
+    actor: str = "system",
 ) -> PMTResult | None:
     """Compute the PMT against the current ACTIVE model and persist a
     PMTResult. Returns None when no ACTIVE model exists (the pipeline

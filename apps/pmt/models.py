@@ -88,7 +88,11 @@ class PMTResult(models.Model):
     inputs_snapshot = models.JSONField(default=dict, blank=True)
     triggered_by = models.CharField(
         max_length=32, default="manual",
-        help_text="dih_promote, upd_commit, manual, backfill",
+        help_text=(
+            "ChoiceOption code from the seeded `pmt_trigger_source` "
+            "ChoiceList (US-PMT-014). Canonical codes in "
+            "apps.pmt.constants — do not hardcode."
+        ),
     )
 
     computed_at = models.DateTimeField(auto_now_add=True)

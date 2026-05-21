@@ -11,6 +11,7 @@ from apps.data_management.models import Household
 from apps.update_workflow.models import EntityType
 from apps.update_workflow.services import post_change_committed
 
+from .constants import PMT_TRIGGER_UPD_COMMIT
 from .services import recompute_for_household
 
 
@@ -24,7 +25,8 @@ def on_change_committed(sender, *, change_request, target, **kwargs):
     else:
         household = Household.objects.get(pk=target.household_id)
     recompute_for_household(
-        household, triggered_by="upd_commit", actor=change_request.approver or "system",
+        household, triggered_by=PMT_TRIGGER_UPD_COMMIT,
+        actor=change_request.approver or "system",
     )
 
 

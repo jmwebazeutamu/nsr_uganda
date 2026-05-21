@@ -7,6 +7,7 @@ from apps.data_management.models import Household
 from apps.security.abac import ScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
+from .constants import PMT_TRIGGER_MANUAL
 from .models import PMTModelVersion, PMTResult
 from .services import recompute_for_household
 
@@ -61,7 +62,8 @@ class PMTResultViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyMod
             return Response({"detail": "household not found"},
                             status=status.HTTP_404_NOT_FOUND)
         result = recompute_for_household(
-            hh, triggered_by="manual", actor=request.user.username or "system",
+            hh, triggered_by=PMT_TRIGGER_MANUAL,
+            actor=request.user.username or "system",
         )
         if result is None:
             return Response({"detail": "no ACTIVE PMT model version"},

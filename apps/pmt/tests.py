@@ -205,3 +205,43 @@ class TestUpdSignalIntegration:
         submit_change_request(cr)
         commit_change_request(cr, approver="bob")
         assert not PMTResult.objects.filter(triggered_by="upd_commit").exists()
+
+
+# --- US-PMT-014 — pmt_trigger_source ChoiceList parity ---------------------
+
+class TestTriggerSourceChoiceList:
+    """The codes in `apps.pmt.constants.PMT_TRIGGER_SOURCES` MUST match
+    the rows seeded by migration `0009_seed_pmt_trigger_source`. Anyone
+    renaming a code should update both in the same commit; this test
+    catches the half-edit.
+    """
+
+    def test_constants_match_seed(self, db):
+        from apps.pmt.constants import PMT_TRIGGER_SOURCE_LIST, PMT_TRIGGER_SOURCES
+        from apps.reference_data.models import ChoiceList
+        cl = ChoiceList.objects.get(list_name=PMT_TRIGGER_SOURCE_LIST, version=1)
+        seeded = sorted(cl.options.values_list("code", flat=True))
+        assert seeded == sorted(PMT_TRIGGER_SOURCES)
+
+    def test_seed_has_label_for_every_code(self, db):
+        from apps.pmt.constants import PMT_TRIGGER_SOURCE_LIST, PMT_TRIGGER_SOURCES
+        from apps.reference_data.models import ChoiceList
+        cl = ChoiceList.objects.get(list_name=PMT_TRIGGER_SOURCE_LIST, version=1)
+        for opt in cl.options.all():
+            assert opt.label, f"{opt.code} has empty label"
+            assert opt.code in PMT_TRIGGER_SOURCES
+
+    def test_recompute_writes_code_from_constants(self, household):
+        # Round-trip via the actual recompute path — the persisted
+        # `triggered_by` must be one of the canonical codes.
+        from apps.pmt.constants import (
+            PMT_TRIGGER_MANUAL,
+            PMT_TRIGGER_SOURCES,
+            PMT_TRIGGER_UPD_COMMIT,
+        )
+        _active_model(intercept=50, weight=-5)
+        r1 = recompute_for_household(household, triggered_by=PMT_TRIGGER_MANUAL)
+        r2 = recompute_for_household(household, triggered_by=PMT_TRIGGER_UPD_COMMIT)
+        assert r1.triggered_by == PMT_TRIGGER_MANUAL
+        assert r2.triggered_by == PMT_TRIGGER_UPD_COMMIT
+        assert r1.triggered_by in PMT_TRIGGER_SOURCES
