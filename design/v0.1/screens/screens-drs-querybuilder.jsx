@@ -4,7 +4,8 @@
 // Drop-in replacement for the current BuildStep in
 // `screens-drs.jsx`. Exposes <BuildStepV2 .../> which renders the
 // full nestable rule + group builder, an estimated-match rail,
-// the DSA card and a saved-queries rail.
+// and the DSA card. (The saved-queries rail was removed in
+// BUG-S27-023 — no backend for it yet.)
 //
 // To wire into the existing wizard:
 //   1. Save this file at /design/v0.1/screens/screens-drs-querybuilder.jsx
@@ -1004,38 +1005,12 @@ WHERE ${sql.replace(/^\(\n  /, "").replace(/\n\)$/, "").replace(/\n  /g, "\n  ")
           </div>
         </div>
 
-        {/* Saved queries */}
-        <div className="card">
-          <div className="card-header" style={{padding:'12px 16px'}}>
-            <div>
-              <div className="t-cap">RECENT QUERIES</div>
-              <h3 className="t-h3" style={{margin:'2px 0 0'}}>Saved</h3>
-            </div>
-            <button className="icon-btn" title="Save current"><Icon name="save" size={14}/></button>
-          </div>
-          <div>
-            {[
-              { name:"Karamoja · q1 vulnerability", rules:5, when:"yesterday" },
-              { name:"PDM Buganda renewals",       rules:3, when:"3 days ago" },
-              { name:"SCG · 60+ heads",             rules:2, when:"last week" },
-            ].map(q => (
-              <div key={q.name} style={{
-                padding:"10px 16px", borderTop:"1px solid var(--neutral-200)",
-                display:"flex", alignItems:"center", gap:8, cursor:"pointer",
-              }}>
-                <Icon name="history" size={14} color="var(--neutral-500)"/>
-                <div style={{flex:1, minWidth:0}}>
-                  <div className="t-bodysm" style={{
-                    fontWeight:500, whiteSpace:"nowrap", overflow:"hidden",
-                    textOverflow:"ellipsis",
-                  }}>{q.name}</div>
-                  <div className="t-cap">{q.rules} rules · {q.when}</div>
-                </div>
-                <Icon name="chevronRight" size={14} color="var(--neutral-500)"/>
-              </div>
-            ))}
-          </div>
-        </div>
+        {/* BUG-S27-023 — the mock "Saved queries" rail was removed.
+            There is no persistence backend for query templates yet,
+            and the hardcoded sample rows misled operators into
+            thinking the feature existed. Reinstate alongside a
+            real /api/v1/drs/queries/ endpoint when DRS-O-TEMPLATES
+            lands. */}
       </div>
     </div>
     </QBFieldsContext.Provider>

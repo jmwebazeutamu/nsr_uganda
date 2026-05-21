@@ -1014,7 +1014,9 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
               : <>Requester: {isPartner ? "you" : "operator"} · No active DSA on this session — submit unavailable</>)
           : <>Loading session…</>}
         right={<>
-          <button className="btn"><Icon name="save" size={14}/> Save as template</button>
+          {/* "Save as template" removed (BUG-S27-023) — no backend
+              for query templates yet; the button was a non-functional
+              affordance. Reinstate when DRS-O-TEMPLATES lands. */}
           <button className="btn btn-ghost" onClick={onExit}>
             <Icon name="x" size={14}/> {onExit ? "Cancel" : "Discard"}
           </button>
