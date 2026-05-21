@@ -547,6 +547,105 @@ const _previewCell = (key, field, i) => {
   return "—";
 };
 
+/* ============================================================
+   Options-source resolution (BUG-S27-020)
+   ============================================================ */
+// `options_source` slugs on the live builder-schema fall into two
+// shapes today:
+//   1. URL-mapped slugs — geographic-units?level=X and `programmes`.
+//      One slug → one HTTP GET. Backend response carries `code` +
+//      `name` per row.
+//   2. choice_list?name=XXX — every coded field introduced by the
+//      US-S22-DE detail-entity work (dwelling_tenure, roof_material,
+//      cooking_fuel, employment_status, wg_difficulty_level, …).
+//      The bundle endpoint at /choice-list-bundle/?lists=a,b,c
+//      returns all named lists in a single round-trip — far cheaper
+//      than 20+ individual fetches. Bundle response carries `code` +
+//      `label` per option.
+// Step 3 (FieldStepV2) doesn't notice when options aren't resolved
+// because it only renders the field name. Step 2 (BuildStepV2)
+// renders dropdowns over `field.options`, so unresolved fields
+// surface as empty selects. This module-level resolver is the
+// fix — single source of truth for both effect-time fetching and
+// memo-time enrichment, also pure-tested in screens-drs.test.jsx.
+
+const _GEO_BASE = "/api/v1/reference-data/geographic-units/";
+const _CHOICE_LIST_BUNDLE = "/api/v1/reference-data/choice-list-bundle/";
+
+const _OPTIONS_SOURCE_URL = {
+  "geographic-units?level=region":     `${_GEO_BASE}?level=region&status=active&page_size=500`,
+  "geographic-units?level=sub_region": `${_GEO_BASE}?level=sub_region&status=active&page_size=500`,
+  "geographic-units?level=district":   `${_GEO_BASE}?level=district&status=active&page_size=500`,
+  "geographic-units?level=county":     `${_GEO_BASE}?level=county&status=active&page_size=500`,
+  "geographic-units?level=sub_county": `${_GEO_BASE}?level=sub_county&status=active&page_size=2000`,
+  "geographic-units?level=parish":     `${_GEO_BASE}?level=parish&status=active&page_size=5000`,
+  "geographic-units?level=village":    `${_GEO_BASE}?level=village&status=active&page_size=10000`,
+  "programmes":                        "/api/v1/programmes/?status=active&page_size=200",
+};
+
+const _choiceListNameFor = (slug) => {
+  if (!slug || !slug.startsWith("choice_list?name=")) return null;
+  return slug.slice("choice_list?name=".length);
+};
+
+// Pure: enrich each schema field whose `options_source` slug has
+// already been resolved in `optionsCache`. Returns the same shape
+// the rest of the wizard expects (each row carries `{value, label}`).
+// Accepts both `name` (GeographicUnitSerializer) and `label`
+// (ChoiceListBundle) as the human-readable label source.
+const _enrichFieldsWithOptions = (schemaFields, optionsCache) => {
+  if (!Array.isArray(schemaFields)) return [];
+  return schemaFields.map(f => {
+    if (f.options || !f.options_source) return f;
+    const rows = (optionsCache && optionsCache[f.options_source]) || [];
+    const options = rows
+      .map(r => ({ value: r.code, label: r.label || r.name || r.code }))
+      .filter(o => o.value);
+    return { ...f, options };
+  });
+};
+
+// Async: resolve every options_source slug the schema references.
+// Returns a `{ [slug]: rows[] }` map suitable for merging into
+// `optionsCache`. Choice-list slugs are batched into one bundle
+// fetch; URL slugs go in parallel. Failures resolve to [] so the
+// caller can still ship the rest of the wizard.
+const _resolveOptionsForSchema = async (schemaFields) => {
+  if (!Array.isArray(schemaFields)) return {};
+  const allSlugs = [...new Set(schemaFields
+    .map(f => f.options_source)
+    .filter(Boolean),
+  )];
+  const urlSlugs    = allSlugs.filter(s => _OPTIONS_SOURCE_URL[s]);
+  const bundleNames = [...new Set(allSlugs
+    .map(_choiceListNameFor).filter(Boolean),
+  )];
+  if (urlSlugs.length === 0 && bundleNames.length === 0) return {};
+
+  const _get = (url) => fetch(url, {
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+  }).then(r => r.ok ? r.json() : null).catch(() => null);
+
+  const urlFetches = urlSlugs.map(async slug => {
+    const data = await _get(_OPTIONS_SOURCE_URL[slug]);
+    const rows = (data?.results || data || []);
+    return [slug, Array.isArray(rows) ? rows : []];
+  });
+  const bundlePromise = bundleNames.length === 0 ? null :
+    _get(`${_CHOICE_LIST_BUNDLE}?lists=${encodeURIComponent(bundleNames.join(","))}`);
+
+  const urlPairs = await Promise.all(urlFetches);
+  const bundle = bundlePromise ? await bundlePromise : null;
+
+  const out = {};
+  for (const [slug, rows] of urlPairs) out[slug] = rows;
+  for (const lst of (bundle?.lists || [])) {
+    out[`choice_list?name=${lst.list_name}`] = lst.options || [];
+  }
+  return out;
+};
+
 // Unified DRS query-builder wizard. Same component for both
 // roles per BUG-S11-002b — operator (no `role` prop / "operator")
 // gets the full catalogue; partner gets the same surface with
@@ -646,53 +745,14 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
     return () => { cancelled = true; };
   }, []);
 
-  // US-S27-013 / US-S27-016 — translate the schema's
-  // `options_source` slugs into real URLs. The backend stays
-  // slug-only to avoid baking pagination params into the contract;
-  // the wizard maps them here. Add a new slug here whenever the
-  // backend catalogue gains a new geographic level.
-  // page_size=500 covers Uganda's ~10k villages without paging.
-  const _GEO_BASE = "/api/v1/reference-data/geographic-units/";
-  const _OPTIONS_SOURCE_URL = {
-    "geographic-units?level=region":     `${_GEO_BASE}?level=region&status=active&page_size=500`,
-    "geographic-units?level=sub_region": `${_GEO_BASE}?level=sub_region&status=active&page_size=500`,
-    "geographic-units?level=district":   `${_GEO_BASE}?level=district&status=active&page_size=500`,
-    "geographic-units?level=county":     `${_GEO_BASE}?level=county&status=active&page_size=500`,
-    "geographic-units?level=sub_county": `${_GEO_BASE}?level=sub_county&status=active&page_size=2000`,
-    "geographic-units?level=parish":     `${_GEO_BASE}?level=parish&status=active&page_size=5000`,
-    "geographic-units?level=village":    `${_GEO_BASE}?level=village&status=active&page_size=10000`,
-    "programmes":                        "/api/v1/programmes/?status=active&page_size=200",
-  };
-
   // Schema-driven options for enum fields whose value set lives
   // in reference data. Inline `options` skip this fetch entirely.
   React.useEffect(() => {
-    if (!schema?.fields) return;
-    const slugs = [...new Set(schema.fields
-      .map(f => f.options_source)
-      .filter(s => s && _OPTIONS_SOURCE_URL[s]),
-    )];
-    if (slugs.length === 0) return;
+    if (!schema?.fields) return undefined;
     let cancelled = false;
-    Promise.all(slugs.map(slug => {
-      const url = _OPTIONS_SOURCE_URL[slug];
-      return fetch(url, {
-        credentials: "same-origin",
-        headers: { Accept: "application/json" },
-      })
-        .then(r => r.ok ? r.json() : null)
-        .then(data => [slug, data])
-        .catch(() => [slug, null]);
-    })).then(pairs => {
+    _resolveOptionsForSchema(schema.fields).then(updates => {
       if (cancelled) return;
-      setOptionsCache(prev => {
-        const next = { ...prev };
-        for (const [slug, data] of pairs) {
-          const rows = (data?.results || data || []);
-          next[slug] = Array.isArray(rows) ? rows : [];
-        }
-        return next;
-      });
+      setOptionsCache(prev => ({ ...prev, ...updates }));
     });
     return () => { cancelled = true; };
   }, [schema]);
@@ -700,17 +760,10 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
   // The catalogue passed to BuildStepV2: schema.fields enriched
   // with resolved `options` for every options_source we've
   // already fetched. Fields with inline `options` pass through.
-  const builderFields = React.useMemo(() => {
-    if (!schema?.fields) return [];
-    return schema.fields.map(f => {
-      if (f.options || !f.options_source) return f;
-      const rows = optionsCache[f.options_source] || [];
-      const options = rows
-        .map(r => ({ value: r.code, label: r.name || r.code }))
-        .filter(o => o.value);
-      return { ...f, options };
-    });
-  }, [schema, optionsCache]);
+  const builderFields = React.useMemo(
+    () => _enrichFieldsWithOptions(schema?.fields, optionsCache),
+    [schema, optionsCache],
+  );
 
   // Initialise the tree once the catalogue is ready. The first
   // available (non-disabled) field anchors the default rule.
@@ -1418,4 +1471,8 @@ const SubmitStep = ({
   );
 };
 
-Object.assign(window, { DRSScreen, PreviewStep, _previewCell });
+Object.assign(window, {
+  DRSScreen, PreviewStep, _previewCell,
+  _choiceListNameFor, _enrichFieldsWithOptions, _resolveOptionsForSchema,
+  _OPTIONS_SOURCE_URL,
+});
