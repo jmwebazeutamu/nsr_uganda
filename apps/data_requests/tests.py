@@ -1465,6 +1465,38 @@ class TestBuilderSchema:
         ):
             assert key in keys, f"missing {key} in builder-schema"
 
+    def test_member_coded_fields_are_enum_with_choice_list_source(
+        self, operator_client,
+    ):
+        # BUG-S27-022 — every Member-level coded field declared in
+        # apps/data_management/choice_field_map.py:MEMBER_FIELDS must
+        # ship as type:enum with options_source:"choice_list?name=…",
+        # NOT as type:text. The list_name in the options_source must
+        # match the field-map entry exactly so the wizard's
+        # /choice-list-bundle/ fetch picks up the right options.
+        r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        by_key = {f["key"]: f for f in r.data["fields"]}
+        # Mapping mirrors apps/data_management/choice_field_map.py
+        # MEMBER_FIELDS — keep them in sync if either side changes.
+        expected = {
+            "member.relationship_to_head":   "relationship",
+            "member.marital_status":         "marital_status",
+            "member.nationality":            "nationality",
+            "member.residency_status":       "residency_status",
+            "member.birth_certificate_status": "birth_certificate",
+            "member.nin_status":             "nin_status",
+        }
+        for key, list_name in expected.items():
+            f = by_key.get(key)
+            assert f is not None, f"missing {key} from catalogue"
+            assert f["type"] == "enum", (
+                f"{key}: expected type=enum (coded field), got {f['type']}"
+            )
+            assert f.get("options_source") == f"choice_list?name={list_name}", (
+                f"{key}: expected options_source=choice_list?name={list_name}, "
+                f"got {f.get('options_source')!r}"
+            )
+
     def test_sensitive_columns_require_special_scope(self, operator_client):
         # US-S22-DE-09 — HIV-relevant and NIN-derived columns carry
         # requires_special_scope=True so the wizard surfaces a

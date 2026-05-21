@@ -124,8 +124,19 @@ FIELD_CATALOGUE: list[dict[str, Any]] = [
      "label": "Other name",        "sensitivity": "Personal", "type": "text"},
 
     # ---- Member: demographic + status ------------------------------------
+    # BUG-S27-022 — every coded Member field below mirrors
+    # apps/data_management/choice_field_map.py:MEMBER_FIELDS. The
+    # `options_source` slug maps to a seeded ChoiceList — the wizard's
+    # /choice-list-bundle/ batch fetch resolves them all in one
+    # round-trip (BUG-S27-020). They used to ship as type:text with no
+    # options, so Step 2 of the DRS wizard rendered free-text inputs
+    # for fields that are actually closed-vocabulary codes.
     {"group": "Members",     "key": "member.relationship_to_head",
-     "label": "Relationship to head", "sensitivity": "Public", "type": "text"},
+     "label": "Relationship to head", "sensitivity": "Public", "type": "enum",
+     "options_source": "choice_list?name=relationship"},
+    # `member.sex` keeps inline F/M options pending verification of the
+    # in-DB code space (memory hint: "1"/"2" not "F"/"M" — needs check
+    # before flipping, lest existing DRS queries break).
     {"group": "Members",     "key": "member.sex",
      "label": "Sex",               "sensitivity": "Public",   "type": "enum",
      "options": [{"value": "F", "label": "Female"}, {"value": "M", "label": "Male"}]},
@@ -134,17 +145,22 @@ FIELD_CATALOGUE: list[dict[str, Any]] = [
     {"group": "Members",     "key": "member.age_years",
      "label": "Age (years)",       "sensitivity": "Personal", "type": "number"},
     {"group": "Members",     "key": "member.marital_status",
-     "label": "Marital status",    "sensitivity": "Personal", "type": "text"},
+     "label": "Marital status",    "sensitivity": "Personal", "type": "enum",
+     "options_source": "choice_list?name=marital_status"},
     {"group": "Members",     "key": "member.nationality",
-     "label": "Nationality",       "sensitivity": "Personal", "type": "text"},
+     "label": "Nationality",       "sensitivity": "Personal", "type": "enum",
+     "options_source": "choice_list?name=nationality"},
     {"group": "Members",     "key": "member.residency_status",
-     "label": "Residency status",  "sensitivity": "Personal", "type": "text"},
+     "label": "Residency status",  "sensitivity": "Personal", "type": "enum",
+     "options_source": "choice_list?name=residency_status"},
     {"group": "Members",     "key": "member.birth_certificate_status",
-     "label": "Birth certificate", "sensitivity": "Personal", "type": "text"},
+     "label": "Birth certificate", "sensitivity": "Personal", "type": "enum",
+     "options_source": "choice_list?name=birth_certificate"},
 
     # ---- Member: NIN (sensitive) -----------------------------------------
     {"group": "Members",     "key": "member.nin_status",
-     "label": "NIN status",        "sensitivity": "Sensitive","type": "text"},
+     "label": "NIN status",        "sensitivity": "Sensitive","type": "enum",
+     "options_source": "choice_list?name=nin_status"},
     {"group": "Members",     "key": "member.nin_hash",
      "label": "NIN hash",          "sensitivity": "Sensitive","type": "text"},
     {"group": "Members",     "key": "member.nin_last4",
