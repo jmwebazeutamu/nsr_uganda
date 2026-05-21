@@ -69,6 +69,142 @@ def derive_band(score: float, cutoffs: dict[str, float]) -> str:
     return band
 
 
+def _safe_attr(parent, attr):
+    """Return getattr(parent, attr) but treat Django's RelatedObjectDoesNotExist
+    (raised when a reverse OneToOne accessor has no row) as None. Detail
+    entities are optional per household; a missing one shouldn't kill scoring.
+    """
+    try:
+        return getattr(parent, attr, None)
+    except Exception:  # ObjectDoesNotExist + related variants
+        return None
+
+
+def _household_features(household) -> dict:
+    """Build the flat dict the PMT engine walks (US-S22-DE-06).
+
+    Models referenced via dotted path:
+      household.<col>                     — Household typed columns
+      household.dwelling.<col>            — Dwelling row (one-to-one)
+      household.utilities.<col>           — Utilities (one-to-one)
+      household.livelihood.<col>          — Livelihood (one-to-one)
+      household.food_security.<col>       — FoodSecurity (one-to-one)
+      household.food_consumption.<col>    — FoodConsumption (one-to-one)
+      household.head_member.<col>         — head Member, including reverse
+                                            one-to-ones (.education, .employment)
+      assets.<asset_type>.count           — AssetOwnership rows by type
+      livestock.<livestock_type>.count    — Livestock rows by type
+      member_count                        — int
+      disabled_member_count               — int (Disability.wg_disability_flag)
+      chronic_ill_member_count            — int (Health.chronic_illness_flag affirmative)
+      school_age_out_of_school_count      — int (age 6–18 not currently attending)
+      dependency_ratio                    — float
+
+    The caller is expected to have prefetched the chain (see
+    apps.pmt.services.recompute_for_household) so this helper is N+1-free.
+    Per-Member reverse-OneToOnes are bulk-loaded here (4 queries total
+    independent of member count) and attached to member instance dicts
+    so the dotted-path resolver finds them without round-tripping.
+    """
+    # Importing here avoids a top-of-file circular: apps.data_management
+    # → apps.security → apps.pmt → engine.py.
+    from apps.data_management.models import (
+        Disability,
+        Education,
+        Employment,
+        Health,
+    )
+
+    # Filter the prefetched members cache in Python so we don't issue
+    # a fresh .filter() query.
+    members = [m for m in household.members.all() if not m.is_deleted]
+
+    # Detail entities by type code so a model variable can reference
+    # `assets.radio.count` directly. iterating the prefetched cache.
+    assets_by_type: dict[str, object] = {
+        a.asset_type: a for a in household.assets.all() if not a.is_deleted
+    }
+    livestock_by_type: dict[str, object] = {
+        ls.livestock_type: ls
+        for ls in household.livestock.all() if not ls.is_deleted
+    }
+
+    # Bulk-load per-member reverse-OneToOnes in 4 queries (not N×4).
+    # Reverse-OneToOne accessors trigger a SELECT per missing row
+    # otherwise; we pre-resolve them into id-keyed dicts and attach
+    # them to each member instance's __dict__ so the descriptor is
+    # bypassed at attribute lookup time.
+    member_ids = [m.id for m in members]
+    if member_ids:
+        healths = {
+            h.member_id: h
+            for h in Health.objects.filter(member_id__in=member_ids)
+        }
+        disabilities = {
+            d.member_id: d
+            for d in Disability.objects.filter(member_id__in=member_ids)
+        }
+        educations = {
+            e.member_id: e
+            for e in Education.objects.filter(member_id__in=member_ids)
+        }
+        employments = {
+            e.member_id: e
+            for e in Employment.objects.filter(member_id__in=member_ids)
+        }
+        for m in members:
+            # Direct __dict__ writes bypass Django's reverse-OneToOne
+            # descriptor — None placeholders prevent the descriptor
+            # firing a query on rows without a child.
+            m.__dict__["health"] = healths.get(m.id)
+            m.__dict__["disability"] = disabilities.get(m.id)
+            m.__dict__["education"] = educations.get(m.id)
+            m.__dict__["employment"] = employments.get(m.id)
+
+    # Member-level aggregations.
+    disabled = 0
+    chronic_ill = 0
+    school_age_out = 0
+    under_15 = 0
+    over_65 = 0
+    working_age = 0
+    for m in members:
+        d = m.__dict__.get("disability")
+        if d is not None and getattr(d, "wg_disability_flag", False):
+            disabled += 1
+        h = m.__dict__.get("health")
+        if h is not None and getattr(h, "chronic_illness_flag", "") == "1":
+            chronic_ill += 1
+        age = getattr(m, "age_years", None) or 0
+        if 6 <= age <= 18:
+            e = m.__dict__.get("education")
+            attending = getattr(e, "currently_attending", "") if e else ""
+            if attending != "1":  # "1" = yes per the questionnaire
+                school_age_out += 1
+        if age < 15:
+            under_15 += 1
+        elif age > 65:
+            over_65 += 1
+        else:
+            working_age += 1
+
+    dependency_ratio = (
+        (under_15 + over_65) / working_age if working_age > 0 else 0.0
+    )
+
+    return {
+        "household": household,
+        "members": members,
+        "assets": assets_by_type,
+        "livestock": livestock_by_type,
+        "member_count": len(members),
+        "disabled_member_count": disabled,
+        "chronic_ill_member_count": chronic_ill,
+        "school_age_out_of_school_count": school_age_out,
+        "dependency_ratio": dependency_ratio,
+    }
+
+
 def compute_pmt(household, model_version: PMTModelVersion) -> tuple[float, str, dict]:
     """Apply the model to a Household instance.
 
@@ -77,12 +213,7 @@ def compute_pmt(household, model_version: PMTModelVersion) -> tuple[float, str, 
     """
     snapshot: dict[str, dict] = {}
     score = float(model_version.intercept or 0)
-    members = list(household.members.filter(is_deleted=False))
-    record = {
-        "household": household,
-        "members": members,
-        "member_count": len(members),
-    }
+    record = _household_features(household)
     for var in (model_version.variables or []):
         path = var.get("variable", "")
         weight = float(var.get("weight", 0))

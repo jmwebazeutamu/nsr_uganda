@@ -52,10 +52,35 @@ def recompute_for_household(
 ) -> PMTResult | None:
     """Compute the PMT against the current ACTIVE model and persist a
     PMTResult. Returns None when no ACTIVE model exists (the pipeline
-    is harmless in dev before any model is approved)."""
+    is harmless in dev before any model is approved).
+
+    US-S22-DE-06: refetch via the prefetch chain so compute_pmt's
+    walk over detail entities is N+1-free. The AC-DE-PMT-NO-N-PLUS-1
+    test caps query count at 12 for a 10-member household."""
     model = get_active_model_version()
     if model is None:
         return None
+    # US-S22-DE-06 prefetch chain. select_related joins one-to-ones
+    # onto the Household SELECT; prefetch_related batches the M2M-like
+    # repeats. Per-Member reverse-OneToOnes are bulk-loaded INSIDE
+    # _household_features (4 queries independent of member count) —
+    # cheaper than the equivalent prefetch_related which fires extra
+    # per-instance SELECTs when a member has no child row.
+    household = (
+        Household.objects
+        .select_related(
+            "dwelling", "utilities", "livelihood",
+            "food_security", "food_consumption",
+            "head_member",
+            "head_member__education", "head_member__employment",
+        )
+        .prefetch_related(
+            "members",
+            "assets", "livestock", "crops",
+            "shocks", "coping_strategies",
+        )
+        .get(pk=household.pk)
+    )
     score, band, snapshot = compute_pmt(household, model)
     result = PMTResult.objects.create(
         household=household, model_version=model,
