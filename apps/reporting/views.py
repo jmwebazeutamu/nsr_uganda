@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import io
+from decimal import Decimal
 
 from django.db.models import Count, Max
 from django.http import HttpResponse
@@ -24,7 +25,11 @@ from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.data_management.models import Household
+from apps.data_management.models import (
+    Disability,
+    FoodConsumption,
+    Household,
+)
 from apps.dqa.models import DqaResult
 from apps.grievance.models import Grievance, GrievanceStatus
 from apps.security.abac import scope_q_for_field
@@ -1574,3 +1579,113 @@ def _render_dqa_violation_records_csv(rows: list[dict]) -> HttpResponse:
         'attachment; filename="dqa-violation-records.csv"'
     )
     return response
+
+
+# ===========================================================================
+# US-S22-DE-10 — detail-entity dashboard tiles
+# ===========================================================================
+
+
+@extend_schema(
+    tags=["rpt"],
+    summary="Disability prevalence by sub-region (US-S22-DE-10)",
+    responses={200: DashboardRowSerializer(many=True)},
+)
+class DisabilityPrevalenceBySubRegion(APIView):
+    """Members with the WG disability flag, grouped by sub-region.
+
+    The Disability row is per-Member; its wg_disability_flag is set
+    when ANY Washington Group column reports "03" / "04" (a lot of
+    difficulty / cannot do at all). This tile reports the count of
+    flagged members per sub-region — the % is computed on the
+    client against the per-sub-region member denominator from the
+    households-by-sub-region tile.
+
+    ABAC: the underlying Member queryset is scoped via the
+    household's sub_region_code. Soft-deleted members are excluded.
+    """
+
+    def get(self, request):
+        scoped_hh = Household.objects.filter(
+            scope_q_for_field(request.user, "sub_region_code"),
+        )
+        rows = list(
+            Disability.objects
+            .filter(
+                wg_disability_flag=True,
+                is_deleted=False,
+                member__is_deleted=False,
+                member__household__in=scoped_hh,
+            )
+            .values(
+                "member__household__sub_region_code",
+                "member__household__sub_region__name",
+            )
+            .annotate(count=Count("id"))
+            .order_by("member__household__sub_region_code"),
+        )
+        out = [
+            {
+                "key": r["member__household__sub_region_code"] or "(unset)",
+                "label": (
+                    r["member__household__sub_region__name"]
+                    or r["member__household__sub_region_code"]
+                    or "(unset)"
+                ),
+                "count": r["count"],
+            }
+            for r in rows
+        ]
+        _audit_dashboard_read(request, "disability_prevalence_by_sub_region", len(out))
+        return _render(request, out, "disability-prevalence-by-sub-region")
+
+
+# WFP FCS thresholds — Food Consumption Score (0–112) maps to:
+#   poor:        0–21
+#   borderline:  21.5–35
+#   acceptable:  > 35
+# See WFP Food Consumption Score (FCS) Indicators §2.1.
+_FCS_BANDS = (
+    ("poor",       "Poor (0–21)",           Decimal("0"),    Decimal("21")),
+    ("borderline", "Borderline (21.5–35)", Decimal("21.01"), Decimal("35")),
+    ("acceptable", "Acceptable (>35)",     Decimal("35.01"), Decimal("999")),
+)
+
+
+@extend_schema(
+    tags=["rpt"],
+    summary="Food Consumption Score distribution by band (US-S22-DE-10)",
+    responses={200: DashboardRowSerializer(many=True)},
+)
+class FoodConsumptionScoreDistribution(APIView):
+    """Households grouped by WFP Food Consumption Score band.
+
+    Every Household has at most one FoodConsumption row; the WFP-
+    weighted fcs_score is computed on save per ADR-0022. Households
+    without a FoodConsumption row don't appear — they pre-date the
+    rollout and need their canonical_payload re-promoted.
+
+    ABAC: filtered by the operator's sub_region_code scope.
+    """
+
+    def get(self, request):
+        scoped_hh = Household.objects.filter(
+            scope_q_for_field(request.user, "sub_region_code"),
+        )
+        rows = (
+            FoodConsumption.objects
+            .filter(is_deleted=False, household__in=scoped_hh)
+            .values_list("fcs_score", flat=True)
+        )
+        bucket = {band[0]: 0 for band in _FCS_BANDS}
+        for score in rows:
+            for slug, _label, low, high in _FCS_BANDS:
+                if low <= score <= high:
+                    bucket[slug] += 1
+                    break
+        out = [
+            {"key": slug, "label": label, "count": bucket[slug]}
+            for slug, label, _low, _high in _FCS_BANDS
+        ]
+        _audit_dashboard_read(request, "fcs_distribution", len(out))
+        return _render(request, out, "fcs-distribution")

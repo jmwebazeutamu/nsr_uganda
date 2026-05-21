@@ -12,8 +12,10 @@ from .views import (
     DedupPairRecords,
     DedupPairsByStatus,
     DihStagesByState,
+    DisabilityPrevalenceBySubRegion,
     DqaViolationRecords,
     DqaViolationsByRule,
+    FoodConsumptionScoreDistribution,
     GrievanceRecords,
     GrievancesByCategory,
     HouseholdsByIntakeSource,
@@ -120,4 +122,11 @@ urlpatterns = [
     path("dashboards/dqa-violations/records/",
          DqaViolationRecords.as_view(),
          name="rpt-dqa-violation-records"),
+    # US-S22-DE-10 — detail-entity dashboard tiles
+    path("dashboards/disability-prevalence-by-sub-region/",
+         DisabilityPrevalenceBySubRegion.as_view(),
+         name="rpt-disability-prevalence-by-sub-region"),
+    path("dashboards/fcs-distribution/",
+         FoodConsumptionScoreDistribution.as_view(),
+         name="rpt-fcs-distribution"),
 ]

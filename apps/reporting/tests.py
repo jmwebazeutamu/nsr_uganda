@@ -1733,3 +1733,81 @@ class TestDqaViolationsDashboard:
         ).order_by("-occurred_at").first()
         assert ev is not None
         assert ev.actor_id == "viol-rec-aud"
+
+
+# ===========================================================================
+# US-S22-DE-10 — detail-entity dashboard tiles
+# ===========================================================================
+
+
+class TestDisabilityPrevalenceBySubRegion:
+    URL = "/api/v1/rpt/dashboards/disability-prevalence-by-sub-region/"
+
+    def test_counts_only_flagged_members(self, db, two_sub_regions, django_user_model):
+        from apps.data_management.models import Disability, Member
+        su = django_user_model.objects.create_superuser(username="dis-rpt", password="p")
+        client = APIClient()
+        client.force_authenticate(user=su)
+        # Two sub-regions, three households, mixed disability flag states.
+        for sr_key, hh_count in [("SR-BUGANDA", 2), ("SR-KARAMOJA", 1)]:
+            nodes = two_sub_regions[sr_key]
+            for i in range(hh_count):
+                hh = Household.objects.create(
+                    region=nodes["r"], sub_region=nodes["sr"], district=nodes["d"],
+                    county=nodes["c"], sub_county=nodes["sc"],
+                    parish=nodes["p"], village=nodes["v"],
+                )
+                # Two members per household; one flagged.
+                m1 = Member.objects.create(
+                    household=hh, line_number=1,
+                    surname="X", first_name="A", sex="F",
+                    relationship_to_head="01",
+                )
+                m2 = Member.objects.create(
+                    household=hh, line_number=2,
+                    surname="X", first_name="B", sex="M",
+                    relationship_to_head="02",
+                )
+                Disability.objects.create(member=m1, walking="03")  # flag = True
+                Disability.objects.create(member=m2, seeing="01")    # flag = False
+                _ = i  # silence linter
+
+        r = client.get(self.URL)
+        assert r.status_code == 200
+        rows = {row["key"]: row["count"] for row in r.data}
+        # 2 Buganda households × 1 flagged each = 2
+        # 1 Karamoja household × 1 flagged = 1
+        # The two_sub_regions fixture names sub_regions as R-<key>-SR.
+        assert rows.get("R-SR-BUGANDA-SR") == 2
+        assert rows.get("R-SR-KARAMOJA-SR") == 1
+
+
+class TestFoodConsumptionScoreDistribution:
+    URL = "/api/v1/rpt/dashboards/fcs-distribution/"
+
+    def test_buckets_by_wfp_band(self, db, two_sub_regions, django_user_model):
+        from apps.data_management.models import FoodConsumption
+        su = django_user_model.objects.create_superuser(username="fcs-rpt", password="p")
+        client = APIClient()
+        client.force_authenticate(user=su)
+        nodes = two_sub_regions["SR-BUGANDA"]
+        # One household per band.
+        # Poor (FCS=14): 7 days staples × 2.0
+        # Borderline (FCS=24): 7 days staples × 2.0 + 5 days vegetables × 1.0 + 5 days fruits × 1.0 = 14+5+5 = 24
+        # Acceptable (FCS>35): max-out a few groups
+        configs = [
+            {"staples_days": 7},                              # 14 → poor
+            {"staples_days": 7, "vegetables_days": 5, "fruits_days": 5},  # 24 → borderline
+            {"staples_days": 7, "meat_days": 7, "dairy_days": 5},         # 14+28+20=62 → acceptable
+        ]
+        for cfg in configs:
+            hh = Household.objects.create(
+                region=nodes["r"], sub_region=nodes["sr"], district=nodes["d"],
+                county=nodes["c"], sub_county=nodes["sc"],
+                parish=nodes["p"], village=nodes["v"],
+            )
+            FoodConsumption.objects.create(household=hh, **cfg)
+        r = client.get(self.URL)
+        assert r.status_code == 200
+        buckets = {row["key"]: row["count"] for row in r.data}
+        assert buckets == {"poor": 1, "borderline": 1, "acceptable": 1}
