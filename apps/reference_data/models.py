@@ -59,6 +59,61 @@ class GeographicUnit(models.Model):
     def __str__(self) -> str:
         return f"{self.get_level_display()}:{self.code} {self.name}"
 
+    # US-REF-026 / Audit 2026-05-21 §2 — bulk administrative
+    # walks ("all households in this sub-region") had to climb
+    # the FK chain ad-hoc. These helpers give a single canonical
+    # entry point that returns a queryset suitable for chaining.
+    #
+    # The hierarchy is bounded at 7 levels (region → village), so
+    # the iterative walk fires at most 7 queries. We deliberately
+    # avoid a recursive CTE here to keep the implementation
+    # backend-portable (SQLite + PostgreSQL) and to keep this app
+    # free of raw SQL (CLAUDE.md: "No raw SQL outside
+    # data_management and ingestion_hub").
+    def get_descendants(self, *, include_self: bool = False):
+        """Queryset of every GeographicUnit below self in the tree,
+        regardless of depth. Returns a deterministic order
+        (level then code). `include_self=True` prepends self."""
+        ids: list = [self.id] if include_self else []
+        current = [self.id]
+        while current:
+            children = list(
+                GeographicUnit.objects
+                .filter(parent_id__in=current)
+                .values_list("id", flat=True),
+            )
+            if not children:
+                break
+            ids.extend(children)
+            current = children
+        return (
+            GeographicUnit.objects
+            .filter(id__in=ids)
+            .order_by("level", "code")
+        )
+
+    def get_ancestors(self, *, include_self: bool = False):
+        """Queryset of every GeographicUnit above self in the tree,
+        ordered top-down (region first, immediate parent last)."""
+        ids: list = [self.id] if include_self else []
+        cur_parent_id = self.parent_id
+        # Bounded at 7 levels; one query per step keeps the
+        # implementation portable and easy to reason about.
+        while cur_parent_id:
+            ids.append(cur_parent_id)
+            next_id = (
+                GeographicUnit.objects
+                .filter(id=cur_parent_id)
+                .values_list("parent_id", flat=True)
+                .first()
+            )
+            cur_parent_id = next_id
+        return (
+            GeographicUnit.objects
+            .filter(id__in=ids)
+            .order_by("level", "code")
+        )
+
 
 class ChoiceListStatus(models.TextChoices):
     """Lifecycle states for ChoiceList — mirror DqaRule (DAT-DQA pattern).

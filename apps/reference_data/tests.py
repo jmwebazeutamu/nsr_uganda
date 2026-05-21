@@ -205,3 +205,77 @@ class TestGeographicUnitSerializer:
         assert r.status_code == 200
         rows = {row["code"]: row for row in r.data["results"]}
         assert rows["SR-BUGANDA-SOUTH"]["parent_code"] == "R-CENTRAL"
+
+
+@pytest.mark.django_db
+class TestGeographicUnitTreeHelpers:
+    """US-REF-026 / Audit 2026-05-21 §2.
+
+    `get_descendants()` and `get_ancestors()` give a single canonical
+    way to walk the UBOS hierarchy without ad-hoc `parent__parent__...`
+    chains. Hierarchy is bounded at 7 levels (region → village).
+    """
+
+    @pytest.fixture
+    def tree(self, db):
+        # Two regions, asymmetric subtrees so we can assert siblings
+        # don't leak.
+        ef = date(2026, 1, 1)
+        mk = lambda level, code, parent=None: GeographicUnit.objects.create(  # noqa: E731
+            level=level, code=code, name=code,
+            parent=parent, effective_from=ef,
+        )
+        r1   = mk("region",     "R1")
+        r2   = mk("region",     "R2")
+        sr1a = mk("sub_region", "SR1A", r1)
+        sr1b = mk("sub_region", "SR1B", r1)
+        sr2  = mk("sub_region", "SR2",  r2)
+        d1a  = mk("district",   "D1A",  sr1a)
+        d1b  = mk("district",   "D1B",  sr1b)
+        v1a  = mk("village",    "V1A",  d1a)
+        return {
+            "r1": r1, "r2": r2,
+            "sr1a": sr1a, "sr1b": sr1b, "sr2": sr2,
+            "d1a": d1a, "d1b": d1b, "v1a": v1a,
+        }
+
+    def test_descendants_excludes_self_by_default(self, tree):
+        qs = tree["r1"].get_descendants()
+        codes = set(qs.values_list("code", flat=True))
+        assert codes == {"SR1A", "SR1B", "D1A", "D1B", "V1A"}
+        assert "R1" not in codes
+
+    def test_descendants_include_self_prepends_root(self, tree):
+        qs = tree["r1"].get_descendants(include_self=True)
+        assert "R1" in set(qs.values_list("code", flat=True))
+
+    def test_descendants_does_not_cross_into_sibling_subtree(self, tree):
+        qs = tree["r1"].get_descendants()
+        codes = set(qs.values_list("code", flat=True))
+        assert "R2" not in codes
+        assert "SR2" not in codes
+
+    def test_descendants_of_leaf_is_empty(self, tree):
+        assert tree["v1a"].get_descendants().count() == 0
+
+    def test_ancestors_walks_to_root(self, tree):
+        qs = tree["v1a"].get_ancestors()
+        codes = set(qs.values_list("code", flat=True))
+        assert codes == {"D1A", "SR1A", "R1"}
+
+    def test_ancestors_include_self_prepends_self(self, tree):
+        qs = tree["v1a"].get_ancestors(include_self=True)
+        assert "V1A" in set(qs.values_list("code", flat=True))
+
+    def test_ancestors_of_region_is_empty(self, tree):
+        assert tree["r1"].get_ancestors().count() == 0
+
+    def test_descendants_query_budget_is_bounded(self, tree, django_assert_max_num_queries):
+        # Hierarchy is 7 levels — implementation fires one query per
+        # populated level (max ~7) plus the final ORM filter.
+        with django_assert_max_num_queries(10):
+            list(tree["r1"].get_descendants())
+
+    def test_ancestors_query_budget_is_bounded(self, tree, django_assert_max_num_queries):
+        with django_assert_max_num_queries(10):
+            list(tree["v1a"].get_ancestors())
