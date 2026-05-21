@@ -17,9 +17,25 @@ from .models import ChoiceList, ChoiceListStatus, ChoiceOption, GeographicUnit
 
 
 class GeographicUnitSerializer(serializers.ModelSerializer):
+    # BUG-S27-024 — the DRS wizard's Step-4 preview must constrain
+    # descendant geographic columns (sub_region, district, …) to
+    # units that actually descend from any pinned parent. Exposing
+    # the parent's UBOS code (not the opaque FK id) lets the
+    # frontend filter children by parent_code with no extra fetch.
+    parent_code = serializers.SerializerMethodField()
+
     class Meta:
         model = GeographicUnit
-        fields = ("id", "level", "code", "name", "parent", "effective_from", "effective_to", "status")
+        fields = (
+            "id", "level", "code", "name",
+            "parent", "parent_code",
+            "effective_from", "effective_to", "status",
+        )
+
+    def get_parent_code(self, obj: "GeographicUnit") -> str:
+        # `select_related("parent")` on the viewset keeps this
+        # zero-query; default to "" for top-level regions.
+        return obj.parent.code if obj.parent_id else ""
 
 
 @extend_schema_view(
@@ -29,7 +45,11 @@ class GeographicUnitSerializer(serializers.ModelSerializer):
 class GeographicUnitViewSet(viewsets.ReadOnlyModelViewSet):
     """UBOS administrative hierarchy. Read-only; sourced from the UBOS loader."""
 
-    queryset = GeographicUnit.objects.all().order_by("level", "code")
+    queryset = (
+        GeographicUnit.objects
+        .select_related("parent")   # parent_code lookup is N+1 without this
+        .order_by("level", "code")
+    )
     serializer_class = GeographicUnitSerializer
 
     def get_queryset(self):

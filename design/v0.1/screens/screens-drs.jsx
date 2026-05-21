@@ -542,6 +542,56 @@ const _buildPinMap = (tree) => {
   return pins;
 };
 
+// BUG-S27-024 — UBOS administrative hierarchy. Used by the preview's
+// implicit-pin inferrer to constrain a descendant geographic column
+// to options whose `parent_code` matches the pinned ancestor. The
+// order is significant: the inferrer walks top-down so a region pin
+// propagates to sub_region, then sub_region's now-implicit pin
+// propagates to district, and so on.
+const _GEO_CHAIN = [
+  "household.region_code",
+  "household.sub_region_code",
+  "household.district_code",
+  "household.county_code",
+  "household.sub_county_code",
+  "household.parish_code",
+  "household.village_code",
+];
+
+// Pure: given the explicit pins from _buildPinMap, the selected
+// columns, and the catalogue, derive *implicit* pins on geographic
+// descendants whose parent geo level is pinned. The result is a new
+// pin map (the original is not mutated) where each implicit pin
+// carries `{ kind: "multi", values, implicit: true }` so the UI can
+// distinguish them from explicit pins.
+const _inferImplicitGeoPins = (pins, cols, catalogueByKey) => {
+  const out = { ...pins };
+  const colKeys = new Set((cols || []).map(c => c.key));
+  for (let i = 1; i < _GEO_CHAIN.length; i++) {
+    const childKey = _GEO_CHAIN[i];
+    if (!colKeys.has(childKey)) continue;        // column not in preview
+    if (out[childKey]) continue;                  // already explicitly pinned
+    const parentKey = _GEO_CHAIN[i - 1];
+    const parentPin = out[parentKey];
+    if (!parentPin) continue;
+    const allowed = new Set(
+      parentPin.kind === "single" ? [parentPin.value]
+      : parentPin.kind === "multi" ? (parentPin.values || [])
+      : [],
+    );
+    if (allowed.size === 0) continue;
+    const field = (catalogueByKey || {})[childKey];
+    const childOpts = (field && field.options) || [];
+    const matching = childOpts
+      .filter(o => o.parent_code && allowed.has(o.parent_code))
+      .map(o => o.value);
+    if (matching.length > 0) {
+      out[childKey] = { kind: "multi", values: matching, implicit: true };
+    }
+  }
+  return out;
+};
+
 // Render a raw pinned value through the field's catalogue — for
 // enum / enum-multi we want the human label, not the storage code.
 const _renderPinned = (raw, field) => {
@@ -675,13 +725,21 @@ const _choiceListNameFor = (slug) => {
 // the rest of the wizard expects (each row carries `{value, label}`).
 // Accepts both `name` (GeographicUnitSerializer) and `label`
 // (ChoiceListBundle) as the human-readable label source.
+// BUG-S27-024 — preserves `parent_code` on options when the
+// upstream row carries one (GeographicUnit + ChoiceOption both
+// expose it). The preview's implicit-pin inferrer uses this to
+// constrain geographic descendants to their parent's children.
 const _enrichFieldsWithOptions = (schemaFields, optionsCache) => {
   if (!Array.isArray(schemaFields)) return [];
   return schemaFields.map(f => {
     if (f.options || !f.options_source) return f;
     const rows = (optionsCache && optionsCache[f.options_source]) || [];
     const options = rows
-      .map(r => ({ value: r.code, label: r.label || r.name || r.code }))
+      .map(r => {
+        const opt = { value: r.code, label: r.label || r.name || r.code };
+        if (r.parent_code) opt.parent_code = r.parent_code;
+        return opt;
+      })
       .filter(o => o.value);
     return { ...f, options };
   });
@@ -1314,8 +1372,9 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
     .map(key => ({ key, field: catalogueByKey[key] }))
     .filter(c => c.field);
   const unknown = selected.filter(k => !catalogueByKey[k]);
-  const pins = _buildPinMap(tree);
-  const pinnedSelectedCount = cols.filter(c => pins[c.key]).length;
+  const pins = _inferImplicitGeoPins(_buildPinMap(tree), cols, catalogueByKey);
+  const pinnedSelectedCount = cols.filter(c => pins[c.key] && !pins[c.key].implicit).length;
+  const scopedSelectedCount = cols.filter(c => pins[c.key] && pins[c.key].implicit).length;
 
   if (selected.length === 0) {
     return (
@@ -1387,6 +1446,7 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
           <strong className="t-bodysm">Preview rows · masked sample</strong>
           <span className="t-cap">
             {pinnedSelectedCount > 0 && <>{pinnedSelectedCount} column{pinnedSelectedCount === 1 ? "" : "s"} pinned by your Step-2 filter · </>}
+            {scopedSelectedCount > 0 && <>{scopedSelectedCount} column{scopedSelectedCount === 1 ? "" : "s"} scoped to the pinned region · </>}
             {sensitiveCount > 0 && <>{sensitiveCount} Sensitive column{sensitiveCount === 1 ? "" : "s"} masked · </>}
             {personalCount > 0 && <>{personalCount} Personal phone column{personalCount === 1 ? "" : "s"} last-4 only · </>}
             cell values are design-time fixtures until DRS-O-PREVIEW lands
@@ -1404,7 +1464,9 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
                       <div style={{display:'flex', flexDirection:'column', gap:2, alignItems:'flex-start'}}>
                         <div style={{display:'flex', alignItems:'center', gap:6}}>
                           <span>{field.label || key}</span>
-                          {pin && <Chip size="sm" tone="system" icon="filter">filtered</Chip>}
+                          {pin && pin.implicit
+                            ? <Chip size="sm" tone="data" icon="link">scoped</Chip>
+                            : pin && <Chip size="sm" tone="system" icon="filter">filtered</Chip>}
                         </div>
                         <span className="t-cap t-mono" style={{fontSize:10, fontWeight:400, color:'var(--neutral-500)', textTransform:'none', letterSpacing:0}}>{key}</span>
                       </div>
@@ -1569,6 +1631,7 @@ const SubmitStep = ({
 
 Object.assign(window, {
   DRSScreen, PreviewStep, _previewCell, _buildPinMap, _renderPinned,
+  _inferImplicitGeoPins, _GEO_CHAIN,
   _choiceListNameFor, _enrichFieldsWithOptions, _resolveOptionsForSchema,
   _OPTIONS_SOURCE_URL,
 });

@@ -18,6 +18,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 let PreviewStep;
 let _previewCell;
 let _buildPinMap;
+let _inferImplicitGeoPins;
 // Pulled from screens-drs-fieldselector via dynamic import so the
 // shared screens-drs module body can also evaluate without throwing
 // on missing primitives.
@@ -37,7 +38,7 @@ beforeAll(async () => {
   await import("./screens-drs-fieldselector.jsx");
   await import("./screens-drs-querybuilder.jsx");
   await import("./screens-drs.jsx");
-  ({ PreviewStep, _previewCell, _buildPinMap } = globalThis);
+  ({ PreviewStep, _previewCell, _buildPinMap, _inferImplicitGeoPins } = globalThis);
 });
 
 afterEach(() => {
@@ -375,5 +376,217 @@ describe("PreviewStep with a tree", () => {
       node.tagName === "TD" && /^01[A-Z0-9]{24}$/.test(node.textContent));
     const distinct = new Set(idCells.map(c => c.textContent));
     expect(distinct.size).toBeGreaterThanOrEqual(5);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────
+// BUG-S27-024 — implicit pinning of geographic descendants
+// ───────────────────────────────────────────────────────────────
+
+describe("_inferImplicitGeoPins", () => {
+  const regionField = {
+    key: "household.region_code", type: "enum",
+    options: [
+      { value: "R-CENTRAL", label: "Central" },
+      { value: "R-NORTHERN", label: "Northern" },
+    ],
+  };
+  const subRegionField = {
+    key: "household.sub_region_code", type: "enum",
+    options: [
+      { value: "SR-BUGANDA-SOUTH", label: "Buganda South", parent_code: "R-CENTRAL" },
+      { value: "SR-BUGANDA-NORTH", label: "Buganda North", parent_code: "R-CENTRAL" },
+      { value: "SR-ACHOLI",        label: "Acholi",         parent_code: "R-NORTHERN" },
+      { value: "SR-KARAMOJA",      label: "Karamoja",       parent_code: "R-NORTHERN" },
+    ],
+  };
+  const districtField = {
+    key: "household.district_code", type: "enum",
+    options: [
+      { value: "DST-KAMPALA", label: "Kampala", parent_code: "SR-BUGANDA-SOUTH" },
+      { value: "DST-MUKONO",  label: "Mukono",  parent_code: "SR-BUGANDA-SOUTH" },
+      { value: "DST-GULU",    label: "Gulu",    parent_code: "SR-ACHOLI" },
+    ],
+  };
+  const cat = {
+    "household.region_code":     regionField,
+    "household.sub_region_code": subRegionField,
+    "household.district_code":   districtField,
+  };
+
+  it("infers a sub_region pin from a region single-pin", () => {
+    const explicit = {
+      "household.region_code": { kind: "single", value: "R-CENTRAL" },
+    };
+    const cols = [
+      { key: "household.region_code",     field: regionField },
+      { key: "household.sub_region_code", field: subRegionField },
+    ];
+    const out = _inferImplicitGeoPins(explicit, cols, cat);
+    expect(out["household.sub_region_code"]).toEqual({
+      kind: "multi",
+      values: ["SR-BUGANDA-SOUTH", "SR-BUGANDA-NORTH"],
+      implicit: true,
+    });
+    // Explicit pin untouched.
+    expect(out["household.region_code"]).toEqual(explicit["household.region_code"]);
+  });
+
+  it("propagates down the chain — region → sub_region → district", () => {
+    const explicit = {
+      "household.region_code": { kind: "single", value: "R-CENTRAL" },
+    };
+    const cols = [
+      { key: "household.region_code",     field: regionField },
+      { key: "household.sub_region_code", field: subRegionField },
+      { key: "household.district_code",   field: districtField },
+    ];
+    const out = _inferImplicitGeoPins(explicit, cols, cat);
+    expect(out["household.district_code"]).toEqual({
+      kind: "multi",
+      values: ["DST-KAMPALA", "DST-MUKONO"],
+      implicit: true,
+    });
+  });
+
+  it("explicit child pin is NOT overwritten by the inferrer", () => {
+    const explicit = {
+      "household.region_code":     { kind: "single", value: "R-CENTRAL" },
+      "household.sub_region_code": { kind: "single", value: "SR-BUGANDA-SOUTH" },
+    };
+    const cols = [
+      { key: "household.region_code",     field: regionField },
+      { key: "household.sub_region_code", field: subRegionField },
+    ];
+    const out = _inferImplicitGeoPins(explicit, cols, cat);
+    expect(out["household.sub_region_code"]).toEqual(explicit["household.sub_region_code"]);
+    expect(out["household.sub_region_code"].implicit).toBeUndefined();
+  });
+
+  it("multi-pinned parent unions descendants", () => {
+    const explicit = {
+      "household.region_code": { kind: "multi", values: ["R-CENTRAL", "R-NORTHERN"] },
+    };
+    const cols = [
+      { key: "household.region_code",     field: regionField },
+      { key: "household.sub_region_code", field: subRegionField },
+    ];
+    const out = _inferImplicitGeoPins(explicit, cols, cat);
+    expect(out["household.sub_region_code"].values.sort()).toEqual([
+      "SR-ACHOLI", "SR-BUGANDA-NORTH", "SR-BUGANDA-SOUTH", "SR-KARAMOJA",
+    ]);
+  });
+
+  it("no descendant column selected → no implicit pin added", () => {
+    const explicit = {
+      "household.region_code": { kind: "single", value: "R-CENTRAL" },
+    };
+    const cols = [{ key: "household.region_code", field: regionField }];
+    const out = _inferImplicitGeoPins(explicit, cols, cat);
+    expect(Object.keys(out)).toEqual(["household.region_code"]);
+  });
+
+  it("parent not pinned → no implicit pin on the child", () => {
+    const cols = [
+      { key: "household.sub_region_code", field: subRegionField },
+    ];
+    const out = _inferImplicitGeoPins({}, cols, cat);
+    expect(out["household.sub_region_code"]).toBeUndefined();
+  });
+
+  it("child options without parent_code → no spurious pin", () => {
+    const noParentField = {
+      key: "household.sub_region_code", type: "enum",
+      options: [
+        { value: "SR-BUGANDA-SOUTH", label: "Buganda South" },
+        { value: "SR-ACHOLI",        label: "Acholi" },
+      ],
+    };
+    const explicit = {
+      "household.region_code": { kind: "single", value: "R-CENTRAL" },
+    };
+    const cols = [
+      { key: "household.region_code",     field: regionField },
+      { key: "household.sub_region_code", field: noParentField },
+    ];
+    const out = _inferImplicitGeoPins(explicit, cols, {
+      ...cat, "household.sub_region_code": noParentField,
+    });
+    expect(out["household.sub_region_code"]).toBeUndefined();
+  });
+});
+
+describe("PreviewStep with geographic implicit pins", () => {
+  const regionField = {
+    key: "household.region_code", label: "Region", type: "enum", sensitivity: "Public",
+    options: [
+      { value: "R-CENTRAL", label: "Central" },
+      { value: "R-NORTHERN", label: "Northern" },
+    ],
+  };
+  const subRegionField = {
+    key: "household.sub_region_code", label: "Sub-region", type: "enum", sensitivity: "Public",
+    options: [
+      { value: "SR-BUGANDA-SOUTH", label: "Buganda South", parent_code: "R-CENTRAL" },
+      { value: "SR-BUGANDA-NORTH", label: "Buganda North", parent_code: "R-CENTRAL" },
+      { value: "SR-ACHOLI",        label: "Acholi",         parent_code: "R-NORTHERN" },
+      { value: "SR-KARAMOJA",      label: "Karamoja",       parent_code: "R-NORTHERN" },
+    ],
+  };
+  const cat = {
+    "household.region_code":     regionField,
+    "household.sub_region_code": subRegionField,
+  };
+  const tree = {
+    id: "g", kind: "group", combinator: "AND",
+    rules: [
+      { id: "r1", kind: "rule", field: "household.region_code",
+        op: "eq", value: "R-CENTRAL" },
+    ],
+  };
+
+  it("never renders sub-regions that don't descend from the pinned region", () => {
+    render(<PreviewStep
+      selected={["household.region_code", "household.sub_region_code"]}
+      catalogueByKey={cat}
+      tree={tree}/>);
+    // Acholi + Karamoja are Northern — must not appear in any body cell.
+    const cells = document.querySelectorAll("tbody td");
+    const subRegions = Array.from(cells).map(c => c.textContent);
+    expect(subRegions).not.toContain("Acholi");
+    expect(subRegions).not.toContain("Karamoja");
+  });
+
+  it("only renders sub-regions descending from the pinned region", () => {
+    render(<PreviewStep
+      selected={["household.region_code", "household.sub_region_code"]}
+      catalogueByKey={cat}
+      tree={tree}/>);
+    // Every sub_region cell must be one of Buganda North / Buganda South.
+    const cells = Array.from(document.querySelectorAll("tbody td"))
+      .filter(td => td.previousElementSibling); // skip the first column
+    const subRegionCells = cells.map(c => c.textContent);
+    for (const v of subRegionCells) {
+      expect(["Buganda South", "Buganda North"]).toContain(v);
+    }
+  });
+
+  it("implicit pins surface a 'scoped' chip, not 'filtered'", () => {
+    render(<PreviewStep
+      selected={["household.region_code", "household.sub_region_code"]}
+      catalogueByKey={cat}
+      tree={tree}/>);
+    // Explicit pin on Region → "filtered". Implicit pin on Sub-region → "scoped".
+    expect(screen.getByText("filtered")).toBeInTheDocument();
+    expect(screen.getByText("scoped")).toBeInTheDocument();
+  });
+
+  it("toolbar copy reports pinned and scoped counts separately", () => {
+    render(<PreviewStep
+      selected={["household.region_code", "household.sub_region_code"]}
+      catalogueByKey={cat}
+      tree={tree}/>);
+    expect(screen.getByText(/1 column pinned by your Step-2 filter/)).toBeInTheDocument();
+    expect(screen.getByText(/1 column scoped to the pinned region/)).toBeInTheDocument();
   });
 });

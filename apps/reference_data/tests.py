@@ -16,7 +16,7 @@ from datetime import date
 import pytest
 from rest_framework.test import APIClient
 
-from apps.reference_data.models import ChoiceList, ChoiceOption
+from apps.reference_data.models import ChoiceList, ChoiceOption, GeographicUnit
 
 
 @pytest.mark.django_db
@@ -148,3 +148,58 @@ class TestChoiceListReadEndpoint:
                        "author": "a"}, format="json",
         )
         assert r.status_code in (405, 403)
+
+
+@pytest.mark.django_db
+class TestGeographicUnitSerializer:
+    """BUG-S27-024 — the DRS preview's implicit-pin inferrer needs the
+    parent's UBOS *code* on each row, not just the FK id. Earlier the
+    serializer only emitted `parent` (an opaque ULID), so the preview
+    rendered geographically impossible rows (Region=Central but
+    Sub-region=Acholi).
+    """
+
+    URL = "/api/v1/reference-data/geographic-units/"
+
+    def _client(self, django_user_model):
+        u = django_user_model.objects.create_user(
+            username="geo-reader", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        return c
+
+    @pytest.fixture
+    def _central_with_buganda_south(self):
+        ef = date(2026, 1, 1)
+        central = GeographicUnit.objects.create(
+            level="region", code="R-CENTRAL", name="Central",
+            effective_from=ef, status="active",
+        )
+        buganda_south = GeographicUnit.objects.create(
+            level="sub_region", code="SR-BUGANDA-SOUTH", name="Buganda South",
+            parent=central, effective_from=ef, status="active",
+        )
+        return central, buganda_south
+
+    def test_row_carries_parent_code(self, django_user_model, _central_with_buganda_south):
+        _, buganda_south = _central_with_buganda_south
+        r = self._client(django_user_model).get(f"{self.URL}{buganda_south.id}/")
+        assert r.status_code == 200
+        assert r.data["parent_code"] == "R-CENTRAL"
+
+    def test_top_level_region_parent_code_is_blank(
+        self, django_user_model, _central_with_buganda_south,
+    ):
+        central, _ = _central_with_buganda_south
+        r = self._client(django_user_model).get(f"{self.URL}{central.id}/")
+        assert r.status_code == 200
+        assert r.data["parent_code"] == ""
+
+    def test_list_endpoint_includes_parent_code(
+        self, django_user_model, _central_with_buganda_south,
+    ):
+        r = self._client(django_user_model).get(self.URL + "?level=sub_region")
+        assert r.status_code == 200
+        rows = {row["code"]: row for row in r.data["results"]}
+        assert rows["SR-BUGANDA-SOUTH"]["parent_code"] == "R-CENTRAL"
