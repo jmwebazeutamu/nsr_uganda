@@ -4,6 +4,38 @@ Notable changes to outbound API contracts. Entries are dated and tied to the com
 
 ---
 
+## 2026-05-21 — US-S27-016 — DRS query builder exposes every UBOS geographic level
+
+**Affected endpoints**:
+- `/api/v1/drs/requests/builder-schema/` — 6 new `fields` (region, district, county, sub_county, parish, village) + 6 new `filter_fields` entries.
+- `/api/v1/drs/requests/{id}/submit/` — `validate_against_dsa` now enforces 7 geographic payload keys (`region_codes`, `sub_region_codes`, `district_codes`, `county_codes`, `sub_county_codes`, `parish_codes`, `village_codes`) instead of just `sub_region_codes`.
+- `/api/v1/reference-data/geographic-units/` — `?level=` / `?status=` / `?parent=` query params now actually filter (previously silent no-ops because `filterset_fields` requires django-filter, which isn't installed).
+
+### What changed
+
+- **Backend `FIELD_CATALOGUE`** gains 6 new fields, one per remaining UBOS administrative level. Each is an `enum` with `options_source: geographic-units?level=<level>`. The query builder's value picker fetches the live list at that level.
+
+- **`GeographicUnitViewSet.get_queryset` honours its query params.** This was a long-standing pre-existing bug: `filterset_fields = ["level", "status", "parent"]` requires django-filter, which the project doesn't install. Every URL like `?level=sub_region` was a no-op and returned the whole hierarchy. Fixed by overriding `get_queryset`. Wizard value pickers now actually get level-scoped results.
+
+- **Validator generalised**. `_allowed_sub_region_codes` is now a thin wrapper around `_allowed_geo_codes(dsa, level)`. `validate_against_dsa` walks a `_GEO_PAYLOAD_KEYS` map and rejects extras at any level. A DSA's `geographic_scope` M2M may carry rows at any level (ADR-0011 §4); each level is enforced independently. If the DSA has no rows at a level, that level is unrestricted (existing convention preserved).
+
+- **Wizard option-source URLs fixed**. The previous URL used `status=current` which doesn't exist in the model (model uses `active` / `superseded` / `retired`). Combined with the no-op viewset filter, the bug was invisible; with the filter fix it became live. Wizard now passes `status=active` for every UBOS level. `page_size` calibrated by expected row count (10k for village, 5k parish, 2k sub-county, 500 for coarser levels).
+
+- **Wizard leaf extractors** translate every supported geo leaf in the criteria tree to its flat payload key, so the validator sees them. Adding a new geo level requires no frontend change beyond the catalogue entry.
+
+### What partners can now filter on
+
+Region · Sub-region · District · County · Sub-county · Parish · Village · Programme · Urban/Rural.
+
+Plus everything from US-S27-013 (PMT band, vulnerability band, member.sex / age_years / etc.). The non-geographic, non-programme leaves still land in `request_payload.criteria` as audit-only — the criteria-evaluator is the next slice.
+
+### What hasn't changed
+
+- The wire format for the validator. New geographic payload keys are additive; existing callers continue to work unchanged.
+- The DSA scope model. `geographic_scope` is still an M2M to `GeographicUnit`, populated at any level.
+
+---
+
 ## 2026-05-21 — US-S27-014 — DRS Step 3 uses the two-pane FieldStepV2 selector
 
 **Affected endpoints**: none. No API contract changes — the wiring is design-layer only. The submit payload's `fields` array is now ORDERED, which the validator already tolerates (it's a set check, not positional).

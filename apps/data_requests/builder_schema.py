@@ -45,9 +45,27 @@ FIELD_CATALOGUE: list[dict[str, Any]] = [
      "label": "Household number",  "sensitivity": "Public",   "type": "text"},
     {"group": "Identifiers", "key": "household.enumeration_area",
      "label": "Enumeration area",  "sensitivity": "Public",   "type": "text"},
+    {"group": "Geography",   "key": "household.region_code",
+     "label": "Region",            "sensitivity": "Public",   "type": "enum",
+     "options_source": "geographic-units?level=region"},
     {"group": "Geography",   "key": "household.sub_region_code",
      "label": "Sub-region",        "sensitivity": "Public",   "type": "enum",
      "options_source": "geographic-units?level=sub_region"},
+    {"group": "Geography",   "key": "household.district_code",
+     "label": "District",          "sensitivity": "Public",   "type": "enum",
+     "options_source": "geographic-units?level=district"},
+    {"group": "Geography",   "key": "household.county_code",
+     "label": "County",            "sensitivity": "Public",   "type": "enum",
+     "options_source": "geographic-units?level=county"},
+    {"group": "Geography",   "key": "household.sub_county_code",
+     "label": "Sub-county",        "sensitivity": "Public",   "type": "enum",
+     "options_source": "geographic-units?level=sub_county"},
+    {"group": "Geography",   "key": "household.parish_code",
+     "label": "Parish",            "sensitivity": "Public",   "type": "enum",
+     "options_source": "geographic-units?level=parish"},
+    {"group": "Geography",   "key": "household.village_code",
+     "label": "Village",           "sensitivity": "Public",   "type": "enum",
+     "options_source": "geographic-units?level=village"},
     {"group": "Geography",   "key": "household.urban_rural",
      "label": "Urban / rural",     "sensitivity": "Public",   "type": "enum",
      "options": [{"value": "1", "label": "Urban"}, {"value": "2", "label": "Rural"}]},
@@ -167,20 +185,33 @@ FILTER_OPERATORS: list[dict[str, str]] = [
 # populate the value picker. When the backend learns a new
 # predicate, add an entry here and the UI follows automatically
 # (US-S27-012).
-FILTER_FIELDS: list[dict[str, Any]] = [
-    {
-        "key": "household.sub_region_code",
-        "label": "Sub-region",
+def _geo_filter_field(level: str, label: str) -> dict[str, Any]:
+    return {
+        "key": f"household.{level}_code",
+        "label": label,
         "operators": ["in"],
         "value_source": (
             "/api/v1/reference-data/geographic-units/"
-            "?level=sub_region&status=current&page_size=200"
+            f"?level={level}&status=active&page_size=500"
         ),
         "value_type": "multi_code",
-        "payload_key": "sub_region_codes",
+        "payload_key": f"{level}_codes",
         "value_code_field": "code",
         "value_label_field": "name",
-    },
+    }
+
+
+# US-S27-016: every UBOS level (region → village) is a filter
+# predicate. validate_against_dsa walks each one against the
+# DSA's geographic_scope at the same level.
+FILTER_FIELDS: list[dict[str, Any]] = [
+    _geo_filter_field("region",     "Region"),
+    _geo_filter_field("sub_region", "Sub-region"),
+    _geo_filter_field("district",   "District"),
+    _geo_filter_field("county",     "County"),
+    _geo_filter_field("sub_county", "Sub-county"),
+    _geo_filter_field("parish",     "Parish"),
+    _geo_filter_field("village",    "Village"),
     {
         "key": "programme",
         "label": "Programme",

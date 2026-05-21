@@ -546,16 +546,22 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
     return () => { cancelled = true; };
   }, []);
 
-  // US-S27-013 — translate the schema's `options_source` slugs
-  // into real URLs. The backend stays slug-only to avoid baking
-  // pagination params into the contract; the wizard maps them
-  // here. Add to this map whenever the backend gains a new
-  // options_source slug.
+  // US-S27-013 / US-S27-016 — translate the schema's
+  // `options_source` slugs into real URLs. The backend stays
+  // slug-only to avoid baking pagination params into the contract;
+  // the wizard maps them here. Add a new slug here whenever the
+  // backend catalogue gains a new geographic level.
+  // page_size=500 covers Uganda's ~10k villages without paging.
+  const _GEO_BASE = "/api/v1/reference-data/geographic-units/";
   const _OPTIONS_SOURCE_URL = {
-    "geographic-units?level=sub_region":
-      "/api/v1/reference-data/geographic-units/?level=sub_region&status=current&page_size=200",
-    "programmes":
-      "/api/v1/programmes/?status=active&page_size=200",
+    "geographic-units?level=region":     `${_GEO_BASE}?level=region&status=active&page_size=500`,
+    "geographic-units?level=sub_region": `${_GEO_BASE}?level=sub_region&status=active&page_size=500`,
+    "geographic-units?level=district":   `${_GEO_BASE}?level=district&status=active&page_size=500`,
+    "geographic-units?level=county":     `${_GEO_BASE}?level=county&status=active&page_size=500`,
+    "geographic-units?level=sub_county": `${_GEO_BASE}?level=sub_county&status=active&page_size=2000`,
+    "geographic-units?level=parish":     `${_GEO_BASE}?level=parish&status=active&page_size=5000`,
+    "geographic-units?level=village":    `${_GEO_BASE}?level=village&status=active&page_size=10000`,
+    "programmes":                        "/api/v1/programmes/?status=active&page_size=200",
   };
 
   // Schema-driven options for enum fields whose value set lives
@@ -657,8 +663,18 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
     // server-side — the wizard flags this to the user on submit.
     if (tree) {
       payload.criteria = tree;
+      // US-S27-016 — every UBOS geo level translates to its
+      // own flat payload key. validate_against_dsa enforces
+      // each one against the DSA's geographic_scope at the
+      // matching level (ADR-0011 §4).
       const leafExtractors = {
+        "household.region_code":     "region_codes",
         "household.sub_region_code": "sub_region_codes",
+        "household.district_code":   "district_codes",
+        "household.county_code":     "county_codes",
+        "household.sub_county_code": "sub_county_codes",
+        "household.parish_code":     "parish_codes",
+        "household.village_code":    "village_codes",
         "household.programme_codes": "programme_codes",
       };
       const grouped = {};

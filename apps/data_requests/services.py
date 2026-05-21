@@ -53,17 +53,42 @@ def _allowed_field_groups(dsa: DataSharingAgreement) -> set[str] | None:
     return {k for k, v in fs.items() if v}
 
 
-def _allowed_sub_region_codes(dsa: DataSharingAgreement) -> set[str] | None:
-    """Sub-region codes a DSA permits. Walks the canonical
-    geographic_scope M2M. Returns None when the DSA isn't geo-scoped."""
+def _allowed_geo_codes(
+    dsa: DataSharingAgreement, level: str,
+) -> set[str] | None:
+    """Codes the DSA permits at `level`. Walks `geographic_scope`
+    filtered to that level. Returns None when the DSA isn't scoped
+    at this level — meaning unrestricted on this dimension
+    (per ADR-0011 §4: a DSA may scope at any level)."""
     codes = list(
         dsa.geographic_scope
-        .filter(level="sub_region")
+        .filter(level=level)
         .values_list("code", flat=True),
     )
     if not codes:
         return None
     return set(codes)
+
+
+def _allowed_sub_region_codes(dsa: DataSharingAgreement) -> set[str] | None:
+    """Back-compat wrapper for the most commonly-used level. New
+    callers should use `_allowed_geo_codes(dsa, 'sub_region')`."""
+    return _allowed_geo_codes(dsa, "sub_region")
+
+
+# US-S27-016: payload key → GeographicUnit.level. The validator
+# walks each entry, asks the DSA which codes it permits at that
+# level, and rejects extras. Add a new level here when the
+# builder catalogue gains a new geographic predicate.
+_GEO_PAYLOAD_KEYS: dict[str, str] = {
+    "region_codes":     "region",
+    "sub_region_codes": "sub_region",
+    "district_codes":   "district",
+    "county_codes":     "county",
+    "sub_county_codes": "sub_county",
+    "parish_codes":     "parish",
+    "village_codes":    "village",
+}
 
 
 def _allowed_programme_codes(dsa: DataSharingAgreement) -> set[str] | None:
@@ -135,15 +160,25 @@ def validate_against_dsa(
                 f"field_scope={sorted(allowed_fields)}",
             )
 
-    # Geographic scope
-    wanted_geo = payload.get("sub_region_codes")
-    allowed_geo = _allowed_sub_region_codes(dsa)
-    if wanted_geo and allowed_geo is not None:
-        extras = set(wanted_geo) - allowed_geo
+    # Geographic scope — one validator per UBOS level. The DSA's
+    # geographic_scope M2M may be populated at any level; we only
+    # constrain when it has codes at the level the payload asks
+    # for. Unrestricted-on-this-level means the request passes
+    # through, even if a coarser level is restricted (the request
+    # would already have been rejected at that coarser key if it
+    # supplied one). See ADR-0011 §4.
+    for payload_key, level in _GEO_PAYLOAD_KEYS.items():
+        wanted = payload.get(payload_key)
+        if not wanted:
+            continue
+        allowed = _allowed_geo_codes(dsa, level)
+        if allowed is None:
+            continue
+        extras = set(wanted) - allowed
         if extras:
             _violation(
-                "sub_region_codes", list(extras),
-                f"geographic_scope={sorted(allowed_geo)}",
+                payload_key, list(extras),
+                f"geographic_scope[{level}]={sorted(allowed)}",
             )
 
     # Programme codes

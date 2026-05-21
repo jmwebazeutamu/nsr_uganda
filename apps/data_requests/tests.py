@@ -76,6 +76,37 @@ class TestValidateAgainstDsa:
                 {"sub_region_codes": ["SR-BUGANDA", "SR-WESTNILE"]}, active_dsa,
             )
 
+    def test_extra_district_rejected(self, active_dsa):
+        # US-S27-016 — the validator walks every UBOS level on the
+        # DSA's geographic_scope. A DSA may scope at any level
+        # (ADR-0011 §4); the wizard now lets the partner build
+        # queries on each. Set up two district-level units; only
+        # one is in scope; payload asks for both → reject.
+        from apps.reference_data.models import GeographicUnit
+        d1 = GeographicUnit.objects.create(
+            level="district", code="DST-KAMPALA", name="Kampala",
+            effective_from=date(2026, 1, 1),
+        )
+        GeographicUnit.objects.create(
+            level="district", code="DST-MOROTO", name="Moroto",
+            effective_from=date(2026, 1, 1),
+        )
+        active_dsa.geographic_scope.add(d1)
+        with pytest.raises(DrsError, match="district_codes="):
+            validate_against_dsa(
+                {"district_codes": ["DST-KAMPALA", "DST-MOROTO"]},
+                active_dsa,
+            )
+
+    def test_district_unrestricted_when_dsa_silent(self, active_dsa):
+        # DSA has sub_region scope but no district-level rows.
+        # A payload asking for district codes must pass — the DSA
+        # didn't constrain that level.
+        validate_against_dsa(
+            {"district_codes": ["DST-WHATEVER", "DST-OTHER"]},
+            active_dsa,
+        )
+
     def test_row_cap_enforced(self, active_dsa):
         with pytest.raises(DrsError, match="max_rows"):
             validate_against_dsa({"max_rows": 50001}, active_dsa)
@@ -1402,6 +1433,19 @@ class TestBuilderSchema:
         assert any(k.startswith("household.") for k in keys)
         assert any(k.startswith("member.") for k in keys)
 
+    def test_catalogue_exposes_every_geo_level(self, operator_client):
+        # US-S27-016 — every UBOS administrative level is a
+        # selectable predicate in the DRS query builder.
+        r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        keys = {f["key"] for f in r.data["fields"]}
+        for level in (
+            "region", "sub_region", "district", "county",
+            "sub_county", "parish", "village",
+        ):
+            assert f"household.{level}_code" in keys, (
+                f"missing household.{level}_code in builder-schema"
+            )
+
     def test_partner_dsa_id_is_populated(
         self, partner_client, partner_with_narrow_dsa,
     ):
@@ -1442,11 +1486,17 @@ class TestBuilderSchema:
     ):
         # The payload_key on each filter_field must be a key the
         # apps.data_requests.services.validate_against_dsa function
-        # actually reads. Today: sub_region_codes, programme_codes.
-        # Add to this set as the validator gains new predicates.
+        # actually reads. US-S27-016 expanded the geographic
+        # predicates to every UBOS level — add to this set as the
+        # validator gains a new predicate.
         r = operator_client.get("/api/v1/drs/requests/builder-schema/")
         keys = {f["payload_key"] for f in r.data["filter_fields"]}
-        assert keys <= {"sub_region_codes", "programme_codes"}
+        assert keys <= {
+            "region_codes", "sub_region_codes", "district_codes",
+            "county_codes", "sub_county_codes", "parish_codes",
+            "village_codes",
+            "programme_codes",
+        }
 
     def test_operator_sees_all_fields_enabled(self, operator_client):
         r = operator_client.get("/api/v1/drs/requests/builder-schema/")

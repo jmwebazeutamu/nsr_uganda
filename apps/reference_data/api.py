@@ -31,7 +31,23 @@ class GeographicUnitViewSet(viewsets.ReadOnlyModelViewSet):
 
     queryset = GeographicUnit.objects.all().order_by("level", "code")
     serializer_class = GeographicUnitSerializer
-    filterset_fields = ["level", "status", "parent"]
+
+    def get_queryset(self):
+        # filterset_fields needs django-filter (not installed); honour the
+        # ?level= / ?status= / ?parent= query params manually so the DRS
+        # wizard's value-picker fetches actually filter (US-S27-016).
+        qs = super().get_queryset()
+        params = self.request.query_params
+        level = params.get("level")
+        if level:
+            qs = qs.filter(level=level)
+        status_v = params.get("status")
+        if status_v:
+            qs = qs.filter(status=status_v)
+        parent = params.get("parent")
+        if parent:
+            qs = qs.filter(parent_id=parent)
+        return qs
 
 
 # --- US-116 ChoiceList read API ---------------------------------------------
