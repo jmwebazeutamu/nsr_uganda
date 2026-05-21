@@ -444,18 +444,108 @@ const STEPS = [
 // (US-S27-013 / US-S27-014). Offline preview falls back to the
 // templates' own inline catalogues.
 
-const PREVIEW_ROWS = [
-  { rid: "01HXY7K3B2N9PVQE4M6FZRWS18", hh: "HH-7411-002-0148", parish: "Nakiloro", subreg: "Karamoja", size: 6, sex: "F", age: "30-39", band: "Poorest 40%", roof: "Iron sheets", phone: "+256 ••• ••4567" },
-  { rid: "01HXZ9MR4N8P2QFB7K6FZRWS33", hh: "HH-3122-005-0091", parish: "Pageya",  subreg: "Acholi",   size: 5, sex: "F", age: "30-39", band: "Poorest 40%", roof: "Iron sheets", phone: "+256 ••• ••2119" },
-  { rid: "01HY09KRS1P9MN6FB7K6FZRWS84", hh: "HH-7411-002-0103", parish: "Kakingol",subreg: "Karamoja", size: 7, sex: "M", age: "40-49", band: "Poorest 20%", roof: "Iron sheets", phone: "+256 ••• ••8221" },
-  { rid: "01HY02FNQ9P8MN6FB7K6FZRWS67", hh: "HH-7531-001-0048", parish: "Lorengedwat", subreg: "Karamoja", size: 6, sex: "F", age: "20-29", band: "Poorest 20%", roof: "Thatch",      phone: "+256 ••• ••5582" },
-  { rid: "01HY04MQR0N8P2FB7K6FZRWS73", hh: "HH-7531-002-0017", parish: "Apeitolim", subreg: "Karamoja", size: 8, sex: "F", age: "40-49", band: "Poorest 40%", roof: "Iron sheets", phone: "+256 ••• ••6620" },
-  { rid: "01HXP02CN4QFB7K6FZRWS00111", hh: "HH-2110-008-0021", parish: "Anyiribu", subreg: "West Nile", size: 4, sex: "M", age: "50-59", band: "Poorest 40%", roof: "Iron sheets", phone: "+256 ••• ••0044" },
-  { rid: "01HXP02CN4QFB7K6FZRWS00118", hh: "HH-2110-008-0033", parish: "Logiri",   subreg: "West Nile", size: 7, sex: "M", age: "30-39", band: "Poorest 40%", roof: "Iron sheets", phone: "+256 ••• ••9912" },
-  { rid: "01HXP02CN4QFB7K6FZRWS00124", hh: "HH-3122-009-0019", parish: "Bobi",     subreg: "Acholi",    size: 5, sex: "F", age: "20-29", band: "Poorest 40%", roof: "Iron sheets", phone: "+256 ••• ••3322" },
-  { rid: "01HXP02CN4QFB7K6FZRWS00135", hh: "HH-2110-008-0040", parish: "Kuluba",   subreg: "West Nile", size: 4, sex: "F", age: "30-39", band: "Poorest 40%", roof: "Iron sheets", phone: "+256 ••• ••7711" },
-  { rid: "01HXP02CN4QFB7K6FZRWS00148", hh: "HH-7411-002-0211", parish: "Tapac",    subreg: "Karamoja",  size: 6, sex: "F", age: "40-49", band: "Poorest 20%", roof: "Iron sheets", phone: "+256 ••• ••1188" },
+// BUG-S27-019 — Step 4 preview now reflects the user's Step-3
+// selection. There is no preview endpoint yet (DRS-O-PREVIEW open
+// item), so cells are generated client-side from each field's
+// catalogue metadata (type, options, sensitivity) plus the
+// shared row-index banks below. Sensitive columns mask; Personal
+// phone numbers reveal last-4 only — matching the design rule that
+// the preview never surfaces more PII than the actual delivery.
+const _PREVIEW_ROW_COUNT = 10;
+const _PREVIEW_ULIDS = [
+  "01HXY7K3B2N9PVQE4M6FZRWS18", "01HXZ9MR4N8P2QFB7K6FZRWS33",
+  "01HY09KRS1P9MN6FB7K6FZRWS84", "01HY02FNQ9P8MN6FB7K6FZRWS67",
+  "01HY04MQR0N8P2FB7K6FZRWS73", "01HXP02CN4QFB7K6FZRWS00111",
+  "01HXP02CN4QFB7K6FZRWS00118", "01HXP02CN4QFB7K6FZRWS00124",
+  "01HXP02CN4QFB7K6FZRWS00135", "01HXP02CN4QFB7K6FZRWS00148",
 ];
+const _PREVIEW_HH_NUMBERS = [
+  "HH-7411-002-0148", "HH-3122-005-0091", "HH-7411-002-0103",
+  "HH-7531-001-0048", "HH-7531-002-0017", "HH-2110-008-0021",
+  "HH-2110-008-0033", "HH-3122-009-0019", "HH-2110-008-0040",
+  "HH-7411-002-0211",
+];
+const _PREVIEW_PLACES = [
+  "Nakiloro", "Pageya", "Kakingol", "Lorengedwat", "Apeitolim",
+  "Anyiribu", "Logiri", "Bobi", "Kuluba", "Tapac",
+];
+const _PREVIEW_SURNAMES = [
+  "Akiteng", "Apio", "Bwambale", "Lokol", "Anyait",
+  "Oboth", "Achan", "Nakato", "Birungi", "Mugisha",
+];
+const _PREVIEW_GIVEN = [
+  "Margaret", "Sarah", "John", "Joseph", "Esther",
+  "Robert", "Amina", "Ruth", "James", "Grace",
+];
+const _PREVIEW_PHONE_TAILS = [
+  "4567", "2119", "8221", "5582", "6620",
+  "0044", "9912", "3322", "7711", "1188",
+];
+const _PREVIEW_NIN_LAST4 = [
+  "ABCD", "8821", "1109", "4F2C", "7733",
+  "9911", "3361", "5520", "0844", "6678",
+];
+const _PREVIEW_DATES = [
+  "2026-03-14", "2026-02-09", "2025-12-18", "2026-04-02", "2025-11-30",
+  "2026-01-22", "2026-03-29", "2026-02-26", "2025-10-11", "2026-04-15",
+];
+const _PREVIEW_AGES = [34, 47, 28, 51, 22, 39, 64, 19, 45, 33];
+const _PREVIEW_SIZES = [6, 5, 7, 6, 8, 4, 7, 5, 4, 6];
+
+// Resolve a single preview cell for (field, rowIndex). Cell semantics
+// mirror what the future preview endpoint will return: sensitive
+// columns always mask, personal phones reveal last-4 only, enum
+// values render their human label not the storage code.
+const _previewCell = (key, field, i) => {
+  if (!field) return "—";
+  const sens = field.sensitivity;
+  const type = field.type;
+  // ---- Sensitivity gate first ----
+  if (sens === "Sensitive") {
+    if (key.endsWith("_last4")) return _PREVIEW_NIN_LAST4[i];
+    return "[masked]";
+  }
+  if (sens === "Personal" && /telephone|phone/.test(key)) {
+    return "+256 ••• ••" + _PREVIEW_PHONE_TAILS[i];
+  }
+  // ---- Type-driven values ----
+  if (type === "bool") return i % 4 === 0 ? "No" : "Yes";
+  if (type === "date") return _PREVIEW_DATES[i];
+  if (type === "number") {
+    if (/pmt|score/.test(key)) return (0.21 + i * 0.037).toFixed(3);
+    if (/dependency_ratio/.test(key)) return (1.0 + (i % 5) * 0.25).toFixed(2);
+    if (/age_years/.test(key)) return String(_PREVIEW_AGES[i]);
+    if (/line_number/.test(key)) return String((i % 6) + 1);
+    if (/size|count|rooms/.test(key)) return String(_PREVIEW_SIZES[i]);
+    return String(_PREVIEW_SIZES[i]);
+  }
+  if (type === "enum" || type === "enum-multi") {
+    const opts = field.options || [];
+    if (opts.length > 0) {
+      const opt = opts[i % opts.length];
+      return opt.label || opt.value || "—";
+    }
+    // Geographic enums whose options_source hasn't resolved yet — fall
+    // through to the place-name bank so the column reads as locations.
+    if (/parish|county|district|region|village|sub_region/.test(key)) {
+      return _PREVIEW_PLACES[i];
+    }
+    return "—";
+  }
+  // type === "text" (or unspecified)
+  if (key === "household.id" || key === "member.id") return _PREVIEW_ULIDS[i];
+  if (key === "household.household_number") return _PREVIEW_HH_NUMBERS[i];
+  if (/surname/.test(key)) return _PREVIEW_SURNAMES[i];
+  if (/first_name|other_name/.test(key)) return _PREVIEW_GIVEN[i];
+  if (/parish|county|district|region|village/.test(key)) return _PREVIEW_PLACES[i];
+  if (/enumeration_area/.test(key)) return "EA-" + String(7411 + i);
+  if (/consent_state/.test(key)) return ["granted", "granted", "granted", "withdrawn", "granted", "granted", "pending", "granted", "granted", "granted"][i];
+  if (/intake_source/.test(key)) return ["CAPI-walkin", "CAPI-walkin", "UBOS-2024", "CAPI-walkin", "CAPI-walkin", "UBOS-2024", "OPM-pdm", "CAPI-walkin", "CAPI-walkin", "OPM-pdm"][i];
+  if (/relationship_to_head/.test(key)) return ["head", "spouse", "child", "head", "spouse", "head", "parent", "child", "head", "spouse"][i];
+  if (/marital_status/.test(key)) return ["married", "single", "married", "widowed", "married", "single", "married", "divorced", "married", "married"][i];
+  if (/nationality/.test(key)) return "Ugandan";
+  return "—";
+};
 
 // Unified DRS query-builder wizard. Same component for both
 // roles per BUG-S11-002b — operator (no `role` prop / "operator")
@@ -869,7 +959,10 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
               dsaReference={schema?.dsa_reference || ""}
             />
       )}
-      {step === 'preview' && <PreviewStep selected={selectedFields}/>}
+      {step === 'preview' && <PreviewStep
+        selected={selectedFields}
+        catalogueByKey={builderFields.reduce((a, f) => (a[f.key] = f, a), {})}
+      />}
       {step === 'delivery' && <DeliveryStep
         methods={schema?.delivery_methods || []}
         value={deliveryMethod}
@@ -1071,22 +1164,41 @@ const DSACard = () => (
 /* ============================================================
    Step 4 — Preview
    ============================================================ */
-const PreviewStep = ({ selected }) => {
-  const cols = [
-    ["Registry ID", "rid", "mono"],
-    ["Household number", "hh", "mono"],
-    ["Sub-region", "subreg"],
-    ["Parish", "parish"],
-    ["HH size", "size"],
-    ["Sex (head)", "sex"],
-    ["Age band (head)", "age"],
-    ["PMT band", "band"],
-    ["Roof", "roof"],
-    ["Phone (masked)", "phone", "mono"],
-  ];
+// BUG-S27-019 — columns now reflect the ordered list from Step 3,
+// labels come from the live catalogue, cells are generated by
+// `_previewCell` from each field's type / options / sensitivity.
+// Empty state when the user hasn't picked anything yet — used to
+// silently render a 10-column household preview that had no relation
+// to the selection.
+const PreviewStep = ({ selected, catalogueByKey = {} }) => {
+  const cols = selected
+    .map(key => ({ key, field: catalogueByKey[key] }))
+    .filter(c => c.field);
+  const unknown = selected.filter(k => !catalogueByKey[k]);
+
+  if (selected.length === 0) {
+    return (
+      <div className="card" style={{padding:40, textAlign:'center'}}>
+        <Icon name="eye" size={32} color="var(--neutral-300)"/>
+        <h3 className="t-h3" style={{margin:'12px 0 4px'}}>Nothing to preview yet</h3>
+        <div className="t-bodysm muted">
+          Go back to Step 3 (Field Selector) and pick at least one column.
+          The preview reflects your selection in the order you arranged it.
+        </div>
+      </div>
+    );
+  }
+
+  // Sensitivity counts drive the masking copy in the toolbar so the
+  // operator knows what the preview is hiding.
+  const sensitiveCount = cols.filter(c => c.field.sensitivity === "Sensitive").length;
+  const personalCount  = cols.filter(c => c.field.sensitivity === "Personal").length;
+
+  const rows = Array.from({length: _PREVIEW_ROW_COUNT}, (_, i) => i);
+
   return (
     <div className="col gap-4">
-      <div className="card" style={{padding:16, display:'flex', alignItems:'center', gap:24}}>
+      <div className="card" style={{padding:16, display:'flex', alignItems:'center', gap:24, flexWrap:'wrap'}}>
         <div>
           <div className="t-cap">MATCHED</div>
           <div className="t-num" style={{fontSize:24, fontWeight:700, letterSpacing:'-0.01em'}}>47,233</div>
@@ -1094,9 +1206,15 @@ const PreviewStep = ({ selected }) => {
         </div>
         <div style={{width:1, height:48, background:'var(--neutral-200)'}}/>
         <div>
+          <div className="t-cap">COLUMNS</div>
+          <div className="t-num" style={{fontSize:24, fontWeight:700, letterSpacing:'-0.01em'}}>{cols.length}</div>
+          <div className="t-cap">in your Step-3 selection order</div>
+        </div>
+        <div style={{width:1, height:48, background:'var(--neutral-200)'}}/>
+        <div>
           <div className="t-cap">PREVIEW SHOWN</div>
-          <div className="t-num" style={{fontSize:24, fontWeight:700, letterSpacing:'-0.01em'}}>10</div>
-          <div className="t-cap">server-side masked sample</div>
+          <div className="t-num" style={{fontSize:24, fontWeight:700, letterSpacing:'-0.01em'}}>{_PREVIEW_ROW_COUNT}</div>
+          <div className="t-cap">design-time sample · no PII surfaced</div>
         </div>
         <div style={{width:1, height:48, background:'var(--neutral-200)'}}/>
         <div>
@@ -1105,25 +1223,57 @@ const PreviewStep = ({ selected }) => {
           <div className="t-cap">written to DPO console</div>
         </div>
         <div style={{flex:1}}/>
-        <button className="btn"><Icon name="refresh" size={14}/> Refresh preview</button>
+        <button className="btn" disabled title="The preview endpoint (DRS-O-PREVIEW) lands in a follow-up slice.">
+          <Icon name="refresh" size={14}/> Refresh preview
+        </button>
       </div>
+
+      {unknown.length > 0 && (
+        <div className="tint-update" style={{padding:12, borderRadius:6, borderLeft:'3px solid var(--accent-update)'}}>
+          <div className="row gap-2"><Icon name="alertCircle" size={14} color="var(--accent-update)"/>
+            <strong className="t-bodysm">{unknown.length} selected field{unknown.length === 1 ? "" : "s"} not in current catalogue</strong>
+          </div>
+          <div className="t-cap" style={{color:'var(--neutral-700)', marginTop:4}}>
+            {unknown.slice(0, 4).map(k => <span key={k} className="t-mono" style={{marginRight:10}}>{k}</span>)}
+            {unknown.length > 4 && `+${unknown.length - 4} more`}
+            {" "}— hidden from preview. Verify the active DSA still covers them.
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-toolbar">
-          <strong className="t-bodysm">Preview rows (masked)</strong>
-          <span className="t-cap">Phone last 4 digits revealed only · IDs always full · sensitive fields excluded</span>
+          <strong className="t-bodysm">Preview rows · masked sample</strong>
+          <span className="t-cap">
+            {sensitiveCount > 0 && <>{sensitiveCount} Sensitive column{sensitiveCount === 1 ? "" : "s"} masked · </>}
+            {personalCount > 0 && <>{personalCount} Personal phone column{personalCount === 1 ? "" : "s"} last-4 only · </>}
+            cell values are design-time fixtures until DRS-O-PREVIEW lands
+          </span>
         </div>
         <div style={{overflowX:'auto'}}>
           <table className="tbl">
-            <thead><tr>{cols.map(c => <th key={c[1]}>{c[0]}</th>)}</tr></thead>
+            <thead>
+              <tr>
+                {cols.map(({key, field}) => (
+                  <th key={key} title={key}>
+                    <div style={{display:'flex', flexDirection:'column', gap:2, alignItems:'flex-start'}}>
+                      <span>{field.label || key}</span>
+                      <span className="t-cap t-mono" style={{fontSize:10, fontWeight:400, color:'var(--neutral-500)', textTransform:'none', letterSpacing:0}}>{key}</span>
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
             <tbody>
-              {PREVIEW_ROWS.map((r, i) => (
+              {rows.map(i => (
                 <tr key={i}>
-                  {cols.map(c => (
-                    <td key={c[1]} className={c[2] === 'mono' ? 'col-id' : ''}>
-                      {c[1] === 'rid' ? r.rid.slice(0, 22) + '…' : r[c[1]]}
-                    </td>
-                  ))}
+                  {cols.map(({key, field}) => {
+                    const v = _previewCell(key, field, i);
+                    const isMono = /id$|number$|hash$|gps|score|nin/.test(key);
+                    return (
+                      <td key={key} className={isMono ? 'col-id' : ''}>{v}</td>
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>
@@ -1268,4 +1418,4 @@ const SubmitStep = ({
   );
 };
 
-Object.assign(window, { DRSScreen });
+Object.assign(window, { DRSScreen, PreviewStep, _previewCell });
