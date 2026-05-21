@@ -30,15 +30,17 @@ class TestSeededChoiceLists:
         # 46 legacy (migration 0003) + 14 partner (migration 0004)
         # + 8 programme (migration 0005, US-S25-001)
         # + 1 beneficiary (migration 0006, US-S25-006)
-        # + 1 referral (migration 0007, US-S26-002) = 70.
-        assert ChoiceList.objects.filter(version=1).count() == 70
+        # + 1 referral (migration 0007, US-S26-002)
+        # + 24 detail-entities (migration 0008, US-S22-DE-02) = 94.
+        assert ChoiceList.objects.filter(version=1).count() == 94
 
     def test_options_seeded(self):
         # 499 (after US-S25-006) + 5 referral-status options
-        # (US-S26-002: sent/accepted/enrolled/rejected/exited) = 504.
+        # (US-S26-002: sent/accepted/enrolled/rejected/exited)
+        # + 199 detail-entity options (US-S22-DE-02) = 703.
         assert ChoiceOption.objects.filter(
             choice_list__version=1,
-        ).count() == 504
+        ).count() == 703
 
     def test_partner_lists_seeded(self):
         names = set(

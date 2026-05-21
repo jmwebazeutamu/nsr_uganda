@@ -1,0 +1,846 @@
+{
+  "dwelling_tenure": [
+    {
+      "code": "1",
+      "label": "Owner"
+    },
+    {
+      "code": "2",
+      "label": "Renting"
+    },
+    {
+      "code": "3",
+      "label": "Free \u2014 with relative"
+    },
+    {
+      "code": "4",
+      "label": "Free \u2014 from employer"
+    },
+    {
+      "code": "5",
+      "label": "Free \u2014 other"
+    },
+    {
+      "code": "8",
+      "label": "Other"
+    }
+  ],
+  "lighting_energy": [
+    {
+      "code": "1",
+      "label": "Electricity \u2014 grid"
+    },
+    {
+      "code": "2",
+      "label": "Solar"
+    },
+    {
+      "code": "3",
+      "label": "Generator"
+    },
+    {
+      "code": "4",
+      "label": "Kerosene / paraffin lamp"
+    },
+    {
+      "code": "5",
+      "label": "Candles"
+    },
+    {
+      "code": "6",
+      "label": "Firewood"
+    },
+    {
+      "code": "7",
+      "label": "Torch / battery"
+    },
+    {
+      "code": "8",
+      "label": "Other"
+    }
+  ],
+  "drinking_water_source": [
+    {
+      "code": "1",
+      "label": "Piped \u2014 into dwelling"
+    },
+    {
+      "code": "2",
+      "label": "Piped \u2014 public tap"
+    },
+    {
+      "code": "3",
+      "label": "Borehole"
+    },
+    {
+      "code": "4",
+      "label": "Protected spring / well"
+    },
+    {
+      "code": "5",
+      "label": "Unprotected spring / well"
+    },
+    {
+      "code": "6",
+      "label": "Rainwater"
+    },
+    {
+      "code": "7",
+      "label": "Surface water (river / lake / pond)"
+    },
+    {
+      "code": "8",
+      "label": "Other"
+    }
+  ],
+  "toilet_facility": [
+    {
+      "code": "1",
+      "label": "Flush \u2014 connected to sewer"
+    },
+    {
+      "code": "2",
+      "label": "Flush \u2014 septic tank"
+    },
+    {
+      "code": "3",
+      "label": "VIP latrine"
+    },
+    {
+      "code": "4",
+      "label": "Pit latrine \u2014 covered slab"
+    },
+    {
+      "code": "5",
+      "label": "Pit latrine \u2014 open"
+    },
+    {
+      "code": "6",
+      "label": "Composting toilet"
+    },
+    {
+      "code": "7",
+      "label": "None / bush"
+    },
+    {
+      "code": "8",
+      "label": "Other"
+    }
+  ],
+  "main_livelihood": [
+    {
+      "code": "1",
+      "label": "Subsistence agriculture"
+    },
+    {
+      "code": "2",
+      "label": "Commercial agriculture"
+    },
+    {
+      "code": "3",
+      "label": "Livestock keeping"
+    },
+    {
+      "code": "4",
+      "label": "Fishing"
+    },
+    {
+      "code": "5",
+      "label": "Wage employment"
+    },
+    {
+      "code": "6",
+      "label": "Self-employment / business"
+    },
+    {
+      "code": "7",
+      "label": "Casual labour"
+    },
+    {
+      "code": "8",
+      "label": "Transfers / remittances"
+    },
+    {
+      "code": "9",
+      "label": "Other"
+    }
+  ],
+  "agricultural_purpose": [
+    {
+      "code": "1",
+      "label": "Subsistence \u2014 own consumption"
+    },
+    {
+      "code": "2",
+      "label": "Commercial \u2014 for sale"
+    },
+    {
+      "code": "3",
+      "label": "Mixed \u2014 consumption + sale"
+    }
+  ],
+  "land_title": [
+    {
+      "code": "1",
+      "label": "Freehold / title"
+    },
+    {
+      "code": "2",
+      "label": "Mailo"
+    },
+    {
+      "code": "3",
+      "label": "Customary"
+    },
+    {
+      "code": "4",
+      "label": "Leasehold"
+    },
+    {
+      "code": "5",
+      "label": "None"
+    },
+    {
+      "code": "8",
+      "label": "Other"
+    }
+  ],
+  "agricultural_zone": [
+    {
+      "code": "1",
+      "label": "Zone 1 \u2014 Central / Buganda"
+    },
+    {
+      "code": "2",
+      "label": "Zone 2 \u2014 Eastern / Busoga"
+    },
+    {
+      "code": "3",
+      "label": "Zone 3 \u2014 Western / Ankole-Kigezi"
+    },
+    {
+      "code": "4",
+      "label": "Zone 4 \u2014 Northern / Acholi-Lango"
+    },
+    {
+      "code": "5",
+      "label": "Zone 5 \u2014 Karamoja"
+    },
+    {
+      "code": "6",
+      "label": "Zone 6 \u2014 Teso"
+    },
+    {
+      "code": "7",
+      "label": "Zone 7 \u2014 West Nile"
+    },
+    {
+      "code": "8",
+      "label": "Zone 8 \u2014 Bunyoro"
+    },
+    {
+      "code": "9",
+      "label": "Zone 9 \u2014 Rwenzori / Tooro"
+    },
+    {
+      "code": "10",
+      "label": "Zone 10 \u2014 Sebei / Bugisu"
+    }
+  ],
+  "chronic_illness_type": [
+    {
+      "code": "1",
+      "label": "Heart disease"
+    },
+    {
+      "code": "2",
+      "label": "Asthma / respiratory"
+    },
+    {
+      "code": "3",
+      "label": "Diabetes"
+    },
+    {
+      "code": "4",
+      "label": "HIV / AIDS"
+    },
+    {
+      "code": "5",
+      "label": "Tuberculosis"
+    },
+    {
+      "code": "6",
+      "label": "Hypertension"
+    },
+    {
+      "code": "7",
+      "label": "Cancer"
+    },
+    {
+      "code": "8",
+      "label": "Mental health condition"
+    },
+    {
+      "code": "9",
+      "label": "Sickle cell"
+    },
+    {
+      "code": "10",
+      "label": "Epilepsy"
+    },
+    {
+      "code": "98",
+      "label": "Other"
+    }
+  ],
+  "wg_difficulty_level": [
+    {
+      "code": "01",
+      "label": "No difficulty"
+    },
+    {
+      "code": "02",
+      "label": "Some difficulty"
+    },
+    {
+      "code": "03",
+      "label": "A lot of difficulty"
+    },
+    {
+      "code": "04",
+      "label": "Cannot do at all"
+    }
+  ],
+  "literacy_status": [
+    {
+      "code": "1",
+      "label": "Reads and writes (any language)"
+    },
+    {
+      "code": "2",
+      "label": "Reads only"
+    },
+    {
+      "code": "3",
+      "label": "Neither reads nor writes"
+    },
+    {
+      "code": "8",
+      "label": "Don't know"
+    }
+  ],
+  "never_attended_reason": [
+    {
+      "code": "1",
+      "label": "Too young"
+    },
+    {
+      "code": "2",
+      "label": "No school nearby"
+    },
+    {
+      "code": "3",
+      "label": "Insufficient money"
+    },
+    {
+      "code": "4",
+      "label": "Illness / disability"
+    },
+    {
+      "code": "5",
+      "label": "Working / household duties"
+    },
+    {
+      "code": "6",
+      "label": "Cultural / religious"
+    },
+    {
+      "code": "8",
+      "label": "Other"
+    }
+  ],
+  "highest_grade": [
+    {
+      "code": "00",
+      "label": "Pre-primary"
+    },
+    {
+      "code": "01",
+      "label": "Primary 1"
+    },
+    {
+      "code": "02",
+      "label": "Primary 2"
+    },
+    {
+      "code": "03",
+      "label": "Primary 3"
+    },
+    {
+      "code": "04",
+      "label": "Primary 4"
+    },
+    {
+      "code": "05",
+      "label": "Primary 5"
+    },
+    {
+      "code": "06",
+      "label": "Primary 6"
+    },
+    {
+      "code": "07",
+      "label": "Primary 7"
+    },
+    {
+      "code": "08",
+      "label": "Secondary 1"
+    },
+    {
+      "code": "09",
+      "label": "Secondary 2"
+    },
+    {
+      "code": "10",
+      "label": "Secondary 3"
+    },
+    {
+      "code": "11",
+      "label": "Secondary 4"
+    },
+    {
+      "code": "12",
+      "label": "Secondary 5"
+    },
+    {
+      "code": "13",
+      "label": "Secondary 6"
+    },
+    {
+      "code": "14",
+      "label": "Post-secondary / vocational"
+    },
+    {
+      "code": "15",
+      "label": "Tertiary / university"
+    },
+    {
+      "code": "98",
+      "label": "Other"
+    }
+  ],
+  "why_stopped_school": [
+    {
+      "code": "1",
+      "label": "Completed studies"
+    },
+    {
+      "code": "2",
+      "label": "No money"
+    },
+    {
+      "code": "3",
+      "label": "Working / household duties"
+    },
+    {
+      "code": "4",
+      "label": "Marriage"
+    },
+    {
+      "code": "5",
+      "label": "Pregnancy"
+    },
+    {
+      "code": "6",
+      "label": "Illness / disability"
+    },
+    {
+      "code": "7",
+      "label": "Expelled / failed"
+    },
+    {
+      "code": "8",
+      "label": "School too far"
+    },
+    {
+      "code": "98",
+      "label": "Other"
+    }
+  ],
+  "employment_main_activity": [
+    {
+      "code": "1",
+      "label": "Working \u2014 paid"
+    },
+    {
+      "code": "2",
+      "label": "Working \u2014 unpaid family"
+    },
+    {
+      "code": "3",
+      "label": "Looking for work"
+    },
+    {
+      "code": "4",
+      "label": "Studying"
+    },
+    {
+      "code": "5",
+      "label": "Household duties"
+    },
+    {
+      "code": "6",
+      "label": "Retired"
+    },
+    {
+      "code": "7",
+      "label": "Ill / unable to work"
+    },
+    {
+      "code": "98",
+      "label": "Other"
+    }
+  ],
+  "employment_sector": [
+    {
+      "code": "1",
+      "label": "Agriculture / forestry / fishing"
+    },
+    {
+      "code": "2",
+      "label": "Industry / manufacturing"
+    },
+    {
+      "code": "3",
+      "label": "Construction"
+    },
+    {
+      "code": "4",
+      "label": "Trade / commerce"
+    },
+    {
+      "code": "5",
+      "label": "Transport"
+    },
+    {
+      "code": "6",
+      "label": "Services"
+    },
+    {
+      "code": "7",
+      "label": "Government / public sector"
+    },
+    {
+      "code": "8",
+      "label": "NGO / civil society"
+    },
+    {
+      "code": "98",
+      "label": "Other"
+    }
+  ],
+  "employment_status": [
+    {
+      "code": "1",
+      "label": "Employee"
+    },
+    {
+      "code": "2",
+      "label": "Self-employed"
+    },
+    {
+      "code": "3",
+      "label": "Employer"
+    },
+    {
+      "code": "4",
+      "label": "Unpaid family worker"
+    },
+    {
+      "code": "5",
+      "label": "Apprentice / intern"
+    },
+    {
+      "code": "6",
+      "label": "Casual labourer"
+    }
+  ],
+  "govt_programme": [
+    {
+      "code": "PDM",
+      "label": "Parish Development Model"
+    },
+    {
+      "code": "NUSAF",
+      "label": "NUSAF (Northern Uganda Social Action Fund)"
+    },
+    {
+      "code": "SAGE",
+      "label": "Senior Citizens' Grant (SAGE)"
+    },
+    {
+      "code": "YLP",
+      "label": "Youth Livelihood Programme"
+    },
+    {
+      "code": "UWEP",
+      "label": "Uganda Women Entrepreneurship Programme"
+    },
+    {
+      "code": "DRDIP",
+      "label": "DRDIP (refugee-host communities)"
+    },
+    {
+      "code": "EMTCT",
+      "label": "eMTCT (mother-to-child transmission)"
+    },
+    {
+      "code": "98",
+      "label": "Other"
+    }
+  ],
+  "savings_location": [
+    {
+      "code": "1",
+      "label": "Bank account"
+    },
+    {
+      "code": "2",
+      "label": "Mobile money"
+    },
+    {
+      "code": "3",
+      "label": "SACCO"
+    },
+    {
+      "code": "4",
+      "label": "VSLA / village savings group"
+    },
+    {
+      "code": "5",
+      "label": "Kept at home"
+    },
+    {
+      "code": "6",
+      "label": "Livestock / asset"
+    },
+    {
+      "code": "98",
+      "label": "Other"
+    }
+  ],
+  "livestock_type": [
+    {
+      "code": "cattle",
+      "label": "Cattle"
+    },
+    {
+      "code": "goat",
+      "label": "Goat"
+    },
+    {
+      "code": "sheep",
+      "label": "Sheep"
+    },
+    {
+      "code": "pig",
+      "label": "Pig"
+    },
+    {
+      "code": "chicken",
+      "label": "Chicken"
+    },
+    {
+      "code": "other_poultry",
+      "label": "Other poultry (duck / turkey / etc.)"
+    },
+    {
+      "code": "rabbit",
+      "label": "Rabbit"
+    },
+    {
+      "code": "bees",
+      "label": "Bees"
+    }
+  ],
+  "crop_name": [
+    {
+      "code": "maize",
+      "label": "Maize"
+    },
+    {
+      "code": "beans",
+      "label": "Beans"
+    },
+    {
+      "code": "rice",
+      "label": "Rice"
+    },
+    {
+      "code": "cassava",
+      "label": "Cassava"
+    },
+    {
+      "code": "sorghum",
+      "label": "Sorghum"
+    },
+    {
+      "code": "millet",
+      "label": "Millet"
+    },
+    {
+      "code": "sweet_potato",
+      "label": "Sweet potato"
+    },
+    {
+      "code": "irish_potato",
+      "label": "Irish potato"
+    },
+    {
+      "code": "banana",
+      "label": "Banana / matoke"
+    },
+    {
+      "code": "coffee",
+      "label": "Coffee"
+    },
+    {
+      "code": "tea",
+      "label": "Tea"
+    },
+    {
+      "code": "cotton",
+      "label": "Cotton"
+    },
+    {
+      "code": "sugarcane",
+      "label": "Sugarcane"
+    },
+    {
+      "code": "groundnut",
+      "label": "Groundnut"
+    },
+    {
+      "code": "soybean",
+      "label": "Soybean"
+    },
+    {
+      "code": "vegetables",
+      "label": "Vegetables (assorted)"
+    },
+    {
+      "code": "fruits",
+      "label": "Fruits (assorted)"
+    },
+    {
+      "code": "other",
+      "label": "Other"
+    }
+  ],
+  "severity_level": [
+    {
+      "code": "1",
+      "label": "Mild"
+    },
+    {
+      "code": "2",
+      "label": "Moderate"
+    },
+    {
+      "code": "3",
+      "label": "Severe"
+    }
+  ],
+  "coping_strategy_type": [
+    {
+      "code": "sold_asset",
+      "label": "Sold productive asset"
+    },
+    {
+      "code": "sold_livestock",
+      "label": "Sold livestock"
+    },
+    {
+      "code": "took_loan",
+      "label": "Took a loan / credit"
+    },
+    {
+      "code": "casual_labor",
+      "label": "Took on casual / day labour"
+    },
+    {
+      "code": "migrated_work",
+      "label": "Member migrated for work"
+    },
+    {
+      "code": "reduced_meals",
+      "label": "Reduced number of meals per day"
+    },
+    {
+      "code": "smaller_portions",
+      "label": "Reduced portion size"
+    },
+    {
+      "code": "less_preferred_food",
+      "label": "Switched to cheaper / less preferred food"
+    },
+    {
+      "code": "borrowed_food",
+      "label": "Borrowed food or relied on help from others"
+    },
+    {
+      "code": "limited_adult_intake",
+      "label": "Adults restricted intake so children eat"
+    },
+    {
+      "code": "withdrew_school",
+      "label": "Withdrew children from school"
+    },
+    {
+      "code": "skipped_health",
+      "label": "Skipped health care / medicine"
+    },
+    {
+      "code": "depleted_savings",
+      "label": "Used up savings"
+    },
+    {
+      "code": "98",
+      "label": "Other"
+    }
+  ],
+  "food_source": [
+    {
+      "code": "1",
+      "label": "Own production"
+    },
+    {
+      "code": "2",
+      "label": "Market / shop (purchased)"
+    },
+    {
+      "code": "3",
+      "label": "Gift from family / neighbour"
+    },
+    {
+      "code": "4",
+      "label": "Food aid / programme"
+    },
+    {
+      "code": "5",
+      "label": "Borrowed / on credit"
+    },
+    {
+      "code": "6",
+      "label": "Hunted / fished / gathered"
+    },
+    {
+      "code": "7",
+      "label": "Exchange / barter"
+    },
+    {
+      "code": "98",
+      "label": "Other"
+    }
+  ]
+}

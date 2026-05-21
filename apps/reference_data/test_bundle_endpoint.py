@@ -65,9 +65,9 @@ class TestBundleSchema:
     def test_includes_all_seeded_lists(self, api):
         # 46 legacy + 14 partner (US-S23-002) + 8 programme wizard
         # (US-S25-001) + 1 beneficiary (US-S25-006) + 1 referral
-        # (US-S26-002) = 70.
+        # (US-S26-002) + 24 detail-entities (US-S22-DE-02) = 94.
         r = api.get(URL)
-        assert len(r.data["lists"]) == 70
+        assert len(r.data["lists"]) == 94
 
     def test_sex_options_resolved(self, api):
         r = api.get(URL)
