@@ -130,6 +130,25 @@ class Household(models.Model):
             self.sub_region_code = self.sub_region.code
         super().save(*args, **kwargs)
 
+    def clean(self):
+        # US-FIX-001 — head-member invariant. If `head_member` is set
+        # then its `relationship_to_head` MUST be "01" (the
+        # ChoiceOption code for "Head" on the seeded `relationship`
+        # list). Audit_2026-05-21 §4 flagged this divergence in the
+        # dev fixture; the registry's promote path now enforces the
+        # code at write time, and this `clean()` guards any other
+        # path (admin, shells, future writers) so the invariant is
+        # also a model-level fact.
+        super().clean()
+        if self.head_member_id and self.head_member.relationship_to_head not in ("", "01"):
+            from django.core.exceptions import ValidationError
+            raise ValidationError({
+                "head_member": (
+                    f"head_member.relationship_to_head must be '01' (Head); "
+                    f"got {self.head_member.relationship_to_head!r}."
+                ),
+            })
+
 
 class Member(models.Model):
     """Current-state member record. id is the Person ID (ULID)."""

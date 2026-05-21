@@ -577,6 +577,18 @@ def promote_stage_record(
             head_member = member
 
     if head_member:
+        # US-FIX-001 — the head-member invariant. `Household.head_member`
+        # and `Member.relationship_to_head = "01"` (the ChoiceOption code
+        # for "Head" on the seeded `relationship` list) must agree. The
+        # promote payload sets `is_head` to identify the head row, but
+        # historically didn't always carry `relationship_to_head`. We
+        # now enforce it here so the audit-bearing path (the ONLY path
+        # creating households on the registry side per CLAUDE.md) writes
+        # consistent rows. The model-level `Household.clean()` below is
+        # the guard for any non-promote write path.
+        if head_member.relationship_to_head != "01":
+            head_member.relationship_to_head = "01"
+            head_member.save(update_fields=["relationship_to_head", "updated_at"])
         hh.head_member = head_member
         hh.save(update_fields=["head_member", "updated_at"])
 

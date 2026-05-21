@@ -163,6 +163,37 @@ class TestPromoteAtomic:
         assert len(members) == 2
         assert hh.head_member_id == members[0].id  # is_head=True on line 1
 
+    def test_promote_enforces_head_relationship_code(self, connector, geo_codes):
+        # US-FIX-001 — when the payload sets `is_head=True` but omits or
+        # mis-codes `relationship_to_head`, the promote service must
+        # still land the registry row with relationship_to_head="01"
+        # (ChoiceOption code for "Head" on the seeded `relationship`
+        # list). Audit 2026-05-21 §4 flagged this as a real divergence
+        # in the dev fixture.
+        payload = _payload(geo_codes)
+        payload["members"][0]["relationship_to_head"] = ""    # was missing
+        payload["members"][1]["relationship_to_head"] = "04"  # son/daughter
+        run = start_connector_run(connector)
+        landing = land_payload(run, payload)
+        stage = stage_from_landing(landing, canonical_payload=payload)
+        hh = promote_stage_record(stage, actor="reviewer-1")
+
+        members = list(hh.members.order_by("line_number"))
+        assert hh.head_member_id == members[0].id
+        assert members[0].relationship_to_head == "01"  # head
+        assert members[1].relationship_to_head == "04"  # unchanged
+
+    def test_promote_does_not_demote_existing_head_code(self, connector, geo_codes):
+        # The invariant flips `""` to `"01"`; it never overwrites a
+        # legitimate explicit "01" with a different value.
+        payload = _payload(geo_codes)
+        run = start_connector_run(connector)
+        landing = land_payload(run, payload)
+        stage = stage_from_landing(landing, canonical_payload=payload)
+        hh = promote_stage_record(stage, actor="reviewer-1")
+        head = hh.members.order_by("line_number").first()
+        assert head.relationship_to_head == "01"  # payload already had it
+
     def test_promote_is_idempotent_on_replay(self, connector, geo_codes):
         run = start_connector_run(connector)
         landing = land_payload(run, _payload(geo_codes))
