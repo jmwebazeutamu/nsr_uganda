@@ -255,9 +255,11 @@ const FSAvailableRow = ({ field, selected, onToggle }) => {
               ? <><Icon name="lock" size={10}/> Blocked by {field.disabled_reason}</>
               : field.desc || <>e.g. <span className="t-mono">{field.example}</span></>}
           </span>
-          <div style={{flex:"0 0 96px"}}>
-            <FSCompleteness pct={field.completeness}/>
-          </div>
+          {Number.isFinite(field.completeness) && (
+            <div style={{flex:"0 0 96px"}}>
+              <FSCompleteness pct={field.completeness}/>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -265,6 +267,7 @@ const FSAvailableRow = ({ field, selected, onToggle }) => {
 };
 
 const FSCompleteness = ({ pct }) => {
+  if (!Number.isFinite(pct)) return null;
   const tone = pct >= 99 ? "var(--accent-data)"
     : pct >= 90 ? "var(--accent-update)"
     : pct >= 75 ? "var(--accent-quality)"
