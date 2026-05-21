@@ -439,35 +439,10 @@ const STEPS = [
   { id: "submit",   label: "Submit",         icon: "check" },
 ];
 
-const FIELDS = [
-  // group, name, sensitivity, disabled?, reason
-  ["Identifiers", "registry_id",        "Public",    false],
-  ["Identifiers", "household_number",   "Public",    false],
-  ["Identifiers", "captured_date",      "Public",    false],
-  ["Identifiers", "captured_parish",    "Internal",  false],
-  ["Geography",   "subregion",          "Public",    false],
-  ["Geography",   "district",           "Public",    false],
-  ["Geography",   "subcounty",          "Public",    false],
-  ["Geography",   "parish",             "Internal",  false],
-  ["Geography",   "village",            "Internal",  false],
-  ["Geography",   "gps_lat",            "Sensitive", true, "Disabled by DSA clause 4.2.b. Request expansion via your data steward."],
-  ["Geography",   "gps_lng",            "Sensitive", true, "Disabled by DSA clause 4.2.b. Request expansion via your data steward."],
-  ["Household",   "household_size",     "Public",    false],
-  ["Household",   "head_sex",           "Public",    false],
-  ["Household",   "head_age_band",      "Public",    false],
-  ["Household",   "head_education",     "Internal",  false],
-  ["Identity",    "nin_value",          "Sensitive", true, "Disabled by DSA clause 4.2.b. Request expansion via your data steward."],
-  ["Identity",    "head_name",          "Personal",  false],
-  ["Identity",    "phone",              "Personal",  false],
-  ["Identity",    "photo_ref",          "Sensitive", true, "Disabled by DSA clause 4.2.b. Request expansion via your data steward."],
-  ["PMT",         "pmt_score",          "Internal",  false],
-  ["PMT",         "pmt_band",           "Internal",  false],
-  ["Housing",     "roof_material",      "Internal",  false],
-  ["Housing",     "walls_material",     "Internal",  false],
-  ["Housing",     "toilet_type",        "Internal",  false],
-  ["Housing",     "water_source",       "Internal",  false],
-  ["Wealth",      "household_savings_amount", "Sensitive", true, "Disabled by DSA clause 4.2.b. Request expansion via your data steward."],
-];
+// FIELDS mock removed — Step 3 (FieldStepV2) and Step 2 (BuildStepV2)
+// both consume the live schema.fields catalogue from /builder-schema/
+// (US-S27-013 / US-S27-014). Offline preview falls back to the
+// templates' own inline catalogues.
 
 const PREVIEW_ROWS = [
   { rid: "01HXY7K3B2N9PVQE4M6FZRWS18", hh: "HH-7411-002-0148", parish: "Nakiloro", subreg: "Karamoja", size: 6, sex: "F", age: "30-39", band: "Poorest 40%", roof: "Iron sheets", phone: "+256 ••• ••4567" },
@@ -514,12 +489,10 @@ const DRSScreen = ({ role = "operator", onExit } = {}) => {
 const DRSWizard = ({ role = "operator", onExit } = {}) => {
   const isPartner = role === "partner";
   const [step, setStep] = useStateDRS("build");
-  // Selected fields hold whatever the effective catalogue's `name`
-  // column is. When `schema` arrives the catalogue switches to the
-  // backend's dotted keys ("household.id"); until then the mock
-  // tail-names ("registry_id") are the placeholder. Defaults are
-  // empty — the user picks intentionally.
-  const [selectedFields, setSel] = useStateDRS(new Set());
+  // Selected fields are ordered dotted keys — the column order in
+  // the delivered file follows the user's drag sequence on Step 3
+  // (US-S27-014). FieldStepV2 owns add/remove/reorder.
+  const [selectedFields, setSel] = useStateDRS([]);
   // US-S27-013 — captured query-builder state is now a recursive
   // tree (AND/OR groups with rules), built by BuildStepV2. On
   // submit we extract leaves matching the predicates the backend
@@ -640,28 +613,9 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
     setTree(window.qbNewGroup("AND", builderFields));
   }, [builderFields, tree]);
 
-  // Compose the effective FIELDS catalogue. When the schema is
-  // loaded the catalogue comes straight from the backend — the
-  // tuple's `name` column carries the dotted key ("household.id")
-  // so it can be POSTed verbatim. When the schema isn't reachable
-  // (offline preview), the hardcoded mock FIELDS catalogue takes
-  // over with its short tail-names — submit is disabled in that
-  // case anyway because `schema.dsa_id` won't exist.
-  const effectiveFields = React.useMemo(() => {
-    if (!schema || !schema.fields) return FIELDS;
-    return schema.fields.map(f => [
-      f.group, f.key, f.sensitivity,
-      Boolean(f.disabled),
-      f.disabled_reason || "",
-    ]);
-  }, [schema]);
-
-  const toggleField = (name, disabled, reason) => {
-    if (disabled) return;
-    const next = new Set(selectedFields);
-    if (next.has(name)) next.delete(name); else next.add(name);
-    setSel(next);
-  };
+  // US-S27-014: FieldStepV2 (Step 3) consumes builderFields
+  // directly via its `fields` prop. The earlier `effectiveFields`
+  // tuple shape used by the now-removed inline FieldStep is gone.
 
   // US-S27-010 — real submit chain replaces the prior toast-only
   // mock. POST creates a DRAFT row, then POST /submit/ runs the
@@ -682,12 +636,15 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
       );
       return;
     }
-    if (selectedFields.size === 0) {
+    if (selectedFields.length === 0) {
       setToast("Pick at least one field before submitting.");
       return;
     }
     setSubmitting(true);
     const payload = {
+      // Ordered — column order in the delivered file follows the
+      // drag sequence on Step 3 (US-S27-014). validate_against_dsa
+      // is order-insensitive so the server contract is unchanged.
       fields: [...selectedFields],
     };
     // US-S27-013 — the criteria tree IS the source of truth. The
@@ -854,7 +811,12 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
               <div className="t-cap muted">Loading field catalogue…</div>
             </div>
       )}
-      {step === 'fields' && <FieldStep selected={selectedFields} onToggle={toggleField} fields={effectiveFields}/>}
+      {step === 'fields' && <window.FieldStepV2
+        selectedKeys={selectedFields}
+        onChange={setSel}
+        fields={builderFields}
+        dsaReference={schema?.dsa_reference || ""}
+      />}
       {step === 'preview' && <PreviewStep selected={selectedFields}/>}
       {step === 'delivery' && <DeliveryStep
         methods={schema?.delivery_methods || []}
@@ -909,10 +871,10 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
             <div style={{textTransform:'capitalize'}}>{entity}</div>
             <div className="muted">Fields</div>
             <div>
-              {selectedFields.size} selected
-              {effectiveFields.length > 0 && ` of ${effectiveFields.length}`}
-              {effectiveFields.filter(f => f[3]).length > 0 &&
-                ` (${effectiveFields.filter(f => f[3]).length} disabled by DSA)`}
+              {selectedFields.length} selected
+              {builderFields.length > 0 && ` of ${builderFields.length}`}
+              {builderFields.filter(f => f.disabled).length > 0 &&
+                ` (${builderFields.filter(f => f.disabled).length} disabled by DSA)`}
             </div>
             <div className="muted">Criteria</div>
             <div>
@@ -1049,83 +1011,10 @@ const DSACard = () => (
 /* ============================================================
    Step 3 — Field Selector
    ============================================================ */
-const FieldStep = ({ selected, onToggle, fields }) => {
-  // `fields` is the effective catalogue: DSA-overlaid when the
-  // builder-schema fetch succeeded, otherwise the mock FIELDS
-  // (US-S18-003). Falls back to the module constant defensively.
-  const list = fields || FIELDS;
-  const groups = list.reduce((acc, f) => { (acc[f[0]] = acc[f[0]] || []).push(f); return acc; }, {});
-  return (
-    <div style={{display:'grid', gridTemplateColumns:'1fr 320px', gap:16}}>
-      <div className="card">
-        <div className="card-header">
-          <div>
-            <h3 className="t-h3" style={{margin:0}}>Field selector</h3>
-            <div className="t-cap">{selected.size} selected · {list.filter(f => f[3]).length} sensitive fields disabled</div>
-          </div>
-          <div className="row gap-2">
-            <button className="btn btn-sm">Select all available</button>
-            <button className="btn btn-sm btn-ghost"><Icon name="save" size={14}/> Save selection</button>
-          </div>
-        </div>
-        <div>
-          {Object.entries(groups).map(([group, fields]) => (
-            <React.Fragment key={group}>
-              <div style={{padding:'10px 20px', background:'var(--neutral-100)', borderBottom:'1px solid var(--neutral-200)', fontSize:12, fontWeight:600, letterSpacing:'0.06em', textTransform:'uppercase', color:'var(--neutral-700)'}}>
-                {group}
-              </div>
-              {fields.map(([, name, sens, disabled, reason]) => (
-                <div key={name} title={reason || ""} onClick={() => onToggle(name, disabled, reason)} style={{
-                  padding:'10px 20px', borderBottom:'1px solid var(--neutral-200)',
-                  display:'grid', gridTemplateColumns:'24px 1fr 120px 200px', alignItems:'center', gap:12,
-                  cursor: disabled ? 'not-allowed' : 'pointer',
-                  background: selected.has(name) ? 'var(--accent-system-bg)' : disabled ? 'var(--neutral-50)' : 'transparent',
-                  opacity: disabled ? 0.7 : 1,
-                }}>
-                  <input type="checkbox" checked={selected.has(name)} disabled={disabled} readOnly/>
-                  <div className="t-mono" style={{fontSize:13, color: disabled ? 'var(--neutral-500)' : 'var(--neutral-900)'}}>{name}</div>
-                  <Chip>{sens}</Chip>
-                  <div className="t-cap" style={{color: disabled ? 'var(--accent-danger)' : 'var(--neutral-500)'}}>
-                    {disabled ? <><Icon name="lock" size={11}/> DSA clause 4.2.b</> : "Available under DSA"}
-                  </div>
-                </div>
-              ))}
-            </React.Fragment>
-          ))}
-        </div>
-      </div>
-
-      <div className="col gap-3">
-        <div className="card">
-          <div className="card-header" style={{padding:'12px 16px'}}><h3 className="t-h3" style={{margin:0}}>Sensitivity legend</h3></div>
-          <div style={{padding:14, display:'flex', flexDirection:'column', gap:10}}>
-            {[["Public", "Geography rolled up; aggregate counts"],
-              ["Internal", "Programme-level reporting"],
-              ["Personal", "Identifies a person; PII"],
-              ["Sensitive", "Identifies + categorical risk; requires expansion"]].map(([s, desc]) => (
-              <div key={s} className="row gap-3">
-                <Chip>{s}</Chip>
-                <span className="t-bodysm muted">{desc}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="card" style={{borderLeft:'3px solid var(--accent-danger)'}}>
-          <div style={{padding:14}}>
-            <div className="row gap-2" style={{marginBottom:4}}>
-              <Icon name="lock" size={14} color="var(--accent-danger)"/>
-              <strong className="t-bodysm">DSA-clause guard</strong>
-            </div>
-            <div className="t-bodysm muted">
-              Fields marked <Chip size="sm">Sensitive</Chip> are blocked by clause 4.2.b of your active DSA. To enable, request a scope expansion via your data steward.
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
+// US-S27-014: the inline FieldStep is removed. The wizard mounts
+// <window.FieldStepV2/> from screens-drs-fieldselector.jsx — the
+// two-pane "available → ordered output" surface with search,
+// sensitivity filters, recommended packs, and drag-reorder.
 
 /* ============================================================
    Step 4 — Preview
@@ -1316,7 +1205,7 @@ const SubmitStep = ({
             <div className="muted">Row cap</div>
             <div>{maxRows ? Number(maxRows).toLocaleString() : "(unbounded)"}</div>
             <div className="muted">Fields</div>
-            <div>{selected.size}</div>
+            <div>{selected.length}</div>
             <div className="muted">Delivery</div>
             <div>{deliveryLabel}</div>
           </div>

@@ -4,6 +4,34 @@ Notable changes to outbound API contracts. Entries are dated and tied to the com
 
 ---
 
+## 2026-05-21 — US-S27-014 — DRS Step 3 uses the two-pane FieldStepV2 selector
+
+**Affected endpoints**: none. No API contract changes — the wiring is design-layer only. The submit payload's `fields` array is now ORDERED, which the validator already tolerates (it's a set check, not positional).
+
+### What changed
+
+- **Wizard Step 3 is now `<FieldStepV2/>`** from `design/v0.1/screens/screens-drs-fieldselector.jsx` — a two-pane available → ordered-output surface with:
+  - **Search** across label / key / description / example
+  - **Group + sensitivity** filter pills
+  - **DSA-blocked toggle** for explicit visibility
+  - **Recommended packs** (Minimum reporting / Geography rollup / Vulnerability profile / Housing & utilities) — one-click presets that load an ordered selection
+  - **Drag-reorder** of the selected list (column order in the delivery file follows this sequence)
+  - **Sensitivity breakdown** card — counts + bar + DPO-review banner when Personal / Sensitive columns are picked
+
+- **Selected fields are now ordered.** The wizard's `selectedFields` state migrated from `Set<string>` to `string[]`. Submit payload's `fields` array preserves the user's drag order. `validate_against_dsa` is order-insensitive; no server contract change.
+
+- **Template parameterized.** `FieldStepV2` now accepts a `fields` prop. The active catalogue is the live `schema.fields` from `/builder-schema/` (US-S27-013); inline `FS_FIELDS` remains as offline-preview fallback. Field-shape renamed to match the backend's contract (`g` → `group`, `sens` → `sensitivity`, `dsaBlocked` → `disabled`, `dsaReason` → `disabled_reason`). `FSSelected` and `FSBreakdownCard` accept a `byKey` prop so they resolve keys against the live catalogue, not a module-level constant.
+
+- **Inline `FieldStep` removed.** The wizard's prior simple-row Field Selector + the `FIELDS` mock + `effectiveFields` derivation are gone. Step 3 is exclusively `<FieldStepV2/>`.
+
+### What hasn't changed
+
+- No backend changes. `apps/data_requests/builder_schema.py` already advertises `label` + `type` per field (US-S27-013); FieldStepV2 consumes that directly.
+- Submit modal labels still cite "X of Y · Z disabled" using the live `builderFields` list.
+- PreviewStep (Step 4) still renders hardcoded preview rows — no real match-estimate endpoint yet.
+
+---
+
 ## 2026-05-21 — US-S27-013 — DRS uses the nested-tree query builder; full household + member catalogue
 
 **Affected endpoints**: `/api/v1/drs/requests/builder-schema/` field shape gains `label` + `type` + (`options` | `options_source`).
