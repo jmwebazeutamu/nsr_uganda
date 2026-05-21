@@ -48,6 +48,117 @@ MEMBER_FIELDS: dict[str, tuple[str, Kind]] = {
     "birth_certificate_status": ("birth_certificate", "single"),
 }
 
+
+# --- US-S22-DE detail-entity coded fields ----------------------------------
+#
+# One map per detail entity. attach_label_methodfields() applies these to
+# the matching ModelSerializer in apps/data_management/api.py.
+
+DWELLING_FIELDS: dict[str, tuple[str, Kind]] = {
+    "tenure": ("dwelling_tenure", "single"),
+    "dwelling_type": ("dwelling_type", "single"),
+    "roof_material": ("roof_material", "single"),
+    "wall_material": ("wall_material", "single"),
+    "floor_material": ("floor_material", "single"),
+}
+
+UTILITIES_FIELDS: dict[str, tuple[str, Kind]] = {
+    "cooking_fuel": ("cooking_fuel", "single"),
+    "lighting_energy": ("lighting_energy", "single"),
+    "drinking_water_source": ("drinking_water_source", "single"),
+    "toilet_facility": ("toilet_facility", "single"),
+    "waste_disposal": ("waste_disposal", "single"),
+}
+
+LIVELIHOOD_FIELDS: dict[str, tuple[str, Kind]] = {
+    "main_livelihood": ("main_livelihood", "single"),
+    "agricultural_purpose": ("agricultural_purpose", "single"),
+    "land_ownership": ("land_ownership", "single"),
+    "land_title": ("land_title", "single"),
+    "crop_production_zone": ("agricultural_zone", "single"),
+    "livestock_zone": ("agricultural_zone", "single"),
+}
+
+# FIES: every column is yes/no-affirmative coded.
+FOOD_SECURITY_FIELDS: dict[str, tuple[str, Kind]] = {
+    "worried_food": ("yes_no", "single"),
+    "unhealthy_food": ("yes_no", "single"),
+    "limited_variety": ("yes_no", "single"),
+    "skipped_meal": ("yes_no", "single"),
+    "ate_less": ("yes_no", "single"),
+    "ran_out_food": ("yes_no", "single"),
+    "hungry_no_eat": ("yes_no", "single"),
+    "whole_day_no_eat": ("yes_no", "single"),
+}
+
+FOOD_CONSUMPTION_FIELDS: dict[str, tuple[str, Kind]] = {
+    "staples_source": ("food_source", "single"),
+    "pulses_source": ("food_source", "single"),
+    "dairy_source": ("food_source", "single"),
+    "meat_source": ("food_source", "single"),
+    "vegetables_source": ("food_source", "single"),
+    "fruits_source": ("food_source", "single"),
+    "oils_source": ("food_source", "single"),
+    "sugar_source": ("food_source", "single"),
+    "condiments_source": ("food_source", "single"),
+}
+
+ASSET_FIELDS: dict[str, tuple[str, Kind]] = {
+    "asset_type": ("asset_type", "single"),
+}
+
+CROP_FIELDS: dict[str, tuple[str, Kind]] = {
+    "crop_name": ("crop_name", "single"),
+}
+
+LIVESTOCK_FIELDS: dict[str, tuple[str, Kind]] = {
+    "livestock_type": ("livestock_type", "single"),
+}
+
+SHOCK_FIELDS: dict[str, tuple[str, Kind]] = {
+    "shock_type": ("shock_type", "single"),
+    "severity": ("severity_level", "single"),
+}
+
+COPING_FIELDS: dict[str, tuple[str, Kind]] = {
+    "strategy_type": ("coping_strategy_type", "single"),
+    "frequency": ("coping_frequency", "single"),
+}
+
+HEALTH_FIELDS: dict[str, tuple[str, Kind]] = {
+    "chronic_illness_flag": ("yes_no", "single"),
+}
+
+DISABILITY_FIELDS: dict[str, tuple[str, Kind]] = {
+    "seeing": ("wg_difficulty_level", "single"),
+    "hearing": ("wg_difficulty_level", "single"),
+    "walking": ("wg_difficulty_level", "single"),
+    "memory": ("wg_difficulty_level", "single"),
+    "selfcare": ("wg_difficulty_level", "single"),
+    "communication": ("wg_difficulty_level", "single"),
+}
+
+EDUCATION_FIELDS: dict[str, tuple[str, Kind]] = {
+    "literacy_status": ("literacy_status", "single"),
+    "ever_attended": ("yes_no", "single"),
+    "never_attended_reason": ("never_attended_reason", "single"),
+    "highest_grade": ("highest_grade", "single"),
+    "currently_attending": ("yes_no", "single"),
+    "why_stopped": ("why_stopped_school", "single"),
+}
+
+EMPLOYMENT_FIELDS: dict[str, tuple[str, Kind]] = {
+    "main_activity_last_30d": ("employment_main_activity", "single"),
+    "work_frequency": ("work_frequency", "single"),
+    "sector": ("employment_sector", "single"),
+    "employment_status": ("employment_status", "single"),
+    "not_working_reason": ("not_working_reason", "single"),
+    "is_govt_programme_beneficiary": ("yes_no", "single"),
+    "currently_benefiting": ("yes_no", "single"),
+    "made_savings": ("yes_no", "single"),
+    "savings_location": ("savings_location", "single"),
+}
+
 # --- source_payload (StageRecord.canonical_payload) paths -------------------
 #
 # Path tuples are walked literally. Use "*" for an array index. The

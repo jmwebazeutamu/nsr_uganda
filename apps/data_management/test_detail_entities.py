@@ -476,3 +476,74 @@ class TestDwellingBackfill:
         self._run()
         self._run()  # re-run is a no-op
         assert Dwelling.objects.filter(household=household).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# US-S22-DE-08 — serialiser nesting smoke
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestSerializerNesting:
+    def test_household_serializer_exposes_dwelling_inline(self, household):
+        from apps.data_management.api import HouseholdSerializer
+        Dwelling.objects.create(
+            household=household, tenure="2", dwelling_type="1",
+        )
+        data = HouseholdSerializer(household).data
+        assert data["dwelling"]["tenure"] == "2"
+        assert data["dwelling"]["dwelling_type"] == "1"
+
+    def test_household_serializer_dwelling_null_when_missing(self, household):
+        # household fixture has no Dwelling row by default.
+        Dwelling.objects.filter(household=household).delete()
+        from apps.data_management.api import HouseholdSerializer
+        data = HouseholdSerializer(household).data
+        assert data["dwelling"] is None
+        # All five one-to-ones are nullable in the same way.
+        for key in ("utilities", "livelihood", "food_security", "food_consumption"):
+            assert data[key] is None, key
+
+    def test_household_serializer_exposes_repeat_groups(self, household):
+        AssetOwnership.objects.create(household=household, asset_type="radio", count=2)
+        Crop.objects.create(household=household, crop_name="maize", rank_order=1)
+        Livestock.objects.create(household=household, livestock_type="cattle", count=3)
+        from apps.data_management.api import HouseholdSerializer
+        data = HouseholdSerializer(household).data
+        assert len(data["assets"]) == 1
+        assert data["assets"][0]["asset_type"] == "radio"
+        assert len(data["crops"]) == 1
+        assert len(data["livestock"]) == 1
+
+    def test_member_serializer_exposes_detail_entities(self, member):
+        Health.objects.create(member=member, chronic_illness_flag="2")
+        Disability.objects.create(member=member, seeing="01", walking="03")
+        Education.objects.create(member=member, literacy_status="1", highest_grade="07")
+        Employment.objects.create(
+            member=member, sector="1", programmes_benefited=["PDM"],
+        )
+        from apps.data_management.api import MemberSerializer
+        data = MemberSerializer(member).data
+        assert data["health"]["chronic_illness_flag"] == "2"
+        assert data["disability"]["wg_disability_flag"] is True
+        assert data["education"]["highest_grade"] == "07"
+        assert data["employment"]["programmes_benefited"] == ["PDM"]
+
+    def test_member_serializer_details_null_when_missing(self, member):
+        from apps.data_management.api import MemberSerializer
+        data = MemberSerializer(member).data
+        assert data["health"] is None
+        assert data["disability"] is None
+        assert data["education"] is None
+        assert data["employment"] is None
+
+    def test_health_serializer_decodes_chronic_illness_types(self, member):
+        h = Health(member=member, chronic_illness_flag="1")
+        h.set_chronic_illness_types(["4", "5"])
+        h.save()
+        from apps.data_management.api import HealthSerializer
+        data = HealthSerializer(h).data
+        # The raw encrypted column is bytes; the serialiser surfaces the
+        # decoded list via the explicit accessor (ADR-0021).
+        assert data["chronic_illness_types"] == ["4", "5"]
+        assert "chronic_illness_types_encrypted" not in data

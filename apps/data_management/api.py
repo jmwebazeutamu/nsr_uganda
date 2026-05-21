@@ -6,11 +6,42 @@ from apps.security.audit_views import AuditReadMixin
 from apps.security.pagination import MemberPagination
 
 from .choice_field_map import (
+    ASSET_FIELDS,
+    COPING_FIELDS,
+    CROP_FIELDS,
+    DISABILITY_FIELDS,
+    DWELLING_FIELDS,
+    EDUCATION_FIELDS,
+    EMPLOYMENT_FIELDS,
+    FOOD_CONSUMPTION_FIELDS,
+    FOOD_SECURITY_FIELDS,
+    HEALTH_FIELDS,
     HOUSEHOLD_FIELDS,
+    LIVELIHOOD_FIELDS,
+    LIVESTOCK_FIELDS,
     MEMBER_FIELDS,
+    SHOCK_FIELDS,
+    UTILITIES_FIELDS,
     apply_payload_labels,
 )
-from .models import Household, Member
+from .models import (
+    AssetOwnership,
+    CopingStrategy,
+    Crop,
+    Disability,
+    Dwelling,
+    Education,
+    Employment,
+    FoodConsumption,
+    FoodSecurity,
+    Health,
+    Household,
+    Livelihood,
+    Livestock,
+    Member,
+    Shock,
+    Utilities,
+)
 
 
 def _stage_for(household):
@@ -88,8 +119,26 @@ def _intake_date_for_obj(obj):
     return _intake_date(hh)
 
 
+def _safe_reverse_o2o(parent, attr):
+    """Read a reverse OneToOne accessor and return None when the related
+    row doesn't exist. Django's descriptor raises ObjectDoesNotExist —
+    we treat that as "no detail entity yet" rather than letting the
+    serialiser crash."""
+    try:
+        return getattr(parent, attr)
+    except Exception:  # noqa: BLE001 — incl. RelatedObjectDoesNotExist
+        return None
+
+
 class MemberSerializer(serializers.ModelSerializer):
     nin_value = serializers.SerializerMethodField()
+    # US-S22-DE-08: per-Member detail entities nested read-only.
+    # SerializerMethodField so a member without the child row
+    # serialises as null instead of raising ObjectDoesNotExist.
+    health = serializers.SerializerMethodField()
+    disability = serializers.SerializerMethodField()
+    education = serializers.SerializerMethodField()
+    employment = serializers.SerializerMethodField()
 
     class Meta:
         model = Member
@@ -105,6 +154,7 @@ class MemberSerializer(serializers.ModelSerializer):
             "nin_status", "nin_status_label",
             "nin_last4", "nin_value",
             "telephone_1", "telephone_2", "is_deleted", "merged_into",
+            "health", "disability", "education", "employment",
         )
 
     def get_nin_value(self, obj) -> str | None:
@@ -112,8 +162,282 @@ class MemberSerializer(serializers.ModelSerializer):
         the operator-facing surface."""
         return None
 
+    def get_health(self, obj):
+        h = _safe_reverse_o2o(obj, "health")
+        return HealthSerializer(h).data if h else None
+
+    def get_disability(self, obj):
+        d = _safe_reverse_o2o(obj, "disability")
+        return DisabilitySerializer(d).data if d else None
+
+    def get_education(self, obj):
+        e = _safe_reverse_o2o(obj, "education")
+        return EducationSerializer(e).data if e else None
+
+    def get_employment(self, obj):
+        e = _safe_reverse_o2o(obj, "employment")
+        return EmploymentSerializer(e).data if e else None
+
 
 _attach_label_methodfields(MemberSerializer, MEMBER_FIELDS)
+
+
+# ===========================================================================
+# Detail-entity serializers (US-S22-DE-08)
+#
+# One ModelSerializer per detail entity from US-S22-DE-01. Each gets
+# its <field>_label companions auto-attached via the choice_field_map
+# entry per ADR-0010. They're nested read-only onto HouseholdSerializer
+# and MemberSerializer below — the registry surface now exposes the
+# socioeconomic detail tail without callers having to walk the
+# StageRecord.canonical_payload by hand.
+# ===========================================================================
+
+
+class DwellingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Dwelling
+        fields = (
+            "id", "tenure", "tenure_label",
+            "dwelling_type", "dwelling_type_label",
+            "total_rooms", "sleeping_rooms",
+            "roof_material", "roof_material_label",
+            "wall_material", "wall_material_label",
+            "floor_material", "floor_material_label",
+            "sub_region_code", "is_deleted", "updated_at",
+        )
+
+
+_attach_label_methodfields(DwellingSerializer, DWELLING_FIELDS)
+
+
+class UtilitiesSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Utilities
+        fields = (
+            "id", "cooking_fuel", "cooking_fuel_label",
+            "lighting_energy", "lighting_energy_label",
+            "drinking_water_source", "drinking_water_source_label",
+            "toilet_facility", "toilet_facility_label",
+            "toilet_shared", "households_sharing_toilet",
+            "waste_disposal", "waste_disposal_label",
+            "sub_region_code", "is_deleted", "updated_at",
+        )
+
+
+_attach_label_methodfields(UtilitiesSerializer, UTILITIES_FIELDS)
+
+
+class LivelihoodSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Livelihood
+        fields = (
+            "id", "main_livelihood", "main_livelihood_label",
+            "crop_production_zone", "crop_production_zone_label",
+            "livestock_zone", "livestock_zone_label",
+            "agricultural_purpose", "agricultural_purpose_label",
+            "land_ownership", "land_ownership_label",
+            "land_hectares",
+            "land_title", "land_title_label",
+            "sub_region_code", "is_deleted", "updated_at",
+        )
+
+
+_attach_label_methodfields(LivelihoodSerializer, LIVELIHOOD_FIELDS)
+
+
+class FoodSecuritySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FoodSecurity
+        fields = (
+            "id",
+            "worried_food", "worried_food_label",
+            "unhealthy_food", "unhealthy_food_label",
+            "limited_variety", "limited_variety_label",
+            "skipped_meal", "skipped_meal_label",
+            "ate_less", "ate_less_label",
+            "ran_out_food", "ran_out_food_label",
+            "hungry_no_eat", "hungry_no_eat_label",
+            "whole_day_no_eat", "whole_day_no_eat_label",
+            "fies_raw_score",
+            "sub_region_code", "is_deleted", "updated_at",
+        )
+
+
+_attach_label_methodfields(FoodSecuritySerializer, FOOD_SECURITY_FIELDS)
+
+
+class FoodConsumptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FoodConsumption
+        fields = (
+            "id",
+            "staples_days", "staples_source", "staples_source_label",
+            "pulses_days", "pulses_source", "pulses_source_label",
+            "dairy_days", "dairy_source", "dairy_source_label",
+            "meat_days", "meat_source", "meat_source_label",
+            "vegetables_days", "vegetables_source", "vegetables_source_label",
+            "fruits_days", "fruits_source", "fruits_source_label",
+            "oils_days", "oils_source", "oils_source_label",
+            "sugar_days", "sugar_source", "sugar_source_label",
+            "condiments_days", "condiments_source", "condiments_source_label",
+            "fcs_score",
+            "sub_region_code", "is_deleted", "updated_at",
+        )
+
+
+_attach_label_methodfields(FoodConsumptionSerializer, FOOD_CONSUMPTION_FIELDS)
+
+
+class AssetOwnershipSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AssetOwnership
+        fields = (
+            "id", "asset_type", "asset_type_label", "count",
+            "sub_region_code", "is_deleted", "updated_at",
+        )
+
+
+_attach_label_methodfields(AssetOwnershipSerializer, ASSET_FIELDS)
+
+
+class CropSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Crop
+        fields = (
+            "id", "crop_name", "crop_name_label", "rank_order",
+            "sub_region_code", "is_deleted", "updated_at",
+        )
+
+
+_attach_label_methodfields(CropSerializer, CROP_FIELDS)
+
+
+class LivestockSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Livestock
+        fields = (
+            "id", "livestock_type", "livestock_type_label", "count",
+            "sub_region_code", "is_deleted", "updated_at",
+        )
+
+
+_attach_label_methodfields(LivestockSerializer, LIVESTOCK_FIELDS)
+
+
+class ShockSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Shock
+        fields = (
+            "id", "shock_type", "shock_type_label",
+            "livelihoods_affected",
+            "severity", "severity_label",
+            "crops_severity_score", "livestock_severity_score",
+            "labour_severity_score", "other_severity_score",
+            "event_date",
+            "sub_region_code", "is_deleted", "updated_at",
+        )
+
+
+_attach_label_methodfields(ShockSerializer, SHOCK_FIELDS)
+
+
+class CopingStrategySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CopingStrategy
+        fields = (
+            "id",
+            "strategy_type", "strategy_type_label",
+            "category",
+            "frequency", "frequency_label",
+            "used_flag",
+            "sub_region_code", "is_deleted", "updated_at",
+        )
+
+
+_attach_label_methodfields(CopingStrategySerializer, COPING_FIELDS)
+
+
+class HealthSerializer(serializers.ModelSerializer):
+    # Chronic illness type list lives in the encrypted column —
+    # surface via the explicit decoded list so callers don't see
+    # the raw bytes. Plaintext HIV/TB codes never appear on the wire
+    # except through this controlled accessor (DPPA 2019).
+    chronic_illness_types = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Health
+        fields = (
+            "id",
+            "chronic_illness_flag", "chronic_illness_flag_label",
+            "chronic_illness_types",
+            "sub_region_code", "is_deleted", "updated_at",
+        )
+
+    def get_chronic_illness_types(self, obj) -> list[str]:
+        return obj.get_chronic_illness_types()
+
+
+_attach_label_methodfields(HealthSerializer, HEALTH_FIELDS)
+
+
+class DisabilitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Disability
+        fields = (
+            "id",
+            "seeing", "seeing_label",
+            "hearing", "hearing_label",
+            "walking", "walking_label",
+            "memory", "memory_label",
+            "selfcare", "selfcare_label",
+            "communication", "communication_label",
+            "wg_disability_flag",
+            "sub_region_code", "is_deleted", "updated_at",
+        )
+
+
+_attach_label_methodfields(DisabilitySerializer, DISABILITY_FIELDS)
+
+
+class EducationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Education
+        fields = (
+            "id",
+            "literacy_status", "literacy_status_label",
+            "ever_attended", "ever_attended_label",
+            "never_attended_reason", "never_attended_reason_label",
+            "highest_grade", "highest_grade_label",
+            "currently_attending", "currently_attending_label",
+            "why_stopped", "why_stopped_label",
+            "sub_region_code", "is_deleted", "updated_at",
+        )
+
+
+_attach_label_methodfields(EducationSerializer, EDUCATION_FIELDS)
+
+
+class EmploymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Employment
+        fields = (
+            "id",
+            "main_activity_last_30d", "main_activity_last_30d_label",
+            "work_frequency", "work_frequency_label",
+            "sector", "sector_label",
+            "employment_status", "employment_status_label",
+            "not_working_reason", "not_working_reason_label",
+            "is_govt_programme_beneficiary", "is_govt_programme_beneficiary_label",
+            "programmes_benefited",
+            "currently_benefiting", "currently_benefiting_label",
+            "made_savings", "made_savings_label",
+            "savings_location", "savings_location_label",
+            "sub_region_code", "is_deleted", "updated_at",
+        )
+
+
+_attach_label_methodfields(EmploymentSerializer, EMPLOYMENT_FIELDS)
 
 
 class HouseholdSerializer(serializers.ModelSerializer):
@@ -130,6 +454,21 @@ class HouseholdSerializer(serializers.ModelSerializer):
     parish_name = serializers.CharField(source="parish.name", read_only=True, default="")
     village_name = serializers.CharField(source="village.name", read_only=True, default="")
     current_intake_source = serializers.CharField(read_only=True)
+    # US-S22-DE-08: per-Household detail entities nested read-only.
+    # The five one-to-ones use SerializerMethodField so a household
+    # without the child row serialises as null rather than crashing.
+    # The five repeat groups use the standard nested-many pattern;
+    # they always exist as a (possibly empty) queryset.
+    dwelling = serializers.SerializerMethodField()
+    utilities = serializers.SerializerMethodField()
+    livelihood = serializers.SerializerMethodField()
+    food_security = serializers.SerializerMethodField()
+    food_consumption = serializers.SerializerMethodField()
+    assets = AssetOwnershipSerializer(many=True, read_only=True)
+    crops = CropSerializer(many=True, read_only=True)
+    livestock = LivestockSerializer(many=True, read_only=True)
+    shocks = ShockSerializer(many=True, read_only=True)
+    coping_strategies = CopingStrategySerializer(many=True, read_only=True)
     # US-S11-020 — surface the canonical_payload of the StageRecord
     # that promoted this household so the React detail screen can
     # render the questionnaire's housing / education / employment /
@@ -160,7 +499,32 @@ class HouseholdSerializer(serializers.ModelSerializer):
             "current_intake_source",
             "is_deleted", "created_at", "updated_at", "members",
             "source_payload", "source_payload_labels",
+            # US-S22-DE-08 detail entities
+            "dwelling", "utilities", "livelihood",
+            "food_security", "food_consumption",
+            "assets", "crops", "livestock",
+            "shocks", "coping_strategies",
         )
+
+    def get_dwelling(self, obj):
+        d = _safe_reverse_o2o(obj, "dwelling")
+        return DwellingSerializer(d).data if d else None
+
+    def get_utilities(self, obj):
+        u = _safe_reverse_o2o(obj, "utilities")
+        return UtilitiesSerializer(u).data if u else None
+
+    def get_livelihood(self, obj):
+        liv = _safe_reverse_o2o(obj, "livelihood")
+        return LivelihoodSerializer(liv).data if liv else None
+
+    def get_food_security(self, obj):
+        fs = _safe_reverse_o2o(obj, "food_security")
+        return FoodSecuritySerializer(fs).data if fs else None
+
+    def get_food_consumption(self, obj):
+        fc = _safe_reverse_o2o(obj, "food_consumption")
+        return FoodConsumptionSerializer(fc).data if fc else None
 
     def get_source_payload(self, obj) -> dict | None:
         """Joins back to the StageRecord that promoted this
