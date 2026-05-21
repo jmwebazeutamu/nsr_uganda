@@ -431,3 +431,48 @@ class TestVersionTables:
             effective_from=datetime.now(UTC),
         )
         assert v.version_number == 1
+
+
+# ---------------------------------------------------------------------------
+# Backfill migration 0007 (US-S22-DE-05) — exercise the helper directly.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+class TestDwellingBackfill:
+    def _run(self):
+        import importlib
+
+        from django.apps import apps as global_apps
+        mod = importlib.import_module(
+            "apps.data_management.migrations.0007_backfill_dwelling",
+        )
+        mod._backfill(global_apps, None)
+
+    def test_backfill_creates_dwelling_for_non_empty_tenure(
+        self, household, sub_region,
+    ):
+        # Force a non-empty legacy tenure on the Household.
+        household.dwelling_tenure = "2"
+        household.save(update_fields=["dwelling_tenure"])
+        # Ensure no Dwelling row exists yet for this household.
+        Dwelling.objects.filter(household=household).delete()
+        self._run()
+        d = Dwelling.objects.get(household=household)
+        assert d.tenure == "2"
+        # sub_region_code inherits from the parent for partition routing.
+        assert d.sub_region_code == household.sub_region_code
+
+    def test_backfill_skips_empty_tenure(self, household):
+        # household fixture leaves dwelling_tenure="" by default.
+        Dwelling.objects.filter(household=household).delete()
+        self._run()
+        assert not Dwelling.objects.filter(household=household).exists()
+
+    def test_backfill_is_idempotent(self, household):
+        household.dwelling_tenure = "1"
+        household.save(update_fields=["dwelling_tenure"])
+        Dwelling.objects.filter(household=household).delete()
+        self._run()
+        self._run()  # re-run is a no-op
+        assert Dwelling.objects.filter(household=household).count() == 1
