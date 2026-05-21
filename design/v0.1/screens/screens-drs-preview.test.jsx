@@ -19,6 +19,7 @@ let PreviewStep;
 let _previewCell;
 let _buildPinMap;
 let _inferImplicitGeoPins;
+let _buildGeoPathsForRows;
 // Pulled from screens-drs-fieldselector via dynamic import so the
 // shared screens-drs module body can also evaluate without throwing
 // on missing primitives.
@@ -38,7 +39,10 @@ beforeAll(async () => {
   await import("./screens-drs-fieldselector.jsx");
   await import("./screens-drs-querybuilder.jsx");
   await import("./screens-drs.jsx");
-  ({ PreviewStep, _previewCell, _buildPinMap, _inferImplicitGeoPins } = globalThis);
+  ({
+    PreviewStep, _previewCell, _buildPinMap,
+    _inferImplicitGeoPins, _buildGeoPathsForRows,
+  } = globalThis);
 });
 
 afterEach(() => {
@@ -588,5 +592,223 @@ describe("PreviewStep with geographic implicit pins", () => {
       tree={tree}/>);
     expect(screen.getByText(/1 column pinned by your Step-2 filter/)).toBeInTheDocument();
     expect(screen.getByText(/1 column scoped to the pinned region/)).toBeInTheDocument();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────
+// BUG-S27-025 — coherent geographic path per preview row
+// ───────────────────────────────────────────────────────────────
+
+describe("_buildGeoPathsForRows", () => {
+  const regionField = {
+    key: "household.region_code", type: "enum",
+    options: [
+      { value: "R-CENTRAL",  label: "Central" },
+      { value: "R-NORTHERN", label: "Northern" },
+    ],
+  };
+  const subRegionField = {
+    key: "household.sub_region_code", type: "enum",
+    options: [
+      { value: "SR-BUGANDA-S", label: "Buganda South", parent_code: "R-CENTRAL"  },
+      { value: "SR-BUGANDA-N", label: "Buganda North", parent_code: "R-CENTRAL"  },
+      { value: "SR-ACHOLI",    label: "Acholi",        parent_code: "R-NORTHERN" },
+    ],
+  };
+  const districtField = {
+    key: "household.district_code", type: "enum",
+    options: [
+      // Buganda South districts
+      { value: "DST-KAMPALA",   label: "Kampala",   parent_code: "SR-BUGANDA-S" },
+      { value: "DST-KALANGALA", label: "Kalangala", parent_code: "SR-BUGANDA-S" },
+      // Buganda North districts
+      { value: "DST-LUWEERO",   label: "Luweero",   parent_code: "SR-BUGANDA-N" },
+      { value: "DST-NAKASEKE",  label: "Nakaseke",  parent_code: "SR-BUGANDA-N" },
+      // Acholi districts
+      { value: "DST-GULU",      label: "Gulu",      parent_code: "SR-ACHOLI"    },
+    ],
+  };
+  const countyField = {
+    key: "household.county_code", type: "enum",
+    options: [
+      // under Kampala
+      { value: "C-KCCA",      label: "KCCA",       parent_code: "DST-KAMPALA"   },
+      // under Kalangala
+      { value: "C-BUJUMBA",   label: "Bujumba",    parent_code: "DST-KALANGALA" },
+      { value: "C-KYAMUSWA",  label: "Kyamuswa",   parent_code: "DST-KALANGALA" },
+      // under Luweero
+      { value: "C-BAMUNANIKA",label: "Bamunanika", parent_code: "DST-LUWEERO"   },
+      // under Gulu (should never appear when Central is pinned)
+      { value: "C-AYAGO",     label: "Ayago",      parent_code: "DST-GULU"      },
+    ],
+  };
+  const catalogue = {
+    "household.region_code":     regionField,
+    "household.sub_region_code": subRegionField,
+    "household.district_code":   districtField,
+    "household.county_code":     countyField,
+  };
+
+  it("each row's district descends from that row's sub_region", () => {
+    const pins = {
+      "household.region_code":     { kind: "single", value: "R-CENTRAL" },
+      "household.sub_region_code": { kind: "multi",  values: ["SR-BUGANDA-S", "SR-BUGANDA-N"], implicit: true },
+      "household.district_code":   { kind: "multi",  values: ["DST-KAMPALA", "DST-KALANGALA", "DST-LUWEERO", "DST-NAKASEKE"], implicit: true },
+    };
+    const cols = [
+      { key: "household.region_code",     field: regionField },
+      { key: "household.sub_region_code", field: subRegionField },
+      { key: "household.district_code",   field: districtField },
+    ];
+    const paths = _buildGeoPathsForRows(pins, cols, catalogue, 10);
+    expect(paths).toHaveLength(10);
+    for (const path of paths) {
+      const subRegion = path["household.sub_region_code"];
+      const district  = path["household.district_code"];
+      const dOpt = districtField.options.find(o => o.value === district);
+      expect(dOpt).toBeTruthy();
+      expect(dOpt.parent_code).toBe(subRegion);
+    }
+  });
+
+  it("each row's county descends from that row's district (full chain)", () => {
+    const pins = {
+      "household.region_code":     { kind: "single", value: "R-CENTRAL" },
+      "household.sub_region_code": { kind: "multi",  values: ["SR-BUGANDA-S", "SR-BUGANDA-N"], implicit: true },
+      "household.district_code":   { kind: "multi",  values: ["DST-KAMPALA", "DST-KALANGALA", "DST-LUWEERO", "DST-NAKASEKE"], implicit: true },
+      "household.county_code":     { kind: "multi",  values: ["C-KCCA", "C-BUJUMBA", "C-KYAMUSWA", "C-BAMUNANIKA"], implicit: true },
+    };
+    const cols = [
+      { key: "household.region_code",     field: regionField },
+      { key: "household.sub_region_code", field: subRegionField },
+      { key: "household.district_code",   field: districtField },
+      { key: "household.county_code",     field: countyField },
+    ];
+    const paths = _buildGeoPathsForRows(pins, cols, catalogue, 10);
+    for (const path of paths) {
+      const district = path["household.district_code"];
+      const county   = path["household.county_code"];
+      const cOpt = countyField.options.find(o => o.value === county);
+      expect(cOpt).toBeTruthy();
+      expect(cOpt.parent_code).toBe(district);
+      // And nothing under Gulu/Acholi sneaks in.
+      expect(county).not.toBe("C-AYAGO");
+    }
+  });
+
+  it("pinned region propagates to every row", () => {
+    const pins = {
+      "household.region_code": { kind: "single", value: "R-CENTRAL" },
+    };
+    const cols = [{ key: "household.region_code", field: regionField }];
+    const paths = _buildGeoPathsForRows(pins, cols, catalogue, 4);
+    expect(paths.every(p => p["household.region_code"] === "R-CENTRAL")).toBe(true);
+  });
+
+  it("missing intermediate column breaks the chain cleanly", () => {
+    // User selected region + district but skipped sub_region.
+    const pins = {
+      "household.region_code":   { kind: "single", value: "R-CENTRAL" },
+      "household.district_code": { kind: "multi",  values: ["DST-KAMPALA", "DST-KALANGALA"], implicit: true },
+    };
+    const cols = [
+      { key: "household.region_code",   field: regionField },
+      { key: "household.district_code", field: districtField },
+    ];
+    const paths = _buildGeoPathsForRows(pins, cols, catalogue, 5);
+    // District still gets a value (from the pin), just not chained
+    // through the missing sub_region.
+    for (const p of paths) {
+      expect(p["household.region_code"]).toBe("R-CENTRAL");
+      expect(["DST-KAMPALA", "DST-KALANGALA"]).toContain(p["household.district_code"]);
+    }
+  });
+
+  it("returns [] when rowCount=0; empty paths {} for no geo cols", () => {
+    expect(_buildGeoPathsForRows({}, [], catalogue, 0)).toEqual([]);
+    expect(_buildGeoPathsForRows({}, [{ key: "household.id", field: { key: "household.id", type: "text" } }], catalogue, 3))
+      .toEqual([{}, {}, {}]);
+  });
+});
+
+describe("PreviewStep renders coherent geographic chain", () => {
+  // Tiny catalogue covering the chain — region pinned to Central,
+  // every other geo level inferred via parent_code.
+  const regionField = {
+    key: "household.region_code", label: "Region", type: "enum", sensitivity: "Public",
+    options: [
+      { value: "R-CENTRAL",  label: "Central" },
+      { value: "R-NORTHERN", label: "Northern" },
+    ],
+  };
+  const subRegionField = {
+    key: "household.sub_region_code", label: "Sub-region", type: "enum", sensitivity: "Public",
+    options: [
+      { value: "SR-BUGANDA-S", label: "Buganda South", parent_code: "R-CENTRAL"  },
+      { value: "SR-BUGANDA-N", label: "Buganda North", parent_code: "R-CENTRAL"  },
+      { value: "SR-ACHOLI",    label: "Acholi",        parent_code: "R-NORTHERN" },
+    ],
+  };
+  const districtField = {
+    key: "household.district_code", label: "District", type: "enum", sensitivity: "Public",
+    options: [
+      { value: "DST-KAMPALA",   label: "Kampala",   parent_code: "SR-BUGANDA-S" },
+      { value: "DST-KALANGALA", label: "Kalangala", parent_code: "SR-BUGANDA-S" },
+      { value: "DST-LUWEERO",   label: "Luweero",   parent_code: "SR-BUGANDA-N" },
+      { value: "DST-GULU",      label: "Gulu",      parent_code: "SR-ACHOLI"    },
+    ],
+  };
+  const cat = {
+    "household.region_code":     regionField,
+    "household.sub_region_code": subRegionField,
+    "household.district_code":   districtField,
+  };
+  const tree = {
+    id: "g", kind: "group", combinator: "AND",
+    rules: [
+      { id: "r1", kind: "rule", field: "household.region_code",
+        op: "eq", value: "R-CENTRAL" },
+    ],
+  };
+
+  it("every row's District descends from that row's Sub-region", () => {
+    render(<PreviewStep
+      selected={["household.region_code", "household.sub_region_code", "household.district_code"]}
+      catalogueByKey={cat}
+      tree={tree}/>);
+    // Cross-check each row: District's option must have
+    // parent_code === Sub-region's value-of-label.
+    const labelToValue = {
+      Central: "R-CENTRAL",
+      "Buganda South": "SR-BUGANDA-S",
+      "Buganda North": "SR-BUGANDA-N",
+      Acholi: "SR-ACHOLI",
+      Kampala: "DST-KAMPALA",
+      Kalangala: "DST-KALANGALA",
+      Luweero: "DST-LUWEERO",
+      Gulu: "DST-GULU",
+    };
+    const rows = document.querySelectorAll("tbody tr");
+    expect(rows.length).toBeGreaterThan(0);
+    for (const tr of rows) {
+      const tds = tr.querySelectorAll("td");
+      const subRegionLabel = tds[1].textContent;
+      const districtLabel  = tds[2].textContent;
+      const subRegionVal = labelToValue[subRegionLabel];
+      const districtVal  = labelToValue[districtLabel];
+      const dOpt = districtField.options.find(o => o.value === districtVal);
+      expect(dOpt).toBeTruthy();
+      expect(dOpt.parent_code).toBe(subRegionVal);
+    }
+  });
+
+  it("never renders a district from outside the pinned region (Gulu absent)", () => {
+    render(<PreviewStep
+      selected={["household.region_code", "household.sub_region_code", "household.district_code"]}
+      catalogueByKey={cat}
+      tree={tree}/>);
+    const text = document.querySelector("tbody").textContent;
+    expect(text).not.toContain("Gulu");
+    expect(text).not.toContain("Acholi");
   });
 });

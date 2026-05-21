@@ -558,6 +558,118 @@ const _GEO_CHAIN = [
   "household.village_code",
 ];
 
+// BUG-S27-025 — build a coherent geographic path per preview row.
+// `_inferImplicitGeoPins` constrains each descendant level to the
+// children of the pinned ancestor's *set*, but each cell still
+// cycles its constrained set independently — so a row could end
+// up with Sub-region=Buganda South paired with District=Kampala
+// (Kampala isn't in Buganda South). This helper picks one path
+// from region → village per row, narrowing at each level using
+// the parent value chosen for THIS row.
+//
+// Strategy:
+//   1. Bottom-up viability pass — a candidate at level L is
+//      "viable" only if it has at least one viable child at L+1.
+//      This prevents the row picker from choosing a parent that
+//      can't be coherently extended to the deepest selected level.
+//   2. Top-down picker — for each row index, walk the chain
+//      filtering by THIS row's parent choice.
+//
+// Returns `pathsByRow[rowIndex][geoKey] = code`. Cells that aren't
+// in the chain are left to the per-column `_previewCell` generator.
+const _buildGeoPathsForRows = (pins, cols, catalogueByKey, rowCount) => {
+  const colKeys = new Set((cols || []).map(c => c.key));
+  // Active chain — the geo levels actually selected, in order.
+  const chain = _GEO_CHAIN.filter(k => colKeys.has(k));
+  if (chain.length === 0) {
+    return Array.from({ length: rowCount }, () => ({}));
+  }
+
+  // Seed candidates per level, from pin if any else all options.
+  const candidatesFor = (levelKey) => {
+    const field = (catalogueByKey || {})[levelKey];
+    const opts = (field && field.options) || [];
+    const pin = (pins || {})[levelKey];
+    if (pin && pin.kind === "single") return [pin.value];
+    if (pin && pin.kind === "multi")  return pin.values.slice();
+    return opts.map(o => o.value);
+  };
+
+  // parent_code on options always references the IMMEDIATE parent
+  // level in _GEO_CHAIN. If the user skipped intermediate levels
+  // (region + district without sub_region) the two selected levels
+  // aren't adjacent and we can't filter directly.
+  const _isAdjacent = (parentKey, childKey) => {
+    const pi = _GEO_CHAIN.indexOf(parentKey);
+    const ci = _GEO_CHAIN.indexOf(childKey);
+    return pi !== -1 && ci === pi + 1;
+  };
+
+  // Bottom-up viability — every level i carries a Set<value> of
+  // values that have at least one viable child at level i+1.
+  // When two selected levels aren't adjacent in _GEO_CHAIN, the
+  // parent-child relationship isn't direct — pass candidates
+  // through unfiltered.
+  const viable = {};
+  viable[chain[chain.length - 1]] = new Set(candidatesFor(chain[chain.length - 1]));
+  for (let i = chain.length - 2; i >= 0; i--) {
+    const parentKey = chain[i];
+    const childKey  = chain[i + 1];
+    const candidates = candidatesFor(parentKey);
+    if (!_isAdjacent(parentKey, childKey)) {
+      viable[parentKey] = new Set(candidates);
+      continue;
+    }
+    const childField = (catalogueByKey || {})[childKey];
+    const childOpts  = (childField && childField.options) || [];
+    const viableChildren = viable[childKey];
+    const filtered = candidates.filter(parent =>
+      childOpts.some(o =>
+        o.parent_code === parent && viableChildren.has(o.value),
+      ),
+    );
+    // If filtering wipes the level out (no child has parent_code,
+    // or data gap), don't propagate the wipe further up — fall
+    // back to the raw candidates so we at least pick *something*.
+    viable[parentKey] = new Set(filtered.length > 0 ? filtered : candidates);
+  }
+
+  // Top-down picker — per row.
+  const out = [];
+  for (let i = 0; i < rowCount; i++) {
+    const path = {};
+    let parentValue = null;
+    let parentLevelKey = null;
+    for (let li = 0; li < chain.length; li++) {
+      const levelKey = chain[li];
+      const field = (catalogueByKey || {})[levelKey];
+      const opts = (field && field.options) || [];
+      const optByValue = new Map(opts.map(o => [o.value, o]));
+      let candidates = [...viable[levelKey]];
+      // Only filter by parent_code when the predecessor is the
+      // immediate parent level — otherwise we'd over-constrain
+      // across a skipped intermediate level.
+      if (parentValue && parentLevelKey && _isAdjacent(parentLevelKey, levelKey)) {
+        candidates = candidates.filter(v => {
+          const opt = optByValue.get(v);
+          return opt && opt.parent_code === parentValue;
+        });
+      }
+      if (candidates.length === 0) {
+        parentValue = null;
+        parentLevelKey = null;
+        continue;
+      }
+      const chosen = candidates[i % candidates.length];
+      path[levelKey] = chosen;
+      parentValue = chosen;
+      parentLevelKey = levelKey;
+    }
+    out.push(path);
+  }
+  return out;
+};
+
 // Pure: given the explicit pins from _buildPinMap, the selected
 // columns, and the catalogue, derive *implicit* pins on geographic
 // descendants whose parent geo level is pinned. The result is a new
@@ -1375,6 +1487,9 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
   const pins = _inferImplicitGeoPins(_buildPinMap(tree), cols, catalogueByKey);
   const pinnedSelectedCount = cols.filter(c => pins[c.key] && !pins[c.key].implicit).length;
   const scopedSelectedCount = cols.filter(c => pins[c.key] && pins[c.key].implicit).length;
+  // BUG-S27-025 — per-row coherent geographic path so cells in
+  // _GEO_CHAIN form a true parent→child chain within each row.
+  const geoPathsByRow = _buildGeoPathsForRows(pins, cols, catalogueByKey, _PREVIEW_ROW_COUNT);
 
   if (selected.length === 0) {
     return (
@@ -1479,7 +1594,13 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
               {rows.map(i => (
                 <tr key={i}>
                   {cols.map(({key, field}) => {
-                    const v = _previewCell(key, field, i, pins[key]);
+                    // Geographic columns use the row's coherent
+                    // path so the chain (region → sub-region →
+                    // district → …) parents match cell-by-cell.
+                    const geoCode = geoPathsByRow[i] && geoPathsByRow[i][key];
+                    const v = geoCode
+                      ? _renderPinned(geoCode, field)
+                      : _previewCell(key, field, i, pins[key]);
                     const isMono = /id$|number$|hash$|gps|score|nin/.test(key);
                     return (
                       <td key={key} className={isMono ? 'col-id' : ''}>{v}</td>
@@ -1631,7 +1752,7 @@ const SubmitStep = ({
 
 Object.assign(window, {
   DRSScreen, PreviewStep, _previewCell, _buildPinMap, _renderPinned,
-  _inferImplicitGeoPins, _GEO_CHAIN,
+  _inferImplicitGeoPins, _buildGeoPathsForRows, _GEO_CHAIN,
   _choiceListNameFor, _enrichFieldsWithOptions, _resolveOptionsForSchema,
   _OPTIONS_SOURCE_URL,
 });
