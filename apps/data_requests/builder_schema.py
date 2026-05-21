@@ -163,7 +163,188 @@ FIELD_CATALOGUE: list[dict[str, Any]] = [
      "label": "Mother alive",      "sensitivity": "Personal", "type": "bool"},
     {"group": "Members",     "key": "member.father_alive_flag",
      "label": "Father alive",      "sensitivity": "Personal", "type": "bool"},
+
+    # ---- US-S22-DE-09: Dwelling (G1–G7) ---------------------------------
+    {"group": "Dwelling",    "key": "household.dwelling.tenure",
+     "label": "Dwelling tenure",   "sensitivity": "Public",   "type": "enum",
+     "options_source": "choice_list?name=dwelling_tenure"},
+    {"group": "Dwelling",    "key": "household.dwelling.dwelling_type",
+     "label": "Dwelling type",     "sensitivity": "Public",   "type": "enum",
+     "options_source": "choice_list?name=dwelling_type"},
+    {"group": "Dwelling",    "key": "household.dwelling.total_rooms",
+     "label": "Total rooms",       "sensitivity": "Public",   "type": "number"},
+    {"group": "Dwelling",    "key": "household.dwelling.sleeping_rooms",
+     "label": "Sleeping rooms",    "sensitivity": "Public",   "type": "number"},
+    {"group": "Dwelling",    "key": "household.dwelling.roof_material",
+     "label": "Roof material",     "sensitivity": "Public",   "type": "enum",
+     "options_source": "choice_list?name=roof_material"},
+    {"group": "Dwelling",    "key": "household.dwelling.wall_material",
+     "label": "Wall material",     "sensitivity": "Public",   "type": "enum",
+     "options_source": "choice_list?name=wall_material"},
+    {"group": "Dwelling",    "key": "household.dwelling.floor_material",
+     "label": "Floor material",    "sensitivity": "Public",   "type": "enum",
+     "options_source": "choice_list?name=floor_material"},
+
+    # ---- US-S22-DE-09: Utilities (G8–G14) -------------------------------
+    {"group": "Utilities",   "key": "household.utilities.cooking_fuel",
+     "label": "Cooking fuel",      "sensitivity": "Public",   "type": "enum",
+     "options_source": "choice_list?name=cooking_fuel"},
+    {"group": "Utilities",   "key": "household.utilities.lighting_energy",
+     "label": "Lighting energy",   "sensitivity": "Public",   "type": "enum",
+     "options_source": "choice_list?name=lighting_energy"},
+    {"group": "Utilities",   "key": "household.utilities.drinking_water_source",
+     "label": "Drinking water",    "sensitivity": "Public",   "type": "enum",
+     "options_source": "choice_list?name=drinking_water_source"},
+    {"group": "Utilities",   "key": "household.utilities.toilet_facility",
+     "label": "Toilet facility",   "sensitivity": "Public",   "type": "enum",
+     "options_source": "choice_list?name=toilet_facility"},
+    {"group": "Utilities",   "key": "household.utilities.toilet_shared",
+     "label": "Toilet shared",     "sensitivity": "Public",   "type": "bool"},
+    {"group": "Utilities",   "key": "household.utilities.households_sharing_toilet",
+     "label": "Households sharing toilet", "sensitivity": "Public", "type": "number"},
+    {"group": "Utilities",   "key": "household.utilities.waste_disposal",
+     "label": "Waste disposal",    "sensitivity": "Public",   "type": "enum",
+     "options_source": "choice_list?name=waste_disposal"},
+
+    # ---- US-S22-DE-09: Livelihood (G16, H1–H8) --------------------------
+    {"group": "Livelihood",  "key": "household.livelihood.main_livelihood",
+     "label": "Main livelihood",   "sensitivity": "Public",   "type": "enum",
+     "options_source": "choice_list?name=main_livelihood"},
+    {"group": "Livelihood",  "key": "household.livelihood.agricultural_purpose",
+     "label": "Agricultural purpose", "sensitivity": "Public", "type": "enum",
+     "options_source": "choice_list?name=agricultural_purpose"},
+    {"group": "Livelihood",  "key": "household.livelihood.land_ownership",
+     "label": "Land ownership",    "sensitivity": "Public",   "type": "enum",
+     "options_source": "choice_list?name=land_ownership"},
+    {"group": "Livelihood",  "key": "household.livelihood.land_hectares",
+     "label": "Land hectares",     "sensitivity": "Public",   "type": "number"},
+    {"group": "Livelihood",  "key": "household.livelihood.land_title",
+     "label": "Land title",        "sensitivity": "Public",   "type": "enum",
+     "options_source": "choice_list?name=land_title"},
+
+    # ---- US-S22-DE-09: FoodSecurity (I1–I8 + computed score) -----------
+    {"group": "Food security", "key": "household.food_security.fies_raw_score",
+     "label": "FIES raw score",    "sensitivity": "Internal", "type": "number"},
+    {"group": "Food security", "key": "household.food_security.worried_food",
+     "label": "Worried about food","sensitivity": "Internal", "type": "enum",
+     "options_source": "choice_list?name=yes_no"},
+    {"group": "Food security", "key": "household.food_security.skipped_meal",
+     "label": "Skipped a meal",    "sensitivity": "Internal", "type": "enum",
+     "options_source": "choice_list?name=yes_no"},
+    {"group": "Food security", "key": "household.food_security.ran_out_food",
+     "label": "Ran out of food",   "sensitivity": "Internal", "type": "enum",
+     "options_source": "choice_list?name=yes_no"},
+    {"group": "Food security", "key": "household.food_security.hungry_no_eat",
+     "label": "Hungry, did not eat", "sensitivity": "Internal", "type": "enum",
+     "options_source": "choice_list?name=yes_no"},
+    {"group": "Food security", "key": "household.food_security.whole_day_no_eat",
+     "label": "Whole day without eating", "sensitivity": "Internal", "type": "enum",
+     "options_source": "choice_list?name=yes_no"},
+
+    # ---- US-S22-DE-09: FoodConsumption (I9–I17 + WFP-weighted) ---------
+    {"group": "Food consumption", "key": "household.food_consumption.fcs_score",
+     "label": "Food consumption score (FCS)", "sensitivity": "Internal", "type": "number"},
+    {"group": "Food consumption", "key": "household.food_consumption.staples_days",
+     "label": "Staples — days last 7", "sensitivity": "Internal", "type": "number"},
+    {"group": "Food consumption", "key": "household.food_consumption.pulses_days",
+     "label": "Pulses — days last 7",  "sensitivity": "Internal", "type": "number"},
+    {"group": "Food consumption", "key": "household.food_consumption.dairy_days",
+     "label": "Dairy — days last 7",   "sensitivity": "Internal", "type": "number"},
+    {"group": "Food consumption", "key": "household.food_consumption.meat_days",
+     "label": "Meat — days last 7",    "sensitivity": "Internal", "type": "number"},
+    {"group": "Food consumption", "key": "household.food_consumption.vegetables_days",
+     "label": "Vegetables — days last 7", "sensitivity": "Internal", "type": "number"},
+
+    # ---- US-S22-DE-09: Health (D1–D2) — chronic_illness_types is DPPA --
+    # special category data (HIV / TB codes possible) and requires a
+    # DSA clause explicitly granting it.
+    {"group": "Health",      "key": "member.health.chronic_illness_flag",
+     "label": "Chronic illness",   "sensitivity": "Personal", "type": "enum",
+     "options_source": "choice_list?name=yes_no"},
+    {"group": "Health",      "key": "member.health.chronic_illness_types",
+     "label": "Chronic illness types (HIV/TB possible)",
+     "sensitivity": "Sensitive",   "type": "enum-multi",
+     "options_source": "choice_list?name=chronic_illness_type",
+     "requires_special_scope": True},
+
+    # ---- US-S22-DE-09: Disability (Washington Group D3–D8) -------------
+    {"group": "Disability",  "key": "member.disability.seeing",
+     "label": "WG — seeing",       "sensitivity": "Personal", "type": "enum",
+     "options_source": "choice_list?name=wg_difficulty_level"},
+    {"group": "Disability",  "key": "member.disability.hearing",
+     "label": "WG — hearing",      "sensitivity": "Personal", "type": "enum",
+     "options_source": "choice_list?name=wg_difficulty_level"},
+    {"group": "Disability",  "key": "member.disability.walking",
+     "label": "WG — walking",      "sensitivity": "Personal", "type": "enum",
+     "options_source": "choice_list?name=wg_difficulty_level"},
+    {"group": "Disability",  "key": "member.disability.memory",
+     "label": "WG — memory",       "sensitivity": "Personal", "type": "enum",
+     "options_source": "choice_list?name=wg_difficulty_level"},
+    {"group": "Disability",  "key": "member.disability.selfcare",
+     "label": "WG — self-care",    "sensitivity": "Personal", "type": "enum",
+     "options_source": "choice_list?name=wg_difficulty_level"},
+    {"group": "Disability",  "key": "member.disability.communication",
+     "label": "WG — communication","sensitivity": "Personal", "type": "enum",
+     "options_source": "choice_list?name=wg_difficulty_level"},
+    {"group": "Disability",  "key": "member.disability.wg_disability_flag",
+     "label": "WG disability (any)","sensitivity": "Personal", "type": "bool"},
+
+    # ---- US-S22-DE-09: Education (E1–E6) -------------------------------
+    {"group": "Education",   "key": "member.education.literacy_status",
+     "label": "Literacy status",   "sensitivity": "Internal", "type": "enum",
+     "options_source": "choice_list?name=literacy_status"},
+    {"group": "Education",   "key": "member.education.ever_attended",
+     "label": "Ever attended",     "sensitivity": "Internal", "type": "enum",
+     "options_source": "choice_list?name=yes_no"},
+    {"group": "Education",   "key": "member.education.highest_grade",
+     "label": "Highest grade",     "sensitivity": "Internal", "type": "enum",
+     "options_source": "choice_list?name=highest_grade"},
+    {"group": "Education",   "key": "member.education.currently_attending",
+     "label": "Currently attending", "sensitivity": "Internal", "type": "enum",
+     "options_source": "choice_list?name=yes_no"},
+    {"group": "Education",   "key": "member.education.why_stopped",
+     "label": "Why stopped",       "sensitivity": "Internal", "type": "enum",
+     "options_source": "choice_list?name=why_stopped_school"},
+
+    # ---- US-S22-DE-09: Employment (F1–F10) -----------------------------
+    {"group": "Employment",  "key": "member.employment.main_activity_last_30d",
+     "label": "Main activity (30d)", "sensitivity": "Internal", "type": "enum",
+     "options_source": "choice_list?name=employment_main_activity"},
+    {"group": "Employment",  "key": "member.employment.sector",
+     "label": "Sector",            "sensitivity": "Internal", "type": "enum",
+     "options_source": "choice_list?name=employment_sector"},
+    {"group": "Employment",  "key": "member.employment.employment_status",
+     "label": "Employment status", "sensitivity": "Internal", "type": "enum",
+     "options_source": "choice_list?name=employment_status"},
+    {"group": "Employment",  "key": "member.employment.is_govt_programme_beneficiary",
+     "label": "Gov programme beneficiary", "sensitivity": "Internal", "type": "enum",
+     "options_source": "choice_list?name=yes_no"},
+    {"group": "Employment",  "key": "member.employment.made_savings",
+     "label": "Made savings",      "sensitivity": "Personal", "type": "enum",
+     "options_source": "choice_list?name=yes_no"},
+
+    # ---- US-S22-DE-09: NIN-derived columns flagged for special scope ---
+    # nin_hash/nin_last4 are already in the catalogue above with
+    # sensitivity=Sensitive; here we flag them as requires_special_scope
+    # so the DRS wizard prevents accidental selection without an explicit
+    # DSA clause (DPPA 2019 + ADR-0021).
 ]
+
+
+# US-S22-DE-09: NIN-derived columns and any HIV-relevant column require
+# the DSA to explicitly grant access. The flag is read by the wizard
+# to surface a "needs scope expansion" badge — server still enforces
+# scope via the existing field_scope check at submit time.
+_REQUIRES_SPECIAL_SCOPE = {
+    "member.nin_hash",
+    "member.nin_last4",
+    "member.health.chronic_illness_types",
+}
+
+
+for _entry in FIELD_CATALOGUE:
+    if _entry["key"] in _REQUIRES_SPECIAL_SCOPE:
+        _entry.setdefault("requires_special_scope", True)
 
 # Filter operators a partner / operator can use to constrain rows.
 # Same for every role; the values they can compare against depend

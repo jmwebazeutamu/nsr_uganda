@@ -1325,7 +1325,7 @@ class TestBuilderSchema:
         "group", "key", "label", "sensitivity", "type",
         "disabled", "disabled_reason",
     }
-    OPTIONAL_FIELD_KEYS = {"options", "options_source"}
+    OPTIONAL_FIELD_KEYS = {"options", "options_source", "requires_special_scope"}
 
     @pytest.fixture
     def operator_client(self, db, django_user_model):
@@ -1444,6 +1444,40 @@ class TestBuilderSchema:
         ):
             assert f"household.{level}_code" in keys, (
                 f"missing household.{level}_code in builder-schema"
+            )
+
+    def test_catalogue_exposes_detail_entity_columns(self, operator_client):
+        # US-S22-DE-09 — the detail-entity tail is selectable from the
+        # DRS query builder. One spot-check per detail surface so the
+        # contract test fails if the catalogue regresses.
+        r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        keys = {f["key"] for f in r.data["fields"]}
+        for key in (
+            "household.dwelling.tenure",
+            "household.utilities.cooking_fuel",
+            "household.livelihood.land_hectares",
+            "household.food_security.fies_raw_score",
+            "household.food_consumption.fcs_score",
+            "member.health.chronic_illness_flag",
+            "member.disability.wg_disability_flag",
+            "member.education.highest_grade",
+            "member.employment.sector",
+        ):
+            assert key in keys, f"missing {key} in builder-schema"
+
+    def test_sensitive_columns_require_special_scope(self, operator_client):
+        # US-S22-DE-09 — HIV-relevant and NIN-derived columns carry
+        # requires_special_scope=True so the wizard surfaces a
+        # scope-expansion prompt. DPPA 2019 + ADR-0021.
+        r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        by_key = {f["key"]: f for f in r.data["fields"]}
+        for key in (
+            "member.nin_hash",
+            "member.nin_last4",
+            "member.health.chronic_illness_types",
+        ):
+            assert by_key[key].get("requires_special_scope") is True, (
+                f"{key}: expected requires_special_scope=True"
             )
 
     def test_partner_dsa_id_is_populated(
