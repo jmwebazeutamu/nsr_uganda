@@ -29,7 +29,24 @@ from django.db.models import F
 from django.utils import timezone
 from nsr_mis.common.fields import generate_ulid
 
-from apps.data_management.models import Household, Member
+from apps.data_management.models import (
+    AssetOwnership,
+    CopingStrategy,
+    Crop,
+    Disability,
+    Dwelling,
+    Education,
+    Employment,
+    FoodConsumption,
+    FoodSecurity,
+    Health,
+    Household,
+    Livelihood,
+    Livestock,
+    Member,
+    Shock,
+    Utilities,
+)
 from apps.dqa.engine import evaluate_all as dqa_evaluate_all
 from apps.identity_verification.mock import NiraError, verify_nin
 from apps.reference_data.models import GeographicUnit
@@ -141,6 +158,302 @@ def stage_from_landing(
     return stage
 
 
+def _emit_create(entity_type: str, entity_id: str, *, actor: str) -> None:
+    """Audit a detail-entity create during promotion fanout. Per US-S22-DE-04
+    every detail row written by the fanout helpers emits one AuditEvent
+    with `action="create"` and `entity_type="<lowercase_model>"` (the
+    AC-DE-AUDIT contract)."""
+    _emit_audit(
+        "create", entity_type, entity_id, actor=actor,
+        reason="promotion fanout",
+    )
+
+
+# --- US-S22-DE-04 promotion fanout helpers ---------------------------------
+#
+# Each helper:
+#   * is defensive — if its canonical_payload section is missing / empty,
+#     it skips silently.
+#   * is idempotent — `get_or_create` keyed on the parent FK (one-to-one)
+#     or (parent FK, type code) (repeats). Audit emission fires only on
+#     the `created=True` path so replay doesn't duplicate audit rows.
+#   * inherits sub_region_code from the parent on the model's save() —
+#     no explicit propagation needed here.
+#
+# Expected canonical_payload shape — see the build prompt §3.
+
+
+def _create_dwelling(hh: Household, payload: dict, *, actor: str) -> None:
+    sect = payload.get("dwelling") or {}
+    legacy_tenure = (payload.get("dwelling_tenure") or "").strip()
+    if not sect and not legacy_tenure:
+        return
+    tenure = sect.get("tenure") or legacy_tenure
+    obj, created = Dwelling.objects.get_or_create(
+        household=hh,
+        defaults={
+            "tenure": tenure,
+            "dwelling_type": sect.get("dwelling_type", ""),
+            "total_rooms": sect.get("total_rooms"),
+            "sleeping_rooms": sect.get("sleeping_rooms"),
+            "roof_material": sect.get("roof_material", ""),
+            "wall_material": sect.get("wall_material", ""),
+            "floor_material": sect.get("floor_material", ""),
+        },
+    )
+    if created:
+        _emit_create("dwelling", obj.id, actor=actor)
+
+
+def _create_utilities(hh: Household, payload: dict, *, actor: str) -> None:
+    sect = payload.get("utilities") or {}
+    if not sect:
+        return
+    obj, created = Utilities.objects.get_or_create(
+        household=hh,
+        defaults={
+            "cooking_fuel": sect.get("cooking_fuel", ""),
+            "lighting_energy": sect.get("lighting_energy", ""),
+            "drinking_water_source": sect.get("drinking_water_source", ""),
+            "toilet_facility": sect.get("toilet_facility", ""),
+            "toilet_shared": sect.get("toilet_shared"),
+            "households_sharing_toilet": sect.get("households_sharing_toilet"),
+            "waste_disposal": sect.get("waste_disposal", ""),
+        },
+    )
+    if created:
+        _emit_create("utilities", obj.id, actor=actor)
+
+
+def _create_livelihood(hh: Household, payload: dict, *, actor: str) -> None:
+    sect = payload.get("livelihood") or {}
+    if not sect:
+        return
+    obj, created = Livelihood.objects.get_or_create(
+        household=hh,
+        defaults={
+            "main_livelihood": sect.get("main_livelihood", ""),
+            "crop_production_zone": sect.get("crop_production_zone", ""),
+            "livestock_zone": sect.get("livestock_zone", ""),
+            "agricultural_purpose": sect.get("agricultural_purpose", ""),
+            "land_ownership": sect.get("land_ownership", ""),
+            "land_hectares": sect.get("land_hectares"),
+            "land_title": sect.get("land_title", ""),
+        },
+    )
+    if created:
+        _emit_create("livelihood", obj.id, actor=actor)
+
+
+def _create_food_security(hh: Household, payload: dict, *, actor: str) -> None:
+    sect = payload.get("food_security") or {}
+    if not sect:
+        return
+    obj, created = FoodSecurity.objects.get_or_create(
+        household=hh,
+        defaults={
+            "worried_food": sect.get("worried_food", ""),
+            "unhealthy_food": sect.get("unhealthy_food", ""),
+            "limited_variety": sect.get("limited_variety", ""),
+            "skipped_meal": sect.get("skipped_meal", ""),
+            "ate_less": sect.get("ate_less", ""),
+            "ran_out_food": sect.get("ran_out_food", ""),
+            "hungry_no_eat": sect.get("hungry_no_eat", ""),
+            "whole_day_no_eat": sect.get("whole_day_no_eat", ""),
+        },
+    )
+    if created:
+        _emit_create("food_security", obj.id, actor=actor)
+
+
+def _create_food_consumption(
+    hh: Household, payload: dict, *, actor: str,
+) -> None:
+    sect = payload.get("food_consumption") or {}
+    if not sect:
+        return
+    # The build prompt's expected shape is per-food-group dicts:
+    # {"staples": {"days_last_7": 7, "source_primary": "..."}, ...}.
+    # The model flattens that to <group>_days / <group>_source columns.
+    groups = (
+        "staples", "pulses", "dairy", "meat",
+        "vegetables", "fruits", "oils", "sugar", "condiments",
+    )
+    defaults: dict = {}
+    for g in groups:
+        grp = sect.get(g) or {}
+        defaults[f"{g}_days"] = grp.get("days_last_7", 0) or 0
+        defaults[f"{g}_source"] = grp.get("source_primary", "")
+    obj, created = FoodConsumption.objects.get_or_create(
+        household=hh, defaults=defaults,
+    )
+    if created:
+        _emit_create("food_consumption", obj.id, actor=actor)
+
+
+def _create_health(member: Member, m_payload: dict, *, actor: str) -> None:
+    sect = m_payload.get("health") or {}
+    if not sect:
+        return
+    obj, created = Health.objects.get_or_create(
+        member=member,
+        defaults={"chronic_illness_flag": sect.get("chronic_illness_flag", "")},
+    )
+    if created:
+        # chronic_illness_types may include HIV/TB codes — set via the
+        # encrypted helper so the plaintext never lands in the column.
+        types = sect.get("chronic_illness_types") or []
+        if types:
+            obj.set_chronic_illness_types(list(types))
+            obj.save(update_fields=["chronic_illness_types_encrypted", "updated_at"])
+        _emit_create("health", obj.id, actor=actor)
+
+
+def _create_disability(
+    member: Member, m_payload: dict, *, actor: str,
+) -> None:
+    sect = m_payload.get("disability") or {}
+    if not sect:
+        return
+    obj, created = Disability.objects.get_or_create(
+        member=member,
+        defaults={
+            "seeing": sect.get("seeing", ""),
+            "hearing": sect.get("hearing", ""),
+            "walking": sect.get("walking", ""),
+            "memory": sect.get("memory", ""),
+            "selfcare": sect.get("selfcare", ""),
+            "communication": sect.get("communication", ""),
+        },
+    )
+    if created:
+        _emit_create("disability", obj.id, actor=actor)
+
+
+def _create_education(
+    member: Member, m_payload: dict, *, actor: str,
+) -> None:
+    sect = m_payload.get("education") or {}
+    if not sect:
+        return
+    obj, created = Education.objects.get_or_create(
+        member=member,
+        defaults={
+            "literacy_status": sect.get("literacy_status", ""),
+            "ever_attended": sect.get("ever_attended", ""),
+            "never_attended_reason": sect.get("never_attended_reason", ""),
+            "highest_grade": sect.get("highest_grade", ""),
+            "currently_attending": sect.get("currently_attending", ""),
+            "why_stopped": sect.get("why_stopped", ""),
+        },
+    )
+    if created:
+        _emit_create("education", obj.id, actor=actor)
+
+
+def _create_employment(
+    member: Member, m_payload: dict, *, actor: str,
+) -> None:
+    sect = m_payload.get("employment") or {}
+    if not sect:
+        return
+    obj, created = Employment.objects.get_or_create(
+        member=member,
+        defaults={
+            "main_activity_last_30d": sect.get("main_activity_last_30d", ""),
+            "work_frequency": sect.get("work_frequency", ""),
+            "sector": sect.get("sector", ""),
+            "employment_status": sect.get("employment_status", ""),
+            "not_working_reason": sect.get("not_working_reason", ""),
+            "is_govt_programme_beneficiary": sect.get(
+                "is_govt_programme_beneficiary", "",
+            ),
+            "programmes_benefited": sect.get("programmes_benefited") or [],
+            "currently_benefiting": sect.get("currently_benefiting", ""),
+            "made_savings": sect.get("made_savings", ""),
+            "savings_location": sect.get("savings_location", ""),
+        },
+    )
+    if created:
+        _emit_create("employment", obj.id, actor=actor)
+
+
+def _create_assets(hh: Household, payload: dict, *, actor: str) -> None:
+    for row in payload.get("assets") or []:
+        code = (row.get("asset_type") or "").strip()
+        if not code:
+            continue
+        obj, created = AssetOwnership.objects.get_or_create(
+            household=hh, asset_type=code,
+            defaults={"count": row.get("count", 0) or 0},
+        )
+        if created:
+            _emit_create("asset_ownership", obj.id, actor=actor)
+
+
+def _create_crops(hh: Household, payload: dict, *, actor: str) -> None:
+    for row in payload.get("crops") or []:
+        name = (row.get("crop_name") or "").strip()
+        if not name:
+            continue
+        obj, created = Crop.objects.get_or_create(
+            household=hh, crop_name=name,
+            defaults={"rank_order": row.get("rank_order", 0) or 0},
+        )
+        if created:
+            _emit_create("crop", obj.id, actor=actor)
+
+
+def _create_livestock(hh: Household, payload: dict, *, actor: str) -> None:
+    for row in payload.get("livestock") or []:
+        kind = (row.get("livestock_type") or "").strip()
+        if not kind:
+            continue
+        obj, created = Livestock.objects.get_or_create(
+            household=hh, livestock_type=kind,
+            defaults={"count": row.get("count", 0) or 0},
+        )
+        if created:
+            _emit_create("livestock", obj.id, actor=actor)
+
+
+def _create_shocks(hh: Household, payload: dict, *, actor: str) -> None:
+    for row in payload.get("shocks") or []:
+        kind = (row.get("shock_type") or "").strip()
+        if not kind:
+            continue
+        obj = Shock.objects.create(
+            household=hh, shock_type=kind,
+            livelihoods_affected=row.get("livelihoods_affected") or [],
+            severity=row.get("severity", ""),
+            crops_severity_score=row.get("crops_severity_score"),
+            livestock_severity_score=row.get("livestock_severity_score"),
+            labour_severity_score=row.get("labour_severity_score"),
+            other_severity_score=row.get("other_severity_score"),
+            event_date=row.get("event_date") or None,
+        )
+        _emit_create("shock", obj.id, actor=actor)
+
+
+def _create_coping_strategies(
+    hh: Household, payload: dict, *, actor: str,
+) -> None:
+    for row in payload.get("coping_strategies") or []:
+        kind = (row.get("strategy_type") or "").strip()
+        category = (row.get("category") or "").strip()
+        if not kind or not category:
+            continue
+        obj, created = CopingStrategy.objects.get_or_create(
+            household=hh, strategy_type=kind, category=category,
+            defaults={
+                "frequency": row.get("frequency", ""),
+                "used_flag": bool(row.get("used_flag", False)),
+            },
+        )
+        if created:
+            _emit_create("coping_strategy", obj.id, actor=actor)
+
+
 @transaction.atomic
 def promote_stage_record(
     stage: StageRecord,
@@ -181,6 +494,27 @@ def promote_stage_record(
             raise DihError(f"geographic unit {level}={code} not found")
         return row
 
+    # US-S22-DE-04: thread the source-system kind through so the
+    # current_intake_source reflects the real channel ("capi_walkin" /
+    # "ubos" / "kobo" / etc.) instead of the hardcoded "dih". Falls
+    # back to "dih" only when the chain is unresolvable (defensive —
+    # the standard pipeline always has a connector / source).
+    try:
+        intake_source = stage.connector_run.connector.source_system.kind or "dih"
+    except AttributeError:
+        intake_source = "dih"
+
+    # US-S22-DE-04: backward-compat for the legacy top-level
+    # `dwelling_tenure` key — write to Household.dwelling_tenure AND
+    # let _create_dwelling pick it up below to create a Dwelling row.
+    # Nested `payload["dwelling"]["tenure"]` takes precedence.
+    dwelling_sect = payload.get("dwelling") or {}
+    hh_dwelling_tenure = (
+        dwelling_sect.get("tenure")
+        or payload.get("dwelling_tenure", "")
+        or ""
+    )
+
     hh = Household.objects.create(
         id=stage.provisional_registry_id,
         region=_geo("region"), sub_region=_geo("sub_region"),
@@ -194,11 +528,14 @@ def promote_stage_record(
         gps_lat=payload.get("gps_lat"),
         gps_lng=payload.get("gps_lng"),
         gps_accuracy_m=payload.get("gps_accuracy_m"),
-        current_intake_source="dih",
+        dwelling_tenure=hh_dwelling_tenure,
+        residence_status=payload.get("residence_status", ""),
+        current_intake_source=intake_source,
     )
 
     # Create Members from the canonical payload's roster, if any.
     head_member = None
+    created_members: list[tuple[Member, dict]] = []
     for i, m in enumerate(payload.get("members", []) or [], start=1):
         nin = (m.get("nin") or "").strip()
         member_kwargs = dict(
@@ -213,6 +550,18 @@ def promote_stage_record(
             age_years=m.get("age_years"),
             telephone_1=m.get("telephone_1", ""),
             telephone_2=m.get("telephone_2", ""),
+            # US-S22-DE-04: the typed columns the previous promote skipped.
+            marital_status=m.get("marital_status", ""),
+            nationality=m.get("nationality", ""),
+            residency_status=m.get("residency_status", ""),
+            birth_certificate_status=m.get("birth_certificate_status", ""),
+            telephone_in_name_flag=bool(m.get("telephone_in_name_flag", False)),
+            mobile_money_flag=bool(m.get("mobile_money_flag", False)),
+            mother_alive_flag=m.get("mother_alive_flag"),
+            father_alive_flag=m.get("father_alive_flag"),
+            mother_line_number=m.get("mother_line_number"),
+            father_line_number=m.get("father_line_number"),
+            identification_documents=m.get("identification_documents") or [],
         )
         if nin:
             # NIN trio per ADR-0002 — populated via the canonical helpers so
@@ -223,12 +572,35 @@ def promote_stage_record(
             # ChoiceOption code for "Yes, has card" on the nin_status list (ADR-0010).
             member_kwargs["nin_status"] = "1"
         member = Member.objects.create(**member_kwargs)
+        created_members.append((member, m))
         if m.get("is_head") and head_member is None:
             head_member = member
 
     if head_member:
         hh.head_member = head_member
         hh.save(update_fields=["head_member", "updated_at"])
+
+    # US-S22-DE-04: detail-entity fanout. Population order per build
+    # prompt §3: Household → Members → per-household details →
+    # per-member details → repeat groups. PMT recompute (below) stays
+    # last so it sees every detail row.
+    _create_dwelling(hh, payload, actor=actor)
+    _create_utilities(hh, payload, actor=actor)
+    _create_livelihood(hh, payload, actor=actor)
+    _create_food_security(hh, payload, actor=actor)
+    _create_food_consumption(hh, payload, actor=actor)
+
+    for _member, _m_payload in created_members:
+        _create_health(_member, _m_payload, actor=actor)
+        _create_disability(_member, _m_payload, actor=actor)
+        _create_education(_member, _m_payload, actor=actor)
+        _create_employment(_member, _m_payload, actor=actor)
+
+    _create_assets(hh, payload, actor=actor)
+    _create_crops(hh, payload, actor=actor)
+    _create_livestock(hh, payload, actor=actor)
+    _create_shocks(hh, payload, actor=actor)
+    _create_coping_strategies(hh, payload, actor=actor)
 
     # Transfer provisional ID to confirmed status.
     stage.state = StageRecordState.PROMOTED
