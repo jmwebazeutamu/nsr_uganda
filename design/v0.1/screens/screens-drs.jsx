@@ -520,21 +520,21 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
   // tail-names ("registry_id") are the placeholder. Defaults are
   // empty — the user picks intentionally.
   const [selectedFields, setSel] = useStateDRS(new Set());
-  // US-S27-011 / US-S27-012 — captured query-builder state. The
-  // backend validator (validate_against_dsa) only recognises
-  // fields / sub_region_codes / programme_codes / max_rows; entity
-  // is derived from field prefix; delivery method is metadata.
-  // The filterRows array is the query-builder source of truth —
-  // each row is one predicate. On submit we group by payload_key
-  // (from schema.filter_fields) so multiple rows on the same
-  // field union their values into one payload entry.
+  // US-S27-013 — captured query-builder state is now a recursive
+  // tree (AND/OR groups with rules), built by BuildStepV2. On
+  // submit we extract leaves matching the predicates the backend
+  // validator currently recognises (sub_region / programme), AND
+  // ship the full tree as request_payload.criteria for audit /
+  // future evaluation.
   const [entity, setEntity] = useStateDRS("household");
   const [maxRows, setMaxRows] = useStateDRS("");
   const [deliveryMethod, setDeliveryMethod] = useStateDRS("");
-  // filterRows: [{ id, fieldKey, operator, values: Set<string> }]
-  const [filterRows, setFilterRows] = useStateDRS([]);
-  // valueCache: { [value_source URL]: [{code, label}, …] }
-  const [valueCache, setValueCache] = useStateDRS({});
+  // tree: { id, kind:'group', combinator:'AND'|'OR', rules: [...] }
+  const [tree, setTree] = useStateDRS(null);
+  // optionsCache: { [resolved URL]: [{code, name, …}, …] } —
+  // populated for enum fields whose `options_source` maps to a
+  // reference-data endpoint.
+  const [optionsCache, setOptionsCache] = useStateDRS({});
   const [submitOpen, setSubmitOpen] = useStateDRS(false);
   const [submitting, setSubmitting] = useStateDRS(false);
   const [toast, setToast] = useStateDRS("");
@@ -573,38 +573,72 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
     return () => { cancelled = true; };
   }, []);
 
-  // US-S27-012 — schema-driven value sources. Each filter_field
-  // in the schema carries a `value_source` URL the UI fetches to
-  // populate that field's value picker. We fetch all unique
-  // sources once on schema load and cache the rows by URL. Adding
-  // a new predicate to the catalogue is a backend-only change —
-  // the UI grows automatically.
+  // US-S27-013 — translate the schema's `options_source` slugs
+  // into real URLs. The backend stays slug-only to avoid baking
+  // pagination params into the contract; the wizard maps them
+  // here. Add to this map whenever the backend gains a new
+  // options_source slug.
+  const _OPTIONS_SOURCE_URL = {
+    "geographic-units?level=sub_region":
+      "/api/v1/reference-data/geographic-units/?level=sub_region&status=current&page_size=200",
+    "programmes":
+      "/api/v1/programmes/?status=active&page_size=200",
+  };
+
+  // Schema-driven options for enum fields whose value set lives
+  // in reference data. Inline `options` skip this fetch entirely.
   React.useEffect(() => {
-    if (!schema?.filter_fields) return;
-    const urls = [...new Set(schema.filter_fields.map(f => f.value_source))];
+    if (!schema?.fields) return;
+    const slugs = [...new Set(schema.fields
+      .map(f => f.options_source)
+      .filter(s => s && _OPTIONS_SOURCE_URL[s]),
+    )];
+    if (slugs.length === 0) return;
     let cancelled = false;
-    Promise.all(urls.map(url =>
-      fetch(url, {
+    Promise.all(slugs.map(slug => {
+      const url = _OPTIONS_SOURCE_URL[slug];
+      return fetch(url, {
         credentials: "same-origin",
         headers: { Accept: "application/json" },
       })
         .then(r => r.ok ? r.json() : null)
-        .then(data => [url, data])
-        .catch(() => [url, null]),
-    )).then(pairs => {
+        .then(data => [slug, data])
+        .catch(() => [slug, null]);
+    })).then(pairs => {
       if (cancelled) return;
-      setValueCache(prev => {
+      setOptionsCache(prev => {
         const next = { ...prev };
-        for (const [url, data] of pairs) {
-          if (data == null) { next[url] = []; continue; }
-          const rows = data.results || data || [];
-          next[url] = Array.isArray(rows) ? rows : [];
+        for (const [slug, data] of pairs) {
+          const rows = (data?.results || data || []);
+          next[slug] = Array.isArray(rows) ? rows : [];
         }
         return next;
       });
     });
     return () => { cancelled = true; };
   }, [schema]);
+
+  // The catalogue passed to BuildStepV2: schema.fields enriched
+  // with resolved `options` for every options_source we've
+  // already fetched. Fields with inline `options` pass through.
+  const builderFields = React.useMemo(() => {
+    if (!schema?.fields) return [];
+    return schema.fields.map(f => {
+      if (f.options || !f.options_source) return f;
+      const rows = optionsCache[f.options_source] || [];
+      const options = rows
+        .map(r => ({ value: r.code, label: r.name || r.code }))
+        .filter(o => o.value);
+      return { ...f, options };
+    });
+  }, [schema, optionsCache]);
+
+  // Initialise the tree once the catalogue is ready. The first
+  // available (non-disabled) field anchors the default rule.
+  React.useEffect(() => {
+    if (tree || builderFields.length === 0) return;
+    setTree(window.qbNewGroup("AND", builderFields));
+  }, [builderFields, tree]);
 
   // Compose the effective FIELDS catalogue. When the schema is
   // loaded the catalogue comes straight from the backend — the
@@ -656,22 +690,41 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
     const payload = {
       fields: [...selectedFields],
     };
-    // US-S27-012 — translate filterRows into the flat predicate
-    // shape validate_against_dsa expects. Each filter_field
-    // declares its `payload_key` in the schema; multiple rows on
-    // the same field union their values into one payload entry.
-    const groups = {};
-    for (const row of filterRows) {
-      const def = (schema?.filter_fields || []).find(
-        f => f.key === row.fieldKey,
-      );
-      if (!def || !row.values || row.values.size === 0) continue;
-      const key = def.payload_key;
-      if (!groups[key]) groups[key] = new Set();
-      for (const v of row.values) groups[key].add(v);
-    }
-    for (const [key, set] of Object.entries(groups)) {
-      payload[key] = [...set];
+    // US-S27-013 — the criteria tree IS the source of truth. The
+    // validator currently reads flat `sub_region_codes` /
+    // `programme_codes`; we extract those leaves from the tree so
+    // existing validate_against_dsa keeps working unchanged. The
+    // full tree also ships as `criteria` for the audit chain and
+    // for the criteria-evaluator when it lands. Other predicates
+    // (head_sex, age_years, …) are captured but not yet enforced
+    // server-side — the wizard flags this to the user on submit.
+    if (tree) {
+      payload.criteria = tree;
+      const leafExtractors = {
+        "household.sub_region_code": "sub_region_codes",
+        "household.programme_codes": "programme_codes",
+      };
+      const grouped = {};
+      const walk = (node) => {
+        if (!node) return;
+        if (node.kind === "rule") {
+          const target = leafExtractors[node.field];
+          if (!target) return;
+          if (!grouped[target]) grouped[target] = new Set();
+          const v = node.value;
+          if (Array.isArray(v)) {
+            for (const x of v) if (x) grouped[target].add(x);
+          } else if (v != null && v !== "") {
+            grouped[target].add(v);
+          }
+          return;
+        }
+        for (const child of (node.rules || [])) walk(child);
+      };
+      walk(tree);
+      for (const [k, set] of Object.entries(grouped)) {
+        if (set.size > 0) payload[k] = [...set];
+      }
     }
     if (maxRows && Number(maxRows) > 0) {
       payload.max_rows = Number(maxRows);
@@ -785,14 +838,22 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
       </div>
 
       {step === 'scope' && <ScopeStep value={entity} onChange={setEntity}/>}
-      {step === 'build' && <BuildStep
-        filterFields={schema?.filter_fields || []}
-        valueCache={valueCache}
-        rows={filterRows}
-        onChange={setFilterRows}
-        maxRows={maxRows}
-        onMaxRows={setMaxRows}
-      />}
+      {step === 'build' && (
+        tree
+          ? <window.BuildStepV2
+              tree={tree}
+              onChange={setTree}
+              maxRows={maxRows}
+              onMaxRows={setMaxRows}
+              fields={builderFields}
+              recipes={[]}
+              showSQL={true}
+              dsaReference={schema?.dsa_reference || ""}
+            />
+          : <div className="card" style={{padding:24}}>
+              <div className="t-cap muted">Loading field catalogue…</div>
+            </div>
+      )}
       {step === 'fields' && <FieldStep selected={selectedFields} onToggle={toggleField} fields={effectiveFields}/>}
       {step === 'preview' && <PreviewStep selected={selectedFields}/>}
       {step === 'delivery' && <DeliveryStep
@@ -804,9 +865,8 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
         onSubmit={() => setSubmitOpen(true)}
         entity={entity}
         selected={selectedFields}
-        filterRows={filterRows}
-        filterFields={schema?.filter_fields || []}
-        valueCache={valueCache}
+        tree={tree}
+        catalogueByKey={builderFields.reduce((a, f) => (a[f.key] = f, a), {})}
         maxRows={maxRows}
         deliveryMethod={deliveryMethod}
         deliveryMethods={schema?.delivery_methods || []}
@@ -854,11 +914,20 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
               {effectiveFields.filter(f => f[3]).length > 0 &&
                 ` (${effectiveFields.filter(f => f[3]).length} disabled by DSA)`}
             </div>
-            <div className="muted">Filters</div>
+            <div className="muted">Criteria</div>
             <div>
-              {filterRows.filter(r => r.values && r.values.size > 0).length === 0
-                ? <span className="muted">(none — DSA scope applies)</span>
-                : `${filterRows.filter(r => r.values && r.values.size > 0).length} predicate${filterRows.filter(r => r.values && r.values.size > 0).length === 1 ? "" : "s"}`}
+              {(() => {
+                let n = 0;
+                const walk = (node) => {
+                  if (!node) return;
+                  if (node.kind === "rule") { n++; return; }
+                  for (const c of (node.rules || [])) walk(c);
+                };
+                walk(tree);
+                return n === 0
+                  ? <span className="muted">(none — DSA scope applies)</span>
+                  : `${n} rule${n === 1 ? "" : "s"} (full criteria tree shipped as request_payload.criteria)`;
+              })()}
             </div>
             <div className="muted">Row cap</div>
             <div>{maxRows ? Number(maxRows).toLocaleString() : "(unbounded — DSA monthly budget applies)"}</div>
@@ -869,6 +938,12 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
                 : <span className="muted">(none selected)</span>}
               <span className="t-cap"> · travels via requester_note until DRS-O-02</span>
             </div>
+          </div>
+          <div className="t-cap muted" style={{marginTop:8}}>
+            Note: today's validator enforces sub-region and programme rules
+            only. Other predicates (e.g. on member.sex, age_years) are
+            recorded in the audit chain but don't yet filter the result
+            set; they'll start filtering when the criteria evaluator lands.
           </div>
           <div className="tint-update" style={{padding:12, borderRadius:6, borderLeft:'3px solid var(--accent-update)'}}>
             <div className="row gap-2"><Icon name="shield" size={14} color="var(--accent-update)"/><strong className="t-bodysm">DPIA + DPO review required</strong></div>
@@ -934,187 +1009,13 @@ const ScopeStep = ({ value, onChange }) => {
 /* ============================================================
    Step 2 — Build
    ============================================================ */
-// US-S27-012 — schema-driven query builder. Each row is a single
-// predicate: pick a field from `filterFields` (advertised by the
-// backend), pick an operator from that field's `operators`, pick
-// one or more values from a multi-select populated from the
-// field's `value_source` URL. Predicates AND together. Each row
-// translates into one entry in request_payload at submit time
-// (via the field's `payload_key`); rows on the same field union.
-//
-// The backend grows new predicates by adding a `filter_fields`
-// entry — the UI follows automatically.
-const _rowId = () => `r${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-const BuildStep = ({
-  filterFields, valueCache, rows, onChange,
-  maxRows, onMaxRows,
-}) => {
-  const addRow = () => onChange([
-    ...rows,
-    { id: _rowId(), fieldKey: "", operator: "", values: new Set() },
-  ]);
-  const removeRow = (id) => onChange(rows.filter(r => r.id !== id));
-  const setFieldOnRow = (id, fieldKey) => {
-    const def = filterFields.find(f => f.key === fieldKey);
-    onChange(rows.map(r => r.id === id
-      ? { ...r, fieldKey, operator: def?.operators?.[0] || "", values: new Set() }
-      : r));
-  };
-  const toggleValueOnRow = (id, code) => {
-    onChange(rows.map(r => {
-      if (r.id !== id) return r;
-      const next = new Set(r.values);
-      next.has(code) ? next.delete(code) : next.add(code);
-      return { ...r, values: next };
-    }));
-  };
-
-  const opLabel = (op) => ({
-    in: "is one of", not_in: "is not one of", eq: "is", neq: "is not",
-    between: "between", starts_with: "starts with", is_null: "is missing",
-  }[op] || op);
-
-  return (
-    <div style={{display:'grid', gridTemplateColumns:'1fr 360px', gap:16}}>
-      <div className="card">
-        <div className="card-header">
-          <div>
-            <h3 className="t-h3" style={{margin:0}}>Query builder</h3>
-            <div className="t-cap">Predicates combine with AND · field catalogue from /builder-schema/</div>
-          </div>
-          <button className="btn btn-sm" onClick={addRow}
-                  disabled={filterFields.length === 0}>
-            <Icon name="plus" size={14}/> Add filter
-          </button>
-        </div>
-        <div style={{padding:16, display:'flex', flexDirection:'column', gap:12}}>
-          {filterFields.length === 0 && (
-            <div className="t-cap muted">(no filter fields available — schema offline)</div>
-          )}
-          {rows.length === 0 && filterFields.length > 0 && (
-            <div className="t-cap muted">
-              No filters added yet. The request will read every row the DSA scope permits.
-              Click <strong>Add filter</strong> to narrow it.
-            </div>
-          )}
-          {rows.map((row, i) => {
-            const def = filterFields.find(f => f.key === row.fieldKey);
-            const values = def ? (valueCache[def.value_source] || []) : [];
-            return (
-              <div key={row.id} style={{
-                border:'1px solid var(--neutral-300)', borderRadius:6,
-                background:'var(--neutral-0)', padding:'10px 12px',
-                display:'flex', flexDirection:'column', gap:10,
-              }}>
-                <div style={{display:'grid', gridTemplateColumns:'56px 1fr 160px auto', gap:10, alignItems:'center'}}>
-                  <span className="t-cap" style={{textAlign:'right'}}>
-                    {i === 0 ? "WHERE" : <Chip size="sm" tone="system">AND</Chip>}
-                  </span>
-                  <select
-                    className="field-select"
-                    value={row.fieldKey}
-                    onChange={e => setFieldOnRow(row.id, e.target.value)}
-                    style={{height:32, fontSize:13}}
-                  >
-                    <option value="">— pick a field —</option>
-                    {filterFields.map(f => (
-                      <option key={f.key} value={f.key}>{f.label}</option>
-                    ))}
-                  </select>
-                  <div className="t-cap" style={{textAlign:'center'}}>
-                    {def ? opLabel(def.operators[0]) : "—"}
-                  </div>
-                  <button className="btn btn-sm btn-ghost"
-                          onClick={() => removeRow(row.id)} title="Remove filter">
-                    <Icon name="x" size={14}/>
-                  </button>
-                </div>
-                {def && (
-                  <div style={{
-                    padding:'8px 10px', background:'var(--neutral-50)',
-                    border:'1px solid var(--neutral-200)', borderRadius:4,
-                    display:'flex', flexDirection:'column', gap:8,
-                  }}>
-                    <div className="row gap-2" style={{justifyContent:'space-between', alignItems:'baseline'}}>
-                      <span className="t-cap">
-                        {values.length === 0
-                          ? "loading values…"
-                          : `${row.values.size} of ${values.length} selected`}
-                      </span>
-                    </div>
-                    {values.length > 0 && (
-                      <div style={{display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:6, maxHeight:200, overflowY:'auto'}}>
-                        {values.map(v => {
-                          const code = v[def.value_code_field] || v.code || v.id;
-                          const label = v[def.value_label_field] || v.label || v.name || code;
-                          const on = row.values.has(code);
-                          return (
-                            <label key={code} style={{
-                              display:'flex', alignItems:'center', gap:6, cursor:'pointer',
-                              padding:'5px 8px', borderRadius:3,
-                              background: on ? 'var(--accent-system-bg)' : 'var(--neutral-0)',
-                              border: `1px solid ${on ? 'var(--accent-system)' : 'var(--neutral-200)'}`,
-                            }}>
-                              <input type="checkbox" checked={on}
-                                onChange={() => toggleValueOnRow(row.id, code)}/>
-                              <div style={{flex:1, minWidth:0}}>
-                                <div className="t-bodysm" style={{fontWeight: on ? 600 : 400, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{label}</div>
-                                <div className="t-cap t-mono" style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{code}</div>
-                              </div>
-                            </label>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-
-          <div className="divider"/>
-
-          {/* Row cap — separate from predicate rows because it's a LIMIT, not a WHERE */}
-          <div>
-            <div className="row gap-2" style={{justifyContent:'space-between', alignItems:'baseline', marginBottom:6}}>
-              <strong className="t-bodysm">Row cap (max_rows)</strong>
-              <span className="t-cap">Optional · DSA monthly budget applies even if blank</span>
-            </div>
-            <input
-              className="field-input"
-              type="number" min={1} step={1000} placeholder="e.g. 10000"
-              value={maxRows}
-              onChange={e => onMaxRows(e.target.value.replace(/[^0-9]/g, ""))}
-              style={{maxWidth:240}}
-            />
-          </div>
-
-          <div className="divider"/>
-
-          <div className="t-cap" style={{marginBottom:6}}>EXPRESSION PREVIEW</div>
-          <div className="t-mono" style={{padding:12, background:'var(--neutral-50)', borderRadius:4, fontSize:12, lineHeight:1.6, color:'var(--neutral-900)', whiteSpace:'pre-wrap', border:'1px solid var(--neutral-200)'}}>
-{rows.filter(r => r.fieldKey && r.values.size > 0).length === 0
-  ? "(no predicates — DSA scope applies as-is)"
-  : `AND (\n${rows
-      .filter(r => r.fieldKey && r.values.size > 0)
-      .map(r => {
-        const def = filterFields.find(f => f.key === r.fieldKey);
-        const vals = [...r.values].map(v => `'${v}'`).join(", ");
-        return `  ${def?.key} ${def?.operators?.[0]?.toUpperCase() || "?"} (${vals})`;
-      }).join(",\n")}\n)`}
-{maxRows ? `\nLIMIT ${Number(maxRows).toLocaleString()}` : ""}
-          </div>
-        </div>
-      </div>
-
-      <div className="col gap-3">
-        <DSACard/>
-      </div>
-    </div>
-  );
-};
-
+// US-S27-013 — the wizard mounts <BuildStepV2/> from
+// screens-drs-querybuilder.jsx (the full nested-tree builder),
+// driven by the live schema.fields catalogue. The earlier
+// schema.filter_fields surface stays in the response for
+// backwards compatibility but isn't consumed here.
+// The simple-row BuildStep that briefly lived in this file is
+// removed below.
 /* ============================================================
    DSA card (shared)
    ============================================================ */
@@ -1346,19 +1247,25 @@ const DeliveryStep = ({ methods, value, onChange }) => {
 /* ============================================================
    Step 6 — Submit
    ============================================================ */
-// US-S27-012 — summary card walks the captured filterRows so it
-// reflects whatever the query builder produced. Purpose /
-// retention / recipient inputs on the left remain presentational;
-// the DRS submit endpoint doesn't persist them yet (the DPO
-// review surface lands in a follow-up slice).
+// US-S27-013 — summary card walks the captured criteria tree.
+// Purpose / retention / recipient inputs on the left remain
+// presentational; the DRS submit endpoint doesn't persist them
+// yet (the DPO review surface lands in a follow-up slice).
 const SubmitStep = ({
   onSubmit, entity, selected,
-  filterRows, filterFields, valueCache,
+  tree, catalogueByKey,
   maxRows, deliveryMethod,
   deliveryMethods, dsaReference,
 }) => {
   const deliveryLabel = (deliveryMethods.find(m => m.id === deliveryMethod) || {}).label || "—";
-  const populated = filterRows.filter(r => r.fieldKey && r.values && r.values.size > 0);
+  // Flatten the tree into a list of leaf rules for the summary.
+  const leaves = [];
+  const walk = (node) => {
+    if (!node) return;
+    if (node.kind === "rule") { leaves.push(node); return; }
+    for (const c of (node.rules || [])) walk(c);
+  };
+  walk(tree);
   return (
     <div style={{display:'grid', gridTemplateColumns:'1fr 360px', gap:16}}>
       <div className="card">
@@ -1382,23 +1289,28 @@ const SubmitStep = ({
             <div className="t-mono">{dsaReference || "—"}</div>
             <div className="muted">Entity</div>
             <div style={{textTransform:'capitalize'}}>{entity}</div>
-            <div className="muted">Predicates</div>
+            <div className="muted">Criteria</div>
             <div>
-              {populated.length === 0
+              {leaves.length === 0
                 ? <span className="muted">(none — DSA scope applies)</span>
                 : <div className="col gap-1">
-                    {populated.map((row, i) => {
-                      const def = filterFields.find(f => f.key === row.fieldKey);
-                      const op = (def?.operators?.[0] || "?").toUpperCase();
-                      const sample = [...row.values].slice(0, 3).join(", ");
-                      const more = row.values.size > 3 ? ` +${row.values.size - 3}` : "";
+                    {leaves.slice(0, 6).map((rule, i) => {
+                      const def = catalogueByKey[rule.field] || {};
+                      const op = (rule.op || "?").toUpperCase();
+                      const v = rule.value;
+                      const sample = Array.isArray(v)
+                        ? v.slice(0, 2).join(", ") + (v.length > 2 ? ` +${v.length - 2}` : "")
+                        : (v == null || v === "" ? "?" : String(v));
                       return (
-                        <div key={row.id} className="t-mono" style={{fontSize:12}}>
-                          {i > 0 && <span className="t-cap" style={{marginRight:6}}>AND</span>}
-                          {def?.label || row.fieldKey} {op} ({sample}{more})
+                        <div key={rule.id} className="t-mono" style={{fontSize:12}}>
+                          {i > 0 && <span className="t-cap" style={{marginRight:6}}>·</span>}
+                          {def.label || rule.field} {op} {sample}
                         </div>
                       );
                     })}
+                    {leaves.length > 6 && (
+                      <div className="t-cap muted">+{leaves.length - 6} more rule{leaves.length - 6 === 1 ? "" : "s"}</div>
+                    )}
                   </div>}
             </div>
             <div className="muted">Row cap</div>

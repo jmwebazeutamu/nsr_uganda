@@ -1287,9 +1287,14 @@ class TestBuilderSchema:
         "key", "label", "operators", "value_source", "value_type",
         "payload_key", "value_code_field", "value_label_field",
     }
-    EXPECTED_FIELD_KEYS = {
-        "group", "key", "sensitivity", "disabled", "disabled_reason",
+    # US-S27-013: a builder-schema field carries these keys at minimum.
+    # `label`, `type` are required; `options` / `options_source` appear
+    # on enum-typed fields only.
+    REQUIRED_FIELD_KEYS = {
+        "group", "key", "label", "sensitivity", "type",
+        "disabled", "disabled_reason",
     }
+    OPTIONAL_FIELD_KEYS = {"options", "options_source"}
 
     @pytest.fixture
     def operator_client(self, db, django_user_model):
@@ -1361,8 +1366,41 @@ class TestBuilderSchema:
 
     def test_each_field_has_expected_keys(self, operator_client):
         r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        allowed = self.REQUIRED_FIELD_KEYS | self.OPTIONAL_FIELD_KEYS
         for f in r.data["fields"]:
-            assert set(f.keys()) == self.EXPECTED_FIELD_KEYS
+            keys = set(f.keys())
+            assert self.REQUIRED_FIELD_KEYS <= keys, (
+                f"{f.get('key')}: missing {self.REQUIRED_FIELD_KEYS - keys}"
+            )
+            assert keys <= allowed, (
+                f"{f.get('key')}: unknown {keys - allowed}"
+            )
+            # Type must be one the wizard knows how to render.
+            assert f["type"] in {"text", "enum", "enum-multi",
+                                  "number", "date", "bool"}
+
+    def test_every_enum_field_advertises_options(self, operator_client):
+        # Enum-typed fields must carry either inline `options` (a
+        # static list) or `options_source` (a slug the wizard
+        # translates to a fetch URL). One or the other; not both.
+        r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        for f in r.data["fields"]:
+            if f["type"] not in ("enum", "enum-multi"):
+                continue
+            has_inline = "options" in f
+            has_source = "options_source" in f
+            assert has_inline ^ has_source, (
+                f"{f['key']}: enum needs exactly one of options / options_source"
+            )
+
+    def test_catalogue_covers_household_and_member(self, operator_client):
+        # The wizard relies on both household.* and member.* fields
+        # being available. US-S27-013 expanded the catalogue to
+        # cover both levels.
+        r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        keys = {f["key"] for f in r.data["fields"]}
+        assert any(k.startswith("household.") for k in keys)
+        assert any(k.startswith("member.") for k in keys)
 
     def test_partner_dsa_id_is_populated(
         self, partner_client, partner_with_narrow_dsa,

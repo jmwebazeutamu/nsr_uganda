@@ -4,6 +4,46 @@ Notable changes to outbound API contracts. Entries are dated and tied to the com
 
 ---
 
+## 2026-05-21 — US-S27-013 — DRS uses the nested-tree query builder; full household + member catalogue
+
+**Affected endpoints**: `/api/v1/drs/requests/builder-schema/` field shape gains `label` + `type` + (`options` | `options_source`).
+
+### What changed
+
+- **`builder-schema.fields` are now typed.** Each entry adds:
+  - `label` (str) — display label for the wizard
+  - `type` — one of `text` / `enum` / `enum-multi` / `number` / `date` / `bool`
+  - `options` (inline list of `{value, label}`) for static enums (e.g. `member.sex`, `household.urban_rural`)
+  - `options_source` (slug) for dynamic enums whose values come from reference data (`geographic-units?level=sub_region`, `programmes`). The wizard maps slugs → fetch URLs.
+
+  Exactly one of `options` / `options_source` is present on enum-typed fields.
+
+- **The catalogue now covers household + member.** Previous catalogue was 19 mostly-identifier columns; current catalogue covers household identifiers / geography / dwelling / PMT / lifecycle / programmes plus member identifiers / demographics / NIN / contact / flags. Reflects real model columns in `apps/data_management/models.py`.
+
+- **`TestBuilderSchema` is widened.** New contract tests pin:
+  - per-field shape (`REQUIRED_FIELD_KEYS` ∪ optional `options`/`options_source`)
+  - `type` is one the wizard knows how to render
+  - every enum has exactly one of `options` / `options_source`
+  - the catalogue covers both `household.*` and `member.*` namespaces
+
+- **Wizard Step 2 is now the nested-tree query builder** from `design/v0.1/screens/screens-drs-querybuilder.jsx`. AND/OR groups, recursive nesting, full operator surface per type (eq / neq / in / not_in / between / contains / starts_with / set / unset / lastN / is_true / is_false). The template was parameterized so its `fields` prop accepts the live catalogue; an offline-preview `QB_FIELDS` constant remains as a fallback.
+
+- **Submit payload now carries the full criteria tree.** `request_payload.criteria = {kind, combinator, rules:[...]}`. For back-compat with the existing validator (`validate_against_dsa` reads flat `sub_region_codes` + `programme_codes`), the wizard also walks the tree on submit and extracts those two predicate types as flat keys — same shape the validator already understands.
+
+### What this means for partners
+
+- You can now build queries like *"head_sex = 'F' AND (age_years BETWEEN 18 AND 49) AND household.sub_region_code IN ('SR-KARAMOJA', 'SR-ACHOLI')"* in the UI.
+- **Today's enforcement is partial.** Only the `household.sub_region_code` and `household.programme_codes` predicates currently filter the result set server-side. Other rules are recorded in the audit chain (via `request_payload.criteria`) but don't yet narrow the query output. The submit modal flags this explicitly.
+- A future slice adds the criteria evaluator on `apps/data_requests/services.py` so all predicates filter for real. The wire format won't change.
+
+### What hasn't changed
+
+- The flat-key payload contract. `request_payload.fields`, `sub_region_codes`, `programme_codes`, `max_rows`, `requester_note` still work as before.
+- The `filter_fields` catalogue from US-S27-012 stays in the schema response for the simple-row builder fallback if any tooling still consumes it. Wizard ignores it now.
+- Operator-side approve/reject + partner download remain unchanged.
+
+---
+
 ## 2026-05-21 — US-S27-012 — DRS query builder is now schema-driven
 
 **Affected endpoints**: `/api/v1/drs/requests/builder-schema/` adds one top-level key.

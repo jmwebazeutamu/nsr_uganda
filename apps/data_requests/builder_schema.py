@@ -24,29 +24,127 @@ from typing import Any
 
 from apps.partners.models import DataSharingAgreement
 
-# All known fields the registry exposes through DRS. Order matters
-# for display; group separates them in the UI's field-selector.
+# All registry fields the DRS surface can use as query parameters
+# AND as output selections. Each entry's `type` drives which
+# operators apply on the wizard's query builder (`text`/`enum`/
+# `enum-multi`/`number`/`date`/`bool`). `options` is included for
+# enum fields whose value set is known statically; for enums
+# whose values come from external reference data (sub-region,
+# programme), the wizard fetches them at runtime via the
+# `filter_fields` value_source URLs.
+#
+# Covers Household + Member level columns exposed by
+# apps/data_management/models.py. Reflects real model columns —
+# adding a field here requires the model column to actually exist
+# on the persisted row.
 FIELD_CATALOGUE: list[dict[str, Any]] = [
-    # group, key, sensitivity per SAD §8.1
-    {"group": "Identifiers", "key": "household.id",                    "sensitivity": "Public"},
-    {"group": "Identifiers", "key": "household.sub_region_code",       "sensitivity": "Public"},
-    {"group": "Geography",   "key": "household.urban_rural",           "sensitivity": "Public"},
-    {"group": "Geography",   "key": "household.gps_lat",               "sensitivity": "Sensitive"},
-    {"group": "Geography",   "key": "household.gps_lng",               "sensitivity": "Sensitive"},
-    {"group": "Household",   "key": "household.current_vulnerability_band", "sensitivity": "Internal"},
-    {"group": "Household",   "key": "household.current_pmt_score",     "sensitivity": "Internal"},
-    {"group": "Identity",    "key": "member.id",                       "sensitivity": "Public"},
-    {"group": "Identity",    "key": "member.line_number",              "sensitivity": "Public"},
-    {"group": "Identity",    "key": "member.surname",                  "sensitivity": "Personal"},
-    {"group": "Identity",    "key": "member.first_name",               "sensitivity": "Personal"},
-    {"group": "Identity",    "key": "member.other_name",               "sensitivity": "Personal"},
-    {"group": "Identity",    "key": "member.sex",                      "sensitivity": "Public"},
-    {"group": "Identity",    "key": "member.date_of_birth",            "sensitivity": "Personal"},
-    {"group": "Identity",    "key": "member.relationship_to_head",     "sensitivity": "Public"},
-    {"group": "Identity",    "key": "member.telephone_1",              "sensitivity": "Personal"},
-    {"group": "Identity",    "key": "member.telephone_2",              "sensitivity": "Personal"},
-    {"group": "Identity",    "key": "member.nin_hash",                 "sensitivity": "Sensitive"},
-    {"group": "Identity",    "key": "member.nin_last4",                "sensitivity": "Sensitive"},
+    # ---- Household: identifiers + geography ------------------------------
+    {"group": "Identifiers", "key": "household.id",
+     "label": "Registry ID",       "sensitivity": "Public",   "type": "text"},
+    {"group": "Identifiers", "key": "household.household_number",
+     "label": "Household number",  "sensitivity": "Public",   "type": "text"},
+    {"group": "Identifiers", "key": "household.enumeration_area",
+     "label": "Enumeration area",  "sensitivity": "Public",   "type": "text"},
+    {"group": "Geography",   "key": "household.sub_region_code",
+     "label": "Sub-region",        "sensitivity": "Public",   "type": "enum",
+     "options_source": "geographic-units?level=sub_region"},
+    {"group": "Geography",   "key": "household.urban_rural",
+     "label": "Urban / rural",     "sensitivity": "Public",   "type": "enum",
+     "options": [{"value": "1", "label": "Urban"}, {"value": "2", "label": "Rural"}]},
+    {"group": "Geography",   "key": "household.gps_lat",
+     "label": "GPS latitude",      "sensitivity": "Sensitive", "type": "number"},
+    {"group": "Geography",   "key": "household.gps_lng",
+     "label": "GPS longitude",     "sensitivity": "Sensitive", "type": "number"},
+    {"group": "Geography",   "key": "household.gps_accuracy_m",
+     "label": "GPS accuracy (m)",  "sensitivity": "Sensitive", "type": "number"},
+
+    # ---- Household: dwelling + status ------------------------------------
+    {"group": "Dwelling",    "key": "household.dwelling_tenure",
+     "label": "Dwelling tenure",   "sensitivity": "Internal", "type": "text"},
+    {"group": "Dwelling",    "key": "household.residence_status",
+     "label": "Residence status",  "sensitivity": "Internal", "type": "text"},
+
+    # ---- Household: PMT / vulnerability ----------------------------------
+    {"group": "PMT",         "key": "household.current_pmt_score",
+     "label": "PMT score",         "sensitivity": "Internal", "type": "number"},
+    {"group": "PMT",         "key": "household.current_vulnerability_band",
+     "label": "Vulnerability band","sensitivity": "Internal", "type": "enum",
+     "options": [
+         {"value": "extremely_vulnerable", "label": "Extremely vulnerable"},
+         {"value": "vulnerable",           "label": "Vulnerable"},
+         {"value": "resilient",            "label": "Resilient"},
+     ]},
+
+    # ---- Household: lifecycle --------------------------------------------
+    {"group": "Lifecycle",   "key": "household.current_consent_state",
+     "label": "Consent state",     "sensitivity": "Internal", "type": "text"},
+    {"group": "Lifecycle",   "key": "household.current_intake_source",
+     "label": "Intake source",     "sensitivity": "Internal", "type": "text"},
+    {"group": "Lifecycle",   "key": "household.is_deleted",
+     "label": "Soft-deleted",      "sensitivity": "Internal", "type": "bool"},
+    {"group": "Lifecycle",   "key": "household.created_at",
+     "label": "Created at",        "sensitivity": "Public",   "type": "date"},
+    {"group": "Lifecycle",   "key": "household.updated_at",
+     "label": "Last updated",      "sensitivity": "Public",   "type": "date"},
+
+    # ---- Household: programme enrolment (derived via Referral/Enrolment) --
+    {"group": "Programmes",  "key": "household.programme_codes",
+     "label": "Programme enrolment",
+     "sensitivity": "Internal", "type": "enum-multi",
+     "options_source": "programmes"},
+
+    # ---- Member: identifiers ---------------------------------------------
+    {"group": "Members",     "key": "member.id",
+     "label": "Member ID",         "sensitivity": "Public",   "type": "text"},
+    {"group": "Members",     "key": "member.line_number",
+     "label": "Line number",       "sensitivity": "Public",   "type": "number"},
+    {"group": "Members",     "key": "member.surname",
+     "label": "Surname",           "sensitivity": "Personal", "type": "text"},
+    {"group": "Members",     "key": "member.first_name",
+     "label": "First name",        "sensitivity": "Personal", "type": "text"},
+    {"group": "Members",     "key": "member.other_name",
+     "label": "Other name",        "sensitivity": "Personal", "type": "text"},
+
+    # ---- Member: demographic + status ------------------------------------
+    {"group": "Members",     "key": "member.relationship_to_head",
+     "label": "Relationship to head", "sensitivity": "Public", "type": "text"},
+    {"group": "Members",     "key": "member.sex",
+     "label": "Sex",               "sensitivity": "Public",   "type": "enum",
+     "options": [{"value": "F", "label": "Female"}, {"value": "M", "label": "Male"}]},
+    {"group": "Members",     "key": "member.date_of_birth",
+     "label": "Date of birth",     "sensitivity": "Personal", "type": "date"},
+    {"group": "Members",     "key": "member.age_years",
+     "label": "Age (years)",       "sensitivity": "Personal", "type": "number"},
+    {"group": "Members",     "key": "member.marital_status",
+     "label": "Marital status",    "sensitivity": "Personal", "type": "text"},
+    {"group": "Members",     "key": "member.nationality",
+     "label": "Nationality",       "sensitivity": "Personal", "type": "text"},
+    {"group": "Members",     "key": "member.residency_status",
+     "label": "Residency status",  "sensitivity": "Personal", "type": "text"},
+    {"group": "Members",     "key": "member.birth_certificate_status",
+     "label": "Birth certificate", "sensitivity": "Personal", "type": "text"},
+
+    # ---- Member: NIN (sensitive) -----------------------------------------
+    {"group": "Members",     "key": "member.nin_status",
+     "label": "NIN status",        "sensitivity": "Sensitive","type": "text"},
+    {"group": "Members",     "key": "member.nin_hash",
+     "label": "NIN hash",          "sensitivity": "Sensitive","type": "text"},
+    {"group": "Members",     "key": "member.nin_last4",
+     "label": "NIN last 4",        "sensitivity": "Sensitive","type": "text"},
+
+    # ---- Member: contact + flags -----------------------------------------
+    {"group": "Members",     "key": "member.telephone_1",
+     "label": "Telephone 1",       "sensitivity": "Personal", "type": "text"},
+    {"group": "Members",     "key": "member.telephone_2",
+     "label": "Telephone 2",       "sensitivity": "Personal", "type": "text"},
+    {"group": "Members",     "key": "member.telephone_in_name_flag",
+     "label": "Phone in own name", "sensitivity": "Personal", "type": "bool"},
+    {"group": "Members",     "key": "member.mobile_money_flag",
+     "label": "Mobile money",      "sensitivity": "Personal", "type": "bool"},
+    {"group": "Members",     "key": "member.mother_alive_flag",
+     "label": "Mother alive",      "sensitivity": "Personal", "type": "bool"},
+    {"group": "Members",     "key": "member.father_alive_flag",
+     "label": "Father alive",      "sensitivity": "Personal", "type": "bool"},
 ]
 
 # Filter operators a partner / operator can use to constrain rows.
