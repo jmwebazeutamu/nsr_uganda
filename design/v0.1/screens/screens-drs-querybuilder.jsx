@@ -375,6 +375,32 @@ const QBFieldPicker = ({ value, onPick, onClose }) => {
   );
 };
 
+// US-DR-EXT — return field.options filtered to children of the
+// IMMEDIATE pinned ancestor in _GEO_CHAIN. If the field isn't a
+// known geo level, or its parent isn't pinned, return the full
+// options list unchanged. Used by both QBValueEditor (single) and
+// QBMultiSelect (multi) so the cascade is symmetric.
+const _qbFilterGeoOptions = (field, pins) => {
+  const opts = (field && field.options) || [];
+  if (!opts.length) return opts;
+  const chain = (typeof window !== "undefined" && window._GEO_CHAIN) || [];
+  const idx = chain.indexOf(field.key);
+  if (idx <= 0) return opts;
+  const parentKey = chain[idx - 1];
+  const parentPin = (pins || {})[parentKey];
+  if (!parentPin) return opts;
+  const allowed = new Set(
+    parentPin.kind === "single" ? [parentPin.value]
+    : parentPin.kind === "multi" ? (parentPin.values || [])
+    : [],
+  );
+  if (allowed.size === 0) return opts;
+  const filtered = opts.filter(o => o.parent_code && allowed.has(o.parent_code));
+  // If the data has no parent_code linkage at all (filtered === 0),
+  // don't blank the dropdown — fall back to the unfiltered set.
+  return filtered.length > 0 ? filtered : opts;
+};
+
 /* ----------------------------------------------------------------
    Value editor — adapts to field type + operator
    ---------------------------------------------------------------- */
@@ -420,10 +446,12 @@ const QBValueEditor = ({ field, op, value, onChange }) => {
     return <QBMultiSelect field={field} value={value||[]} onChange={onChange}/>;
   }
   if (field.type === "enum") {
+    const ctx = useQBFields();
+    const cascadeOpts = _qbFilterGeoOptions(field, ctx && ctx.pins);
     return (
       <select className="field-select" value={value||""} onChange={e => onChange(e.target.value)}>
         <option value="">Select…</option>
-        {field.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        {cascadeOpts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     );
   }
@@ -456,7 +484,9 @@ const QBMultiSelect = ({ field, value, onChange }) => {
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, []);
-  const options = field.options || [];
+  // US-DR-EXT — geo cascade for in / any / all on a geographic level.
+  const ctxMS = useQBFields();
+  const options = _qbFilterGeoOptions(field, ctxMS && ctxMS.pins);
   const labelFor = v => (options.find(o => o.value === v)?.label) || v;
   const toggle = v => onChange(value.includes(v) ? value.filter(x => x!==v) : [...value, v]);
   return (
@@ -810,11 +840,23 @@ const BuildStepV2 = ({
   // inline QB_FIELDS for offline preview. The byKey map is shared
   // via React context so every QBRule / QBFieldPicker can resolve
   // a rule's field without prop-drilling.
+  //
+  // US-DR-EXT — also carry a pin map derived from the criteria
+  // tree so the value editors on geographic descendants can cascade
+  // their option lists to children of the chosen ancestor. The pin
+  // helper lives in screens-drs.jsx; we reference it via the global
+  // surface because that file loads after this one (load-order in
+  // nsr-mis-console.html). At first render `window._buildPinMap`
+  // may be undefined for a tick — fall back to {} so the picker
+  // simply doesn't cascade rather than crashing.
   const ctx = useMemoQB(() => {
     const list = (fields && fields.length > 0) ? fields : QB_FIELDS;
     const byKey = list.reduce((a, f) => (a[f.key] = f, a), {});
-    return { fields: list, byKey };
-  }, [fields]);
+    const pins = (typeof window !== "undefined" && window._buildPinMap)
+      ? window._buildPinMap(tree)
+      : {};
+    return { fields: list, byKey, pins };
+  }, [fields, tree]);
 
   // Estimated match count — fake numeric model derived from rule
   // count, just to give the surface a believable "live" feel.
@@ -1021,4 +1063,5 @@ Object.assign(window, {
   BuildStepV2,
   qbNewGroup, qbNewRule, qbId,
   QB_FIELDS, QB_FIELD_BY_KEY, QB_RECIPES,
+  _qbFilterGeoOptions,
 });
