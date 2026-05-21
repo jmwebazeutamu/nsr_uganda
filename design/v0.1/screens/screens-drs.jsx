@@ -516,6 +516,16 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
   const next = () => setStep(STEPS[Math.min(stepIdx + 1, STEPS.length - 1)].id);
   const prev = () => setStep(STEPS[Math.max(stepIdx - 1, 0)].id);
 
+  // US-S27-017 — alias the template globals locally. Babel-standalone
+  // is finicky about JSX member-expression element types (the
+  // `<window.BuildStepV2 />` pattern), and an aliased capitalised
+  // identifier sidesteps the issue entirely. The locals also let the
+  // wizard render a clear "template not loaded" message if a script
+  // failed to compile (rather than throwing "Element type is invalid").
+  const BuildStepV2 = window.BuildStepV2;
+  const FieldStepV2 = window.FieldStepV2;
+  const qbNewGroup  = window.qbNewGroup;
+
   // US-S18-003 / US-S27-010 — fetch the role-aware schema from
   // /api/v1/drs/requests/builder-schema/ on mount. Partner roles
   // get the live catalogue scoped to their active DSA (with
@@ -614,10 +624,14 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
 
   // Initialise the tree once the catalogue is ready. The first
   // available (non-disabled) field anchors the default rule.
+  // qbNewGroup may be undefined if the template script failed to
+  // compile — guard explicitly so the wizard renders a clear error
+  // rather than throwing on undefined.
   React.useEffect(() => {
     if (tree || builderFields.length === 0) return;
-    setTree(window.qbNewGroup("AND", builderFields));
-  }, [builderFields, tree]);
+    if (typeof qbNewGroup !== "function") return;
+    setTree(qbNewGroup("AND", builderFields));
+  }, [builderFields, tree, qbNewGroup]);
 
   // US-S27-014: FieldStepV2 (Step 3) consumes builderFields
   // directly via its `fields` prop. The earlier `effectiveFields`
@@ -812,8 +826,23 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
 
       {step === 'scope' && <ScopeStep value={entity} onChange={setEntity}/>}
       {step === 'build' && (
-        tree
-          ? <window.BuildStepV2
+        !BuildStepV2
+          ? <div className="card" style={{padding:24}}>
+              <div className="t-cap" style={{color:'var(--accent-danger)'}}>
+                Query builder template not loaded — refresh the page; if
+                it persists, check the browser console for a JS error in
+                screens-drs-querybuilder.jsx.
+              </div>
+            </div>
+          : !tree
+          ? <div className="card" style={{padding:24}}>
+              <div className="t-cap muted">
+                {builderFields.length === 0
+                  ? <>Loading field catalogue from <span className="t-mono">/api/v1/drs/requests/builder-schema/</span> · make sure you're logged in via <span className="t-mono">/admin/</span>.</>
+                  : "Initialising query tree…"}
+              </div>
+            </div>
+          : <BuildStepV2
               tree={tree}
               onChange={setTree}
               maxRows={maxRows}
@@ -823,16 +852,23 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
               showSQL={true}
               dsaReference={schema?.dsa_reference || ""}
             />
-          : <div className="card" style={{padding:24}}>
-              <div className="t-cap muted">Loading field catalogue…</div>
-            </div>
       )}
-      {step === 'fields' && <window.FieldStepV2
-        selectedKeys={selectedFields}
-        onChange={setSel}
-        fields={builderFields}
-        dsaReference={schema?.dsa_reference || ""}
-      />}
+      {step === 'fields' && (
+        !FieldStepV2
+          ? <div className="card" style={{padding:24}}>
+              <div className="t-cap" style={{color:'var(--accent-danger)'}}>
+                Field selector template not loaded — refresh the page; if
+                it persists, check the browser console for a JS error in
+                screens-drs-fieldselector.jsx.
+              </div>
+            </div>
+          : <FieldStepV2
+              selectedKeys={selectedFields}
+              onChange={setSel}
+              fields={builderFields}
+              dsaReference={schema?.dsa_reference || ""}
+            />
+      )}
       {step === 'preview' && <PreviewStep selected={selectedFields}/>}
       {step === 'delivery' && <DeliveryStep
         methods={schema?.delivery_methods || []}
