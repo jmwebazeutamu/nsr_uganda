@@ -492,21 +492,103 @@ const _PREVIEW_DATES = [
 const _PREVIEW_AGES = [34, 47, 28, 51, 22, 39, 64, 19, 45, 33];
 const _PREVIEW_SIZES = [6, 5, 7, 6, 8, 4, 7, 5, 4, 6];
 
+// BUG-S27-021 — walk the criteria tree once and collect a per-field
+// "pin" for any rule that fixes the column's value. The preview row
+// generator uses these pins so the rendered cells reflect the WHERE
+// clause instead of cycling through every enum option. Pinning only
+// applies to operators that constrain to a specific value or value
+// set: eq / on / true / false (single), in / any (multi), between
+// (range). Inequality / range / contains / set / unset don't pin —
+// the field is still free to vary, just within the operator's
+// constraint, which is good enough for a design-time preview.
+//
+// pin shapes:
+//   { kind: "single", value: <raw code or literal> }
+//   { kind: "multi",  values: [<raw>, <raw>, …] }
+//   { kind: "range",  min: <number|date>, max: <number|date> }
+const _buildPinMap = (tree) => {
+  const pins = {};
+  const walk = (node) => {
+    if (!node) return;
+    if (node.kind === "rule") {
+      const k = node.field;
+      const op = node.op;
+      const v = node.value;
+      if (!k) return;
+      // True / false don't carry a value — synthesise one.
+      if (op === "true")  { pins[k] = { kind: "single", value: true  }; return; }
+      if (op === "false") { pins[k] = { kind: "single", value: false }; return; }
+      // Empty-string / null guards — an unfilled rule shouldn't pin.
+      const hasValue = v !== null && v !== undefined && v !== "";
+      if (op === "eq" || op === "on") {
+        if (hasValue) pins[k] = { kind: "single", value: v };
+      } else if (op === "in" || op === "any" || op === "all") {
+        if (Array.isArray(v) && v.length > 0) {
+          pins[k] = { kind: "multi", values: v };
+        }
+      } else if (op === "between") {
+        if (Array.isArray(v) && v.length === 2 && v[0] !== "" && v[1] !== "") {
+          pins[k] = { kind: "range", min: v[0], max: v[1] };
+        }
+      }
+      // gt/gte/lt/lte/contains/starts/before/after/lastN/set/
+      // unset/neq/nin/none — don't fix a value; let the generator
+      // run.
+      return;
+    }
+    for (const c of node.rules || []) walk(c);
+  };
+  walk(tree);
+  return pins;
+};
+
+// Render a raw pinned value through the field's catalogue — for
+// enum / enum-multi we want the human label, not the storage code.
+const _renderPinned = (raw, field) => {
+  if (raw === true || raw === false) return raw ? "Yes" : "No";
+  if (field?.type === "enum" || field?.type === "enum-multi") {
+    const opt = (field.options || []).find(o => String(o.value) === String(raw));
+    return opt ? opt.label : String(raw);
+  }
+  return String(raw);
+};
+
 // Resolve a single preview cell for (field, rowIndex). Cell semantics
 // mirror what the future preview endpoint will return: sensitive
 // columns always mask, personal phones reveal last-4 only, enum
-// values render their human label not the storage code.
-const _previewCell = (key, field, i) => {
+// values render their human label not the storage code. When `pin`
+// is supplied, the WHERE clause dominates the generator — see
+// _buildPinMap above.
+const _previewCell = (key, field, i, pin) => {
   if (!field) return "—";
   const sens = field.sensitivity;
   const type = field.type;
-  // ---- Sensitivity gate first ----
+  // ---- Sensitivity gate first (pinning never reveals masked data) ----
   if (sens === "Sensitive") {
     if (key.endsWith("_last4")) return _PREVIEW_NIN_LAST4[i];
     return "[masked]";
   }
   if (sens === "Personal" && /telephone|phone/.test(key)) {
     return "+256 ••• ••" + _PREVIEW_PHONE_TAILS[i];
+  }
+  // ---- WHERE-clause pinning takes over the rest ----
+  if (pin) {
+    if (pin.kind === "single") return _renderPinned(pin.value, field);
+    if (pin.kind === "multi") {
+      const vals = pin.values;
+      return vals.length === 0 ? "—" : _renderPinned(vals[i % vals.length], field);
+    }
+    if (pin.kind === "range") {
+      const a = Number(pin.min);
+      const b = Number(pin.max);
+      if (Number.isFinite(a) && Number.isFinite(b) && b >= a) {
+        const span = b - a;
+        const v = a + (span * i) / Math.max(1, _PREVIEW_ROW_COUNT - 1);
+        return type === "number" ? v.toFixed(span < 10 ? 2 : 0) : String(Math.round(v));
+      }
+      // Date range or non-numeric — alternate the endpoints.
+      return i % 2 === 0 ? String(pin.min) : String(pin.max);
+    }
   }
   // ---- Type-driven values ----
   if (type === "bool") return i % 4 === 0 ? "No" : "Yes";
@@ -1015,6 +1097,7 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
       {step === 'preview' && <PreviewStep
         selected={selectedFields}
         catalogueByKey={builderFields.reduce((a, f) => (a[f.key] = f, a), {})}
+        tree={tree}
       />}
       {step === 'delivery' && <DeliveryStep
         methods={schema?.delivery_methods || []}
@@ -1220,14 +1303,17 @@ const DSACard = () => (
 // BUG-S27-019 — columns now reflect the ordered list from Step 3,
 // labels come from the live catalogue, cells are generated by
 // `_previewCell` from each field's type / options / sensitivity.
-// Empty state when the user hasn't picked anything yet — used to
-// silently render a 10-column household preview that had no relation
-// to the selection.
-const PreviewStep = ({ selected, catalogueByKey = {} }) => {
+// BUG-S27-021 — `tree` is now consumed: any rule pinning a column
+// (eq / in / between / true / false / on / any) fixes that column's
+// value across the preview so the rendered rows match the captured
+// WHERE clause. Unconstrained columns still vary via the generator.
+const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
   const cols = selected
     .map(key => ({ key, field: catalogueByKey[key] }))
     .filter(c => c.field);
   const unknown = selected.filter(k => !catalogueByKey[k]);
+  const pins = _buildPinMap(tree);
+  const pinnedSelectedCount = cols.filter(c => pins[c.key]).length;
 
   if (selected.length === 0) {
     return (
@@ -1298,6 +1384,7 @@ const PreviewStep = ({ selected, catalogueByKey = {} }) => {
         <div className="card-toolbar">
           <strong className="t-bodysm">Preview rows · masked sample</strong>
           <span className="t-cap">
+            {pinnedSelectedCount > 0 && <>{pinnedSelectedCount} column{pinnedSelectedCount === 1 ? "" : "s"} pinned by your Step-2 filter · </>}
             {sensitiveCount > 0 && <>{sensitiveCount} Sensitive column{sensitiveCount === 1 ? "" : "s"} masked · </>}
             {personalCount > 0 && <>{personalCount} Personal phone column{personalCount === 1 ? "" : "s"} last-4 only · </>}
             cell values are design-time fixtures until DRS-O-PREVIEW lands
@@ -1307,21 +1394,28 @@ const PreviewStep = ({ selected, catalogueByKey = {} }) => {
           <table className="tbl">
             <thead>
               <tr>
-                {cols.map(({key, field}) => (
-                  <th key={key} title={key}>
-                    <div style={{display:'flex', flexDirection:'column', gap:2, alignItems:'flex-start'}}>
-                      <span>{field.label || key}</span>
-                      <span className="t-cap t-mono" style={{fontSize:10, fontWeight:400, color:'var(--neutral-500)', textTransform:'none', letterSpacing:0}}>{key}</span>
-                    </div>
-                  </th>
-                ))}
+                {cols.map(({key, field}) => {
+                  const pin = pins[key];
+                  return (
+                    <th key={key} title={key}
+                      style={pin ? {background:'var(--accent-system-bg)'} : undefined}>
+                      <div style={{display:'flex', flexDirection:'column', gap:2, alignItems:'flex-start'}}>
+                        <div style={{display:'flex', alignItems:'center', gap:6}}>
+                          <span>{field.label || key}</span>
+                          {pin && <Chip size="sm" tone="system" icon="filter">filtered</Chip>}
+                        </div>
+                        <span className="t-cap t-mono" style={{fontSize:10, fontWeight:400, color:'var(--neutral-500)', textTransform:'none', letterSpacing:0}}>{key}</span>
+                      </div>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
               {rows.map(i => (
                 <tr key={i}>
                   {cols.map(({key, field}) => {
-                    const v = _previewCell(key, field, i);
+                    const v = _previewCell(key, field, i, pins[key]);
                     const isMono = /id$|number$|hash$|gps|score|nin/.test(key);
                     return (
                       <td key={key} className={isMono ? 'col-id' : ''}>{v}</td>
@@ -1472,7 +1566,7 @@ const SubmitStep = ({
 };
 
 Object.assign(window, {
-  DRSScreen, PreviewStep, _previewCell,
+  DRSScreen, PreviewStep, _previewCell, _buildPinMap, _renderPinned,
   _choiceListNameFor, _enrichFieldsWithOptions, _resolveOptionsForSchema,
   _OPTIONS_SOURCE_URL,
 });

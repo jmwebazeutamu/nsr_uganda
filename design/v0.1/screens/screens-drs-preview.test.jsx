@@ -17,6 +17,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 
 let PreviewStep;
 let _previewCell;
+let _buildPinMap;
 // Pulled from screens-drs-fieldselector via dynamic import so the
 // shared screens-drs module body can also evaluate without throwing
 // on missing primitives.
@@ -36,7 +37,7 @@ beforeAll(async () => {
   await import("./screens-drs-fieldselector.jsx");
   await import("./screens-drs-querybuilder.jsx");
   await import("./screens-drs.jsx");
-  ({ PreviewStep, _previewCell } = globalThis);
+  ({ PreviewStep, _previewCell, _buildPinMap } = globalThis);
 });
 
 afterEach(() => {
@@ -156,5 +157,223 @@ describe("PreviewStep", () => {
       catalogueByKey={catalogue}/>);
     expect(screen.getByText(/not in current catalogue/)).toBeInTheDocument();
     expect(screen.getByText("household.removed_field")).toBeInTheDocument();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────
+// BUG-S27-021 — WHERE-clause pinning
+// ───────────────────────────────────────────────────────────────
+
+describe("_buildPinMap", () => {
+  const rule = (over) => ({ id: "r", kind: "rule", field: "x", op: "eq", value: "v", ...over });
+  const group = (rules) => ({ id: "g", kind: "group", combinator: "AND", rules });
+
+  it("pins eq + on to single values", () => {
+    const tree = group([
+      rule({ field: "h.region_code", op: "eq", value: "R-CENTRAL" }),
+      rule({ field: "h.captured_date", op: "on", value: "2026-03-14" }),
+    ]);
+    expect(_buildPinMap(tree)).toEqual({
+      "h.region_code":   { kind: "single", value: "R-CENTRAL" },
+      "h.captured_date": { kind: "single", value: "2026-03-14" },
+    });
+  });
+
+  it("pins true / false to boolean literals", () => {
+    const tree = group([
+      rule({ field: "h.has_disability", op: "true",  value: null }),
+      rule({ field: "h.is_deleted",     op: "false", value: null }),
+    ]);
+    expect(_buildPinMap(tree)).toEqual({
+      "h.has_disability": { kind: "single", value: true },
+      "h.is_deleted":     { kind: "single", value: false },
+    });
+  });
+
+  it("pins in / any / all to multi", () => {
+    const tree = group([
+      rule({ field: "h.sub_region_code", op: "in",  value: ["SR-KARAMOJA", "SR-ACHOLI"] }),
+      rule({ field: "h.programme_codes", op: "any", value: ["OPM-PDM"] }),
+    ]);
+    expect(_buildPinMap(tree)).toEqual({
+      "h.sub_region_code": { kind: "multi", values: ["SR-KARAMOJA", "SR-ACHOLI"] },
+      "h.programme_codes": { kind: "multi", values: ["OPM-PDM"] },
+    });
+  });
+
+  it("pins between to range", () => {
+    const tree = group([rule({ field: "h.pmt_score", op: "between", value: ["0.2", "0.4"] })]);
+    expect(_buildPinMap(tree)).toEqual({
+      "h.pmt_score": { kind: "range", min: "0.2", max: "0.4" },
+    });
+  });
+
+  it("ignores operators that don't fix a value", () => {
+    const tree = group([
+      rule({ field: "h.size", op: "gt", value: "5" }),
+      rule({ field: "h.size", op: "lt", value: "9" }),
+      rule({ field: "h.label", op: "contains", value: "Karamoja" }),
+      rule({ field: "h.x", op: "set", value: null }),
+      rule({ field: "h.y", op: "neq", value: "z" }),
+    ]);
+    expect(_buildPinMap(tree)).toEqual({});
+  });
+
+  it("ignores rules with empty values", () => {
+    const tree = group([
+      rule({ field: "h.k", op: "eq", value: "" }),
+      rule({ field: "h.l", op: "eq", value: null }),
+      rule({ field: "h.m", op: "in", value: [] }),
+      rule({ field: "h.n", op: "between", value: ["", "5"] }),
+    ]);
+    expect(_buildPinMap(tree)).toEqual({});
+  });
+
+  it("walks nested groups", () => {
+    const tree = group([
+      rule({ field: "h.region_code", op: "eq", value: "R-CENTRAL" }),
+      group([
+        rule({ field: "h.size", op: "gt", value: "5" }),  // ignored
+        rule({ field: "h.pmt_band", op: "eq", value: "Poorest 40%" }),
+      ]),
+    ]);
+    expect(_buildPinMap(tree)).toEqual({
+      "h.region_code": { kind: "single", value: "R-CENTRAL" },
+      "h.pmt_band":    { kind: "single", value: "Poorest 40%" },
+    });
+  });
+
+  it("returns {} for null / empty tree", () => {
+    expect(_buildPinMap(null)).toEqual({});
+    expect(_buildPinMap(undefined)).toEqual({});
+    expect(_buildPinMap(group([]))).toEqual({});
+  });
+});
+
+describe("_previewCell with a pin", () => {
+  const enumField = (over) => ({
+    key: "h.region_code", type: "enum", sensitivity: "Public",
+    options: [
+      { value: "R-CENTRAL", label: "Central" },
+      { value: "R-EASTERN", label: "Eastern" },
+    ],
+    ...over,
+  });
+
+  it("renders the enum label for a single-pinned enum, same value every row", () => {
+    const f = enumField();
+    const pin = { kind: "single", value: "R-CENTRAL" };
+    for (let i = 0; i < 10; i++) {
+      expect(_previewCell("h.region_code", f, i, pin)).toBe("Central");
+    }
+  });
+
+  it("cycles through pinned multi values", () => {
+    const f = enumField();
+    const pin = { kind: "multi", values: ["R-CENTRAL", "R-EASTERN"] };
+    expect(_previewCell("h.region_code", f, 0, pin)).toBe("Central");
+    expect(_previewCell("h.region_code", f, 1, pin)).toBe("Eastern");
+    expect(_previewCell("h.region_code", f, 2, pin)).toBe("Central");
+  });
+
+  it("renders raw code when the pinned value isn't in field.options", () => {
+    const f = enumField();
+    const pin = { kind: "single", value: "R-UNKNOWN" };
+    expect(_previewCell("h.region_code", f, 0, pin)).toBe("R-UNKNOWN");
+  });
+
+  it("renders Yes/No for boolean pin", () => {
+    const f = { key: "h.is_deleted", type: "bool", sensitivity: "Internal" };
+    expect(_previewCell("h.is_deleted", f, 0, { kind: "single", value: true  })).toBe("Yes");
+    expect(_previewCell("h.is_deleted", f, 0, { kind: "single", value: false })).toBe("No");
+  });
+
+  it("renders numbers spread across a range pin", () => {
+    const f = { key: "h.size", type: "number", sensitivity: "Public" };
+    const pin = { kind: "range", min: "1", max: "10" };
+    const first = _previewCell("h.size", f, 0, pin);
+    const last  = _previewCell("h.size", f, 9, pin);
+    expect(Number(first)).toBeGreaterThanOrEqual(1);
+    expect(Number(last)).toBeLessThanOrEqual(10);
+    // Spread, not constant.
+    expect(Number(last)).toBeGreaterThan(Number(first));
+  });
+
+  it("Sensitive masking still wins over any pin", () => {
+    const f = { key: "h.gps_lat", type: "number", sensitivity: "Sensitive" };
+    const pin = { kind: "single", value: "2.5283" };
+    expect(_previewCell("h.gps_lat", f, 0, pin)).toBe("[masked]");
+  });
+
+  it("falls through to the generator when no pin is supplied", () => {
+    const f = { key: "h.size", type: "number", sensitivity: "Public" };
+    const v0 = _previewCell("h.size", f, 0);
+    const v1 = _previewCell("h.size", f, 1);
+    expect(v0).not.toBe("");
+    expect(v0).not.toBe("[masked]");
+    expect(Number.isFinite(Number(v0)) || Number.isFinite(Number(v1))).toBe(true);
+  });
+});
+
+describe("PreviewStep with a tree", () => {
+  const cat = {
+    "household.region_code": {
+      key: "household.region_code", label: "Region", type: "enum",
+      sensitivity: "Public",
+      options: [
+        { value: "R-CENTRAL", label: "Central" },
+        { value: "R-EASTERN", label: "Eastern" },
+        { value: "R-NORTHERN", label: "Northern" },
+      ],
+    },
+    "household.id": {
+      key: "household.id", label: "Registry ID", type: "text", sensitivity: "Public",
+    },
+  };
+  const tree = {
+    id: "g", kind: "group", combinator: "AND",
+    rules: [
+      { id: "r1", kind: "rule", field: "household.region_code",
+        op: "eq", value: "R-CENTRAL" },
+    ],
+  };
+
+  it("every Region cell shows 'Central' when the tree pins R-CENTRAL", () => {
+    render(<PreviewStep
+      selected={["household.region_code", "household.id"]}
+      catalogueByKey={cat}
+      tree={tree}/>);
+    // Find every body cell in the Region column — there should be
+    // 10 of them and every one should read "Central".
+    const regionCells = screen.getAllByText("Central");
+    expect(regionCells.length).toBeGreaterThanOrEqual(10);
+  });
+
+  it("flags pinned columns with a 'filtered' chip in the header", () => {
+    render(<PreviewStep
+      selected={["household.region_code", "household.id"]}
+      catalogueByKey={cat}
+      tree={tree}/>);
+    expect(screen.getByText("filtered")).toBeInTheDocument();
+  });
+
+  it("toolbar copy reports how many columns are pinned", () => {
+    render(<PreviewStep
+      selected={["household.region_code", "household.id"]}
+      catalogueByKey={cat}
+      tree={tree}/>);
+    expect(screen.getByText(/1 column pinned by your Step-2 filter/)).toBeInTheDocument();
+  });
+
+  it("unconstrained columns continue to vary across rows", () => {
+    render(<PreviewStep
+      selected={["household.region_code", "household.id"]}
+      catalogueByKey={cat}
+      tree={tree}/>);
+    // Each Registry ID cell comes from a 10-element bank — distinct.
+    const idCells = screen.getAllByText((_, node) =>
+      node.tagName === "TD" && /^01[A-Z0-9]{24}$/.test(node.textContent));
+    const distinct = new Set(idCells.map(c => c.textContent));
+    expect(distinct.size).toBeGreaterThanOrEqual(5);
   });
 });
