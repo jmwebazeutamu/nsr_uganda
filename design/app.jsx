@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -28,6 +28,11 @@ const NAV = [
   { id: "beneficiaries", label: "Beneficiaries",   icon: "book",  screen: true },
   { id: "drs",     label: "Data Requests", icon: "download",  count: 9 },
   { id: "partner-drs", label: "My requests", icon: "download", count: 5 },
+  // Partner self-service surfaces — visible only when role is
+  // partner-analyst (see role-filter below). Read-only views of the
+  // partner's own DSA + programmes register.
+  { id: "my-dsa",        label: "My DSA",        icon: "file" },
+  { id: "my-programmes", label: "My programmes", icon: "book" },
   { id: "receipt", label: "Receipt slip",  icon: "print" },
   { section: "PARTNERS" },
   { id: "partners", label: "Partners",     icon: "users",     screen: true },
@@ -75,11 +80,14 @@ function App() {
       if (role === "partner-analyst" && n.section === "PARTNERS") return false;
       return true;
     }
-    if (role === "parish" && ["dih","drs","dedup","partner-drs","partners","beneficiaries","dsas"].includes(n.id)) return false;
-    if (role === "dpo"    && ["capture","upd","dedup","grm","receipt","partner-drs"].includes(n.id)) return false;
-    if (role === "cdo"    && ["dih","drs","partner-drs","partners","dsas"].includes(n.id)) return false;
-    if (role === "nsr-unit" && n.id === "partner-drs") return false;
-    if (role === "partner-analyst" && !["home","partner-drs","kit"].includes(n.id)) return false;
+    // The partner self-service tiles only make sense for the
+    // partner-analyst role — operator-side roles never use them.
+    const PARTNER_ONLY = new Set(["partner-drs", "my-dsa", "my-programmes"]);
+    if (role !== "partner-analyst" && PARTNER_ONLY.has(n.id)) return false;
+    if (role === "parish" && ["dih","drs","dedup","partners","beneficiaries","dsas"].includes(n.id)) return false;
+    if (role === "dpo"    && ["capture","upd","dedup","grm","receipt"].includes(n.id)) return false;
+    if (role === "cdo"    && ["dih","drs","partners","dsas"].includes(n.id)) return false;
+    if (role === "partner-analyst" && !["home","partner-drs","my-dsa","my-programmes","kit"].includes(n.id)) return false;
     // Registry + Beneficiaries are operator-only — partners use the
     // DRS portal to request data, not browse the registry directly.
     if (["registry","beneficiaries"].includes(n.id) && role === "partner-analyst") return false;
@@ -169,6 +177,8 @@ function App() {
         {screen === "drs"     && <DRSScreen onNavigate={navigate}/>}
         {screen === "grm"     && <GRMScreen onNavigate={navigate}/>}
         {screen === "partner-drs" && <PartnerDRSScreen/>}
+        {screen === "my-dsa" && <MyDsaScreen/>}
+        {screen === "my-programmes" && <MyProgrammesScreen/>}
         {screen === "reports" && <ReportsScreen role={role}/>}
         {screen === "admin"   && <AdminScreen/>}
         {screen === "registry" && <RegistryScreen onNavigate={navigate}/>}
