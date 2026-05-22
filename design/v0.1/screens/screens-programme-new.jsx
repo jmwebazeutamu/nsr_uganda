@@ -351,20 +351,52 @@ const ProgrammeRegistrationScreen = ({ onBack }) => {
       </div>
 
       {/* ACTION BAR */}
-      <div style={{margin:"16px -24px 0", position:"sticky", bottom:0, zIndex:20, background:"var(--neutral-0)", borderTop:"1px solid var(--neutral-300)", padding:"12px 20px", display:"flex", gap:12, alignItems:"center", boxShadow:"0 -2px 8px rgba(0,0,0,0.04)"}}>
-        <span className="t-bodysm muted">Step {stepIdx+1} of {PROG_STEPS.length} · <strong style={{color:"var(--neutral-900)"}}>{PROG_STEPS[stepIdx].label}</strong></span>
-        {outOfScopeGeo.length > 0 && step !== "scope" && (
-          <span className="row gap-2" style={{color:"var(--accent-quality)", fontSize:13}}>
-            <Icon name="alert" size={14} color="var(--accent-quality)"/> {outOfScopeGeo.length} region{outOfScopeGeo.length===1?'':'s'} outside DSA scope
-          </span>
-        )}
-        <div style={{flex:1}}/>
-        <button className="btn" onClick={prev} disabled={stepIdx === 0}><Icon name="chevronLeft" size={14}/> Back</button>
-        {stepIdx < PROG_STEPS.length - 1
-          ? <button className="btn btn-primary" onClick={next}>Continue <Icon name="chevronRight" size={14}/></button>
-          : <button className="btn btn-primary" onClick={() => setSubmitOpen(true)} disabled={!data.partner_id || !data.name || !data.kind}><Icon name="check" size={14}/> Create programme</button>
-        }
-      </div>
+      {(() => {
+        // The "Create programme" button at the wizard's last step needs
+        // partner + name + kind to be set. When the user clicked
+        // through and one of these is empty (e.g. the programme_kind
+        // ChoiceList never loaded because of a session expiry, or the
+        // user skipped the Kind card), the button used to disable
+        // silently — looked like a dead click. List which fields are
+        // missing inline + as a tooltip so the user knows what to fix.
+        const missing = [];
+        if (!data.partner_id) missing.push("partner");
+        if (!data.name)       missing.push("name");
+        if (!data.kind)       missing.push("programme kind");
+        const submitBlocked = missing.length > 0;
+        const tip = submitBlocked
+          ? `Missing: ${missing.join(", ")}. Go back to Step 1 (Basics) to set ${missing.length === 1 ? "it" : "them"}.`
+          : "";
+        const isLast = stepIdx === PROG_STEPS.length - 1;
+        return (
+          <div style={{margin:"16px -24px 0", position:"sticky", bottom:0, zIndex:20, background:"var(--neutral-0)", borderTop:"1px solid var(--neutral-300)", padding:"12px 20px", display:"flex", gap:12, alignItems:"center", boxShadow:"0 -2px 8px rgba(0,0,0,0.04)"}}>
+            <span className="t-bodysm muted">Step {stepIdx+1} of {PROG_STEPS.length} · <strong style={{color:"var(--neutral-900)"}}>{PROG_STEPS[stepIdx].label}</strong></span>
+            {outOfScopeGeo.length > 0 && step !== "scope" && (
+              <span className="row gap-2" style={{color:"var(--accent-quality)", fontSize:13}}>
+                <Icon name="alert" size={14} color="var(--accent-quality)"/> {outOfScopeGeo.length} region{outOfScopeGeo.length===1?'':'s'} outside DSA scope
+              </span>
+            )}
+            {isLast && submitBlocked && (
+              <span className="row gap-2" style={{color:"var(--accent-danger)", fontSize:13}}>
+                <Icon name="alert" size={14} color="var(--accent-danger)"/>
+                Missing on Basics step: <strong>{missing.join(", ")}</strong>
+              </span>
+            )}
+            <div style={{flex:1}}/>
+            <button className="btn" onClick={prev} disabled={stepIdx === 0}><Icon name="chevronLeft" size={14}/> Back</button>
+            {!isLast
+              ? <button className="btn btn-primary" onClick={next}>Continue <Icon name="chevronRight" size={14}/></button>
+              : <button className="btn btn-primary"
+                       onClick={() => setSubmitOpen(true)}
+                       disabled={submitBlocked}
+                       title={tip}
+                       aria-disabled={submitBlocked}>
+                  <Icon name="check" size={14}/> Create programme
+                </button>
+            }
+          </div>
+        );
+      })()}
 
       {/* SUBMIT MODAL */}
       <Modal open={submitOpen} onClose={() => !submitting && setSubmitOpen(false)} title="Create programme · save as draft" width={540}
@@ -489,7 +521,14 @@ const StepBasics = ({ data, setD, partners, partner, activeDsa, kindOpts }) => (
         <span className="t-cap">Drives the modality choices in step 3 and the default exit-reason codes</span>
       </div>
       <div style={{padding:20, display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(220px, 1fr))", gap:10}}>
-        {kindOpts.map(k => {
+        {kindOpts.length === 0 ? (
+          <span className="muted t-bodysm">
+            Programme kinds didn’t load. Check that you’re signed in
+            (the choice-list endpoint returns 403 anonymously) and
+            refresh — without a kind set, the “Create programme”
+            button at Step 5 stays disabled.
+          </span>
+        ) : kindOpts.map(k => {
           const on = data.kind === k.code;
           const tone = "programme";
           return (
