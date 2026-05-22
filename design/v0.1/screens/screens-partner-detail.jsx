@@ -407,21 +407,38 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme, onNavigat
         eyebrow={<>PARTNERS · <span className="t-mono">{p.code}</span> · §11.6</>}
         title={<>{p.name} <Chip tone="data" style={{marginLeft:8, verticalAlign:'2px'}}>{p.status}</Chip></>}
         sub={<>{p.type} · {p.sector} · lead {p.lead} · last activity {p.lastActivity}</>}
-        right={<>
-          <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to partners</button>
-          <button className="btn"><Icon name="download" size={14}/> Export partner record</button>
-          <button className="btn btn-primary"
-                  disabled={!p.dsas.length || !p.dsas.some(d => _SCOPE_EDITABLE.has(d.status_code))}
-                  onClick={() => {
-                    // Prefer active; otherwise pick the newest draft.
-                    const target = p.dsas.find(d => d.status_code === "active")
-                      || p.dsas.find(d => d.status_code === "draft");
-                    openScopeEditor(target);
-                  }}>
-            <Icon name="edit" size={14}/> Edit DSA scope
-          </button>
-          <button className="btn btn-ghost"><Icon name="moreH" size={14}/></button>
-        </>}
+        right={(() => {
+          const hasEditable = p.dsas.some(d => _SCOPE_EDITABLE.has(d.status_code));
+          const noDsas = p.dsas.length === 0;
+          // When the partner has no DSA (or only terminal ones), the
+          // "Edit scope" affordance is meaningless — surface the
+          // create-wizard path instead so the operator isn't dead-ended.
+          return <>
+            <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to partners</button>
+            <button className="btn"><Icon name="download" size={14}/> Export partner record</button>
+            {noDsas || !hasEditable ? (
+              <button className="btn btn-primary"
+                      onClick={() => onNavigate && onNavigate("dsa-new", { partnerId: p.id })}
+                      title={noDsas
+                        ? "This partner has no DSA yet — create one"
+                        : "All DSAs are in terminal status — create a new one"}>
+                <Icon name="plus" size={14}/> New DSA
+              </button>
+            ) : (
+              <button className="btn btn-primary"
+                      onClick={() => {
+                        // Prefer active; otherwise pick the newest draft.
+                        const target = p.dsas.find(d => d.status_code === "active")
+                          || p.dsas.find(d => d.status_code === "draft");
+                        openScopeEditor(target);
+                      }}
+                      title="Edit the scope on this partner's active or draft DSA">
+                <Icon name="edit" size={14}/> Edit DSA scope
+              </button>
+            )}
+            <button className="btn btn-ghost"><Icon name="moreH" size={14}/></button>
+          </>;
+        })()}
       />
 
       {/* Header summary card */}

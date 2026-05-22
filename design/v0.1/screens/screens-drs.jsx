@@ -1114,7 +1114,16 @@ const DRSScreen = ({ role = "operator", onExit, onNavigate } = {}) => {
 
 const DRSWizard = ({ role = "operator", onExit } = {}) => {
   const isPartner = role === "partner";
-  const [step, setStep] = useStateDRS("build");
+  // Start on Step 1 (Scope). The operator path REQUIRES picking an
+  // organisation + DSA here before the rest of the wizard makes
+  // sense — landing on Step 2 (Build) was the historical default
+  // and left operators flowing through the whole wizard without
+  // ever seeing the picker.
+  const [step, setStep] = useStateDRS("scope");
+  // Operator picker — organisation first, DSA second. For partners
+  // the schema already binds a single DSA, so neither piece of state
+  // is used.
+  const [pickedPartnerCode, setPickedPartnerCode] = useStateDRS("");
   // Selected fields are ordered dotted keys — the column order in
   // the delivered file follows the user's drag sequence on Step 3
   // (US-S27-014). FieldStepV2 owns add/remove/reorder.
@@ -1209,6 +1218,52 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
     }
     return null;
   }, [schema, pickedDsaId]);
+
+  // Distinct organisations the operator can file on behalf of —
+  // derived from available_dsas (one entry per partner_code).
+  // Sorted by partner name so the dropdown is alphabetical.
+  const availablePartners = React.useMemo(() => {
+    const dsas = schema?.available_dsas || [];
+    const byCode = new Map();
+    for (const d of dsas) {
+      if (!byCode.has(d.partner_code)) {
+        byCode.set(d.partner_code, {
+          code: d.partner_code,
+          name: d.partner_name || d.partner_code,
+          dsa_count: 0,
+        });
+      }
+      byCode.get(d.partner_code).dsa_count += 1;
+    }
+    return Array.from(byCode.values())
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  }, [schema]);
+
+  // DSAs scoped to the picked partner. Empty when no partner picked
+  // (the operator picker hides the DSA dropdown until that happens).
+  const partnerDsas = React.useMemo(() => {
+    if (!pickedPartnerCode) return [];
+    return (schema?.available_dsas || [])
+      .filter(d => d.partner_code === pickedPartnerCode);
+  }, [schema, pickedPartnerCode]);
+
+  // Auto-pick when the partner has exactly one DSA — the operator
+  // doesn't need a second click. When they switch partners, the
+  // current DSA pick is invalidated and reset.
+  React.useEffect(() => {
+    if (!pickedPartnerCode) {
+      if (pickedDsaId) setPickedDsaId("");
+      return;
+    }
+    if (partnerDsas.length === 1) {
+      if (pickedDsaId !== partnerDsas[0].id) setPickedDsaId(partnerDsas[0].id);
+      return;
+    }
+    // Multi-DSA partner — clear stale pick if it doesn't belong here.
+    if (pickedDsaId && !partnerDsas.some(d => d.id === pickedDsaId)) {
+      setPickedDsaId("");
+    }
+  }, [pickedPartnerCode, partnerDsas, pickedDsaId]);
 
   // Schema-driven options for enum fields whose value set lives
   // in reference data. Inline `options` skip this fetch entirely.
@@ -1447,7 +1502,10 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
       {step === 'scope' && <ScopeStep
         value={entity} onChange={setEntity}
         role={schema?.role || (isPartner ? "partner" : "operator")}
-        availableDsas={schema?.available_dsas || []}
+        availablePartners={availablePartners}
+        partnerDsas={partnerDsas}
+        pickedPartnerCode={pickedPartnerCode}
+        onPickPartner={setPickedPartnerCode}
         pickedDsaId={pickedDsaId}
         onPickDsa={setPickedDsaId}
         effectiveDsa={effectiveDsa}
@@ -1525,9 +1583,28 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
         <span className="t-bodysm muted">Step {stepIdx + 1} of {STEPS.length} · <strong style={{color:'var(--neutral-900)'}}>{STEPS[stepIdx].label}</strong></span>
         <div style={{flex:1}}/>
         <button className="btn" onClick={prev} disabled={stepIdx === 0}><Icon name="chevronLeft" size={14}/> Back</button>
-        {stepIdx < STEPS.length - 1
-          ? <button className="btn btn-primary" onClick={next}>Continue <Icon name="chevronRight" size={14}/></button>
-          : <button
+        {(() => {
+          // Step 1 (Scope) on the operator path REQUIRES a partner +
+          // DSA pick before continuing. This is the picker the side
+          // rail depends on — letting the operator skip past it
+          // produced the "— no DSA picked —" stuck state at submit
+          // time. Partners auto-bind via schema.dsa_id, so the gate
+          // only fires for operator role.
+          const scopeBlocked = step === "scope" && !isPartner && !effectiveDsa;
+          if (stepIdx < STEPS.length - 1) {
+            return (
+              <button
+                className="btn btn-primary"
+                onClick={next}
+                disabled={scopeBlocked}
+                title={scopeBlocked
+                  ? "Pick an organisation and a DSA before continuing"
+                  : ""}
+              >Continue <Icon name="chevronRight" size={14}/></button>
+            );
+          }
+          return (
+            <button
               className="btn btn-primary"
               onClick={() => setSubmitOpen(true)}
               disabled={!effectiveDsa}
@@ -1535,7 +1612,8 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
                 ? "Pick a DSA on Step 1 before submitting"
                 : ""}
             ><Icon name="check" size={14}/> Submit for approval</button>
-        }
+          );
+        })()}
       </div>
 
       <Modal open={submitOpen} onClose={() => submitting ? null : setSubmitOpen(false)} title="Submit data request" width={520}
@@ -1624,7 +1702,10 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
 const ScopeStep = ({
   value, onChange,
   role = "partner",
-  availableDsas = [],
+  availablePartners = [],
+  partnerDsas = [],
+  pickedPartnerCode = "",
+  onPickPartner,
   pickedDsaId = "",
   onPickDsa,
   effectiveDsa = null,
@@ -1636,45 +1717,81 @@ const ScopeStep = ({
     { id: "grievance", label: "Grievance summary", sub: "Case-level summary", enabled: false },
   ];
   const showOperatorPicker = role === "operator";
+  // The DSA dropdown only matters when a partner has more than one
+  // active DSA. With exactly one DSA the parent auto-picks it and
+  // we render a confirmation chip instead of a redundant picker.
+  const needsDsaPick = pickedPartnerCode && partnerDsas.length > 1;
   return (
     <div style={{display:'grid', gridTemplateColumns:'1fr 360px', gap:16}}>
       <div className="col gap-3">
         {showOperatorPicker && (
-          <div className="card">
+          <div className="card" style={{borderTop: "3px solid var(--accent-system)"}}>
             <div className="card-header">
               <h3 className="t-h3" style={{margin:0}}>Filing on behalf of</h3>
-              <span className="t-cap">Pick the DSA this request is filed under</span>
+              <span className="t-cap">Organisation first — DSA follows from the picked partner</span>
             </div>
             <div style={{padding:16}}>
-              {availableDsas.length === 0 ? (
+              {availablePartners.length === 0 ? (
                 <div className="tint-danger" style={{padding:12, borderRadius:6, borderLeft:'3px solid var(--accent-danger)'}}>
                   <div className="row gap-2"><Icon name="alert" size={14} color="var(--accent-danger)"/><strong className="t-bodysm">No active DSAs available</strong></div>
                   <p className="t-bodysm" style={{margin:'4px 0 0', color:'var(--neutral-700)'}}>
                     There are no active Data Sharing Agreements to file a
-                    request against. The submit action is disabled until a
-                    DSA is activated by the Partner Steward.
+                    request against. Ask the Partner Steward to activate
+                    a DSA, then come back here.
                   </p>
                 </div>
               ) : (
-                <div style={{display:'grid', gridTemplateColumns:'1fr', gap:8}}>
-                  <select
-                    className="field-input"
-                    value={pickedDsaId}
-                    onChange={(e) => onPickDsa && onPickDsa(e.target.value)}
-                    style={{padding:'10px 12px', fontSize:14}}
-                  >
-                    <option value="">— Select a DSA —</option>
-                    {availableDsas.map(d => (
-                      <option key={d.id} value={d.id}>
-                        {d.reference} · {d.partner_name || d.partner_code}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="t-cap muted">
-                    {availableDsas.length} active DSA{availableDsas.length === 1 ? "" : "s"} available.
-                    The operator (you) is recorded as `requester`; the
-                    partner whose DSA you pick is the data recipient.
-                  </div>
+                <div className="col gap-3">
+                  <Field label="Organisation" required hint="The partner this request is filed under. The operator (you) is recorded as requester.">
+                    <select
+                      className="field-input"
+                      value={pickedPartnerCode}
+                      onChange={(e) => onPickPartner && onPickPartner(e.target.value)}
+                      style={{padding:'10px 12px', fontSize:14}}
+                    >
+                      <option value="">— Select an organisation —</option>
+                      {availablePartners.map(p => (
+                        <option key={p.code} value={p.code}>
+                          {p.name}{p.dsa_count > 1 ? ` (${p.dsa_count} active DSAs)` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+
+                  {/* DSA picker only when the partner has > 1 active DSA. */}
+                  {needsDsaPick && (
+                    <Field label="Data Sharing Agreement" required hint={`${partnerDsas.length} active DSAs on this partner — pick one`}>
+                      <select
+                        className="field-input"
+                        value={pickedDsaId}
+                        onChange={(e) => onPickDsa && onPickDsa(e.target.value)}
+                        style={{padding:'10px 12px', fontSize:14}}
+                      >
+                        <option value="">— Select a DSA —</option>
+                        {partnerDsas.map(d => (
+                          <option key={d.id} value={d.id}>{d.reference}</option>
+                        ))}
+                      </select>
+                    </Field>
+                  )}
+
+                  {/* Auto-picked confirmation when the partner has 1 DSA. */}
+                  {pickedPartnerCode && partnerDsas.length === 1 && (
+                    <div className="tint-data" style={{padding:10, borderRadius:6, fontSize:13, display:"flex", alignItems:"center", gap:8}}>
+                      <Icon name="check" size={14} color="var(--accent-data)"/>
+                      <span>
+                        Linked to <strong className="t-mono">{partnerDsas[0].reference}</strong> · the partner's single active DSA.
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Empty state when partner picked but has no active DSAs. */}
+                  {pickedPartnerCode && partnerDsas.length === 0 && (
+                    <div className="tint-danger" style={{padding:10, borderRadius:6, fontSize:13, display:"flex", alignItems:"center", gap:8}}>
+                      <Icon name="alert" size={14} color="var(--accent-danger)"/>
+                      <span>No active DSA on this partner. Pick a different organisation.</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
