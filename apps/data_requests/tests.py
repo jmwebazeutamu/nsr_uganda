@@ -855,13 +855,53 @@ class TestBundleStorageSeam:
     Memory backend handles dev/CI; MinIO is the prod placeholder
     that raises until DRS-O-02 closes."""
 
-    def test_default_backend_is_memory(self, db, settings):
+    def test_memory_backend_resolves_when_selected(self, db, settings):
         from apps.data_requests.storage import (
             InMemoryBundleStorage,
             get_bundle_storage,
         )
         settings.DRS_BUNDLE_STORAGE = "memory"
         assert isinstance(get_bundle_storage(), InMemoryBundleStorage)
+
+    def test_file_backend_resolves_when_selected(self, db, settings, tmp_path):
+        from apps.data_requests.storage import (
+            FileBundleStorage,
+            get_bundle_storage,
+        )
+        settings.DRS_BUNDLE_STORAGE = "file"
+        settings.DRS_BUNDLE_DIR = str(tmp_path)
+        assert isinstance(get_bundle_storage(), FileBundleStorage)
+
+    def test_file_backend_round_trips_via_disk(self, db, settings, tmp_path):
+        """BUG-S27-032 regression: bundles must survive a process
+        restart. Tests that by writing a bundle via the singleton, then
+        spinning a fresh FileBundleStorage instance against the same
+        DRS_BUNDLE_DIR and reading it back — simulates a `runserver`
+        restart with the bytes still on disk."""
+        from apps.data_requests.storage import (
+            FileBundleStorage,
+            get_bundle_storage,
+        )
+        settings.DRS_BUNDLE_STORAGE = "file"
+        settings.DRS_BUNDLE_DIR = str(tmp_path)
+        # Hex SHA — the file backend refuses non-hex inputs to keep
+        # path traversal impossible.
+        sha = "a" * 64
+        get_bundle_storage().put(sha, b"persisted-bytes")
+        fresh = FileBundleStorage()
+        assert fresh.exists(sha)
+        assert fresh.get(sha) == b"persisted-bytes"
+
+    def test_file_backend_rejects_non_hex_keys(self, db, settings, tmp_path):
+        from apps.data_requests.storage import FileBundleStorage
+        settings.DRS_BUNDLE_DIR = str(tmp_path)
+        s = FileBundleStorage()
+        # exists/get swallow the ValueError as "missing"; put surfaces
+        # it because writing under a tampered key is a real error.
+        assert s.exists("../escape") is False
+        assert s.get("../escape") is None
+        with pytest.raises(ValueError):
+            s.put("../escape", b"x")
 
     def test_memory_backend_round_trips(self, db, settings):
         from apps.data_requests.storage import get_bundle_storage

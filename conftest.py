@@ -18,7 +18,31 @@ both. If a test needs to assert both branches, split into two cases.
 from __future__ import annotations
 
 import pytest
+from django.conf import settings
 from django.db import connection
+
+
+@pytest.fixture(autouse=True)
+def _drs_bundle_storage_isolation():
+    """Force the in-process bundle backend during tests.
+
+    Settings.py defaults to the file-backed store (BUG-S27-032 fix) so
+    dev `runserver` survives restarts. Tests would otherwise litter
+    .drs-bundles/ with cross-run artefacts; pinning to memory keeps
+    bundles per-process and isolates them between cases.
+    """
+    prev = getattr(settings, "DRS_BUNDLE_STORAGE", None)
+    settings.DRS_BUNDLE_STORAGE = "memory"
+    try:
+        from apps.data_requests.storage import get_bundle_storage
+        get_bundle_storage()._reset_for_tests()
+    except Exception:
+        pass
+    yield
+    if prev is None:
+        delattr(settings, "DRS_BUNDLE_STORAGE")
+    else:
+        settings.DRS_BUNDLE_STORAGE = prev
 
 
 def pytest_collection_modifyitems(config, items):

@@ -173,10 +173,17 @@ NSR_DATA_KEY = env("NSR_DATA_KEY", default="6kZf3vUYNDxBcLg3Vh-uYqOjQp4mEX0sIqAJ
 NIRA_PROVIDER = env("NIRA_PROVIDER", default="mock")
 
 # --- DRS bundle storage backend -------------------------------------------
-# 'memory' = in-process dict (dev / CI default).
+# 'file'   = disk-backed (default for dev). Bundles persist across
+#            `runserver` restarts, which the in-process dict never did
+#            (BUG-S27-032 — partner downloads kept 404ing after a restart).
+# 'memory' = in-process dict (test-suite default; see conftest.py).
 # 'minio'  = MinIO client (placeholder, raises NotImplementedError until
 #            DRS-O-02 closes — see apps.data_requests.storage).
-DRS_BUNDLE_STORAGE = env("DRS_BUNDLE_STORAGE", default="memory")
+DRS_BUNDLE_STORAGE = env("DRS_BUNDLE_STORAGE", default="file")
+DRS_BUNDLE_DIR = env(
+    "DRS_BUNDLE_DIR",
+    default=str(BASE_DIR / ".drs-bundles"),
+)
 
 # --- Celery -------------------------------------------------------------
 # Beat schedule lives in nsr_mis/celery.py. CELERY_ENABLED is a soft

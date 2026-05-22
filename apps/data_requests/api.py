@@ -312,6 +312,35 @@ class DataRequestViewSet(
                 status=status.HTTP_404_NOT_FOUND,
             )
         body = get_bundle(req.manifest_sha256) if req.manifest_sha256 else None
+        # BUG-S27-032 belt-and-braces — if the bundle bytes are missing
+        # (in-memory store wiped on restart, disk file rotated away,
+        # etc.) and the request is still DELIVERED with a manifest, try
+        # re-rendering from the deterministic source. Verify the
+        # recomputed SHA-256 matches the locked manifest before serving
+        # — if it doesn't, the underlying registry has shifted since
+        # delivery and we must NOT silently serve a different result.
+        if body is None and req.manifest_sha256:
+            import hashlib
+
+            from .bundles import put_bundle, render_bundle
+            try:
+                rebuilt, _row_count = render_bundle(req)
+            except Exception:
+                rebuilt = None
+            if rebuilt is not None:
+                recomputed = hashlib.sha256(rebuilt).hexdigest()
+                if recomputed == req.manifest_sha256:
+                    put_bundle(recomputed, rebuilt)
+                    body = rebuilt
+                else:
+                    return Response(
+                        {"detail":
+                            "bundle bytes lost and re-render no longer matches "
+                            "the locked manifest — underlying registry has "
+                            "changed since delivery. Contact the NSR Unit to "
+                            "re-issue the request."},
+                        status=status.HTTP_410_GONE,
+                    )
         if body is None:
             return Response(
                 {"detail": "bundle bytes not found in storage"},

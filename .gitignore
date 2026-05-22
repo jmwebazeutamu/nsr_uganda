@@ -56,3 +56,8 @@ node_modules/
 
 # Design — local scratch backups (e.g. partners-source/, screens-source/)
 design/v0.1/*-source/
+
+# DRS bundle store (file-backed default) — local-only artefacts;
+# regenerated on demand via /render-and-deliver/ + the download
+# endpoint's lazy-regen path.
+.drs-bundles/
