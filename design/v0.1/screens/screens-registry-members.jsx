@@ -1,23 +1,120 @@
-/* global React, Icon, Chip, PageHeader, KPI */
+/* global React, Icon, Chip, PageHeader, KPI, useApi, useChoiceList */
 // NSR MIS — Registry · Members listing (US-005 sibling)
 // =========================================================
 // Per-individual browse across every household in the registry.
 // Sister view to RegistryScreen (the household list). Same chrome,
 // same filter bar grammar, but rows are members.
 //
-// In production the data comes from /api/v1/registry/members/
-// (paginated, with the same column whitelist the household list
-// uses).  The sample below is hand-built from a subset of
-// households so the demo cross-links a couple of registry IDs
-// already known to the household list.
+// Live data:
+//   GET /api/v1/data-management/members/?...        — list rows
+//   GET /api/v1/data-management/members/aggregates/ — KPI strip
+//   GET /api/v1/reference-data/geographic-units/?level=sub_region
+//                                                  — sub-region picker
+//   GET /api/v1/reference-data/choice-list-bundle/?lists=...
+//                                                  — relationship + nin
+//                                                    + sex pickers
+//
+// MemberSerializer (US-005) nests household_sub_region_name /
+// district_name / parish_name / village_name / pmt_band so the row
+// projection below can read location off each member without
+// follow-up fetches.
 
 const { useState: useStateMem, useMemo: useMemoMem } = React;
 
-/* ------------------------------------------------------------
-   Sample members — drawn from a mix of households we already
-   know in HOUSEHOLDS so detail links cross-reference cleanly.
-   ------------------------------------------------------------ */
-const MEMBERS = [
+const _MEM_API_BASE = "/api/v1/data-management/members/";
+
+const _memQS = (params) => {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v != null && v !== "") qs.set(k, String(v));
+  }
+  return qs.toString();
+};
+
+const _buildMemberListUrl = (filters, page, pageSize) => {
+  const s = _memQS({ ...filters, page, page_size: pageSize });
+  return s ? `${_MEM_API_BASE}?${s}` : _MEM_API_BASE;
+};
+
+const _buildMemberAggregatesUrl = (filters) => {
+  const s = _memQS(filters);
+  return s ? `${_MEM_API_BASE}aggregates/?${s}` : `${_MEM_API_BASE}aggregates/`;
+};
+
+// Backend stores Disability flag per domain on the Disability one-
+// to-one (seeing/hearing/walking/memory/selfcare/communication). The
+// row projection picks the FIRST domain with a code of 03/04 ("a
+// lot of difficulty" / "cannot do at all") consistent with how
+// wg_disability_flag is computed in apps.data_management.models.
+const _DISAB_DOMAINS_ORDERED = [
+  "seeing", "hearing", "walking", "memory", "selfcare", "communication",
+];
+
+const _worstDisabilityDomain = (disab) => {
+  if (!disab || !disab.wg_disability_flag) return "none";
+  for (const d of _DISAB_DOMAINS_ORDERED) {
+    const v = disab[d];
+    if (v === "03" || v === "04") return d;
+  }
+  return "none";
+};
+
+// Coarse age-band bucket. Mirrors apps.data_management.api._AGE_BANDS
+// so the prototype's chips read the same buckets the server filters
+// against.
+const _ageBandFor = (years) => {
+  if (years == null) return "";
+  if (years < 5)  return "<5";
+  if (years < 10) return "5-9";
+  if (years < 15) return "10-14";
+  if (years < 20) return "15-19";
+  if (years < 30) return "20-29";
+  if (years < 40) return "30-39";
+  if (years < 50) return "40-49";
+  if (years < 60) return "50-59";
+  return "60+";
+};
+
+// Project a live Member payload (MemberSerializer shape) onto the
+// row shape the existing Members table renders. Names follow the
+// "<surname> <first_name>" convention used elsewhere in the harness.
+// nin status carries the raw code; NinPill resolves the chip tone.
+const _projectMember = (m) => ({
+  id: m.id,
+  line: m.line_number,
+  name: `${m.surname || ""} ${m.first_name || ""}`.trim() || "—",
+  rel: m.relationship_to_head || "",
+  relLabel: m.relationship_to_head_label || m.relationship_to_head || "—",
+  // ChoiceList: 1=Male, 2=Female. Keep the code on the row so the
+  // sex chip stays in lockstep with the backend filter param.
+  sex: m.sex || "",
+  age: m.age_years,
+  ageBand: _ageBandFor(m.age_years),
+  ninStatus: m.nin_status || "",
+  ninLast4: m.nin_last4 || "",
+  // List-view PII rule (HANDOFF §4): NIN value is never serialised
+  // by MemberSerializer.get_nin_value (returns null). The display
+  // uses nin_last4 + the verified flag for an at-a-glance preview.
+  disability: _worstDisabilityDomain(m.disability),
+  householdId: m.household,
+  subreg: m.household_sub_region_name || "",
+  district: m.household_district_name || "",
+  parish: m.household_parish_name || "",
+  village: m.household_village_name || "",
+  pmtBand: m.household_pmt_band || "",
+  status: "Confirmed",  // post-promotion baseline (matches Household.status)
+  lastUpdate: (m.updated_at || "").slice(0, 10),
+  // ProgrammeEnrolment lives on Household — wire via a follow-up
+  // when the serializer carries enrolment summary onto Member.
+  programmes: [],
+});
+
+// Kept as a static fallback for the test export so any consumer
+// that pulled MEMBERS off window still resolves to an empty list
+// rather than undefined. The live screen no longer reads this.
+const MEMBERS = [];
+
+const _LEGACY_MEMBERS_UNUSED = [
   // Nsubuga household (Buganda South · Lyantonde · Kibalinga)
   { mid:"M-01KRPPW6WR-001", line:1, name:"Nsubuga Ruth",       rel:"Head",      sex:"F", age:42, ageBand:"40–49", nin:"verified", ninShort:"CM84050213ABCD", disability:"none", hh:"01KRPPW6WRGRJZY0N4XN8R1YC2", subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Okello Village", pmtBand:"Poorest 40%", programmes:["OPM-PDM"],     status:"Confirmed", lastUpdate:"22 Apr 2026" },
   { mid:"M-01KRPPW6WR-002", line:2, name:"Tumusiime Samuel",   rel:"Spouse",    sex:"M", age:46, ageBand:"40–49", nin:"verified", ninShort:"CM80020412EFGH", disability:"none", hh:"01KRPPW6WRGRJZY0N4XN8R1YC2", subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Okello Village", pmtBand:"Poorest 40%", programmes:["OPM-PDM"],     status:"Confirmed", lastUpdate:"22 Apr 2026" },
@@ -80,28 +177,43 @@ const MEMBERS = [
   { mid:"M-01HX91KPN5-003", line:3, name:"Tumuhairwe Edith",   rel:"Daughter",  sex:"F", age:25, ageBand:"20–29", nin:"verified", ninShort:"CM00021105HIJK", disability:"none",      hh:"01HX91KPNRMQ0F2B7K6FZRWS55", subreg:"Buganda South", district:"Lyantonde", parish:"Kasaana", village:"Kasaana A", pmtBand:"Middle 40%", programmes:[],       status:"Confirmed", lastUpdate:"02 Feb 2026" },
 ];
 
-const MEM_AGE_BANDS = ["<5", "5–9", "10–14", "15–19", "20–29", "30–39", "40–49", "50–59", "60+"];
-const MEM_RELATIONS = ["Head","Spouse","Son","Daughter","Parent","Other relative","Non-relative"];
+// Age-band keys MUST match apps.data_management.api._AGE_BANDS so
+// the dropdown round-trips cleanly through `?age_band=`.
+const MEM_AGE_BANDS = ["<5", "5-9", "10-14", "15-19", "20-29", "30-39", "40-49", "50-59", "60+"];
 
-const NinPill = ({ status, value }) => {
-  const map = {
-    verified: { label:"verified", tone:"data",    icon:"check" },
-    pending:  { label:"pending",  tone:"quality", icon:"clock" },
-    none:     { label:"none",     tone:"neutral", icon:"minus" },
-  };
-  const m = map[status] || map.none;
+// nin_status code → chip tone + icon. ChoiceList seed (US-S22-005c):
+// 1=has_card (verified), 2=lost, 3=not_issued (pending), 4=no, 8=unknown.
+const _NIN_CHIP = {
+  "1": { tone:"data",    icon:"check" },
+  "2": { tone:"quality", icon:"alert" },
+  "3": { tone:"quality", icon:"clock" },
+  "4": { tone:"neutral", icon:"minus" },
+  "8": { tone:"neutral", icon:"minus" },
+};
+
+// NinPill — code-driven. `status` is the raw ChoiceList code; `label`
+// is the resolved label from MemberSerializer.nin_status_label (or a
+// hardcoded fallback). `ninLast4` shows only when verified so the
+// list view satisfies HANDOFF §4 (sensitive: redacted in list).
+const NinPill = ({ status, label, ninLast4 }) => {
+  const m = _NIN_CHIP[status] || _NIN_CHIP["8"];
   return (
     <div style={{display:"flex", flexDirection:"column", gap:2, minWidth:0}}>
-      <Chip size="sm" tone={m.tone}><Icon name={m.icon} size={10}/> {m.label}</Chip>
-      {status === "verified" && (
+      <Chip size="sm" tone={m.tone}>
+        <Icon name={m.icon} size={10}/> {label || status || "—"}
+      </Chip>
+      {status === "1" && ninLast4 && (
         <span className="t-mono t-cap" style={{fontSize:10, color:"var(--neutral-500)", letterSpacing:"0.02em"}}>
-          {value}
+          ••••{ninLast4}
         </span>
       )}
     </div>
   );
 };
 
+// DisabilityPill — `kind` is one of the WG-SS domain names returned
+// by _worstDisabilityDomain (`seeing`, `hearing`, `walking`, etc.)
+// or `none`.
 const DisabilityPill = ({ kind }) => {
   if (kind === "none" || !kind) return <span className="muted t-cap">none</span>;
   return <Chip size="sm" tone="quality" title={`Washington Group: a lot of difficulty (${kind}).`}>
@@ -111,6 +223,10 @@ const DisabilityPill = ({ kind }) => {
 
 const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
   const [q, setQ] = useStateMem("");
+  // Filters are keyed off the same codes the backend accepts so the
+  // URL is round-trippable. sex/nin_status carry ChoiceList codes;
+  // sub_region carries GeographicUnit.code; relationship_to_head
+  // carries the relationship code.
   const [sex, setSex] = useStateMem("");
   const [ageBand, setAgeBand] = useStateMem("");
   const [rel, setRel] = useStateMem("");
@@ -122,51 +238,64 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
   const [page, setPage] = useStateMem(0);
   const pageSize = 12;
 
-  const rows = useMemoMem(() => {
-    let r = MEMBERS.filter(m => {
-      if (q) {
-        const ql = q.toLowerCase();
-        if (!(m.name.toLowerCase().includes(ql) ||
-              m.mid.toLowerCase().includes(ql) ||
-              m.ninShort.toLowerCase().includes(ql) ||
-              m.hh.toLowerCase().includes(ql) ||
-              m.parish.toLowerCase().includes(ql))) return false;
-      }
-      if (sex && m.sex !== sex) return false;
-      if (ageBand && m.ageBand !== ageBand) return false;
-      if (rel && m.rel !== rel) return false;
-      if (subreg && m.subreg !== subreg) return false;
-      if (disab) {
-        if (disab === "any" && m.disability === "none") return false;
-        if (disab !== "any" && m.disability !== disab) return false;
-      }
-      if (nin && m.nin !== nin) return false;
-      if (prog && !m.programmes.includes(prog)) return false;
-      return true;
-    });
-    if (sortBy === "name") r = [...r].sort((a, b) => a.name.localeCompare(b.name));
-    if (sortBy === "ageAsc") r = [...r].sort((a, b) => a.age - b.age);
-    if (sortBy === "ageDesc") r = [...r].sort((a, b) => b.age - a.age);
-    return r;
-  }, [q, sex, ageBand, rel, subreg, disab, nin, prog, sortBy]);
+  const _filters = {
+    q,
+    sex,
+    age_band: ageBand,
+    relationship_to_head: rel,
+    sub_region: subreg,
+    disability: disab,
+    nin_status: nin,
+    programme: prog,
+  };
+  const _orderingMap = {
+    lastUpdate: "-updated_at",
+    name: "surname",
+    ageAsc: "age_years",
+    ageDesc: "-age_years",
+  };
+  const listUrl = _buildMemberListUrl(
+    { ..._filters, ordering: _orderingMap[sortBy] || undefined },
+    page + 1, pageSize,
+  );
+  const aggUrl = _buildMemberAggregatesUrl(_filters);
 
-  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
-  const visible = rows.slice(page * pageSize, page * pageSize + pageSize);
+  const [listResp, listMeta] = useApi(listUrl);
+  const [aggResp] = useApi(aggUrl);
+  const [subregResp] = useApi(
+    "/api/v1/reference-data/geographic-units/?level=sub_region&status=active&page_size=500",
+  );
 
-  const subregs = [...new Set(MEMBERS.map(m => m.subreg))].sort();
+  // Choice-list pickers — relationship_to_head + nin_status + sex.
+  // The useChoiceList hook caches the bundle by ETag (US-S23-012).
+  const [, , clMeta] = useChoiceList
+    ? useChoiceList(["relationship_to_head", "nin_status", "sex"])
+    : [[], {}, {}];
+  const relOptions = (clMeta && clMeta.allLists && clMeta.allLists.relationship_to_head) || [];
+  const ninOptions = (clMeta && clMeta.allLists && clMeta.allLists.nin_status) || [];
+  const sexOptions = (clMeta && clMeta.allLists && clMeta.allLists.sex) || [];
+
+  const liveRows = ((listResp && listResp.results) || []).map(_projectMember);
+  const liveCount = (listResp && typeof listResp.count === "number")
+    ? listResp.count
+    : liveRows.length;
+  const totalPages = Math.max(1, Math.ceil(liveCount / pageSize));
+
+  const subregs = (subregResp && subregResp.results) || subregResp || [];
 
   const reset = () => {
     setQ(""); setSex(""); setAgeBand(""); setRel(""); setSubreg("");
     setDisab(""); setNin(""); setProg(""); setPage(0);
   };
 
-  // KPI counts (whole set, not filtered — matches household-page convention)
-  const total = MEMBERS.length;
-  const under18 = MEMBERS.filter(m => m.age < 18).length;
-  const elder60 = MEMBERS.filter(m => m.age >= 60).length;
-  const withDis = MEMBERS.filter(m => m.disability !== "none").length;
-  const female = MEMBERS.filter(m => m.sex === "F").length;
-  const ninVer = MEMBERS.filter(m => m.nin === "verified").length;
+  // KPIs read off the aggregates endpoint — same filter params, so
+  // the strip reflects the visible slice (HANDOFF §5).
+  const total = aggResp?.total_individuals ?? 0;
+  const under18 = aggResp?.children_under_18 ?? 0;
+  const elder60 = aggResp?.elderly_60_plus ?? 0;
+  const withDis = aggResp?.with_disability_wgss ?? 0;
+  const female = aggResp?.female ?? 0;
+  const ninVer = aggResp?.nin_verified ?? 0;
 
   const activeFilters = [q, sex, ageBand, rel, subreg, disab, nin, prog].filter(Boolean);
 
@@ -205,42 +334,49 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
 
           <select className="field-select" style={{height:34, width:'auto', minWidth:110}} value={sex} onChange={(e) => { setSex(e.target.value); setPage(0); }}>
             <option value="">Any sex</option>
-            <option value="F">Female</option>
-            <option value="M">Male</option>
+            {sexOptions.length
+              ? sexOptions.map(o => <option key={o.code} value={o.code}>{o.label}</option>)
+              : <><option value="2">Female</option><option value="1">Male</option></>}
           </select>
           <select className="field-select" style={{height:34, width:'auto', minWidth:130}} value={ageBand} onChange={(e) => { setAgeBand(e.target.value); setPage(0); }}>
             <option value="">Any age band</option>
             {MEM_AGE_BANDS.map(b => <option key={b} value={b}>{b}</option>)}
           </select>
-          <select className="field-select" style={{height:34, width:'auto', minWidth:150}} value={rel} onChange={(e) => { setRel(e.target.value); setPage(0); }}>
+          <select className="field-select" style={{height:34, width:'auto', minWidth:170}} value={rel} onChange={(e) => { setRel(e.target.value); setPage(0); }}>
             <option value="">Any relationship</option>
-            {MEM_RELATIONS.map(r => <option key={r}>{r}</option>)}
+            {relOptions.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}
           </select>
-          <select className="field-select" style={{height:34, width:'auto', minWidth:160}} value={subreg} onChange={(e) => { setSubreg(e.target.value); setPage(0); }}>
+          <select className="field-select" style={{height:34, width:'auto', minWidth:200}} value={subreg} onChange={(e) => { setSubreg(e.target.value); setPage(0); }}>
             <option value="">Any sub-region</option>
-            {subregs.map(s => <option key={s}>{s}</option>)}
+            {subregs.map(s => <option key={s.id || s.code} value={s.code}>{s.name}</option>)}
           </select>
           <select className="field-select" style={{height:34, width:'auto', minWidth:150}} value={disab} onChange={(e) => { setDisab(e.target.value); setPage(0); }}>
             <option value="">Any disability</option>
             <option value="any">Any flag set</option>
             <option value="seeing">Seeing</option>
             <option value="hearing">Hearing</option>
-            <option value="mobility">Mobility</option>
-            <option value="cognition">Cognition</option>
+            <option value="walking">Walking</option>
+            <option value="memory">Memory</option>
+            <option value="selfcare">Self-care</option>
+            <option value="communication">Communication</option>
           </select>
-          <select className="field-select" style={{height:34, width:'auto', minWidth:130}} value={nin} onChange={(e) => { setNin(e.target.value); setPage(0); }}>
+          <select className="field-select" style={{height:34, width:'auto', minWidth:140}} value={nin} onChange={(e) => { setNin(e.target.value); setPage(0); }}>
             <option value="">Any NIN status</option>
-            <option value="verified">Verified</option>
-            <option value="pending">Pending</option>
-            <option value="none">None</option>
+            {ninOptions.length
+              ? ninOptions.map(o => <option key={o.code} value={o.code}>{o.label}</option>)
+              : <>
+                  <option value="1">Verified</option>
+                  <option value="3">Pending</option>
+                  <option value="4">No NIN</option>
+                  <option value="8">Unknown</option>
+                </>}
           </select>
-          <select className="field-select" style={{height:34, width:'auto', minWidth:160}} value={prog} onChange={(e) => { setProg(e.target.value); setPage(0); }}>
-            <option value="">Any programme (HH)</option>
-            <option>OPM-PDM</option>
-            <option>NUSAF</option>
-            <option>WFP</option>
-            <option>SCG</option>
-          </select>
+          <input
+            type="text" value={prog}
+            onChange={(e) => { setProg(e.target.value); setPage(0); }}
+            placeholder="Programme code (HH)"
+            className="field-input"
+            style={{height:34, width:'auto', minWidth:160}}/>
 
           <div style={{flex:1}}/>
           <button className="btn btn-sm btn-ghost" onClick={reset}><Icon name="x" size={13}/> Reset</button>
@@ -260,12 +396,21 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
         <div className="row gap-2 mt-3" style={{flexWrap:'wrap'}}>
           <span className="t-cap">Active filters:</span>
           {q && <Chip size="sm">"{q}"</Chip>}
-          {sex && <Chip size="sm">{sex === "F" ? "Female" : "Male"}</Chip>}
+          {sex && <Chip size="sm">{
+            sexOptions.find(o => o.code === sex)?.label
+              || (sex === "1" ? "Male" : sex === "2" ? "Female" : sex)
+          }</Chip>}
           {ageBand && <Chip size="sm">Age {ageBand}</Chip>}
-          {rel && <Chip size="sm">{rel}</Chip>}
-          {subreg && <Chip size="sm">{subreg}</Chip>}
+          {rel && <Chip size="sm">{
+            relOptions.find(o => o.code === rel)?.label || rel
+          }</Chip>}
+          {subreg && <Chip size="sm">{
+            subregs.find(s => s.code === subreg)?.name || subreg
+          }</Chip>}
           {disab && <Chip size="sm" tone="quality">Disability: {disab}</Chip>}
-          {nin && <Chip size="sm">NIN: {nin}</Chip>}
+          {nin && <Chip size="sm">NIN: {
+            ninOptions.find(o => o.code === nin)?.label || nin
+          }</Chip>}
           {prog && <Chip size="sm" tone="programme">{prog}</Chip>}
         </div>
       )}
@@ -273,20 +418,27 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
       {/* Results table */}
       <div className="card mt-4">
         <div className="card-toolbar">
-          <strong className="t-bodysm">{rows.length.toLocaleString()} members</strong>
-          <span className="t-cap">Page {page+1} of {totalPages} · click any row to open the member record</span>
+          <strong className="t-bodysm">{liveCount.toLocaleString()} members</strong>
+          <span className="t-cap">
+            {listMeta.loading ? "Loading…" : `Page ${page+1} of ${totalPages} · click any row to open the member record`}
+          </span>
           <div style={{flex:1}}/>
           <span className="t-cap" style={{display:"flex", alignItems:"center", gap:6}}>
             <span style={{width:8, height:8, borderRadius:2, background:"var(--accent-system)"}}/>
-            {female} F · {total - female} M (sample)
+            {female} F · {total - female} M
           </span>
           <div style={{width:1, height:18, background:'var(--neutral-200)'}}/>
           <span className="t-cap" style={{display:"flex", alignItems:"center", gap:6}}>
             <Icon name="check" size={11} color="var(--accent-data)"/>
-            {ninVer} NIN-verified ({Math.round(ninVer/total*100)}%)
+            {ninVer} NIN-verified {total ? `(${Math.round(ninVer/total*100)}%)` : ""}
           </span>
           <button className="btn btn-sm btn-ghost"><Icon name="sliders" size={14}/> Columns</button>
         </div>
+        {listMeta.error && (
+          <div style={{padding:'12px 16px', color:'var(--accent-danger)'}} className="t-bodysm">
+            Couldn’t load members: {listMeta.error}
+          </div>
+        )}
         <table className="tbl">
           <thead>
             <tr>
@@ -304,21 +456,26 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
             </tr>
           </thead>
           <tbody>
-            {visible.map(m => (
-              <tr key={m.mid} style={{cursor:'pointer'}} onClick={() => onOpenMember?.(m.mid)}>
-                <td className="col-id">{m.mid}</td>
+            {liveRows.length === 0 && !listMeta.loading && (
+              <tr><td colSpan={11} style={{padding:'20px', textAlign:'center'}} className="muted t-bodysm">
+                No members match the current filters.
+              </td></tr>
+            )}
+            {liveRows.map(m => (
+              <tr key={m.id} style={{cursor:'pointer'}} onClick={() => onOpenMember?.(m.id)}>
+                <td className="col-id">{m.id.slice(0, 16)}…</td>
                 <td>
                   <div className="row gap-3">
                     <div style={{
                       width:28, height:28, borderRadius:'50%',
-                      background: m.sex === 'F' ? 'var(--accent-eligibility-bg, var(--primary-100))' : 'var(--primary-100)',
+                      background: m.sex === '2' ? 'var(--accent-eligibility-bg, var(--primary-100))' : 'var(--primary-100)',
                       color: 'var(--primary-900)',
                       display:'grid', placeItems:'center', fontSize:11, fontWeight:600,
-                    }}>{m.name.split(' ').map(w => w[0]).slice(0,2).join('')}</div>
+                    }}>{m.name !== "—" ? m.name.split(' ').map(w => w[0]).slice(0,2).join('') : "—"}</div>
                     <div style={{minWidth:0}}>
-                      <div style={{fontWeight: m.line === 1 ? 600 : 500, whiteSpace:'nowrap'}}>
+                      <div style={{fontWeight: m.rel === "01" ? 600 : 500, whiteSpace:'nowrap'}}>
                         {m.name}
-                        {m.line === 1 && (
+                        {m.rel === "01" && (
                           <span className="t-cap" style={{marginLeft:8, color:'var(--accent-identity, var(--primary-900))'}}>head</span>
                         )}
                       </div>
@@ -326,28 +483,30 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
                     </div>
                   </div>
                 </td>
-                <td><Chip size="sm">{m.sex}</Chip></td>
+                <td><Chip size="sm">{m.sex === "2" ? "F" : m.sex === "1" ? "M" : "—"}</Chip></td>
                 <td>
-                  <div className="t-num" style={{fontWeight:500}}>{m.age}</div>
+                  <div className="t-num" style={{fontWeight:500}}>{m.age != null ? m.age : "—"}</div>
                   <div className="t-cap">{m.ageBand}</div>
                 </td>
-                <td className="t-bodysm">{m.rel}</td>
-                <td><NinPill status={m.nin} value={m.ninShort}/></td>
+                <td className="t-bodysm">{m.relLabel}</td>
+                <td><NinPill status={m.ninStatus} label={
+                  ninOptions.find(o => o.code === m.ninStatus)?.label
+                } ninLast4={m.ninLast4}/></td>
                 <td><DisabilityPill kind={m.disability}/></td>
-                <td onClick={(e) => { e.stopPropagation(); onOpenHousehold?.(m.hh); }}
+                <td onClick={(e) => { e.stopPropagation(); onOpenHousehold?.(m.householdId); }}
                     style={{cursor:'pointer'}} title="Open household detail">
                   <div className="t-mono" style={{fontSize:11, color:'var(--accent-system, var(--primary-900))', whiteSpace:'nowrap'}}>
-                    {m.hh.slice(0, 16)}…
+                    {m.householdId ? `${m.householdId.slice(0, 16)}…` : "—"}
                   </div>
-                  <div className="t-cap">{m.pmtBand}</div>
+                  <div className="t-cap">{m.pmtBand || "—"}</div>
                 </td>
                 <td>
-                  <div className="t-bodysm" style={{whiteSpace:'nowrap'}}>{m.parish} · {m.district}</div>
-                  <div className="t-cap">{m.subreg} · {m.village}</div>
+                  <div className="t-bodysm" style={{whiteSpace:'nowrap'}}>{m.parish || "—"} · {m.district || "—"}</div>
+                  <div className="t-cap">{m.subreg || "—"} · {m.village || "—"}</div>
                 </td>
                 <td>
                   {m.programmes.length === 0
-                    ? <span className="muted t-cap">none</span>
+                    ? <span className="muted t-cap">—</span>
                     : <div className="row-wrap">{m.programmes.map(p => <Chip key={p} size="sm" tone="programme">{p}</Chip>)}</div>}
                 </td>
                 <td className="col-actions"><Icon name="chevronRight" size={16} color="var(--neutral-500)"/></td>
@@ -358,7 +517,11 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
 
         {/* Pagination */}
         <div className="row gap-2" style={{padding:'12px 16px', borderTop:'1px solid var(--neutral-200)', justifyContent:'space-between'}}>
-          <span className="t-cap">Showing {page*pageSize + 1}–{Math.min((page+1)*pageSize, rows.length)} of {rows.length.toLocaleString()}</span>
+          <span className="t-cap">
+            {liveCount === 0
+              ? "0 results"
+              : `Showing ${page*pageSize + 1}–${Math.min((page+1)*pageSize, liveCount)} of ${liveCount.toLocaleString()}`}
+          </span>
           <div className="row gap-2">
             <button className="btn btn-sm" disabled={page === 0} onClick={() => setPage(0)}><Icon name="chevronsLeft" size={14}/></button>
             <button className="btn btn-sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}><Icon name="chevronLeft" size={14}/></button>

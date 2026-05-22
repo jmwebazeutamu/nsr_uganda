@@ -142,6 +142,26 @@ class MemberSerializer(serializers.ModelSerializer):
     disability = serializers.SerializerMethodField()
     education = serializers.SerializerMethodField()
     employment = serializers.SerializerMethodField()
+    # US-005 — household location names so the Members list can render
+    # a location chip without a follow-up fetch per row. select_related
+    # on the viewset keeps these zero-query. Defaults to "" for any
+    # row whose household FK chain is incomplete (shouldn't happen
+    # against promoted households).
+    household_sub_region_name = serializers.CharField(
+        source="household.sub_region.name", read_only=True, default="",
+    )
+    household_district_name = serializers.CharField(
+        source="household.district.name", read_only=True, default="",
+    )
+    household_parish_name = serializers.CharField(
+        source="household.parish.name", read_only=True, default="",
+    )
+    household_village_name = serializers.CharField(
+        source="household.village.name", read_only=True, default="",
+    )
+    household_pmt_band = serializers.CharField(
+        source="household.current_vulnerability_band", read_only=True, default="",
+    )
 
     class Meta:
         model = Member
@@ -158,6 +178,10 @@ class MemberSerializer(serializers.ModelSerializer):
             "nin_last4", "nin_value",
             "telephone_1", "telephone_2", "is_deleted", "merged_into",
             "health", "disability", "education", "employment",
+            "household_sub_region_name", "household_district_name",
+            "household_parish_name", "household_village_name",
+            "household_pmt_band",
+            "updated_at",
         )
 
     def get_nin_value(self, obj) -> str | None:
@@ -708,7 +732,19 @@ class HouseholdViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyMod
 )
 class MemberViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
     audit_entity_type = "member"
-    queryset = Member.objects.all().order_by("household", "line_number")
+    # US-005 — select_related the household location chain so the
+    # Members list renders sub-region / district / parish / village
+    # names without N+1 fetches.
+    queryset = (
+        Member.objects
+        .select_related(
+            "household__sub_region",
+            "household__district",
+            "household__parish",
+            "household__village",
+        )
+        .order_by("household", "line_number")
+    )
     serializer_class = MemberSerializer
     # US-S16-003 — tighter page-size cap on the highest-PII surface.
     # DefaultPagination caps at 500; MemberPagination caps at 100.

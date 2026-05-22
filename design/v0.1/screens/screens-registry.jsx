@@ -1,28 +1,75 @@
-/* global React, Icon, Chip, PageHeader, KPI */
+/* global React, Icon, Chip, PageHeader, KPI, useApi */
 // NSR MIS — Registry browse + Household detail (US-005, US-090 read-only registry view)
 
 const { useState: useStateReg, useMemo: useMemoReg } = React;
 
-/* ============================================================
-   HOUSEHOLDS — sample registry
-   ============================================================ */
-const HOUSEHOLDS = [
-  { rid: "01KRPPW6WRGRJZY0N4XN8R1YC2", head: "Nsubuga Ruth",      sex:"F", hh: 7, subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Okello Village", pmt:0.39, band:"Poorest 40%", source:"DIH",     status:"Registered", regDate:"08 Mar 2026", lastUpdate:"22 Apr 2026", programmes:["OPM-PDM"] },
-  { rid: "01HXY7K3B2N9PVQE4M6FZRWS18", head: "Lokol Naume",       sex:"F", hh: 6, subreg:"Karamoja",      district:"Moroto",    parish:"Nakiloro",  village:"Lopuwapuwa A",   pmt:0.32, band:"Poorest 20%", source:"Walk-in", status:"Provisional", regDate:"14 May 2026", lastUpdate:"—",            programmes:[] },
-  { rid: "01HXZ9MR4N8P2QFB7K6FZRWS33", head: "Akello Grace",      sex:"F", hh: 5, subreg:"Acholi",        district:"Gulu",      parish:"Pageya",    village:"Aywee",         pmt:0.41, band:"Poorest 40%", source:"Walk-in", status:"Pending",     regDate:"14 May 2026", lastUpdate:"—",            programmes:[] },
-  { rid: "01HXP02CN4QFB7K6FZRWS00111", head: "Mukasa Patrick",    sex:"M", hh: 4, subreg:"West Nile",     district:"Arua",      parish:"Anyiribu",  village:"Anyiribu A",    pmt:0.55, band:"Poorest 40%", source:"DIH",     status:"Registered", regDate:"15 Feb 2026", lastUpdate:"03 May 2026", programmes:["NUSAF","OPM-PDM"] },
-  { rid: "01HXP02CN4QFB7K6FZRWS00118", head: "Onyango David",     sex:"M", hh: 7, subreg:"West Nile",     district:"Arua",      parish:"Logiri",    village:"Logiri Central",pmt:0.46, band:"Poorest 40%", source:"Bulk",    status:"Pending",     regDate:"14 May 2026", lastUpdate:"—",            programmes:[] },
-  { rid: "01HY02FNQ9P8MN6FB7K6FZRWS67", head: "Mugisha James",    sex:"M", hh: 6, subreg:"Karamoja",      district:"Napak",     parish:"Lokopo",    village:"Lorengedwat",   pmt:0.28, band:"Poorest 20%", source:"Walk-in", status:"Pending",     regDate:"14 May 2026", lastUpdate:"—",            programmes:[] },
-  { rid: "01HY04MQR0N8P2FB7K6FZRWS73", head: "Auma Beatrice",     sex:"F", hh: 8, subreg:"Karamoja",      district:"Napak",     parish:"Lokopo",    village:"Apeitolim",     pmt:0.34, band:"Poorest 40%", source:"Walk-in", status:"Pending",     regDate:"14 May 2026", lastUpdate:"—",            programmes:[] },
-  { rid: "01HY09KRS1P9MN6FB7K6FZRWS84", head: "Lopuwa John",      sex:"M", hh: 7, subreg:"Karamoja",      district:"Moroto",    parish:"Tapac",     village:"Kakingol",      pmt:0.36, band:"Poorest 40%", source:"Walk-in", status:"Registered", regDate:"08 Apr 2026", lastUpdate:"11 May 2026", programmes:["OPM-PDM"] },
-  { rid: "01HXZBVK6QN8M2PFB7K6FZRWS41", head: "Nakato Sarah",     sex:"F", hh: 4, subreg:"West Nile",     district:"Yumbe",     parish:"Romogi",    village:"Kuluba",        pmt:0.52, band:"Poorest 40%", source:"Walk-in", status:"Rejected",    regDate:"01 May 2026", lastUpdate:"04 May 2026", programmes:[] },
-  { rid: "01HY0AMNT8P2N6FB7K6FZRWS92", head: "Acheng Rose",       sex:"F", hh: 3, subreg:"Acholi",        district:"Gulu",      parish:"Bobi",      village:"Aywee",         pmt:0.62, band:"Middle 40%",  source:"DIH",     status:"Registered", regDate:"19 Jan 2026", lastUpdate:"30 Apr 2026", programmes:["NUSAF"] },
-  { rid: "01HX91KPNRMQ0F2B7K6FZRWS10", head: "Byaruhanga Charles",sex:"M", hh: 5, subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Okello Village", pmt:0.44, band:"Poorest 40%", source:"DIH",     status:"Registered", regDate:"22 Dec 2025", lastUpdate:"17 Mar 2026", programmes:["OPM-PDM"] },
-  { rid: "01HX91KPNRMQ0F2B7K6FZRWS44", head: "Namutebi Sarah",    sex:"F", hh: 6, subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Okello Village", pmt:0.31, band:"Poorest 20%", source:"DIH",     status:"Registered", regDate:"22 Dec 2025", lastUpdate:"21 Apr 2026", programmes:["OPM-PDM","WFP"] },
-  { rid: "01HX91KPNRMQ0F2B7K6FZRWS55", head: "Tumuhairwe Peter",  sex:"M", hh: 4, subreg:"Buganda South", district:"Lyantonde", parish:"Kasaana",   village:"Kasaana A",     pmt:0.71, band:"Middle 40%",  source:"DIH",     status:"Registered", regDate:"08 Jan 2026", lastUpdate:"02 Feb 2026", programmes:[] },
-  { rid: "01HX91KPNRMQ0F2B7K6FZRWS66", head: "Apio Joyce",        sex:"F", hh: 5, subreg:"Lango",         district:"Lira",      parish:"Adekokwok", village:"Adekokwok B",   pmt:0.38, band:"Poorest 40%", source:"Walk-in", status:"Registered", regDate:"19 Feb 2026", lastUpdate:"08 May 2026", programmes:["NUSAF"] },
-  { rid: "01HX91KPNRMQ0F2B7K6FZRWS77", head: "Kintu Ronald",      sex:"M", hh: 6, subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Lwemiyaga",     pmt:0.49, band:"Poorest 40%", source:"DIH",     status:"Registered", regDate:"01 Mar 2026", lastUpdate:"14 Apr 2026", programmes:["OPM-PDM"] },
-];
+// ────────────────────────────────────────────────────────────────
+// Live-data helpers for the Households browse (US-005).
+// Filters round-trip through query params on
+// /api/v1/data-management/households/; KPIs read off
+// /api/v1/data-management/households/aggregates/. The aggregates
+// endpoint honours the same filter params so the KPI strip reflects
+// the visible slice.
+// ────────────────────────────────────────────────────────────────
+
+const _HH_API_BASE = "/api/v1/data-management/households/";
+
+const _registryQS = (params) => {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params || {})) {
+    if (v != null && v !== "") qs.set(k, String(v));
+  }
+  return qs.toString();
+};
+
+const _buildHouseholdListUrl = (filters, page, pageSize) => {
+  const s = _registryQS({ ...filters, page, page_size: pageSize });
+  return s ? `${_HH_API_BASE}?${s}` : _HH_API_BASE;
+};
+
+const _buildHouseholdAggregatesUrl = (filters) => {
+  const s = _registryQS(filters);
+  return s
+    ? `${_HH_API_BASE}aggregates/?${s}`
+    : `${_HH_API_BASE}aggregates/`;
+};
+
+// Project a live Household payload (HouseholdSerializer shape) onto
+// the row shape the existing table render expects. Head is the
+// nested member with relationship_to_head === "01" (the "Head" code
+// from the ChoiceList seed). Falls back to line-1 if the head isn't
+// flagged, then to "—".
+const _projectHousehold = (h) => {
+  const members = h.members || [];
+  const head = members.find(m => m.relationship_to_head === "01")
+    || members.find(m => m.line_number === 1)
+    || members[0]
+    || null;
+  return {
+    rid: h.id,
+    head: head
+      ? `${head.surname || ""} ${head.first_name || ""}`.trim() || "—"
+      : "—",
+    // Member.sex is ChoiceList code: 1=Male, 2=Female.
+    sex: head ? (head.sex === "2" ? "F" : head.sex === "1" ? "M" : "—") : "—",
+    hh: members.length,
+    subreg: h.sub_region_name || "",
+    district: h.district_name || "",
+    parish: h.parish_name || "",
+    village: h.village_name || "",
+    pmt: h.current_pmt_score != null ? Number(h.current_pmt_score) : null,
+    band: h.current_vulnerability_band || "",
+    source: h.current_intake_source || "",
+    // Every post-promotion Household is Registered by definition;
+    // pre-promotion records live in StageRecord (DIH).
+    status: "Registered",
+    regDate: (h.created_at || "").slice(0, 10),
+    lastUpdate: (h.updated_at || "").slice(0, 10),
+    // ProgrammeEnrolment lives in apps.referral — wire when the
+    // HouseholdSerializer nests it. Follow-up.
+    programmes: [],
+  };
+};
 
 /* ============================================================
    REGISTRY SCREEN
@@ -34,41 +81,65 @@ const RegistryScreen = ({ onOpen, onOpenMember, initialView = "households" }) =>
   const [view, setView] = useStateReg(initialView === "members" ? "members" : "households");
 
   const [q, setQ] = useStateReg("");
-  const [status, setStatus] = useStateReg("");
+  // sub-region picker is keyed by GeographicUnit.code (matches the
+  // backend filter param exactly).
   const [subreg, setSubreg] = useStateReg("");
   const [band, setBand] = useStateReg("");
+  const [intakeSrc, setIntakeSrc] = useStateReg("");
   const [prog, setProg] = useStateReg("");
   const [sortBy, setSortBy] = useStateReg("lastUpdate");
   const [page, setPage] = useStateReg(0);
   const pageSize = 12;
 
-  const rows = useMemoReg(() => {
-    let r = HOUSEHOLDS.filter(h => {
-      if (q && !(h.head.toLowerCase().includes(q.toLowerCase()) || h.rid.toLowerCase().includes(q.toLowerCase()) || h.parish.toLowerCase().includes(q.toLowerCase()))) return false;
-      if (status && h.status !== status) return false;
-      if (subreg && h.subreg !== subreg) return false;
-      if (band && h.band !== band) return false;
-      if (prog && !h.programmes.includes(prog)) return false;
-      return true;
-    });
-    if (sortBy === "head") r = [...r].sort((a, b) => a.head.localeCompare(b.head));
-    if (sortBy === "pmt") r  = [...r].sort((a, b) => a.pmt - b.pmt);
-    if (sortBy === "hh") r   = [...r].sort((a, b) => b.hh - a.hh);
-    return r;
-  }, [q, status, subreg, band, prog, sortBy]);
+  const _hhFilters = {
+    q, sub_region: subreg, band, intake_source: intakeSrc, programme: prog,
+  };
+  // DRF is 1-indexed; expose the same `page` state on screen and add 1
+  // when building the URL.
+  const _orderingMap = {
+    lastUpdate: "-updated_at",
+    head: "id",                  // head A→Z needs a SerializerMethodField; defer
+    pmt: "current_pmt_score",
+    hh: "id",                    // hh size needs a denormalised member_count; defer
+  };
+  const listUrl = view === "households"
+    ? _buildHouseholdListUrl(
+        { ..._hhFilters, ordering: _orderingMap[sortBy] || undefined },
+        page + 1, pageSize,
+      )
+    : null;
+  const aggUrl = view === "households"
+    ? _buildHouseholdAggregatesUrl(_hhFilters)
+    : null;
+  // Sub-region picker reads the live UBOS catalogue at sub_region
+  // level. The choice-list bundle endpoint pulls all 15 in one round-
+  // trip.
+  const subregUrl = view === "households"
+    ? "/api/v1/reference-data/geographic-units/?level=sub_region&status=active&page_size=500"
+    : null;
 
-  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
-  const visible = rows.slice(page * pageSize, page * pageSize + pageSize);
+  const [listResp, listMeta] = useApi(listUrl);
+  const [aggResp] = useApi(aggUrl);
+  const [subregResp] = useApi(subregUrl);
 
-  const reset = () => { setQ(""); setStatus(""); setSubreg(""); setBand(""); setProg(""); setPage(0); };
+  const liveRows = ((listResp && listResp.results) || []).map(_projectHousehold);
+  const liveCount = (listResp && typeof listResp.count === "number")
+    ? listResp.count
+    : liveRows.length;
+  const totalPages = Math.max(1, Math.ceil(liveCount / pageSize));
 
-  const subregs = [...new Set(HOUSEHOLDS.map(h => h.subreg))].sort();
+  const subregs = (subregResp && subregResp.results) || subregResp || [];
 
-  // KPIs from full set
-  const total = HOUSEHOLDS.length;
-  const registered = HOUSEHOLDS.filter(h => h.status === "Registered").length;
-  const provisional = HOUSEHOLDS.filter(h => h.status === "Provisional" || h.status === "Pending").length;
-  const programmesEnrolled = HOUSEHOLDS.filter(h => h.programmes.length).length;
+  const reset = () => {
+    setQ(""); setSubreg(""); setBand(""); setIntakeSrc(""); setProg(""); setPage(0);
+  };
+
+  // KPIs read off the aggregates endpoint so they reflect the visible
+  // slice — same filter params, no client-side aggregation.
+  const total = aggResp?.total ?? 0;
+  const registered = aggResp?.registered ?? 0;
+  const provisional = aggResp?.provisional_pending ?? 0;
+  const programmesEnrolled = aggResp?.programme_enrolled ?? 0;
 
   return (
     <div className="page">
@@ -156,22 +227,27 @@ const RegistryScreen = ({ onOpen, onOpenMember, initialView = "households" }) =>
             <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Search by name, Registry ID, or parish…"/>
           </div>
 
-          <select className="field-select" style={{height:34, width:'auto', minWidth:140}} value={status} onChange={(e) => { setStatus(e.target.value); setPage(0); }}>
-            <option value="">Any status</option>
-            <option>Registered</option><option>Provisional</option><option>Pending</option><option>Rejected</option><option>Voided</option>
+          <select className="field-select" style={{height:34, width:'auto', minWidth:140}} value={intakeSrc} onChange={(e) => { setIntakeSrc(e.target.value); setPage(0); }}>
+            <option value="">Any intake source</option>
+            <option value="DIH">DIH</option>
+            <option value="Walk-in">Walk-in</option>
+            <option value="Bulk">Bulk</option>
+            <option value="capi">CAPI</option>
           </select>
-          <select className="field-select" style={{height:34, width:'auto', minWidth:160}} value={subreg} onChange={(e) => { setSubreg(e.target.value); setPage(0); }}>
+          <select className="field-select" style={{height:34, width:'auto', minWidth:200}} value={subreg} onChange={(e) => { setSubreg(e.target.value); setPage(0); }}>
             <option value="">Any sub-region</option>
-            {subregs.map(s => <option key={s}>{s}</option>)}
+            {subregs.map(s => <option key={s.id || s.code} value={s.code}>{s.name}</option>)}
           </select>
           <select className="field-select" style={{height:34, width:'auto', minWidth:140}} value={band} onChange={(e) => { setBand(e.target.value); setPage(0); }}>
             <option value="">Any PMT band</option>
             <option>Poorest 20%</option><option>Poorest 40%</option><option>Middle 40%</option><option>Top 20%</option>
           </select>
-          <select className="field-select" style={{height:34, width:'auto', minWidth:160}} value={prog} onChange={(e) => { setProg(e.target.value); setPage(0); }}>
-            <option value="">Any programme</option>
-            <option>OPM-PDM</option><option>NUSAF</option><option>WFP</option>
-          </select>
+          <input
+            type="text" value={prog}
+            onChange={(e) => { setProg(e.target.value); setPage(0); }}
+            placeholder="Programme code (e.g. OPM-PDM)"
+            className="field-input"
+            style={{height:34, width:'auto', minWidth:160}}/>
 
           <div style={{flex:1}}/>
           <button className="btn btn-sm btn-ghost" onClick={reset}><Icon name="x" size={13}/> Reset</button>
@@ -187,25 +263,34 @@ const RegistryScreen = ({ onOpen, onOpenMember, initialView = "households" }) =>
       </div>
 
       {/* Active filter chips */}
-      {(status || subreg || band || prog || q) && (
+      {(intakeSrc || subreg || band || prog || q) && (
         <div className="row gap-2 mt-3" style={{flexWrap:'wrap'}}>
           <span className="t-cap">Active filters:</span>
           {q && <Chip size="sm">"{q}" <button onClick={() => setQ("")} style={{marginLeft:4, border:0, background:'transparent', cursor:'pointer'}}>×</button></Chip>}
-          {status && <Chip size="sm">{status}</Chip>}
-          {subreg && <Chip size="sm">{subreg}</Chip>}
+          {intakeSrc && <Chip size="sm">{intakeSrc}</Chip>}
+          {subreg && <Chip size="sm">{
+            (subregs.find(s => s.code === subreg)?.name) || subreg
+          }</Chip>}
           {band && <Chip size="sm">{band}</Chip>}
-          {prog && <Chip size="sm">{prog}</Chip>}
+          {prog && <Chip size="sm" tone="programme">{prog}</Chip>}
         </div>
       )}
 
       {/* Results table */}
       <div className="card mt-4">
         <div className="card-toolbar">
-          <strong className="t-bodysm">{rows.length.toLocaleString()} households</strong>
-          <span className="t-cap">Page {page+1} of {totalPages} · click any row to open</span>
+          <strong className="t-bodysm">{liveCount.toLocaleString()} households</strong>
+          <span className="t-cap">
+            {listMeta.loading ? "Loading…" : `Page ${page+1} of ${totalPages} · click any row to open`}
+          </span>
           <div style={{flex:1}}/>
           <button className="btn btn-sm btn-ghost"><Icon name="sliders" size={14}/> Columns</button>
         </div>
+        {listMeta.error && (
+          <div style={{padding:'12px 16px', color:'var(--accent-danger)'}} className="t-bodysm">
+            Couldn’t load households: {listMeta.error}
+          </div>
+        )}
         <table className="tbl">
           <thead>
             <tr>
@@ -222,35 +307,44 @@ const RegistryScreen = ({ onOpen, onOpenMember, initialView = "households" }) =>
             </tr>
           </thead>
           <tbody>
-            {visible.map(h => (
+            {liveRows.length === 0 && !listMeta.loading && (
+              <tr><td colSpan={10} style={{padding:'20px', textAlign:'center'}} className="muted t-bodysm">
+                No households match the current filters.
+              </td></tr>
+            )}
+            {liveRows.map(h => (
               <tr key={h.rid} onClick={() => onOpen?.(h.rid)} style={{cursor:'pointer'}}>
                 <td className="col-id">{h.rid.slice(0, 20)}…</td>
                 <td>
                   <div className="row gap-3">
                     <div style={{width:28, height:28, borderRadius:'50%', background:'var(--primary-100)', color:'var(--primary-900)', display:'grid', placeItems:'center', fontSize:11, fontWeight:600}}>
-                      {h.head.split(' ').map(w => w[0]).slice(0,2).join('')}
+                      {h.head !== "—" ? h.head.split(' ').map(w => w[0]).slice(0,2).join('') : "—"}
                     </div>
                     <div>
                       <div style={{fontWeight:500}}>{h.head}</div>
-                      <div className="t-cap">{h.sex === 'F' ? 'Female' : 'Male'}-headed</div>
+                      <div className="t-cap">{h.sex === 'F' ? 'Female' : h.sex === 'M' ? 'Male' : '—'}-headed</div>
                     </div>
                   </div>
                 </td>
                 <td className="t-num">{h.hh}</td>
                 <td>
-                  <div>{h.parish} · {h.district}</div>
-                  <div className="t-cap">{h.subreg} · {h.village}</div>
+                  <div>{h.parish || "—"} · {h.district || "—"}</div>
+                  <div className="t-cap">{h.subreg || "—"} · {h.village || "—"}</div>
                 </td>
                 <td>
-                  <Chip size="sm" tone="eligibility">{h.band}</Chip>
-                  <div className="t-cap t-mono mt-1" style={{marginTop:2}}>score {h.pmt.toFixed(2)}</div>
+                  {h.band
+                    ? <Chip size="sm" tone="eligibility">{h.band}</Chip>
+                    : <span className="muted t-cap">—</span>}
+                  <div className="t-cap t-mono mt-1" style={{marginTop:2}}>
+                    {h.pmt != null ? `score ${h.pmt.toFixed(2)}` : "no score"}
+                  </div>
                 </td>
-                <td className="t-bodysm">{h.source}</td>
-                <td className="t-cap" style={{whiteSpace:'nowrap'}}>{h.lastUpdate}</td>
+                <td className="t-bodysm">{h.source || "—"}</td>
+                <td className="t-cap" style={{whiteSpace:'nowrap'}}>{h.lastUpdate || "—"}</td>
                 <td><Chip size="sm">{h.status}</Chip></td>
                 <td>
                   {h.programmes.length === 0
-                    ? <span className="muted t-cap">none</span>
+                    ? <span className="muted t-cap">—</span>
                     : <div className="row-wrap">{h.programmes.map(p => <Chip key={p} size="sm" tone="programme">{p}</Chip>)}</div>}
                 </td>
                 <td className="col-actions"><Icon name="chevronRight" size={16} color="var(--neutral-500)"/></td>
@@ -261,7 +355,11 @@ const RegistryScreen = ({ onOpen, onOpenMember, initialView = "households" }) =>
 
         {/* Pagination */}
         <div className="row gap-2" style={{padding:'12px 16px', borderTop:'1px solid var(--neutral-200)', justifyContent:'space-between'}}>
-          <span className="t-cap">Showing {page*pageSize + 1}–{Math.min((page+1)*pageSize, rows.length)} of {rows.length.toLocaleString()}</span>
+          <span className="t-cap">
+            {liveCount === 0
+              ? "0 results"
+              : `Showing ${page*pageSize + 1}–${Math.min((page+1)*pageSize, liveCount)} of ${liveCount.toLocaleString()}`}
+          </span>
           <div className="row gap-2">
             <button className="btn btn-sm" disabled={page === 0} onClick={() => setPage(0)}><Icon name="chevronsLeft" size={14}/></button>
             <button className="btn btn-sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}><Icon name="chevronLeft" size={14}/></button>
