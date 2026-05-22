@@ -1569,6 +1569,10 @@
     {
       "code": "other",
       "label": "Other asset"
+    },
+    {
+      "code": "refrigerator",
+      "label": "Refrigerator / freezer"
     }
   ]
 }

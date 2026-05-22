@@ -45,10 +45,12 @@ class TestSeededChoiceLists:
         #   migration 0010: pending_approval/suspended/
         #   pending_amendment/closing)
         # + 5 programme_signoff_status codes (US-182, migration 0011:
-        #   pending/signed/rejected/skipped/on_hold) = 716.
+        #   pending/signed/rejected/skipped/on_hold)
+        # + 1 refrigerator on asset_type (US-117-FRIDGE,
+        #   migration 0012) = 717.
         assert ChoiceOption.objects.filter(
             choice_list__version=1,
-        ).count() == 716
+        ).count() == 717
 
     def test_partner_lists_seeded(self):
         names = set(
@@ -64,6 +66,33 @@ class TestSeededChoiceLists:
             "dsa_wizard_step",
         }
         assert names == expected
+
+    def test_asset_type_includes_refrigerator(self):
+        """US-117-FRIDGE — `refrigerator` is the 12th option on the
+        active asset_type ChoiceList (appended after `other` so the
+        existing 11 sort_orders don't shift)."""
+        asset_type = ChoiceList.objects.get(list_name="asset_type", version=1)
+        codes = list(
+            asset_type.options
+            .order_by("sort_order")
+            .values_list("code", flat=True),
+        )
+        assert "refrigerator" in codes
+        # Position is the new tail. If a future seed bump inserts new
+        # codes BEFORE refrigerator, update both this test and the
+        # migration so sort_order stays the next free slot.
+        assert codes.index("refrigerator") == 11  # 0-indexed → 12th
+        refrigerator = asset_type.options.get(code="refrigerator")
+        assert refrigerator.sort_order == 12
+        assert refrigerator.label == "Refrigerator / freezer"
+        assert refrigerator.status == "active"
+        # The existing 11 codes are untouched + still in their seed
+        # order. Pinning the prefix here means an accidental shuffle
+        # of the JSON catches a regression in this assertion.
+        assert codes[:11] == [
+            "radio", "tv", "phone", "bicycle", "motorcycle",
+            "car", "bed", "mattress", "solar", "livestock", "other",
+        ]
 
     def test_relationship_list_present(self):
         rel = ChoiceList.objects.get(list_name="relationship", version=1)
