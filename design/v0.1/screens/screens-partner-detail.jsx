@@ -143,6 +143,30 @@ const _projectDsa = (d) => ({
     })),
 });
 
+// Project an apps.partners ProgrammeSerializer payload onto the row
+// shape the Programmes tab + Overview tile expect. Labels resolve
+// via the *_label fields auto-attached by the serializer.
+const _projectProgramme = (pr) => ({
+  id: pr.id,
+  code: pr.code || "",
+  name: pr.name || "—",
+  kind: pr.kind_label || pr.kind || "—",
+  kind_code: pr.kind || "",
+  status: pr.status_label || pr.status || "—",
+  status_code: pr.status || "",
+  // Free-text scope on the model; falls back to a dash so the row
+  // tile doesn't render "—" beside an unrelated chip.
+  scope: pr.scope_text || "national",
+  benef: pr.beneficiary_estimate || pr.cohort_target || 0,
+  start: pr.start_month || (pr.start_date || "—"),
+  end: pr.end_date
+    || (pr.duration_months ? `${pr.duration_months}mo` : "—"),
+  cashRail: pr.channel || "—",
+  targeting: pr.unit_of_enrolment_label || pr.unit_of_enrolment || "—",
+  cycle: pr.disbursement_cycle_label || pr.disbursement_cycle || "—",
+  dsa_reference: pr.dsa_reference || "",
+});
+
 const _projectActivity = (e) => ({
   who: (e.partner || "-").toUpperCase().slice(0, 4),
   action: (e.kind || "").replace(/_/g, " "),
@@ -154,7 +178,7 @@ const _projectActivity = (e) => ({
   chip: e.kind || "",
 });
 
-const _buildDetail = ({ partner, dsasList, usage, activity }) => {
+const _buildDetail = ({ partner, dsasList, usage, activity, programmesList }) => {
   const p = JSON.parse(JSON.stringify(PARTNER_FALLBACK));
   if (!partner) return p;
 
@@ -204,10 +228,16 @@ const _buildDetail = ({ partner, dsasList, usage, activity }) => {
     .filter(v => v != null && v >= 0)
     .sort((a, b) => a - b)[0];
 
+  const programmes = (programmesList || []).map(_projectProgramme);
+  p.programmes = programmes;
+
   p.rollup = {
     dsasActive, dsasTotal: dsas.length,
     daysToRenewal: daysToRenewal == null ? null : daysToRenewal,
-    programmes: 0, programmesActive: 0,
+    programmes: programmes.length,
+    programmesActive: programmes.filter(
+      pr => pr.status_code === "active",
+    ).length,
     contacts: 0, contactsVerified: 0,
     rows30d, rows90d: 0,
     requests30d, requests90d: 0,
@@ -321,6 +351,13 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme, onNavigat
   const [activityResp] = useApi(
     partnerId ? `/api/v1/partners/${partnerId}/activity/` : null,
   );
+  // Programmes for this partner — list endpoint takes a partner=
+  // filter (see apps.partners.api.ProgrammeViewSet.get_queryset). The
+  // Programmes tab + Overview tile + DSA-card Programmes-count chip
+  // all read off this.
+  const [programmesResp, programmesMeta] = useApi(
+    partnerId ? `/api/v1/programmes/?partner=${partnerId}&page_size=200` : null,
+  );
 
   const p = useMemoPD(
     () => _buildDetail({
@@ -328,8 +365,11 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme, onNavigat
       dsasList: dsasResp ? (dsasResp.results || dsasResp) : null,
       usage: usageResp,
       activity: activityResp,
+      programmesList: programmesResp
+        ? (programmesResp.results || programmesResp)
+        : null,
     }),
-    [partnerResp, dsasResp, usageResp, activityResp],
+    [partnerResp, dsasResp, usageResp, activityResp, programmesResp],
   );
 
   const [tab, setTab] = useStatePD("over");
@@ -876,8 +916,12 @@ const PDProgrammes = ({ p, onRegisterProgramme }) => (
           <div style={{display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12, paddingLeft:48}}>
             <Pill label="Cash rail" value={pr.cashRail} tone="data"/>
             <Pill label="Targeting" value={pr.targeting} tone="eligibility"/>
-            <Pill label="Cycle" value={pr.kind === "Cash transfer" ? "Monthly · 12 cycles" : "One-off audit"} tone="update"/>
-            <Pill label="Under DSA" value={p.dsas.find(d => d.programme.startsWith(pr.name.split(" ")[0]))?.ref.split("-").slice(0,3).join("-") || p.dsas[0].ref.split("-").slice(0,3).join("-")} tone="programme"/>
+            <Pill label="Cycle" value={pr.cycle} tone="update"/>
+            <Pill label="Under DSA"
+              value={pr.dsa_reference
+                || (p.dsas[0] && p.dsas[0].ref)
+                || "—"}
+              tone="programme"/>
           </div>
         </div>
       ))}
