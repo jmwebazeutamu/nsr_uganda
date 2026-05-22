@@ -100,4 +100,14 @@ app.conf.beat_schedule = {
         # to "alert" per ADR-0011.
         "schedule": crontab(minute=15, hour=1),
     },
+    "recompute-pmt-band-thresholds": {
+        "task": "apps.pmt.tasks.recompute_band_thresholds_task",
+        # Daily at 02:00 EAT — off-peak, after the partner-usage
+        # rollups but before the 03:00 audit-chain verify. The
+        # percentile pass walks every PMTResult.score for each
+        # ACTIVE PMTModelVersion (US-S22-PMT-BAND-THRESHOLD); MGLSD
+        # eligibility decisions read derive_band, which reads the
+        # latest empirical PMTBandThreshold row written here.
+        "schedule": crontab(minute=0, hour=2),
+    },
 }

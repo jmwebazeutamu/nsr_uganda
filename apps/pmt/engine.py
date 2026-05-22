@@ -18,7 +18,7 @@ import math
 from decimal import Decimal
 from typing import Any
 
-from .models import Band, PMTModelVersion
+from .models import Band, PMTBandThreshold, PMTModelVersion
 
 DEFAULT_BAND_CUTOFFS = {
     Band.EXTREME_POVERTY: 0,
@@ -59,14 +59,92 @@ def _transform(value: Any, name: str) -> float:
     return raw  # identity
 
 
-def derive_band(score: float, cutoffs: dict[str, float]) -> str:
-    """Return the band whose lower cutoff is the largest one not exceeding score."""
+def derive_band_from_cutoffs(score: float, cutoffs: dict[str, float]) -> str:
+    """Classic fixed-cutoff classifier.
+
+    Returns the band whose lower cutoff is the largest one not
+    exceeding `score`. Inclusive lower bound — a score exactly equal
+    to a cutoff lands on the higher-band side (this matched the pre-
+    US-S22-PMT-BAND-THRESHOLD semantics; the empirical-percentile
+    classifier below flips that).
+    """
     items = sorted((c, b) for b, c in cutoffs.items())
     band = items[0][1]
     for cutoff, b in items:
         if score >= cutoff:
             band = b
     return band
+
+
+def derive_band_from_thresholds(score: float, model_version: PMTModelVersion) -> str | None:
+    """Percentile-based classifier (US-S22-PMT-BAND-THRESHOLD).
+
+    Reads the most-recent PMTBandThreshold row per band for the given
+    model version and returns the band whose score_threshold is the
+    largest one not exceeding `score`. Inclusive lower bound — a
+    score exactly at the 30th-percentile threshold lands in the
+    poorer band (expands eligibility marginally; MGLSD default).
+
+    Returns None when no PMTBandThreshold rows exist for the model
+    version — caller falls back to the fixed-cutoff path.
+    """
+    rows = list(
+        PMTBandThreshold.objects
+        .filter(model_version=model_version)
+        .order_by("band_name", "-computed_at")
+    )
+    if not rows:
+        return None
+    # `.distinct("band_name")` is Postgres-only; do it in Python so
+    # the sqlite test path produces the same result as production.
+    latest_per_band: dict[str, PMTBandThreshold] = {}
+    for row in rows:
+        latest_per_band.setdefault(row.band_name, row)
+    # Walk ascending by threshold; the band whose score_threshold is
+    # the LARGEST value not exceeding `score` wins (mirrors the
+    # legacy derive_band_from_cutoffs semantic — inclusive lower
+    # bound = poorer side wins on the boundary). Scores below the
+    # smallest threshold default to that smallest band.
+    by_threshold = sorted(
+        latest_per_band.values(), key=lambda r: float(r.score_threshold),
+    )
+    band = by_threshold[0].band_name
+    for row in by_threshold:
+        if float(row.score_threshold) <= score:
+            band = row.band_name
+    return band
+
+
+def derive_band(score: float, target) -> str:
+    """Classify a score into a band.
+
+    `target` may be either:
+    - a PMTModelVersion instance — the new behaviour. Uses the
+      latest empirical PMTBandThreshold rows; falls back to
+      `target.band_cutoffs` (fixed-cutoff path) if no threshold rows
+      exist yet (e.g. first day after a fresh model activates,
+      before the daily beat job has run). Final fallback if both
+      are missing is the project default.
+    - a dict of band -> cutoff — legacy callers (tests, ad-hoc
+      scoring) keep working without modification.
+
+    Two-path fallback is policy-conservative: a fresh system without
+    threshold rows still classifies via the existing cutoff dict
+    rather than tagging every household as `not_poor` (which the
+    ticket suggested but which would erase eligibility on day-zero
+    and trip every downstream eligibility check).
+    """
+    if isinstance(target, PMTModelVersion):
+        band = derive_band_from_thresholds(score, target)
+        if band is not None:
+            return band
+        cutoffs = target.band_cutoffs or {
+            b.value: float(c) for b, c in DEFAULT_BAND_CUTOFFS.items()
+        }
+        return derive_band_from_cutoffs(
+            score, {str(k): float(v) for k, v in cutoffs.items()},
+        )
+    return derive_band_from_cutoffs(score, target)
 
 
 def _safe_attr(parent, attr):
@@ -228,8 +306,8 @@ def compute_pmt(household, model_version: PMTModelVersion) -> tuple[float, str, 
             "weight": weight,
             "contribution": contribution,
         }
-    cutoffs = model_version.band_cutoffs or {
-        b.value: float(c) for b, c in DEFAULT_BAND_CUTOFFS.items()
-    }
-    band = derive_band(score, {str(k): float(v) for k, v in cutoffs.items()})
+    # derive_band now resolves the model_version's threshold rows
+    # first and only falls back to fixed cutoffs when none exist —
+    # the polymorphic dispatch keeps callers (here + tests) simple.
+    band = derive_band(score, model_version)
     return score, band, snapshot

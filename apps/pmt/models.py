@@ -106,3 +106,70 @@ class PMTResult(models.Model):
 
     def __str__(self) -> str:
         return f"PMTResult {self.household_id} {self.score} [{self.band}]"
+
+
+class PMTBandThreshold(models.Model):
+    """Empirical score threshold for one band under one model version
+    (US-S22-PMT-BAND-THRESHOLD).
+
+    MGLSD policy fixes eligibility cutoffs at population percentiles
+    (e.g. "bottom 30%"), not at score values. The score that lands at
+    the 30th percentile drifts as the registry grows and as recalibrations
+    shift the distribution. Storing the score-threshold here, recomputed
+    daily, lets `derive_band` pin-classify a single score in O(1) without
+    running a percentile over the full population on every call.
+
+    Reads
+    -----
+    `apps.pmt.engine.derive_band` loads the latest row per band for the
+    target model version and picks the band whose score_threshold is the
+    largest one not exceeding the score (inclusive lower-bound semantics).
+
+    Writes
+    ------
+    `apps.pmt.tasks.recompute_band_thresholds_task` is the only writer
+    in production. The job is append-only — every recompute writes a
+    new row per band so the history is queryable for audit +
+    calibration-drift tracking. Lookup convention: ORDER BY
+    computed_at DESC LIMIT 1 per (model_version, band_name).
+
+    Boundary semantics
+    ------------------
+    A score exactly equal to a band's score_threshold lands in that
+    band (poorer side wins, inclusive lower bound). This expands
+    eligibility marginally at the boundary — consistent with MGLSD's
+    default; revisit only on policy directive.
+    """
+
+    id = ULIDField(primary_key=True)
+    model_version = models.ForeignKey(
+        PMTModelVersion, on_delete=models.PROTECT, related_name="band_thresholds",
+    )
+    band_name = models.CharField(max_length=32)
+    # The score value below which the band applies. Decimal-precision
+    # matches the underlying PMTResult.score field (max_digits=8,
+    # decimal_places=4) plus two extra decimal places of headroom for
+    # the percentile interpolation result.
+    score_threshold = models.DecimalField(max_digits=10, decimal_places=6)
+    # The percentile rank this threshold was computed at (0-100). The
+    # mapping comes from PMTModelVersion.band_cutoffs.
+    percentile_rank = models.PositiveSmallIntegerField()
+    # Count of PMTResult rows the percentile was computed across. A
+    # sample of 0 means the model has no scores yet — `derive_band`
+    # treats that as a fallback case (see its docstring).
+    sample_size = models.PositiveIntegerField()
+    computed_at = models.DateTimeField(auto_now_add=True)
+    computed_by = models.CharField(max_length=64, default="celery-beat")
+
+    class Meta:
+        verbose_name = "PMT band threshold"
+        indexes = [
+            models.Index(fields=["model_version", "band_name", "-computed_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"PMTBandThreshold v{self.model_version.version} "
+            f"{self.band_name}@p{self.percentile_rank} "
+            f"= {self.score_threshold}"
+        )
