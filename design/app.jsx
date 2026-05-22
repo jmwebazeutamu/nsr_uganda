@@ -38,7 +38,9 @@ const NAV = [
   { id: "receipt", label: "Receipt slip",  icon: "print" },
   { section: "PARTNERS" },
   { id: "partners", label: "Partners",     icon: "users",     screen: true },
-  { id: "dsas",     label: "Data Sharing Agreements", icon: "file", screen: true },
+  // Data Sharing Agreements lives under Admin → Partners & DSAs.
+  // Removed from the sidebar so the workspace is discoverable from
+  // the admin index rather than competing as a top-level entry.
 ];
 
 function App() {
@@ -127,9 +129,9 @@ function App() {
     // partner-analyst role — operator-side roles never use them.
     const PARTNER_ONLY = new Set(["partner-drs", "my-dsa", "my-programmes"]);
     if (role !== "partner-analyst" && PARTNER_ONLY.has(n.id)) return false;
-    if (role === "parish" && ["dih","drs","dedup","partners","beneficiaries","dsas"].includes(n.id)) return false;
+    if (role === "parish" && ["dih","drs","dedup","partners","beneficiaries"].includes(n.id)) return false;
     if (role === "dpo"    && ["capture","upd","dedup","grm","receipt"].includes(n.id)) return false;
-    if (role === "cdo"    && ["dih","drs","partners","dsas"].includes(n.id)) return false;
+    if (role === "cdo"    && ["dih","drs","partners"].includes(n.id)) return false;
     if (role === "partner-analyst" && !["home","partner-drs","my-dsa","my-programmes","kit"].includes(n.id)) return false;
     // Registry + Beneficiaries are operator-only — partners use the
     // DRS portal to request data, not browse the registry directly.
@@ -228,7 +230,7 @@ function App() {
         {screen === "my-dsa" && <MyDsaScreen/>}
         {screen === "my-programmes" && <MyProgrammesScreen/>}
         {screen === "reports" && <ReportsScreen role={role}/>}
-        {screen === "admin"   && <AdminScreen/>}
+        {screen === "admin"   && <AdminScreen onNavigate={navigate}/>}
         {(screen === "registry" || screen === "registry-members") && <RegistryScreen
             initialView={screen === "registry-members" ? "members" : (screenPayload?.initialView)}
             onOpen={(rid) => navigate("household", { householdId: rid })}

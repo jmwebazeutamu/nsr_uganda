@@ -371,6 +371,94 @@ const AdminStubTab = ({ title, adminPath, sprintRef, description }) => (
   </div>
 );
 
+// Partners & DSAs — admin launchpad. Replaces the AdminStubTab that
+// only pointed at /admin/. The Data Sharing Agreements workspace +
+// the Partners list both live as their own console screens; the
+// admin tab is now the canonical discovery surface for them (the
+// top-level sidebar entry for DSAs was removed when this tab took
+// over that role).
+const PartnersAndDsasTab = ({ onNavigate }) => (
+  <div className="col gap-4">
+    <PartnersAdminTile
+      title="Data Sharing Agreements"
+      iconName="file"
+      tone="data"
+      lede="The DSA workspace — list every active / draft DSA across partners, edit scope on a draft, propose v(N+1) clones on an active row, or start a new DSA from a wizard."
+      ctaLabel="Open DSA workspace"
+      onClick={() => onNavigate && onNavigate("dsas")}
+      secondary={[
+        ["Backend",  <span className="t-mono">apps.partners</span>],
+        ["Endpoint", <span className="t-mono">GET /api/v1/dsas/</span>],
+        ["Spec",     "US-S27-004 cross-partner DSA workbench"],
+      ]}
+    />
+    <PartnersAdminTile
+      title="Partners"
+      iconName="users"
+      tone="programme"
+      lede="Partner organisations registry. Open a partner to see their identity record, DSAs, programmes, contacts, usage, activity feed, and compliance posture."
+      ctaLabel="Open Partners workspace"
+      onClick={() => onNavigate && onNavigate("partners")}
+      secondary={[
+        ["Backend",  <span className="t-mono">apps.partners</span>],
+        ["Endpoint", <span className="t-mono">GET /api/v1/partners/</span>],
+        ["Spec",     "US-S23-008..010 + US-S27 follow-ups"],
+      ]}
+    />
+    <div className="card" style={{padding:"14px 16px", background:"var(--neutral-50)"}}>
+      <div className="row gap-2">
+        <Icon name="settings" size={14} color="var(--neutral-700)"/>
+        <strong className="t-bodysm">Django admin shortcut</strong>
+      </div>
+      <div className="t-cap" style={{marginTop:4}}>
+        Raw model edits (overrides, hot-fixes, support tickets) still go
+        through the Django admin:
+        {" "}
+        <a className="t-mono" href="/admin/partners/datasharingagreement/" target="_blank" rel="noopener noreferrer">
+          /admin/partners/datasharingagreement/
+        </a>.
+      </div>
+    </div>
+  </div>
+);
+
+const PartnersAdminTile = ({ title, iconName, tone, lede, ctaLabel, onClick, secondary }) => (
+  <div className="card" style={{
+    padding: 0, borderLeft: `3px solid var(--accent-${tone})`,
+  }}>
+    <div style={{padding:"16px 20px", display:"flex", alignItems:"flex-start", gap:16}}>
+      <div style={{
+        width:40, height:40, borderRadius:8,
+        background:`var(--accent-${tone}-bg)`, color:`var(--accent-${tone})`,
+        display:"grid", placeItems:"center", flexShrink:0,
+      }}>
+        <Icon name={iconName} size={20}/>
+      </div>
+      <div style={{flex:1, minWidth:0}}>
+        <div style={{fontWeight:600, fontSize:15}}>{title}</div>
+        <p className="t-bodysm muted" style={{margin:"6px 0 0", lineHeight:1.5}}>
+          {lede}
+        </p>
+      </div>
+      <button className="btn btn-primary" onClick={onClick}>
+        {ctaLabel} <Icon name="chevronRight" size={13}/>
+      </button>
+    </div>
+    <div style={{
+      padding:"10px 20px", background:"var(--neutral-50)",
+      borderTop:"1px solid var(--neutral-200)",
+      display:"grid", gridTemplateColumns:"repeat(3, 1fr)", gap:12,
+    }}>
+      {secondary.map(([k, v], i) => (
+        <div key={i}>
+          <div className="t-cap">{k}</div>
+          <div className="t-bodysm" style={{marginTop:2}}>{v}</div>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
 // ── Main screen ────────────────────────────────────────────────────────
 const TABS = [
   { id: "model-versions", label: "DDUP model versions", icon: "duplicate" },
@@ -380,7 +468,7 @@ const TABS = [
   { id: "scopes",         label: "Operator scopes",     icon: "shield"    },
 ];
 
-const AdminScreen = () => {
+const AdminScreen = ({ onNavigate }) => {
   const [tab, setTab] = useStateAdmin("model-versions");
 
   return (
@@ -431,10 +519,7 @@ const AdminScreen = () => {
                        description="(change_type × pmt_relevant) → (required_role, sla_hours). Operations-editable from REF-DATA — change SLA windows or required roles without a deploy. Defaults seeded from SAD §4.4.4."/>
       )}
       {tab === "partners" && (
-        <AdminStubTab title="Partners & Data-Sharing Agreements"
-                       adminPath="/admin/data_requests/datasharingagreement/"
-                       sprintRef="US-S3-002, US-S4-001"
-                       description="Partner organisations and their signed DSAs. Each DSA carries allowed_scopes (fields, sub-regions, programmes, max_rows) which gates every DataRequest from that partner. ABAC partner-scope (S4-001) ties operators to their partner."/>
+        <PartnersAndDsasTab onNavigate={onNavigate}/>
       )}
       {tab === "scopes" && (
         <AdminStubTab title="Operator scopes"
