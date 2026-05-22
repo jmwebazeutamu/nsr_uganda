@@ -1,5 +1,8 @@
+from django.db.models import Q
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import serializers, viewsets
+from rest_framework.decorators import action
+from rest_framework.response import Response
 
 from apps.security.abac import ScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
@@ -552,6 +555,113 @@ class HouseholdSerializer(serializers.ModelSerializer):
 _attach_label_methodfields(HouseholdSerializer, HOUSEHOLD_FIELDS)
 
 
+# --- Registry browse filter helpers (US-005) --------------------------------
+#
+# The Registry browse screens (Households + Members + Member Detail) need
+# server-side filters that round-trip through query params, plus aggregate
+# endpoints for the KPI strips. django-filter isn't installed (per the
+# project's testing memo) so each filter is applied manually here. The
+# helpers are module-level so the aggregate endpoints can reuse the same
+# pipeline as the list endpoints.
+
+# Age-band bucket → inclusive (min, max) over Member.age_years. None means
+# "no bound on that end". Matches the seven bands the prototype renders.
+_AGE_BANDS = {
+    "<5":    (None, 4),
+    "5-9":   (5, 9),
+    "10-14": (10, 14),
+    "15-19": (15, 19),
+    "20-29": (20, 29),
+    "30-39": (30, 39),
+    "40-49": (40, 49),
+    "50-59": (50, 59),
+    "60+":   (60, None),
+}
+
+# Washington Group Short Set domain columns on Disability. The
+# `?disability=` filter takes either "any" (wg_disability_flag=True) or
+# one of these domain names; domain filter checks for codes 03 / 04
+# ("a lot of difficulty" / "cannot do at all") consistent with the
+# wg_disability_flag computation in Disability.save().
+_DISABILITY_DOMAINS = {"seeing", "hearing", "walking", "memory", "selfcare", "communication"}
+
+
+def _household_filters(qs, params):
+    """Apply the Registry household-list query params to `qs`. Used by
+    both HouseholdViewSet.get_queryset and the aggregates action so the
+    KPI strip reflects the same slice the list rows do."""
+    q = (params.get("q") or "").strip()
+    if q:
+        qs = qs.filter(
+            Q(id__icontains=q)
+            | Q(head_member__surname__icontains=q)
+            | Q(head_member__first_name__icontains=q)
+            | Q(parish__name__icontains=q),
+        )
+    sub_region = (params.get("sub_region") or "").strip()
+    if sub_region:
+        qs = qs.filter(sub_region_code=sub_region)
+    band = (params.get("band") or "").strip()
+    if band:
+        qs = qs.filter(current_vulnerability_band=band)
+    intake_source = (params.get("intake_source") or "").strip()
+    if intake_source:
+        qs = qs.filter(current_intake_source=intake_source)
+    programme = (params.get("programme") or "").strip()
+    if programme:
+        qs = qs.filter(
+            enrolments__programme__code=programme,
+            enrolments__status="active",
+        ).distinct()
+    return qs
+
+
+def _member_filters(qs, params):
+    """Apply the Registry member-list query params to `qs`. Used by both
+    MemberViewSet.get_queryset and the aggregates action."""
+    q = (params.get("q") or "").strip()
+    if q:
+        qs = qs.filter(
+            Q(surname__icontains=q)
+            | Q(first_name__icontains=q)
+            | Q(id__icontains=q),
+        )
+    sex = (params.get("sex") or "").strip()
+    if sex:
+        qs = qs.filter(sex=sex)
+    rel = (params.get("relationship_to_head") or "").strip()
+    if rel:
+        qs = qs.filter(relationship_to_head=rel)
+    sub_region = (params.get("sub_region") or "").strip()
+    if sub_region:
+        qs = qs.filter(sub_region_code=sub_region)
+    nin_status = (params.get("nin_status") or "").strip()
+    if nin_status:
+        qs = qs.filter(nin_status=nin_status)
+    household_id = (params.get("household") or "").strip()
+    if household_id:
+        qs = qs.filter(household_id=household_id)
+    age_band = (params.get("age_band") or "").strip()
+    if age_band in _AGE_BANDS:
+        lo, hi = _AGE_BANDS[age_band]
+        if lo is not None:
+            qs = qs.filter(age_years__gte=lo)
+        if hi is not None:
+            qs = qs.filter(age_years__lte=hi)
+    disab = (params.get("disability") or "").strip()
+    if disab == "any":
+        qs = qs.filter(disability__wg_disability_flag=True)
+    elif disab in _DISABILITY_DOMAINS:
+        qs = qs.filter(**{f"disability__{disab}__in": ["03", "04"]})
+    programme = (params.get("programme") or "").strip()
+    if programme:
+        qs = qs.filter(
+            household__enrolments__programme__code=programme,
+            household__enrolments__status="active",
+        ).distinct()
+    return qs
+
+
 @extend_schema_view(
     list=extend_schema(tags=["data-management"], summary="List households"),
     retrieve=extend_schema(tags=["data-management"], summary="Retrieve a household"),
@@ -560,6 +670,36 @@ class HouseholdViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyMod
     audit_entity_type = "household"
     queryset = Household.objects.all().order_by("-updated_at")
     serializer_class = HouseholdSerializer
+
+    def get_queryset(self):
+        return _household_filters(
+            super().get_queryset(), self.request.query_params,
+        )
+
+    @extend_schema(
+        tags=["data-management"],
+        summary="Household aggregates for the Registry KPI strip",
+        description=(
+            "Returns total / registered / provisional_pending / "
+            "programme_enrolled counts honouring the same filter params "
+            "as the list endpoint (q, sub_region, band, intake_source, "
+            "programme). Note: `provisional_pending` is always 0 against "
+            "this surface because pre-promotion records live in "
+            "apps.ingestion_hub.StageRecord, not Household. The two-"
+            "system count lands when the DIH-pending tile feature ships."
+        ),
+    )
+    @action(detail=False, methods=["get"], url_path="aggregates")
+    def aggregates(self, request):
+        qs = self.get_queryset()
+        return Response({
+            "total": qs.count(),
+            "registered": qs.count(),
+            "provisional_pending": 0,
+            "programme_enrolled": qs.filter(
+                enrolments__status="active",
+            ).distinct().count(),
+        })
 
 
 @extend_schema_view(
@@ -573,3 +713,33 @@ class MemberViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyModelV
     # US-S16-003 — tighter page-size cap on the highest-PII surface.
     # DefaultPagination caps at 500; MemberPagination caps at 100.
     pagination_class = MemberPagination
+
+    def get_queryset(self):
+        return _member_filters(
+            super().get_queryset(), self.request.query_params,
+        )
+
+    @extend_schema(
+        tags=["data-management"],
+        summary="Member aggregates for the Registry KPI strip",
+        description=(
+            "Returns total_individuals / children_under_18 / "
+            "elderly_60_plus / with_disability_wgss / female / "
+            "nin_verified counts honouring the same filter params as the "
+            "list endpoint. Sex code 2 = Female and nin_status code 1 = "
+            "verified per the ChoiceList seed (US-S22-005c)."
+        ),
+    )
+    @action(detail=False, methods=["get"], url_path="aggregates")
+    def aggregates(self, request):
+        qs = self.get_queryset()
+        return Response({
+            "total_individuals": qs.count(),
+            "children_under_18": qs.filter(age_years__lt=18).count(),
+            "elderly_60_plus": qs.filter(age_years__gte=60).count(),
+            "with_disability_wgss": qs.filter(
+                disability__wg_disability_flag=True,
+            ).count(),
+            "female": qs.filter(sex="2").count(),
+            "nin_verified": qs.filter(nin_status="1").count(),
+        })
