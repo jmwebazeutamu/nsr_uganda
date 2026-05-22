@@ -1044,9 +1044,10 @@ WHERE ${sql.replace(/^\(\n  /, "").replace(/\n\)$/, "").replace(/\n  /g, "\n  ")
           const daysLeft = validTo
             ? Math.max(0, Math.round((Date.parse(validTo) - Date.now()) / 86400000))
             : null;
-          const validToLabel = validTo
-            ? new Date(validTo).toLocaleDateString("en-GB", { year:"numeric", month:"short", day:"numeric" })
-            : "—";
+          // ISO YYYY-MM-DD only, per the app-wide date-formatting
+          // policy. The raw effective_to is already ISO from the
+          // schema endpoint — just slice off any time component.
+          const validToLabel = validTo ? String(validTo).slice(0, 10) : "—";
           const statusLabel = d?.status || (ref ? "Active" : "Pending");
           return (
             <div className="card" style={{borderTop:'3px solid var(--accent-system)'}}>
@@ -1065,7 +1066,7 @@ WHERE ${sql.replace(/^\(\n  /, "").replace(/\n\)$/, "").replace(/\n  /g, "\n  ")
                   <div>{partner || <span className="muted">—</span>}</div>
                   <div className="muted">Valid from</div>
                   <div>{validFrom
-                    ? new Date(validFrom).toLocaleDateString("en-GB", { year:"numeric", month:"short", day:"numeric" })
+                    ? String(validFrom).slice(0, 10)
                     : <span className="muted">—</span>}</div>
                   <div className="muted">Valid to</div>
                   <div>

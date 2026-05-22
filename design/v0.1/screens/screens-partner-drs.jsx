@@ -419,10 +419,10 @@ const PartnerDRSScreen = () => {
                   {r.row_count_delivered != null ? r.row_count_delivered.toLocaleString() : "—"}
                 </div>
                 <div style={{padding:"12px 8px", fontSize:12, color:"var(--neutral-700)"}}>
-                  {r.submitted_at || "—"}
+                  {(r.submitted_at || "").slice(0, 10) || "—"}
                 </div>
                 <div style={{padding:"12px 8px", fontSize:12, color:"var(--neutral-700)"}}>
-                  {r.expires_at || "—"}
+                  {(r.expires_at || "").slice(0, 10) || "—"}
                 </div>
                 <div style={{padding:"12px 8px"}}>
                   {r.download_url
@@ -511,7 +511,7 @@ const PartnerDRSScreen = () => {
                     </div>
                     <div className="t-bodysm mt-1">
                       <span className="muted">Expires:</span>{" "}
-                      <span>{current.expires_at}</span>
+                      <span>{(current.expires_at || "").slice(0, 10)}</span>
                     </div>
 
                     {/* US-S11-006 — verify integrity. Operator picks

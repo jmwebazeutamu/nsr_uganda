@@ -147,7 +147,9 @@ const _projectActivity = (e) => ({
   who: (e.partner || "-").toUpperCase().slice(0, 4),
   action: (e.kind || "").replace(/_/g, " "),
   detail: e.detail || e.related_object_type || "",
-  time: (e.occurred_at || "").slice(0, 16).replace("T", " "),
+  // ISO date only — the activity rail had "2026-05-22 14:35" before;
+  // wall-clock precision lives in the audit chain, not the rail.
+  time: _pdFmtDate(e.occurred_at) || "",
   tone: e.severity_tone || "neutral",
   chip: e.kind || "",
 });
@@ -170,9 +172,10 @@ const _buildDetail = ({ partner, dsasList, usage, activity }) => {
   p.leadTitle = "-";
   p.joinedAt = _pdFmtDate(partner.created_at) || "-";
   p.joinedAtRel = _pdHumanRel(partner.created_at);
-  p.lastActivity = partner.last_activity_at
-    ? ((partner.last_activity_at || "").slice(0, 16).replace("T", " ") + " EAT")
-    : "-";
+  // ISO date only — was "2026-05-22 14:35 EAT". Per the app-wide
+  // date-formatting policy the header line shows the date and lets
+  // the audit timeline carry the wall-clock detail.
+  p.lastActivity = _pdFmtDate(partner.last_activity_at) || "-";
 
   const dsas = (dsasList || []).map(_projectDsa);
   p.dsas = dsas;

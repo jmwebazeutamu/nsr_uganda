@@ -84,7 +84,7 @@ const PAIR = {
     { key: "roster_n",    label: "Roster members",A: "6 members",      B: "7 members",     sim: 0.85, note: "B has additional dependant — review" },
     { key: "roof",        label: "Roof material",A: "Iron sheets",     B: "Iron sheets",   sim: 1.00 },
     { key: "pmt_band",    label: "PMT band",    A: "Poorest 40%",      B: "Poorest 40%",   sim: 1.00 },
-    { key: "captured_at", label: "Captured at", A: "14 May 2026",      B: "9 Apr 2026",    sim: null, fixed: "A", note: "Most recent capture wins (rule MERGE-LATEST)" },
+    { key: "captured_at", label: "Captured at", A: "2026-05-14",       B: "2026-04-09",    sim: null, fixed: "A", note: "Most recent capture wins (rule MERGE-LATEST)" },
   ],
 };
 
@@ -274,7 +274,7 @@ const DedupScreen = () => {
         <div style={{width:1, height:32, background:'var(--neutral-200)'}}/>
         <div>
           <div className="t-cap">RAISED</div>
-          <div className="t-bodysm" style={{color:'var(--neutral-900)'}}>14 May 2026 · 08:11 EAT</div>
+          <div className="t-bodysm" style={{color:'var(--neutral-900)'}}>2026-05-14</div>
         </div>
         <div style={{width:1, height:32, background:'var(--neutral-200)'}}/>
         <div>

@@ -377,7 +377,7 @@ const ActivityRail = ({ partners }) => {
             </div>
             <div className="col" style={{alignItems: "flex-end", gap: 6}}>
               <Chip tone={a.severity_tone || "neutral"}>{a.kind}</Chip>
-              <span className="t-cap">{(a.occurred_at || "").slice(0, 16).replace("T", " ")}</span>
+              <span className="t-cap">{(a.occurred_at || "").slice(0, 10)}</span>
             </div>
           </div>
         ))}

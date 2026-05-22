@@ -403,7 +403,7 @@ const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
                   {r.row_count_delivered != null ? r.row_count_delivered.toLocaleString() : "—"}
                 </div>
                 <div style={{padding:"12px 8px", fontSize:12, color:"var(--neutral-700)"}}>
-                  {r.submitted_at || "—"}
+                  {(r.submitted_at || "").slice(0, 10) || "—"}
                 </div>
                 <div style={{padding:"12px 8px", fontSize:12, color:"var(--neutral-700)"}}>
                   {r.requester || "—"}
@@ -547,7 +547,7 @@ const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
                 {current.approver && (
                   <>
                     <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>DECIDED BY</div>
-                    <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>{current.approver} · {current.decided_at || "—"}</div>
+                    <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>{current.approver} · {(current.decided_at || "").slice(0, 10) || "—"}</div>
                   </>
                 )}
               </div>

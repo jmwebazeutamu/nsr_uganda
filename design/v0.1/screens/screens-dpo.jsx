@@ -134,15 +134,15 @@ const RequesterDrawer = ({ requester, onClose }) => {
           </thead>
           <tbody>
             <tr>
-              <td>2026-05-14 08:21 EAT</td><td className="num">25,000</td>
+              <td>2026-05-14</td><td className="num">25,000</td>
               <td className="t-mono">8e7c…1d2f</td><td><Chip size="sm" tone="data">delivered</Chip></td>
             </tr>
             <tr>
-              <td>2026-05-12 14:09 EAT</td><td className="num">10,000</td>
+              <td>2026-05-12</td><td className="num">10,000</td>
               <td className="t-mono">3a9b…dd07</td><td><Chip size="sm" tone="data">delivered</Chip></td>
             </tr>
             <tr>
-              <td>2026-05-09 11:50 EAT</td><td className="num">6,500</td>
+              <td>2026-05-09</td><td className="num">6,500</td>
               <td className="t-mono">f04c…112a</td><td><Chip size="sm" tone="quality">expired</Chip></td>
             </tr>
           </tbody>

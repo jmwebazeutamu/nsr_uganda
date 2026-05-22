@@ -73,16 +73,14 @@ const _DsaStatusChip = ({ status, size }) => {
   return <Chip size={size} tone={s.tone}>{s.label}</Chip>;
 };
 
-// Convert ISO date → "12 May 2026". The full app already does
-// EAT-time elsewhere; effective_from/to are date-only so timezone
-// doesn't matter.
+// All UI dates render in ISO YYYY-MM-DD per the operator preference
+// (single, unambiguous, locale-independent shape across the app).
+// Datetimes are truncated at the date — the wizard, detail rails,
+// and audit cells don't need wall-clock precision; the audit chain
+// keeps full UTC timestamps for forensics.
 const _fmtDate = (iso) => {
   if (!iso) return "—";
-  try {
-    return new Date(iso).toLocaleDateString("en-GB", {
-      year: "numeric", month: "short", day: "numeric",
-    });
-  } catch (e) { return iso; }
+  return String(iso).slice(0, 10);
 };
 
 // Truthy-key count on a JSONField scope dict. Used for the
