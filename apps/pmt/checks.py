@@ -34,13 +34,19 @@ def pmt_registered_functions_check(app_configs: Any, **kwargs: Any) -> list[Erro
     except LookupError:
         return errors
 
+    # First-run migrate (and the OpenAPI generator + drf-spectacular
+    # --validate phase) run `manage.py check` BEFORE the schema is
+    # applied — `PMTModelVersion.objects.filter(...)` is lazy so any
+    # exception fires when we iterate, not at .filter() construction.
+    # Materialise inside the try so a missing table fails open.
     try:
-        active_qs = PMTModelVersion.objects.filter(status="active")
+        active_models = list(
+            PMTModelVersion.objects.filter(status="active"),
+        )
     except Exception:
-        # First-run migrate before the table exists. Fail open.
         return errors
 
-    for mv in active_qs:
+    for mv in active_models:
         for var in (mv.variables or []):
             feat = var.get("feature") if isinstance(var, dict) else None
             if not isinstance(feat, dict):
