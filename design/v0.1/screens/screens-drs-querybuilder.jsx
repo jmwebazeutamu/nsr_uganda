@@ -1104,7 +1104,7 @@ WHERE ${sql.replace(/^\(\n  /, "").replace(/\n\)$/, "").replace(/\n  /g, "\n  ")
 
 Object.assign(window, {
   BuildStepV2,
-  qbNewGroup, qbNewRule, qbId,
+  qbNewGroup, qbNewRule, qbId, qbCountRules,
   QB_FIELDS, QB_FIELD_BY_KEY, QB_RECIPES,
   _qbFilterGeoOptions,
 });

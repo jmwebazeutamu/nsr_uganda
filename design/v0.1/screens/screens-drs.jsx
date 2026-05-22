@@ -637,6 +637,49 @@ const STEPS = [
 // phone numbers reveal last-4 only — matching the design rule that
 // the preview never surfaces more PII than the actual delivery.
 const _PREVIEW_ROW_COUNT = 10;
+
+// Deterministic 32-bit FNV-1a hash. The PreviewStep header used to
+// show a hardcoded "a4e9d2f1…b7c3" string regardless of the actual
+// query — operators couldn't tell whether two previews referred to
+// the same fingerprint. This produces a stable 8-hex digest from
+// the captured tree + field selection. Server-side audit emits a
+// SHA-256 of the canonicalised payload; this is just the UI hint.
+const _drsQueryHash = (tree, selected) => {
+  const canon = JSON.stringify({
+    fields: [...(selected || [])].sort(),
+    tree: tree || null,
+  });
+  let h = 0x811c9dc5;
+  for (let i = 0; i < canon.length; i++) {
+    h ^= canon.charCodeAt(i);
+    h = (h * 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+};
+
+// Total registry size used by the heuristic matched-count estimate.
+// The real number is whatever /api/v1/data-management/households/
+// reports today; pinning it here keeps the headline label aligned
+// with what the operator already saw on Step 2's right rail.
+const _DRS_REGISTRY_TOTAL = 12_089_442;
+
+// Heuristic estimate — same shape BuildStepV2 uses on Step 2.
+// Each rule cuts ~62% of the cohort (capped at 8 rules). 0 rules =
+// the full registry size. There is no live count endpoint yet
+// (DRS-O-PREVIEW); the estimate is clearly badged in the UI.
+const _drsEstimateMatched = (tree) => {
+  // qbCountRules expects a node — guard for null up front so the
+  // estimator survives a yet-uninitialised tree (or a PreviewStep
+  // rendered before Step 2 has fired).
+  if (!tree || typeof window?.qbCountRules !== "function") {
+    return _DRS_REGISTRY_TOTAL;
+  }
+  const count = window.qbCountRules(tree);
+  if (count === 0) return _DRS_REGISTRY_TOTAL;
+  return Math.max(120, Math.round(
+    _DRS_REGISTRY_TOTAL * Math.pow(0.38, Math.min(count, 8)),
+  ));
+};
 const _PREVIEW_ULIDS = [
   "01HXY7K3B2N9PVQE4M6FZRWS18", "01HXZ9MR4N8P2QFB7K6FZRWS33",
   "01HY09KRS1P9MN6FB7K6FZRWS84", "01HY02FNQ9P8MN6FB7K6FZRWS67",
@@ -1924,13 +1967,25 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
 
   const rows = Array.from({length: _PREVIEW_ROW_COUNT}, (_, i) => i);
 
+  // Header values — all derived from real state. The MATCHED cell
+  // used to read a hardcoded "47,233" and the QUERY HASH a hardcoded
+  // "a4e9d2f1…b7c3" no matter what the operator built; approvers
+  // couldn't fingerprint different requests apart. Now both update
+  // every time `tree` / `selected` changes.
+  const matched = _drsEstimateMatched(tree);
+  const matchedPct = (matched / _DRS_REGISTRY_TOTAL) * 100;
+  const queryHash = _drsQueryHash(tree, selected);
+
   return (
     <div className="col gap-4">
       <div className="card" style={{padding:16, display:'flex', alignItems:'center', gap:24, flexWrap:'wrap'}}>
         <div>
-          <div className="t-cap">MATCHED</div>
-          <div className="t-num" style={{fontSize:24, fontWeight:700, letterSpacing:'-0.01em'}}>47,233</div>
-          <div className="t-cap">of 12,089,442 households (0.39%)</div>
+          <div className="row gap-2" style={{alignItems:'center'}}>
+            <span className="t-cap">ESTIMATED ROWS</span>
+            <Chip size="sm" tone="neutral">heuristic</Chip>
+          </div>
+          <div className="t-num" style={{fontSize:24, fontWeight:700, letterSpacing:'-0.01em', color:'var(--neutral-700)'}}>~{matched.toLocaleString()}</div>
+          <div className="t-cap">of {_DRS_REGISTRY_TOTAL.toLocaleString()} households ({matchedPct.toFixed(2)}%) · final count at delivery</div>
         </div>
         <div style={{width:1, height:48, background:'var(--neutral-200)'}}/>
         <div>
@@ -1946,14 +2001,10 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
         </div>
         <div style={{width:1, height:48, background:'var(--neutral-200)'}}/>
         <div>
-          <div className="t-cap">QUERY HASH</div>
-          <div className="t-mono" style={{fontSize:13.5, fontWeight:600}}>a4e9d2f1…b7c3</div>
-          <div className="t-cap">written to DPO console</div>
+          <div className="t-cap">QUERY FINGERPRINT</div>
+          <div className="t-mono" style={{fontSize:13.5, fontWeight:600}} title="FNV-1a digest of the captured fields + criteria tree">{queryHash}</div>
+          <div className="t-cap">stable across reloads · server emits SHA-256 on submit</div>
         </div>
-        <div style={{flex:1}}/>
-        <button className="btn" disabled title="The preview endpoint (DRS-O-PREVIEW) lands in a follow-up slice.">
-          <Icon name="refresh" size={14}/> Refresh preview
-        </button>
       </div>
 
       {unknown.length > 0 && (
@@ -2169,4 +2220,5 @@ Object.assign(window, {
   _inferImplicitGeoPins, _buildGeoPathsForRows, _GEO_CHAIN,
   _choiceListNameFor, _enrichFieldsWithOptions, _resolveOptionsForSchema,
   _OPTIONS_SOURCE_URL,
+  _drsQueryHash, _drsEstimateMatched, _DRS_REGISTRY_TOTAL,
 });
