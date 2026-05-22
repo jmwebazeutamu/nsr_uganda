@@ -87,6 +87,61 @@ const _odrsPost = (url, body) => fetch(url, {
   body: JSON.stringify(body),
 });
 
+// Translate a query-builder operator + value into a natural-language
+// phrase. The wizard records ops like "eq" / "in" / "lastN"; raw
+// tokens read like SQL on the approver's detail rail. The phrasing
+// also collapses single-item arrays (any/in with one value reads
+// "is X" rather than "is one of X") so the prose stays direct.
+const _drsHumanOp = (op, value) => {
+  const arr = Array.isArray(value) ? value : null;
+  const single = arr && arr.length === 1;
+  switch ((op || "").toLowerCase()) {
+    case "eq":         return "is";
+    case "ne":         return "is not";
+    case "in":         return single ? "is" : "is one of";
+    case "nin":        return single ? "is not" : "is none of";
+    case "any":        return single ? "is" : "is any of";
+    case "all":        return "matches all of";
+    case "none":       return single ? "is not" : "is none of";
+    case "gt":         return "is greater than";
+    case "gte":        return "is at least";
+    case "lt":         return "is less than";
+    case "lte":        return "is at most";
+    case "between":    return "is between";
+    case "contains":   return "contains";
+    case "icontains":  return "contains";  // case-insensitive flag is implicit in the UI
+    case "startswith": return "starts with";
+    case "endswith":   return "ends with";
+    case "isnull":     return "is empty";
+    case "isnotnull":  return "is set";
+    case "true":       return "is yes";
+    case "false":      return "is no";
+    case "lastn":      return "in the last";
+    default:           return op || "?";
+  }
+};
+
+// Format the value side for natural reading. Arrays collapse to a
+// comma-joined list with an "and N more" tail; "between" gets the
+// "X and Y" form; lastN handles the {n, unit} shape the wizard
+// emits. Strings + numbers pass through. Empty/missing → "(empty)".
+const _drsHumanValue = (op, value) => {
+  if (value === null || value === undefined || value === "") return "(empty)";
+  if ((op || "").toLowerCase() === "between" && Array.isArray(value) && value.length === 2) {
+    return `${value[0]} and ${value[1]}`;
+  }
+  if ((op || "").toLowerCase() === "lastn" && value && typeof value === "object") {
+    return `${value.n ?? "?"} ${value.unit || ""}`.trim();
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "(empty list)";
+    if (value.length === 1) return String(value[0]);
+    const head = value.slice(0, 6).join(", ");
+    return value.length > 6 ? `${head} and ${value.length - 6} more` : head;
+  }
+  return String(value);
+};
+
 // Render the criteria tree (request_payload.criteria) as nested
 // AND/OR groups. catalogueByKey maps dotted field keys to the
 // builder-schema metadata so the rule shows a human label instead
@@ -97,16 +152,13 @@ const _drsRenderCriteriaNode = (node, catalogueByKey, depth = 0) => {
   if (node.kind === "rule") {
     const def = catalogueByKey[node.field] || {};
     const label = def.label || node.field;
-    const op = (node.op || "?").toUpperCase();
-    const v = node.value;
-    const sample = Array.isArray(v)
-      ? v.slice(0, 6).join(", ") + (v.length > 6 ? ` +${v.length - 6} more` : "")
-      : (v == null || v === "" ? "(empty)" : String(v));
+    const opPhrase = _drsHumanOp(node.op, node.value);
+    const valuePhrase = _drsHumanValue(node.op, node.value);
     return (
-      <div className="t-mono" style={{fontSize:12, padding:"3px 0", lineHeight:1.5}}>
+      <div style={{fontSize:13, padding:"3px 0", lineHeight:1.5}}>
         <strong style={{color:"var(--neutral-900)"}}>{label}</strong>
-        <span className="muted" style={{margin:"0 6px"}}>{op}</span>
-        <span style={{color:"var(--neutral-800)"}}>{sample}</span>
+        <span style={{margin:"0 6px", color:"var(--neutral-700)"}}>{opPhrase}</span>
+        <span className="t-mono" style={{color:"var(--neutral-900)", fontSize:12.5}}>{valuePhrase}</span>
       </div>
     );
   }
@@ -114,6 +166,9 @@ const _drsRenderCriteriaNode = (node, catalogueByKey, depth = 0) => {
   if (children.length === 0) {
     return <div className="t-cap muted" style={{padding:"2px 0"}}>(empty group)</div>;
   }
+  // "and" / "or" lowercase, prose-style. Combinator only renders
+  // between rules — a single rule needs no connector at all.
+  const connector = (node.combinator || "AND").toLowerCase() === "or" ? "or" : "and";
   const inner = (
     <>
       {children.map((c, i) => (
@@ -122,8 +177,8 @@ const _drsRenderCriteriaNode = (node, catalogueByKey, depth = 0) => {
             <div className="t-cap" style={{
               fontWeight:600,
               color:"var(--accent-system)",
-              margin:"2px 0", letterSpacing:".06em",
-            }}>{node.combinator || "AND"}</div>
+              margin:"4px 0 2px",
+            }}>{connector}</div>
           )}
           {_drsRenderCriteriaNode(c, catalogueByKey, depth + 1)}
         </React.Fragment>
@@ -2296,4 +2351,8 @@ Object.assign(window, {
   _choiceListNameFor, _enrichFieldsWithOptions, _resolveOptionsForSchema,
   _OPTIONS_SOURCE_URL,
   _drsQueryHash, _drsEstimateMatched, _DRS_REGISTRY_TOTAL,
+  // Criteria walker + natural-language helpers — exposed so the
+  // partner detail rail (screens-partner-drs.jsx) can render the
+  // same WHERE-clause translation the operator sees.
+  _drsRenderCriteriaNode, _drsHumanOp, _drsHumanValue,
 });
