@@ -289,7 +289,13 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
   };
 
   // KPIs read off the aggregates endpoint — same filter params, so
-  // the strip reflects the visible slice (HANDOFF §5).
+  // the strip reflects the visible slice (HANDOFF §5). Earlier this
+  // strip hard-coded projected national totals (48.1M / 22.1M /
+  // 3.07M / 1.81M) with the real sample shown only in the foot
+  // line — operators couldn't tell which number was live. Now the
+  // headline is the real count from /members/aggregates/, and the
+  // foot text labels the scope (filtered or full) without inventing
+  // a projection.
   const total = aggResp?.total_individuals ?? 0;
   const under18 = aggResp?.children_under_18 ?? 0;
   const elder60 = aggResp?.elderly_60_plus ?? 0;
@@ -298,29 +304,37 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
   const ninVer = aggResp?.nin_verified ?? 0;
 
   const activeFilters = [q, sex, ageBand, rel, subreg, disab, nin, prog].filter(Boolean);
+  // % of the visible slice, rounded. Guards a zero-total denominator
+  // so the strip doesn't render "NaN%" while the first fetch is
+  // in flight.
+  const pct = (n) => total > 0 ? `${Math.round((n / total) * 100)}%` : "—";
+  // Scope hint surfaced in the foot of each card. Filtered slices
+  // get an explicit callout so an operator never mistakes a narrow
+  // result for a registry-wide count.
+  const scopeFoot = activeFilters.length > 0
+    ? `Filtered slice · ${activeFilters.length} filter${activeFilters.length === 1 ? "" : "s"} applied`
+    : "Across the full registry";
 
   return (
     <div>
-      {/* Headline KPIs — registry-wide numbers, not the demo sample */}
+      {/* Headline KPIs — actuals from /members/aggregates/ honouring
+          the same filter params as the list below. */}
       <div className="grid grid-4">
         <KPI title="Total individuals"
-             value="48,116,802"
-             foot={`Sample: ${total.toLocaleString()} rows · avg HH size 4.89`}
-             spark={[40,42,43,44,45,46,47,48]}/>
+             value={total.toLocaleString()}
+             foot={`${scopeFoot} · ${ninVer.toLocaleString()} NIN-verified (${pct(ninVer)})`}/>
         <KPI title="Children under 18"
-             value="22,140,389"
-             trend="up" trendValue="46%"
-             foot={`Sample: ${under18} of ${total} (${Math.round(under18/total*100)}%)`}
-             spark={[19,19,20,20,21,21,22,22]}/>
+             value={under18.toLocaleString()}
+             trendValue={pct(under18)}
+             foot={`${pct(under18)} of the slice · school + nutrition cohorts`}/>
         <KPI title="Elderly 60+"
-             value="3,071,540"
-             foot={`Sample: ${elder60} of ${total} · SCG eligibility cohort`}
-             spark={[2.4,2.5,2.6,2.7,2.8,2.9,3.0,3.07]}/>
+             value={elder60.toLocaleString()}
+             trendValue={pct(elder60)}
+             foot={`${pct(elder60)} of the slice · SCG eligibility cohort`}/>
         <KPI title="With disability (WG-SS)"
-             value="1,809,408"
-             trend="up" trendValue="3.8%"
-             foot={`Sample: ${withDis} of ${total} flagged`}
-             spark={[1.3,1.4,1.5,1.6,1.7,1.7,1.8,1.81]}/>
+             value={withDis.toLocaleString()}
+             trendValue={pct(withDis)}
+             foot={`${pct(withDis)} of the slice · WG-SS-flagged`}/>
       </div>
 
       {/* Filter bar */}
