@@ -318,18 +318,17 @@ class ProgrammeSignOff(models.Model):
     skipped).
     """
 
+    # Status codes — per ADR-0010 the field is a plain CharField; the
+    # canonical option set is seeded as `programme_signoff_status` in
+    # reference_data migration 0011 (label resolution goes through
+    # apps.reference_data.services.resolve_label). Constants are kept
+    # for in-code use so the lifecycle service doesn't sprinkle string
+    # literals across the codebase.
     PENDING = "pending"
     SIGNED = "signed"
     REJECTED = "rejected"
     SKIPPED = "skipped"
     HOLD = "on_hold"
-    _STATUSES = (
-        (PENDING, "Pending"),
-        (SIGNED, "Signed"),
-        (REJECTED, "Rejected"),
-        (SKIPPED, "Skipped"),
-        (HOLD, "On hold"),
-    )
 
     # Canonical step roles. The wizard submits four emails on
     # /programmes/{id}/submit/ and the lifecycle service maps each
@@ -354,7 +353,7 @@ class ProgrammeSignOff(models.Model):
     expected_role = models.CharField(max_length=64)
     expected_email = models.CharField(max_length=254, blank=True)
     actual_email = models.CharField(max_length=254, blank=True)
-    status = models.CharField(max_length=24, choices=_STATUSES, default=PENDING)
+    status = models.CharField(max_length=24, default=PENDING)
     decided_at = models.DateTimeField(null=True, blank=True)
     decision_note = models.TextField(blank=True)
     # Pointer back into the AuditEvent chain so a reviewer can lift
