@@ -537,6 +537,15 @@ def build_schema(user) -> dict[str, Any]:
             "reference": d.reference,
             "partner_code": d.partner.code,
             "partner_name": d.partner.name,
+            # Dates + budget travel on the picker payload so the
+            # wizard's right-rail ACTIVE DSA card renders the real
+            # values the operator just bound to (rather than the
+            # earlier hardcoded OPM placeholder).
+            "effective_from": d.effective_from.isoformat() if d.effective_from else None,
+            "effective_to":   d.effective_to.isoformat()   if d.effective_to   else None,
+            "monthly_row_budget": d.monthly_row_budget,
+            "status": d.status,
+            "version": d.version,
         }
         for d in _available_dsas_for_user(user)
     ]

@@ -834,6 +834,12 @@ const BuildStepV2 = ({
   fields,
   recipes = QB_RECIPES,
   showSQL = true, dsaReference = "DSA-OPM-PDM-2026",
+  // `effectiveDsa` carries the actual partner + dates + budget the
+  // wizard bound to on Step 1. Older mounts (offline preview, the
+  // standalone querybuilder demo) pass nothing here, so the card
+  // gracefully degrades to a "no DSA bound" placeholder rather than
+  // the hardcoded OPM-PDM mock it used to ship.
+  effectiveDsa = null,
 }) => {
   // Resolve the active catalogue: prefer the live `fields` prop
   // (US-S27-013 — comes from /builder-schema/), fall back to the
@@ -985,16 +991,25 @@ WHERE ${sql.replace(/^\(\n  /, "").replace(/\n\)$/, "").replace(/\n  /g, "\n  ")
 
       {/* Right rail */}
       <div className="col gap-3">
-        {/* Estimated match card */}
-        <div className="card" style={{borderTop:"3px solid var(--accent-data)"}}>
+        {/* Estimated match card — design-time only.
+            There is no live recount endpoint yet (DRS-O-PREVIEW);
+            the estimate is derived from the rule count to give the
+            surface a believable feel. The card is honest about that:
+            "Design-time estimate" badge, no Recount button until the
+            backend lands, and the headline number renders in neutral
+            tone so it doesn't look like a confirmed query result. */}
+        <div className="card" style={{borderTop:"3px solid var(--neutral-400)"}}>
           <div style={{padding:16}}>
-            <div className="t-cap" style={{color:"var(--accent-data)", fontWeight:600}}>
-              <Icon name="target" size={11}/> ESTIMATED MATCHES
+            <div className="row gap-2" style={{alignItems:"center", justifyContent:"space-between"}}>
+              <div className="t-cap" style={{color:"var(--neutral-700)", fontWeight:600}}>
+                <Icon name="target" size={11}/> ESTIMATED MATCHES
+              </div>
+              <Chip size="sm" tone="neutral">design-time</Chip>
             </div>
             <div className="t-num" style={{
               fontSize:32, fontWeight:700, letterSpacing:"-0.01em",
-              marginTop:4, color:"var(--neutral-900)",
-            }}>{estimate.toLocaleString()}</div>
+              marginTop:4, color:"var(--neutral-700)",
+            }}>~{estimate.toLocaleString()}</div>
             <div className="t-cap">
               of 12,089,442 households · {(estimate/12089442*100).toFixed(2)}% of registry
             </div>
@@ -1004,48 +1019,76 @@ WHERE ${sql.replace(/^\(\n  /, "").replace(/\n\)$/, "").replace(/\n  /g, "\n  ")
             }}>
               <div style={{
                 width:`${Math.max(0.5, estimate/12089442*100)}%`, height:"100%",
-                background:"var(--accent-data)",
+                background:"var(--neutral-500)",
               }}/>
             </div>
-            <button className="btn btn-sm mt-3" style={{width:"100%"}}>
-              <Icon name="refresh" size={12}/> Recount
-            </button>
-            <div className="t-cap mt-2" style={{color:"var(--neutral-500)"}}>
-              Estimate runs against an anonymised sample. Final row count
-              is computed at delivery time.
+            <div className="t-cap mt-3" style={{color:"var(--neutral-600)"}}>
+              Heuristic estimate based on the number of rules in your
+              query — not a live count. The live recount endpoint
+              (DRS-O-PREVIEW) lands in a follow-up slice; final row
+              count is computed at delivery time.
             </div>
           </div>
         </div>
 
-        {/* DSA card */}
-        <div className="card" style={{borderTop:'3px solid var(--accent-system)'}}>
-          <div className="card-header" style={{padding:'12px 16px'}}>
-            <div>
-              <div className="t-cap" style={{color:'var(--accent-system)'}}>ACTIVE DSA</div>
-              <h3 className="t-h3" style={{margin:'2px 0 0'}}>{dsaReference}</h3>
+        {/* DSA card — driven by the live effectiveDsa from Step 1.
+            Falls back to the dsaReference string for older mounts. */}
+        {(() => {
+          const d = effectiveDsa;
+          const ref = d?.reference || dsaReference;
+          const partner = d?.partner_name;
+          const validTo = d?.effective_to;
+          const validFrom = d?.effective_from;
+          const budget = d?.monthly_row_budget;
+          // Days-until-expiry — only meaningful when validTo parses.
+          const daysLeft = validTo
+            ? Math.max(0, Math.round((Date.parse(validTo) - Date.now()) / 86400000))
+            : null;
+          const validToLabel = validTo
+            ? new Date(validTo).toLocaleDateString("en-GB", { year:"numeric", month:"short", day:"numeric" })
+            : "—";
+          const statusLabel = d?.status || (ref ? "Active" : "Pending");
+          return (
+            <div className="card" style={{borderTop:'3px solid var(--accent-system)'}}>
+              <div className="card-header" style={{padding:'12px 16px'}}>
+                <div>
+                  <div className="t-cap" style={{color:'var(--accent-system)'}}>ACTIVE DSA</div>
+                  <h3 className="t-h3" style={{margin:'2px 0 0'}}>{ref || "— no DSA picked —"}</h3>
+                </div>
+                <Chip tone={statusLabel === "active" || statusLabel === "Active" ? "data" : "neutral"}>
+                  {statusLabel}
+                </Chip>
+              </div>
+              <div style={{padding:16}}>
+                <div style={{display:'grid', gridTemplateColumns:'110px 1fr', rowGap:6, fontSize:13}}>
+                  <div className="muted">Partner</div>
+                  <div>{partner || <span className="muted">—</span>}</div>
+                  <div className="muted">Valid from</div>
+                  <div>{validFrom
+                    ? new Date(validFrom).toLocaleDateString("en-GB", { year:"numeric", month:"short", day:"numeric" })
+                    : <span className="muted">—</span>}</div>
+                  <div className="muted">Valid to</div>
+                  <div>
+                    {validToLabel}
+                    {daysLeft != null && (
+                      <Chip size="sm" tone={daysLeft <= 30 ? "update" : "data"} style={{marginLeft:6}}>
+                        {daysLeft} days left
+                      </Chip>
+                    )}
+                  </div>
+                  <div className="muted">Row budget</div>
+                  <div>{budget != null
+                    ? `${Number(budget).toLocaleString()} / month`
+                    : <span className="muted">unbounded</span>}</div>
+                </div>
+                <div className="t-cap mt-3" style={{color:"var(--neutral-600)"}}>
+                  Used-this-month + sensitive-field counts land on the
+                  schema endpoint in a follow-up slice (DRS-O-02).
+                </div>
+              </div>
             </div>
-            <Chip tone="data">Active</Chip>
-          </div>
-          <div style={{padding:16}}>
-            <div style={{display:'grid', gridTemplateColumns:'110px 1fr', rowGap:6, fontSize:13}}>
-              <div className="muted">Partner</div><div>Office of the Prime Minister</div>
-              <div className="muted">Programme</div><div>OPM-PDM 2026</div>
-              <div className="muted">Valid to</div>
-                <div>31 Dec 2026 <Chip size="sm" tone="data">8 months left</Chip></div>
-              <div className="muted">Row budget</div><div>2,500,000 / month</div>
-              <div className="muted">Used</div><div>1,824,317 (73%)</div>
-            </div>
-            <div style={{
-              height:6, background:'var(--neutral-200)', borderRadius:3,
-              marginTop:10, overflow:'hidden',
-            }}>
-              <div style={{width:'73%', height:'100%', background:'var(--accent-system)'}}/>
-            </div>
-            <div className="t-cap mt-3">
-              Sensitive fields: <strong>4 disabled</strong> by clause 4.2.b.
-            </div>
-          </div>
-        </div>
+          );
+        })()}
 
         {/* BUG-S27-023 — the mock "Saved queries" rail was removed.
             There is no persistence backend for query templates yet,

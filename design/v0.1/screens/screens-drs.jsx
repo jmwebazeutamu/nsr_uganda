@@ -1535,7 +1535,8 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
               fields={builderFields}
               recipes={[]}
               showSQL={true}
-              dsaReference={schema?.dsa_reference || ""}
+              dsaReference={effectiveDsa?.reference || schema?.dsa_reference || ""}
+              effectiveDsa={effectiveDsa}
             />
       )}
       {step === 'fields' && (

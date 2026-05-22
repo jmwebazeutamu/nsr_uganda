@@ -1554,10 +1554,17 @@ class TestBuilderSchema:
         assert r.status_code == 200
         refs = {d["reference"] for d in r.data["available_dsas"]}
         assert {"DSA-NARROW-1", "DSA-OTHER-1"} <= refs
-        # Shape contract — every entry has the four keys the wizard reads.
+        # Shape contract — every entry carries the keys the wizard's
+        # picker reads (id, reference, partner_code, partner_name)
+        # plus the metadata the right-rail ACTIVE DSA card displays
+        # (effective_from, effective_to, monthly_row_budget, status,
+        # version). Adding a new key here means updating the wizard's
+        # effectiveDsa memo + BuildStepV2 to consume it.
         for d in r.data["available_dsas"]:
             assert set(d.keys()) == {
                 "id", "reference", "partner_code", "partner_name",
+                "effective_from", "effective_to",
+                "monthly_row_budget", "status", "version",
             }
             # IDs are ULIDs — non-empty strings the wizard can POST back.
             assert d["id"]
