@@ -376,3 +376,76 @@ class TestChainBreakAlerts:
             result = verify_audit_chain_task()
         assert result["mode"] == "no_chain"
         assert not mock_notify.called
+
+
+@pytest.mark.django_db
+class TestUsersMe:
+    """GET /api/v1/security/users/me/ — identity endpoint the React
+    shell reads on mount to show the real authenticated user in the
+    topbar. Returns role + partner derived from OperatorScope."""
+
+    URL = "/api/v1/security/users/me/"
+
+    def test_anonymous_is_unauthorised(self, db):
+        from rest_framework.test import APIClient
+        r = APIClient().get(self.URL)
+        assert r.status_code in (401, 403)
+
+    def test_superuser_resolves_to_nsr_unit_role(
+        self, db, django_user_model,
+    ):
+        from rest_framework.test import APIClient
+        u = django_user_model.objects.create_superuser(
+            username="ms-test-super", password="p",
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.get(self.URL)
+        assert r.status_code == 200
+        assert r.data["username"] == "ms-test-super"
+        assert r.data["is_superuser"] is True
+        assert r.data["role"] == "nsr-unit"
+        assert r.data["partner"] is None
+
+    def test_partner_scoped_user_resolves_partner_payload(
+        self, db, django_user_model,
+    ):
+        from rest_framework.test import APIClient
+
+        from apps.partners.models import Partner
+        from apps.security.models import OperatorScope, ScopeLevel
+
+        Partner.objects.create(
+            code="OPM-T", name="OPM (test)", type="ministry",
+            sector="social_protection", status="active", tone="system",
+        )
+        u = django_user_model.objects.create_user(
+            username="ms-test-opm", password="p",
+        )
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARTNER, scope_code="OPM-T",
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.get(self.URL)
+        assert r.status_code == 200
+        assert r.data["role"] == "partner-analyst"
+        assert r.data["partner"]["code"] == "OPM-T"
+        assert r.data["partner"]["name"] == "OPM (test)"
+
+    def test_user_with_no_scope_falls_back_to_operator(
+        self, db, django_user_model,
+    ):
+        from rest_framework.test import APIClient
+        u = django_user_model.objects.create_user(
+            username="ms-test-ghost", password="p",
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.get(self.URL)
+        assert r.status_code == 200
+        # No superuser flag, no partner scope — role hint is "operator"
+        # rather than the more privileged "nsr-unit".
+        assert r.data["role"] == "operator"
+        assert r.data["partner"] is None
+        assert r.data["is_superuser"] is False

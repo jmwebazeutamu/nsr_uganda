@@ -46,6 +46,24 @@ function App() {
   // Live nav counters keyed by nav id. Falls back to NAV.count when
   // the API is unreachable so the design preview still renders.
   const [navCounts] = useNavCounts();
+  // Identity of the actually-authenticated session user. The
+  // Tweaks "Role" dropdown is a rendering override; this is the
+  // ground truth from /api/v1/security/users/me/. Used to:
+  //  - show real username + partner in the topbar
+  //  - auto-pick a sensible Tweaks role when first mounting (so
+  //    opm-analyst doesn't land on an NSR-Unit-themed home).
+  const [me, setMe] = useStateApp(null);
+  useEffectApp(() => {
+    let cancelled = false;
+    fetch("/api/v1/security/users/me/", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { if (!cancelled) setMe(d); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   // Cross-screen handoff payload — set by `navigate(screen, payload)`,
   // consumed by the destination screen on mount, cleared when the
   // user navigates away. Lets GRM → UPD pass a changeRequestId
@@ -67,9 +85,32 @@ function App() {
     document.documentElement.setAttribute('data-stretch', tweaks.stretchStrings ? '1' : '0');
   }, [tweaks.density, tweaks.stretchStrings]);
 
-  // Role label gates which Home variant + person we show
+  // When /me/ resolves and the Tweaks role still matches the
+  // TWEAK_DEFAULTS seed (i.e. the user hasn't manually overridden
+  // it yet), align the rendering role to the actual session. This
+  // is what makes "log in as opm-analyst" produce a partner-analyst
+  // sidebar without a second click in Tweaks.
+  useEffectApp(() => {
+    if (!me || !me.role) return;
+    if (tweaks.role === TWEAK_DEFAULTS.role && me.role !== tweaks.role) {
+      setTweak("role", me.role);
+    }
+  }, [me]);
+
+  // Role label gates which Home variant + person we show. The Tweaks
+  // dropdown is a rendering override; it does NOT change auth.
   const role = tweaks.role;
   const roleData = ROLE_CONTENT[role] || ROLE_CONTENT["nsr-unit"];
+  // Topbar identity — prefer the live /me/ payload; fall back to the
+  // hardcoded persona only when the endpoint hasn't responded yet.
+  const identityName = me?.display_name || me?.username || roleData.person;
+  const identityOrg  = me?.partner?.name || roleData.org;
+  const identityRoleLabel = me?.partner
+    ? `${roleData.name} · ${me.partner.code}`
+    : roleData.name;
+  const identityInitials = identityName
+    .split(/\s+/).filter(Boolean).map(p => p[0]).slice(0, 2).join("").toUpperCase()
+    || "?";
 
   // Role-aware nav: hide things outside role scope.
   // Partner roles see ONLY their portal — they have no business in
@@ -115,7 +156,9 @@ function App() {
         <div className="topbar-spacer"/>
 
         <div className="topbar-actions">
-          <span className="role-chip"><span className="muted">Role</span> <strong>{roleData.name}</strong></span>
+          <span className="role-chip" title={me ? `Authenticated as ${me.username}` : "Loading session…"}>
+            <span className="muted">Role</span> <strong>{identityRoleLabel}</strong>
+          </span>
           {role !== "partner-analyst" && (
             <button className="icon-btn" title="Find a DSA"
                     onClick={() => setDsaFindOpen(true)}>
@@ -124,7 +167,7 @@ function App() {
           )}
           <button className="icon-btn" title="Notifications"><Icon name="bell" size={18}/><span className="dot"/></button>
           <button className="icon-btn" title="Settings"><Icon name="settings" size={18}/></button>
-          <button className="avatar" title={roleData.person}>{roleData.person.split(' ').map(p => p[0]).slice(0,2).join('')}</button>
+          <button className="avatar" title={`${identityName}${identityOrg ? " · " + identityOrg : ""}${me?.username ? " (" + me.username + ")" : ""}`}>{identityInitials}</button>
         </div>
       </header>
 
@@ -227,15 +270,43 @@ function App() {
 
       {/* Tweaks */}
       <TweaksPanel title="Tweaks">
-        <TweakSection label="Operator role">
+        {/* Authenticated identity — surfaces the gap that previously
+            confused users: the dropdown below is a RENDER override
+            only; the real session is whoever is logged in via /admin/. */}
+        <TweakSection label="Authenticated as">
+          <div style={{
+            padding: "8px 10px", border: "1px solid var(--neutral-200)",
+            borderRadius: 6, background: "var(--neutral-50)",
+            fontSize: 13, lineHeight: 1.4,
+          }}>
+            {me ? (
+              <>
+                <div><strong className="t-mono">{me.username}</strong>{me.is_superuser ? " · superuser" : ""}</div>
+                <div className="t-cap" style={{color: "var(--neutral-700)", marginTop: 2}}>
+                  Role from session: <strong>{me.role}</strong>
+                  {me.partner && <> · partner <strong className="t-mono">{me.partner.code}</strong> ({me.partner.name})</>}
+                </div>
+              </>
+            ) : (
+              <span className="t-cap muted">Not signed in · log in at <span className="t-mono">/admin/</span></span>
+            )}
+          </div>
+        </TweakSection>
+
+        <TweakSection label="Render as (preview only)">
           <TweakSelect label="Role" value={tweaks.role} onChange={(v) => setTweak('role', v)}
             options={[
               { value: "nsr-unit",        label: "NSR Unit Coordinator" },
               { value: "parish",          label: "Parish Chief" },
               { value: "cdo",             label: "Community Development Officer" },
               { value: "dpo",             label: "Data Protection Officer" },
-              { value: "partner-analyst", label: "Partner Analyst (PDM/NUSAF/WFP)" },
+              { value: "partner-analyst", label: "Partner Analyst" + (me?.partner ? ` · ${me.partner.code}` : "") },
             ]}/>
+          <div className="t-cap" style={{color: "var(--neutral-600)", marginTop: 6, lineHeight: 1.4}}>
+            Switches the rendering only — sidebar items, home dashboard
+            persona, queue projections. The authenticated session above
+            is what the server enforces.
+          </div>
         </TweakSection>
 
         <TweakSection label="Table density">
