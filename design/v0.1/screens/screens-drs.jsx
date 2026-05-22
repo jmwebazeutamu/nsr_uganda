@@ -87,6 +87,58 @@ const _odrsPost = (url, body) => fetch(url, {
   body: JSON.stringify(body),
 });
 
+// Render the criteria tree (request_payload.criteria) as nested
+// AND/OR groups. catalogueByKey maps dotted field keys to the
+// builder-schema metadata so the rule shows a human label instead
+// of `household.sub_region_code`. Approvers need this — judging a
+// request without seeing the WHERE clause is judging it blind.
+const _drsRenderCriteriaNode = (node, catalogueByKey, depth = 0) => {
+  if (!node) return null;
+  if (node.kind === "rule") {
+    const def = catalogueByKey[node.field] || {};
+    const label = def.label || node.field;
+    const op = (node.op || "?").toUpperCase();
+    const v = node.value;
+    const sample = Array.isArray(v)
+      ? v.slice(0, 6).join(", ") + (v.length > 6 ? ` +${v.length - 6} more` : "")
+      : (v == null || v === "" ? "(empty)" : String(v));
+    return (
+      <div className="t-mono" style={{fontSize:12, padding:"3px 0", lineHeight:1.5}}>
+        <strong style={{color:"var(--neutral-900)"}}>{label}</strong>
+        <span className="muted" style={{margin:"0 6px"}}>{op}</span>
+        <span style={{color:"var(--neutral-800)"}}>{sample}</span>
+      </div>
+    );
+  }
+  const children = node.rules || [];
+  if (children.length === 0) {
+    return <div className="t-cap muted" style={{padding:"2px 0"}}>(empty group)</div>;
+  }
+  const inner = (
+    <>
+      {children.map((c, i) => (
+        <React.Fragment key={c.id || i}>
+          {i > 0 && (
+            <div className="t-cap" style={{
+              fontWeight:600,
+              color:"var(--accent-system)",
+              margin:"2px 0", letterSpacing:".06em",
+            }}>{node.combinator || "AND"}</div>
+          )}
+          {_drsRenderCriteriaNode(c, catalogueByKey, depth + 1)}
+        </React.Fragment>
+      ))}
+    </>
+  );
+  if (depth === 0) return inner;
+  return (
+    <div style={{
+      paddingLeft: 10, borderLeft: "2px solid var(--neutral-200)",
+      margin: "2px 0 2px 2px",
+    }}>{inner}</div>
+  );
+};
+
 const OperatorDRSList = ({ onNewRequest }) => {
   // US-S14-002 — operator list view. Mirrors the partner list
   // shape (S13-004) but reads /api/v1/drs/requests/ (full
@@ -103,6 +155,22 @@ const OperatorDRSList = ({ onNewRequest }) => {
   const [approveOpen, setApproveOpen] = useStateDRS(false);
   const [rejectOpen, setRejectOpen] = useStateDRS(false);
   const [toast, setToast] = useStateDRS("");
+  // Operator-side "+ New request" needs to know whether any active
+  // DSA exists for the wizard to file under. Empty means the wizard
+  // would dead-end on Step 1 (no DSAs in the picker) — disable the
+  // button rather than letting the operator walk into a dead end.
+  const [availableDsas, setAvailableDsas] = useStateDRS([]);
+  // Field catalogue keyed by dotted key — used to label criteria
+  // rules in human-readable form on the REQUEST DETAIL panel and
+  // to drive the data-sample modal's column metadata.
+  const [catalogueByKey, setCatalogueByKey] = useStateDRS({});
+  // Approval triage data-sample modal: shows the partner's saved
+  // fields + criteria against the mocked preview surface so the
+  // approver can see what the request would yield before deciding.
+  // Backed by the same PreviewStep the wizard uses on Step 4. The
+  // live preview endpoint (DRS-O-PREVIEW) lands in a follow-up
+  // slice; today's sample is design-time.
+  const [previewOpen, setPreviewOpen] = useStateDRS(false);
 
   useEffectDRS(() => {
     let cancelled = false;
@@ -119,6 +187,20 @@ const OperatorDRSList = ({ onNewRequest }) => {
       .catch(() => {});
     return () => { cancelled = true; };
   }, [reloadKey]);
+
+  useEffectDRS(() => {
+    let cancelled = false;
+    _odrsFetchJson("/api/v1/drs/requests/builder-schema/")
+      .then(data => {
+        if (cancelled) return;
+        setAvailableDsas(data.available_dsas || []);
+        const map = {};
+        for (const f of (data.fields || [])) map[f.key] = f;
+        setCatalogueByKey(map);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const allRequests = liveRequests || ODRS_REQUESTS_MOCK;
   // Default selection: first row matching the active filter, else
@@ -232,7 +314,14 @@ const OperatorDRSList = ({ onNewRequest }) => {
         title={<>Data requests <Chip>{rows.length}</Chip></>}
         sub="Triage incoming requests under each active DSA. Approve, reject or hold for clarification."
         right={<>
-          <button className="btn btn-primary" onClick={onNewRequest}>
+          <button
+            className="btn btn-primary"
+            onClick={onNewRequest}
+            disabled={availableDsas.length === 0}
+            title={availableDsas.length === 0
+              ? "No active DSAs to file under — activate a DSA first"
+              : ""}
+          >
             <Icon name="plus" size={14}/> New request
           </button>
         </>}
@@ -349,27 +438,66 @@ const OperatorDRSList = ({ onNewRequest }) => {
                 <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>{current.requester || "—"}</div>
 
                 <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>DSA</div>
-                <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>{current.dsa_reference || `DSA ${current.dsa || "—"}`}</div>
+                <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>
+                  {current.dsa_reference || `DSA ${current.dsa || "—"}`}
+                  {current.partner_name && (
+                    <span className="t-cap muted" style={{marginLeft:8}}>· {current.partner_name}</span>
+                  )}
+                </div>
 
-                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>FIELDS REQUESTED</div>
+                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>FIELDS REQUESTED ({(current.request_payload.fields || []).length})</div>
                 <div className="row-wrap" style={{display:"flex", flexWrap:"wrap", gap:6}}>
                   {(current.request_payload.fields || []).length === 0
                     ? <span className="t-bodysm muted">— none —</span>
-                    : current.request_payload.fields.map(f => (
-                      <Chip key={f} size="sm" tone="programme">{f}</Chip>
-                    ))}
+                    : current.request_payload.fields.map(f => {
+                        const def = catalogueByKey[f] || {};
+                        return (
+                          <Chip key={f} size="sm" tone="programme" title={def.label || f}>
+                            {def.label || f}
+                          </Chip>
+                        );
+                      })}
                 </div>
 
-                {current.request_payload.sub_region_codes && (
-                  <>
-                    <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>GEOGRAPHY</div>
-                    <div className="row-wrap" style={{display:"flex", flexWrap:"wrap", gap:6}}>
-                      {current.request_payload.sub_region_codes.map(s => (
-                        <Chip key={s} size="sm" tone="data">{s}</Chip>
-                      ))}
+                {/* CRITERIA — the WHERE clause the partner built on
+                    Step 2. Approvers need this to judge scope, not
+                    just the field list. Falls back to flat geo /
+                    programme chips for older requests that
+                    pre-date request_payload.criteria. */}
+                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>CRITERIA</div>
+                {current.request_payload.criteria
+                  ? <div className="card" style={{padding:10, background:"var(--neutral-50, #f7f8fa)", borderRadius:6}}>
+                      {_drsRenderCriteriaNode(current.request_payload.criteria, catalogueByKey)}
                     </div>
-                  </>
-                )}
+                  : <div className="t-bodysm muted">
+                      No structured criteria recorded.
+                      {(current.request_payload.sub_region_codes
+                        || current.request_payload.region_codes
+                        || current.request_payload.district_codes
+                        || current.request_payload.programme_codes)
+                        ? " Flat-key fallback below."
+                        : " The request runs unconstrained within DSA scope."}
+                    </div>}
+
+                {/* Flat-key fallback — surfaces legacy / pre-criteria
+                    requests OR the geo/programme leaves the validator
+                    actually enforces. Shown when present even if a
+                    criteria tree also exists; the validator currently
+                    only reads these flat keys. */}
+                {["region_codes","sub_region_codes","district_codes",
+                  "county_codes","sub_county_codes","parish_codes",
+                  "village_codes","programme_codes"].map(k => (
+                  current.request_payload[k] && current.request_payload[k].length > 0 ? (
+                    <div key={k} style={{marginTop:8}}>
+                      <div className="t-cap" style={{color:"var(--neutral-600)", marginBottom:4}}>{k.replace(/_/g, " ").toUpperCase()}</div>
+                      <div className="row-wrap" style={{display:"flex", flexWrap:"wrap", gap:4}}>
+                        {current.request_payload[k].map(s => (
+                          <Chip key={s} size="sm" tone="data">{s}</Chip>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null
+                ))}
 
                 {current.request_payload.max_rows && (
                   <>
@@ -377,6 +505,24 @@ const OperatorDRSList = ({ onNewRequest }) => {
                     <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>{Number(current.request_payload.max_rows).toLocaleString()} rows</div>
                   </>
                 )}
+
+                {/* Data sample — opens the same masked preview the
+                    partner saw at submit time. Helps the approver
+                    assess shape & sensitivity before deciding. The
+                    real preview endpoint (DRS-O-PREVIEW) lands in a
+                    follow-up; today's modal is a design-time sample. */}
+                <div style={{marginTop:14}}>
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => setPreviewOpen(true)}
+                    disabled={(current.request_payload.fields || []).length === 0}
+                    title={(current.request_payload.fields || []).length === 0
+                      ? "No fields to preview"
+                      : "Open a masked data sample for this request"}
+                  >
+                    <Icon name="eye" size={13}/> View data sample
+                  </button>
+                </div>
 
                 {current.decision_reason && (
                   <>
@@ -424,6 +570,32 @@ const OperatorDRSList = ({ onNewRequest }) => {
         reasonOptions={ODRS_REJECT_REASONS}
         recordLabel={current?.id}
         onClose={() => setRejectOpen(false)} onConfirm={confirmReject}/>
+
+      <Modal open={previewOpen && !!current} onClose={() => setPreviewOpen(false)}
+        title={current ? `Data sample · ${current.id.slice(0,16)}…` : "Data sample"}
+        width={1080}
+        footer={<>
+          <button className="btn" onClick={() => setPreviewOpen(false)}>Close</button>
+        </>}>
+        {current && (() => {
+          const fields = current.request_payload.fields || [];
+          const tree = current.request_payload.criteria || null;
+          const Preview = window.PreviewStep;
+          if (typeof Preview !== "function") {
+            return <div className="t-bodysm muted">Preview template not loaded.</div>;
+          }
+          return (
+            <div className="col gap-3">
+              <div className="t-cap muted">
+                Approver view · same masked sample the partner saw at
+                submit time. Real preview endpoint (DRS-O-PREVIEW) is
+                deferred to a follow-up slice.
+              </div>
+              <Preview selected={fields} catalogueByKey={catalogueByKey} tree={tree}/>
+            </div>
+          );
+        })()}
+      </Modal>
 
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>
@@ -952,6 +1124,12 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
   const [submitOpen, setSubmitOpen] = useStateDRS(false);
   const [submitting, setSubmitting] = useStateDRS(false);
   const [toast, setToast] = useStateDRS("");
+  // Operator-only: which DSA the operator is filing on behalf of.
+  // Partner role inherits schema.dsa_id (a single bound DSA), so
+  // pickedDsaId stays empty there and the effective DSA falls back
+  // to schema.dsa_id. Without this, the operator submit path
+  // silently dead-ended (modal closed, no POST, no inbox row).
+  const [pickedDsaId, setPickedDsaId] = useStateDRS("");
   const stepIdx = STEPS.findIndex(s => s.id === step);
 
   const next = () => setStep(STEPS[Math.min(stepIdx + 1, STEPS.length - 1)].id);
@@ -996,6 +1174,28 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  // Resolve the DSA the wizard is filing under. For partners this
+  // is the one DSA bound to their account (schema.dsa_id). For
+  // operators it is whichever DSA they pick from the
+  // "Filing on behalf of" picker on Step 1. Returns null until a
+  // choice exists — submit is gated on this.
+  const effectiveDsa = React.useMemo(() => {
+    if (!schema) return null;
+    if (pickedDsaId) {
+      const found = (schema.available_dsas || []).find(d => d.id === pickedDsaId);
+      if (found) return found;
+    }
+    if (schema.dsa_id) {
+      return {
+        id: schema.dsa_id,
+        reference: schema.dsa_reference,
+        partner_code: "",
+        partner_name: "",
+      };
+    }
+    return null;
+  }, [schema, pickedDsaId]);
 
   // Schema-driven options for enum fields whose value set lives
   // in reference data. Inline `options` skip this fetch entirely.
@@ -1042,12 +1242,20 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
   // success toast.
   const confirmSubmit = async () => {
     if (submitting) return;
-    if (!schema || !schema.dsa_id) {
+    if (!schema) {
       setSubmitOpen(false);
+      setToast("Schema not loaded — refresh and try again.");
+      return;
+    }
+    if (!effectiveDsa) {
+      // Operator opened the wizard without picking a DSA, OR no
+      // active DSAs exist in the system at all. The Scope step
+      // surfaces the picker; nudge them back there. Keep the
+      // submit modal open so the action is recoverable in place.
       setToast(
-        isPartner
-          ? "No active DSA for your account — submission unavailable."
-          : "Operators submit on behalf of partners; no DSA bound to this session.",
+        (schema.available_dsas || []).length === 0
+          ? "No active DSAs available — nothing to file against."
+          : "Pick a DSA on Step 1 (Scope) before submitting.",
       );
       return;
     }
@@ -1129,7 +1337,7 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
           Accept: "application/json",
         },
         body: JSON.stringify({
-          dsa: schema.dsa_id,
+          dsa: effectiveDsa.id,
           request_payload: payload,
           requester_note: requesterNote,
         }),
@@ -1174,14 +1382,16 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
       <PageHeader
         eyebrow={
           (isPartner ? "PARTNER DRS · NEW REQUEST" : "DATA REQUESTS")
-          + (schema?.dsa_reference ? ` · DSA ${schema.dsa_reference}` : "")
+          + (effectiveDsa?.reference ? ` · DSA ${effectiveDsa.reference}` : "")
           + (schema ? " · LIVE SCHEMA" : "")
         }
         title={isPartner ? "Build data request" : "DRS query builder"}
         sub={schema
-          ? (schema.dsa_reference
-              ? <>Requester: {isPartner ? "you" : "operator"} · Active DSA <span className="t-mono">{schema.dsa_reference}</span></>
-              : <>Requester: {isPartner ? "you" : "operator"} · No active DSA on this session — submit unavailable</>)
+          ? (effectiveDsa
+              ? <>Requester: {isPartner ? "you" : "operator"} · {isPartner ? "Active DSA" : "Filing on behalf of"} <span className="t-mono">{effectiveDsa.reference}</span>{effectiveDsa.partner_name ? <> · {effectiveDsa.partner_name}</> : null}</>
+              : isPartner
+                  ? <>Requester: you · No active DSA on this session — submit unavailable</>
+                  : <>Requester: operator · Pick a DSA on Step 1 to file on behalf of</>)
           : <>Loading session…</>}
         right={<>
           {/* "Save as template" removed (BUG-S27-023) — no backend
@@ -1221,7 +1431,14 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
         })}
       </div>
 
-      {step === 'scope' && <ScopeStep value={entity} onChange={setEntity}/>}
+      {step === 'scope' && <ScopeStep
+        value={entity} onChange={setEntity}
+        role={schema?.role || (isPartner ? "partner" : "operator")}
+        availableDsas={schema?.available_dsas || []}
+        pickedDsaId={pickedDsaId}
+        onPickDsa={setPickedDsaId}
+        effectiveDsa={effectiveDsa}
+      />}
       {step === 'build' && (
         !BuildStepV2
           ? <div className="card" style={{padding:24}}>
@@ -1275,6 +1492,7 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
         methods={schema?.delivery_methods || []}
         value={deliveryMethod}
         onChange={setDeliveryMethod}
+        effectiveDsa={effectiveDsa}
       />}
       {step === 'submit' && <SubmitStep
         onSubmit={() => setSubmitOpen(true)}
@@ -1285,7 +1503,8 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
         maxRows={maxRows}
         deliveryMethod={deliveryMethod}
         deliveryMethods={schema?.delivery_methods || []}
-        dsaReference={schema?.dsa_reference}
+        dsaReference={effectiveDsa?.reference}
+        effectiveDsa={effectiveDsa}
       />}
 
       {/* Action bar */}
@@ -1295,7 +1514,14 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
         <button className="btn" onClick={prev} disabled={stepIdx === 0}><Icon name="chevronLeft" size={14}/> Back</button>
         {stepIdx < STEPS.length - 1
           ? <button className="btn btn-primary" onClick={next}>Continue <Icon name="chevronRight" size={14}/></button>
-          : <button className="btn btn-primary" onClick={() => setSubmitOpen(true)}><Icon name="check" size={14}/> Submit for approval</button>
+          : <button
+              className="btn btn-primary"
+              onClick={() => setSubmitOpen(true)}
+              disabled={!effectiveDsa}
+              title={!effectiveDsa
+                ? "Pick a DSA on Step 1 before submitting"
+                : ""}
+            ><Icon name="check" size={14}/> Submit for approval</button>
         }
       </div>
 
@@ -1309,8 +1535,8 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
         <div className="col gap-3">
           <p style={{margin:0}}>
             A draft DataRequest will be created on
-            {schema?.dsa_reference
-              ? <> DSA <span className="t-mono">{schema.dsa_reference}</span></>
+            {effectiveDsa?.reference
+              ? <> DSA <span className="t-mono">{effectiveDsa.reference}</span>{!isPartner && effectiveDsa.partner_name ? <> (filing on behalf of {effectiveDsa.partner_name})</> : null}</>
               : " your active DSA"}
             {" "}and submitted for NSR Unit DRS Reviewer + DPO approval.
             Server-side validation runs on submit; if the request includes
@@ -1319,7 +1545,7 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
           </p>
           <div style={{display:'grid', gridTemplateColumns:'130px 1fr', rowGap:6, fontSize:13}}>
             <div className="muted">DSA</div>
-            <div className="t-mono">{schema?.dsa_reference || "—"}</div>
+            <div className="t-mono">{effectiveDsa?.reference || "—"}</div>
             <div className="muted">Entity</div>
             <div style={{textTransform:'capitalize'}}>{entity}</div>
             <div className="muted">Fields</div>
@@ -1382,41 +1608,92 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
 // field selector while household-prefixed ones get filtered out
 // on the FieldStep. Referral and grievance entities are out of
 // the MVP DRS scope; greyed out per ADR-0011's narrow MVP grant.
-const ScopeStep = ({ value, onChange }) => {
+const ScopeStep = ({
+  value, onChange,
+  role = "partner",
+  availableDsas = [],
+  pickedDsaId = "",
+  onPickDsa,
+  effectiveDsa = null,
+}) => {
   const options = [
     { id: "household", label: "Household", sub: "Primary entity · one row per registered household", enabled: true },
     { id: "member",    label: "Member",    sub: "One row per individual within a household", enabled: true },
     { id: "referral",  label: "Referral summary", sub: "Programme referrals · aggregated", enabled: false },
     { id: "grievance", label: "Grievance summary", sub: "Case-level summary", enabled: false },
   ];
+  const showOperatorPicker = role === "operator";
   return (
     <div style={{display:'grid', gridTemplateColumns:'1fr 360px', gap:16}}>
-      <div className="card">
-        <div className="card-header"><h3 className="t-h3" style={{margin:0}}>Choose entity</h3><span className="t-cap">Field selector adapts to this choice</span></div>
-        <div style={{padding:20, display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:12}}>
-          {options.map(o => {
-            const selected = value === o.id;
-            return (
-              <button
-                key={o.id}
-                disabled={!o.enabled}
-                onClick={() => o.enabled && onChange(o.id)}
-                style={{
-                  textAlign:'left', padding:16, borderRadius:6,
-                  border: `2px solid ${selected ? 'var(--accent-system)' : 'var(--neutral-300)'}`,
-                  background: selected ? 'var(--accent-system-bg)' : !o.enabled ? 'var(--neutral-100)' : 'var(--neutral-0)',
-                  opacity: o.enabled ? 1 : 0.5, cursor: o.enabled ? 'pointer' : 'not-allowed',
-                }}
-              >
-                <div className="row gap-2"><strong>{o.label}</strong>{selected && <Icon name="check" size={14} color="var(--accent-system)"/>}</div>
-                <div className="t-cap mt-1">{o.sub}</div>
-                {!o.enabled && <div className="t-cap mt-2" style={{color:'var(--accent-danger)'}}><Icon name="lock" size={11}/> Outside MVP DRS scope</div>}
-              </button>
-            );
-          })}
+      <div className="col gap-3">
+        {showOperatorPicker && (
+          <div className="card">
+            <div className="card-header">
+              <h3 className="t-h3" style={{margin:0}}>Filing on behalf of</h3>
+              <span className="t-cap">Pick the DSA this request is filed under</span>
+            </div>
+            <div style={{padding:16}}>
+              {availableDsas.length === 0 ? (
+                <div className="tint-danger" style={{padding:12, borderRadius:6, borderLeft:'3px solid var(--accent-danger)'}}>
+                  <div className="row gap-2"><Icon name="alert" size={14} color="var(--accent-danger)"/><strong className="t-bodysm">No active DSAs available</strong></div>
+                  <p className="t-bodysm" style={{margin:'4px 0 0', color:'var(--neutral-700)'}}>
+                    There are no active Data Sharing Agreements to file a
+                    request against. The submit action is disabled until a
+                    DSA is activated by the Partner Steward.
+                  </p>
+                </div>
+              ) : (
+                <div style={{display:'grid', gridTemplateColumns:'1fr', gap:8}}>
+                  <select
+                    className="field-input"
+                    value={pickedDsaId}
+                    onChange={(e) => onPickDsa && onPickDsa(e.target.value)}
+                    style={{padding:'10px 12px', fontSize:14}}
+                  >
+                    <option value="">— Select a DSA —</option>
+                    {availableDsas.map(d => (
+                      <option key={d.id} value={d.id}>
+                        {d.reference} · {d.partner_name || d.partner_code}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="t-cap muted">
+                    {availableDsas.length} active DSA{availableDsas.length === 1 ? "" : "s"} available.
+                    The operator (you) is recorded as `requester`; the
+                    partner whose DSA you pick is the data recipient.
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        <div className="card">
+          <div className="card-header"><h3 className="t-h3" style={{margin:0}}>Choose entity</h3><span className="t-cap">Field selector adapts to this choice</span></div>
+          <div style={{padding:20, display:'grid', gridTemplateColumns:'repeat(2,1fr)', gap:12}}>
+            {options.map(o => {
+              const selected = value === o.id;
+              return (
+                <button
+                  key={o.id}
+                  disabled={!o.enabled}
+                  onClick={() => o.enabled && onChange(o.id)}
+                  style={{
+                    textAlign:'left', padding:16, borderRadius:6,
+                    border: `2px solid ${selected ? 'var(--accent-system)' : 'var(--neutral-300)'}`,
+                    background: selected ? 'var(--accent-system-bg)' : !o.enabled ? 'var(--neutral-100)' : 'var(--neutral-0)',
+                    opacity: o.enabled ? 1 : 0.5, cursor: o.enabled ? 'pointer' : 'not-allowed',
+                  }}
+                >
+                  <div className="row gap-2"><strong>{o.label}</strong>{selected && <Icon name="check" size={14} color="var(--accent-system)"/>}</div>
+                  <div className="t-cap mt-1">{o.sub}</div>
+                  {!o.enabled && <div className="t-cap mt-2" style={{color:'var(--accent-danger)'}}><Icon name="lock" size={11}/> Outside MVP DRS scope</div>}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
-      <DSACard/>
+      <DSACard effectiveDsa={effectiveDsa}/>
     </div>
   );
 };
@@ -1434,32 +1711,37 @@ const ScopeStep = ({ value, onChange }) => {
 /* ============================================================
    DSA card (shared)
    ============================================================ */
-const DSACard = () => (
-  <div className="card" style={{borderTop:'3px solid var(--accent-system)'}}>
-    <div className="card-header" style={{padding:'12px 16px'}}>
-      <div>
-        <div className="t-cap" style={{color:'var(--accent-system)'}}>ACTIVE DSA</div>
-        <h3 className="t-h3" style={{margin:'2px 0 0'}}>DSA-OPM-PDM-2026</h3>
+const DSACard = ({ effectiveDsa = null } = {}) => {
+  // When the wizard knows which DSA it is filing under (operator
+  // pick OR partner-bound DSA), surface a thin live header. The
+  // illustrative usage/quota body stays placeholder — those metrics
+  // are not yet on the schema endpoint (await DRS-O-02).
+  const ref = effectiveDsa?.reference;
+  const partner = effectiveDsa?.partner_name;
+  return (
+    <div className="card" style={{borderTop:'3px solid var(--accent-system)'}}>
+      <div className="card-header" style={{padding:'12px 16px'}}>
+        <div>
+          <div className="t-cap" style={{color:'var(--accent-system)'}}>ACTIVE DSA</div>
+          <h3 className="t-h3" style={{margin:'2px 0 0'}}>{ref || "— no DSA picked —"}</h3>
+        </div>
+        <Chip tone="data">{ref ? "Active" : "Pending"}</Chip>
       </div>
-      <Chip tone="data">Active</Chip>
+      <div style={{padding:16}}>
+        <div style={{display:'grid', gridTemplateColumns:'110px 1fr', rowGap:6, fontSize:13}}>
+          <div className="muted">Partner</div><div>{partner || "—"}</div>
+          <div className="muted">Programme</div><div className="muted">(advertised on schema follow-up)</div>
+          <div className="muted">Valid window</div><div className="muted">(advertised on schema follow-up)</div>
+          <div className="muted">Row budget</div><div className="muted">(advertised on schema follow-up)</div>
+        </div>
+        <div className="t-cap mt-3">
+          DSA fine print — quotas, sensitivity caveats, retention
+          pledges — lands on the schema endpoint in a follow-up slice.
+        </div>
+      </div>
     </div>
-    <div style={{padding:16}}>
-      <div style={{display:'grid', gridTemplateColumns:'110px 1fr', rowGap:6, fontSize:13}}>
-        <div className="muted">Partner</div><div>Office of the Prime Minister</div>
-        <div className="muted">Programme</div><div>OPM-PDM 2026</div>
-        <div className="muted">Valid from</div><div>1 Jan 2026</div>
-        <div className="muted">Valid to</div><div>31 Dec 2026 <Chip size="sm" tone="data">8 months left</Chip></div>
-        <div className="muted">Row budget</div><div>2,500,000 / month</div>
-        <div className="muted">Used this month</div><div>1,824,317 (73%)</div>
-      </div>
-      <div style={{height:6, background:'var(--neutral-200)', borderRadius:3, marginTop:10, overflow:'hidden'}}>
-        <div style={{width:'73%', height:'100%', background:'var(--accent-system)'}}/>
-      </div>
-      <div className="t-cap mt-3">Sensitive fields: <strong>4 disabled</strong> by clause 4.2.b.</div>
-      <button className="btn btn-sm mt-3" style={{width:'100%'}}><Icon name="file" size={13}/> Open DSA document</button>
-    </div>
-  </div>
-);
+  );
+};
 
 /* ============================================================
    Step 3 — Field Selector
@@ -1626,7 +1908,7 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
 // a slot for it (DRS-O-02 wiring will add one). Until then the
 // chosen method just travels via the audit chain via the request's
 // `requester_note` field — explicit gap, not silent fudge.
-const DeliveryStep = ({ methods, value, onChange }) => {
+const DeliveryStep = ({ methods, value, onChange, effectiveDsa = null }) => {
   const iconFor = id => id === "portal_download" ? "download"
     : id === "sftp_push" ? "database"
     : id === "webhook"   ? "git"
@@ -1662,7 +1944,7 @@ const DeliveryStep = ({ methods, value, onChange }) => {
           </div>
         </div>
       </div>
-      <DSACard/>
+      <DSACard effectiveDsa={effectiveDsa}/>
     </div>
   );
 };
@@ -1679,6 +1961,7 @@ const SubmitStep = ({
   tree, catalogueByKey,
   maxRows, deliveryMethod,
   deliveryMethods, dsaReference,
+  effectiveDsa = null,
 }) => {
   const deliveryLabel = (deliveryMethods.find(m => m.id === deliveryMethod) || {}).label || "—";
   // Flatten the tree into a list of leaf rules for the summary.
@@ -1744,7 +2027,7 @@ const SubmitStep = ({
             <div>{deliveryLabel}</div>
           </div>
         </div>
-        <DSACard/>
+        <DSACard effectiveDsa={effectiveDsa}/>
       </div>
     </div>
   );

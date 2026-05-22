@@ -35,16 +35,25 @@ class DownloadRateThrottle(UserRateThrottle):
 
 
 class DataRequestSerializer(serializers.ModelSerializer):
+    # Operator-side detail panel renders the DSA reference next to
+    # the row, not the ULID. Exposed read-only so a POST still
+    # accepts dsa as the PK.
+    dsa_reference = serializers.CharField(source="dsa.reference", read_only=True)
+    partner_code = serializers.CharField(source="dsa.partner.code", read_only=True)
+    partner_name = serializers.CharField(source="dsa.partner.name", read_only=True)
+
     class Meta:
         model = DataRequest
-        fields = ("id", "dsa", "requester", "requester_note",
+        fields = ("id", "dsa", "dsa_reference", "partner_code", "partner_name",
+                  "requester", "requester_note",
                   "request_payload", "status",
                   "submitted_at", "approver", "decided_at",
                   "decision_reason", "delivered_at", "expires_at",
                   "manifest_sha256", "row_count_delivered",
                   "created_at", "updated_at")
         read_only_fields = (
-            "id", "requester", "status",
+            "id", "dsa_reference", "partner_code", "partner_name",
+            "requester", "status",
             "submitted_at", "approver", "decided_at",
             "decision_reason", "delivered_at", "expires_at",
             "manifest_sha256", "row_count_delivered",

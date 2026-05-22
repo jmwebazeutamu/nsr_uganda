@@ -459,6 +459,32 @@ def _active_partner_dsa(user) -> DataSharingAgreement | None:
     )
 
 
+def _available_dsas_for_user(user) -> list[DataSharingAgreement]:
+    """Return active DSAs the user can file requests under, ordered by
+    reference. The wizard uses this to render a "Filing on behalf of"
+    picker on Step 1 — required for operator roles, redundant (but
+    consistent) for partner roles.
+
+    Partner-affiliated users: only DSAs whose partner matches their
+    PARTNER scope. Operator / NSR Unit (no partner scope): every
+    active DSA — they submit on behalf of any partner. The previous
+    schema response had no way to express this, so the operator
+    submit path silently dead-ended whenever schema.dsa_id was empty.
+    """
+    if user is None or not getattr(user, "is_authenticated", False):
+        return []
+    qs = DataSharingAgreement.objects.filter(status="active").select_related("partner")
+    from apps.security.models import OperatorScope, ScopeLevel
+    partner_codes = list(
+        OperatorScope.objects.filter(
+            user=user, active=True, scope_level=ScopeLevel.PARTNER,
+        ).exclude(scope_code="").values_list("scope_code", flat=True),
+    )
+    if partner_codes:
+        qs = qs.filter(partner__code__in=partner_codes)
+    return list(qs.order_by("reference"))
+
+
 def build_schema(user) -> dict[str, Any]:
     """Generate the builder schema for `user`. Same top-level shape
     for every role; partner roles get DSA-restricted fields flagged
@@ -505,10 +531,20 @@ def build_schema(user) -> dict[str, Any]:
             or (role == "operator" and "nsr-unit" in m["available_to"])
     ]
 
+    available_dsas = [
+        {
+            "id": str(d.id),
+            "reference": d.reference,
+            "partner_code": d.partner.code,
+            "partner_name": d.partner.name,
+        }
+        for d in _available_dsas_for_user(user)
+    ]
     return {
         "role": role,
         "dsa_id": str(dsa.id) if dsa else "",
         "dsa_reference": dsa.reference if dsa else "",
+        "available_dsas": available_dsas,
         "fields": fields,
         "filter_operators": list(FILTER_OPERATORS),
         "filter_fields": [dict(f) for f in FILTER_FIELDS],

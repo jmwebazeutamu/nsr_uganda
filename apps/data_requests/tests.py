@@ -1311,7 +1311,7 @@ class TestBuilderSchema:
     is invariant — frontend renders one component regardless of role."""
 
     EXPECTED_TOP_LEVEL_KEYS = {
-        "role", "dsa_id", "dsa_reference", "fields",
+        "role", "dsa_id", "dsa_reference", "available_dsas", "fields",
         "filter_operators", "filter_fields", "delivery_methods",
     }
     EXPECTED_FILTER_FIELD_KEYS = {
@@ -1532,6 +1532,69 @@ class TestBuilderSchema:
         r = operator_client.get("/api/v1/drs/requests/builder-schema/")
         assert r.status_code == 200
         assert r.data["dsa_id"] == ""
+
+    def test_operator_available_dsas_lists_every_active_dsa(
+        self, operator_client, partner_with_narrow_dsa,
+    ):
+        # An operator submits on behalf of partners — the wizard's
+        # "Filing on behalf of" picker reads `available_dsas` to know
+        # what they may pick from. Every active DSA in the registry
+        # is fair game; no active partner scope on the operator user
+        # means no filter narrows the list.
+        from apps.partners.models import DataSharingAgreement
+
+        # Seed a second active DSA on a different partner.
+        other_partner = make_partner(code="PARTNER-OTHER", name="Other Partner")
+        make_dsa(
+            partner=other_partner, reference="DSA-OTHER-1",
+            status="active",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+        )
+        r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        assert r.status_code == 200
+        refs = {d["reference"] for d in r.data["available_dsas"]}
+        assert {"DSA-NARROW-1", "DSA-OTHER-1"} <= refs
+        # Shape contract — every entry has the four keys the wizard reads.
+        for d in r.data["available_dsas"]:
+            assert set(d.keys()) == {
+                "id", "reference", "partner_code", "partner_name",
+            }
+            # IDs are ULIDs — non-empty strings the wizard can POST back.
+            assert d["id"]
+            assert DataSharingAgreement.objects.filter(id=d["id"]).exists()
+
+    def test_operator_available_dsas_empty_when_no_active_dsa(
+        self, operator_client,
+    ):
+        # No active DSAs in the system — operator can't file a
+        # request on behalf of anyone. The wizard shows an empty
+        # state and disables submit. (Inactive DSAs are excluded;
+        # they couldn't be submitted against anyway.)
+        from apps.partners.models import DataSharingAgreement
+        DataSharingAgreement.objects.update(status="suspended")
+        r = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        assert r.status_code == 200
+        assert r.data["available_dsas"] == []
+
+    def test_partner_available_dsas_is_their_own_dsa_only(
+        self, partner_client, partner_with_narrow_dsa,
+    ):
+        # A partner-scoped user sees only DSAs tied to their own
+        # partner — the picker stays consistent across roles but
+        # the partner's choices are constrained to their own.
+
+        # Seed a DSA on a DIFFERENT partner — must NOT appear.
+        other_partner = make_partner(code="PARTNER-EXCLUDED", name="Excluded")
+        make_dsa(
+            partner=other_partner, reference="DSA-EXCLUDED-1",
+            status="active",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+        )
+        r = partner_client.get("/api/v1/drs/requests/builder-schema/")
+        assert r.status_code == 200
+        refs = [d["reference"] for d in r.data["available_dsas"]]
+        assert "DSA-NARROW-1" in refs
+        assert "DSA-EXCLUDED-1" not in refs
 
     def test_filter_fields_catalogue_shape(self, operator_client):
         # US-S27-012: builder-schema advertises the predicates the
