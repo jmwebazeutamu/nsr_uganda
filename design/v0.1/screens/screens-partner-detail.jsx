@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, KPI, Sparkline, PageHeader, Modal, Field, Toast, PartnerMark, useApi, nsrApi */
+/* global React, Icon, Chip, KPI, Sparkline, PageHeader, Modal, Field, Toast, PartnerMark, useApi, nsrApi, ScopeEditModal */
 // NSR MIS — Partner detail (US-S23-018, live-wired)
 //   PartnerDetailScreen  — full read view for one partner
 //
@@ -110,6 +110,7 @@ const _projectDsa = (d) => ({
   ref: d.reference, version: d.version,
   status: d.status_label || d.status || "-",
   status_code: d.status,
+  _raw: d,                          // raw API payload for the scope-edit modal pre-fill
   programme: (d.programmes && d.programmes.length)
     ? (d.programmes.length + " programme" + (d.programmes.length === 1 ? "" : "s"))
     : "-",
@@ -330,6 +331,26 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme }) => {
 
   const [tab, setTab] = useStatePD("over");
   const [toast, setToast] = useStatePD("");
+  // ScopeEditDsa is the raw DSA payload being scope-edited; null
+  // when the modal is closed. ADR-0016 §"Decision 2" gates editing
+  // to draft + active rows only.
+  const [scopeEditDsa, setScopeEditDsa] = useStatePD(null);
+  const _SCOPE_EDITABLE = new Set(["draft", "active"]);
+  const openScopeEditor = (projectedDsa) => {
+    if (!projectedDsa || !_SCOPE_EDITABLE.has(projectedDsa.status_code)) return;
+    setScopeEditDsa(projectedDsa._raw || null);
+  };
+  const onScopeEditSuccess = (result, { cloned }) => {
+    if (cloned && result?.reference) {
+      setToast(`Cloned to ${result.reference} v${result.version} (draft) — dispatch the new draft for sign-off.`);
+    } else if (result?.reference) {
+      setToast(`Scope updated on ${result.reference} v${result.version}.`);
+    } else {
+      setToast("Scope updated.");
+    }
+    setScopeEditDsa(null);
+    dsasMeta.refresh && dsasMeta.refresh();
+  };
 
   const tabCounts = {
     dsa: p.dsas.length,
@@ -390,8 +411,13 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme }) => {
           <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to partners</button>
           <button className="btn"><Icon name="download" size={14}/> Export partner record</button>
           <button className="btn btn-primary"
-                  disabled={!p.dsas.length}
-                  onClick={() => setToast(`Opened scope editor for ${p.dsas[0]?.ref || "DSA"} (stub)`)}>
+                  disabled={!p.dsas.length || !p.dsas.some(d => _SCOPE_EDITABLE.has(d.status_code))}
+                  onClick={() => {
+                    // Prefer active; otherwise pick the newest draft.
+                    const target = p.dsas.find(d => d.status_code === "active")
+                      || p.dsas.find(d => d.status_code === "draft");
+                    openScopeEditor(target);
+                  }}>
             <Icon name="edit" size={14}/> Edit DSA scope
           </button>
           <button className="btn btn-ghost"><Icon name="moreH" size={14}/></button>
@@ -465,7 +491,7 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme }) => {
       {/* Tab body */}
       <div className="card" style={{borderTopLeftRadius:0, borderTopRightRadius:0, padding:0, marginTop:0}}>
         {tab === "over" && <PDOverview p={p}/>}
-        {tab === "dsa"  && <PDDsas p={p} onToast={setToast} onRefresh={dsasMeta.refresh}/>}
+        {tab === "dsa"  && <PDDsas p={p} onToast={setToast} onRefresh={dsasMeta.refresh} onEditScope={openScopeEditor}/>}
         {tab === "prog" && <PDProgrammes p={p} onRegisterProgramme={onRegisterProgramme}/>}
         {tab === "con"  && <PDContacts p={p}/>}
         {tab === "use"  && <PDUsage p={p}/>}
@@ -480,6 +506,12 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme }) => {
       </div>
 
       <Toast message={toast} onDone={() => setToast("")}/>
+
+      <ScopeEditModal
+        open={!!scopeEditDsa}
+        dsa={scopeEditDsa}
+        onClose={() => setScopeEditDsa(null)}
+        onSuccess={onScopeEditSuccess}/>
     </div>
   );
 };
@@ -609,7 +641,8 @@ const BigSpark = ({ points }) => {
 };
 
 /* ---------- DSAs ---------- */
-const PDDsas = ({ p, onToast, onRefresh }) => {
+const _PD_SCOPE_EDITABLE = new Set(["draft", "active"]);
+const PDDsas = ({ p, onToast, onRefresh, onEditScope }) => {
   const [openIdx, setOpenIdx] = useStatePD(0);
   const [creating, setCreating] = useStatePD(false);
 
@@ -737,7 +770,14 @@ const PDDsas = ({ p, onToast, onRefresh }) => {
 
                   <div className="row gap-2 mt-4" style={{justifyContent:'flex-end'}}>
                     <button className="btn btn-sm"><Icon name="history" size={13}/> Version history</button>
-                    <button className="btn btn-sm"><Icon name="edit" size={13}/> Propose scope edit</button>
+                    <button className="btn btn-sm"
+                            disabled={!_PD_SCOPE_EDITABLE.has(d.status_code)}
+                            title={_PD_SCOPE_EDITABLE.has(d.status_code)
+                              ? undefined
+                              : `Scope edit not available in status "${d.status}". Only draft + active DSAs are editable (ADR-0016).`}
+                            onClick={() => onEditScope && onEditScope(d)}>
+                      <Icon name="edit" size={13}/> {d.status_code === "active" ? "Propose scope edit" : "Edit scope"}
+                    </button>
                     <button className="btn btn-sm"><Icon name="refresh" size={13}/> Start renewal</button>
                   </div>
                 </div>
