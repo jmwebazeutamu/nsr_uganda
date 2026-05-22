@@ -265,6 +265,19 @@ class Programme(models.Model):
     start_date = models.DateField(null=True, blank=True)
     end_date = models.DateField(null=True, blank=True)
 
+    # Lifecycle metadata (US-180 / US-182). `status` carries the
+    # lifecycle code (draft / pending_approval / active / suspended /
+    # pending_amendment / closing / closed) — the original 3-state
+    # ChoiceList was extended by migration 0019 to add the four
+    # workflow states. `current_revision` increments when an active
+    # programme proposes an amendment (US-182). `created_by` is the
+    # actor identifier captured at create-time so the lifecycle
+    # service can enforce AC-PROG-NO-SELF-APPROVE.
+    current_revision = models.PositiveIntegerField(default=1)
+    created_by = models.CharField(max_length=64, blank=True)
+    activated_at = models.DateTimeField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -286,6 +299,90 @@ class Programme(models.Model):
 
     def __str__(self) -> str:
         return f"{self.partner.code} · {self.name}"
+
+
+class ProgrammeSignOff(models.Model):
+    """One row per step in a Programme sign-off chain (US-182).
+
+    Mirrors the DsaSignature shape — see apps.partners.models.DsaSignature
+    — but the chain is 4 steps deep instead of 3 (NSR Unit Coordinator
+    → Partner Data Steward → DPO → Director). Email-identified signers
+    so the chain works before User rows + Django groups for the four
+    roles exist; a later iteration moves expected_email + actual_email
+    onto FK(User).
+
+    `revision` increments for amendments (US-182): v1 is the initial
+    chain, v2+ is each amendment's chain. (programme, revision, step)
+    is unique. Statuses match the operator vocabulary on the detail
+    screen's Sign-off & audit tab (pending / signed / rejected /
+    skipped).
+    """
+
+    PENDING = "pending"
+    SIGNED = "signed"
+    REJECTED = "rejected"
+    SKIPPED = "skipped"
+    HOLD = "on_hold"
+    _STATUSES = (
+        (PENDING, "Pending"),
+        (SIGNED, "Signed"),
+        (REJECTED, "Rejected"),
+        (SKIPPED, "Skipped"),
+        (HOLD, "On hold"),
+    )
+
+    # Canonical step roles. The wizard submits four emails on
+    # /programmes/{id}/submit/ and the lifecycle service maps each
+    # email to a step in this order.
+    ROLE_NSR_COORDINATOR = "nsr_unit_coordinator"
+    ROLE_PARTNER_STEWARD = "partner_data_steward"
+    ROLE_DPO = "dpo"
+    ROLE_DIRECTOR = "nsr_director"
+    ROLE_ORDER = (
+        ROLE_NSR_COORDINATOR,
+        ROLE_PARTNER_STEWARD,
+        ROLE_DPO,
+        ROLE_DIRECTOR,
+    )
+
+    id = ULIDField(primary_key=True)
+    programme = models.ForeignKey(
+        Programme, on_delete=models.PROTECT, related_name="signoffs",
+    )
+    revision = models.PositiveIntegerField(default=1)
+    step = models.PositiveSmallIntegerField()  # 1..4
+    expected_role = models.CharField(max_length=64)
+    expected_email = models.CharField(max_length=254, blank=True)
+    actual_email = models.CharField(max_length=254, blank=True)
+    status = models.CharField(max_length=24, choices=_STATUSES, default=PENDING)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.TextField(blank=True)
+    # Pointer back into the AuditEvent chain so a reviewer can lift
+    # the sign-off out into the global audit trail.
+    audit_event_id = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Programme sign-off"
+        verbose_name_plural = "Programme sign-offs"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["programme", "revision", "step"],
+                name="programme_signoff_step_unique",
+            ),
+        ]
+        ordering = ["programme", "revision", "step"]
+        indexes = [
+            models.Index(fields=["programme", "revision"]),
+            models.Index(fields=["status"]),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"{self.programme.code or self.programme_id} "
+            f"r{self.revision}/step{self.step} ({self.status})"
+        )
 
 
 class DataSharingAgreement(models.Model):

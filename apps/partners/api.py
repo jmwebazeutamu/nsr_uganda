@@ -688,12 +688,18 @@ class ProgrammeViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
         import secrets as _s
         cleartext = _s.token_urlsafe(32)
         digest = hashlib.sha256(cleartext.encode("utf-8")).hexdigest()
-        prog = serializer.save(webhook_secret_hash=digest)
+        # US-180 — capture the creator on the row so the lifecycle
+        # service can enforce AC-PROG-NO-SELF-APPROVE later.
+        actor = str(self.request.user.username or self.request.user.id)
+        prog = serializer.save(
+            webhook_secret_hash=digest,
+            created_by=actor,
+        )
         # Audit the create.
         from apps.security.audit import emit as emit_audit
         emit_audit(
             "programme_created", "programme", prog.id,
-            actor=str(self.request.user.username or self.request.user.id),
+            actor=actor,
             reason=f"partner={prog.partner.code} code={prog.code}",
             field_changes={
                 "partner_id": prog.partner_id,
@@ -717,6 +723,135 @@ class ProgrammeViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
         if secret:
             data["webhook_secret_cleartext"] = secret
         return Response(data, status=status.HTTP_201_CREATED)
+
+    # --- Lifecycle actions (US-180 / US-182) ------------------------------
+    #
+    # Mirrors the DSA sign-off pattern (submit / sign / reject / suspend
+    # / close). All transitions are routed through
+    # apps.partners.services.programme_lifecycle, which is atomic and
+    # emits one AuditEvent per transition (HANDOFF §3.5).
+
+    @extend_schema(
+        tags=["partners"],
+        summary="Submit a draft programme for the 4-step sign-off chain",
+        description=(
+            "DRAFT → PENDING_APPROVAL. Creates four ProgrammeSignOff "
+            "rows (one per role: NSR Unit Coordinator, Partner Data "
+            "Steward, DPO, Director). All four emails must be distinct "
+            "and none can equal the creator's id (AC-PROG-NO-SELF-"
+            "APPROVE)."
+        ),
+    )
+    @action(detail=True, methods=["post"], url_path="submit-for-signoff")
+    def submit_for_signoff(self, request, pk=None):
+        from apps.partners.services import programme_lifecycle
+        prog = self.get_object()
+        try:
+            programme_lifecycle.submit_for_signoff(
+                prog,
+                actor=str(request.user.username or request.user.id),
+                nsr_coordinator_email=request.data.get("nsr_coordinator_email", ""),
+                partner_steward_email=request.data.get("partner_steward_email", ""),
+                dpo_email=request.data.get("dpo_email", ""),
+                director_email=request.data.get("director_email", ""),
+            )
+        except programme_lifecycle.ProgrammeLifecycleError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        prog.refresh_from_db()
+        return Response(self.get_serializer(prog).data)
+
+    @extend_schema(
+        tags=["partners"],
+        summary="Sign one step of the active sign-off chain",
+        description=(
+            "Marks a pending ProgrammeSignOff row as signed. Steps must "
+            "be signed in order; each step must come from a distinct "
+            "email; the creator cannot sign any step. The 4th sign "
+            "flips status=ACTIVE and sets activated_at."
+        ),
+    )
+    @action(detail=True, methods=["post"], url_path=r"sign/(?P<step>[1-4])")
+    def sign_step(self, request, pk=None, step=None):
+        from apps.partners.services import programme_lifecycle
+        prog = self.get_object()
+        try:
+            programme_lifecycle.sign_step(
+                prog, int(step),
+                actor_email=request.data.get("actor_email", ""),
+                note=request.data.get("note", ""),
+            )
+        except programme_lifecycle.ProgrammeLifecycleError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        prog.refresh_from_db()
+        return Response(self.get_serializer(prog).data)
+
+    @extend_schema(
+        tags=["partners"],
+        summary="Reject the active sign-off chain at a given step",
+        description=(
+            "Rolls the programme back to DRAFT (or ACTIVE if rejecting "
+            "an amendment chain). Reason mandatory (≥ 20 chars). The "
+            "rejecting approver cannot be the programme creator."
+        ),
+    )
+    @action(detail=True, methods=["post"], url_path=r"reject/(?P<step>[1-4])")
+    def reject_step(self, request, pk=None, step=None):
+        from apps.partners.services import programme_lifecycle
+        prog = self.get_object()
+        try:
+            programme_lifecycle.reject_step(
+                prog, int(step),
+                actor_email=request.data.get("actor_email", ""),
+                reason=request.data.get("reason", ""),
+            )
+        except programme_lifecycle.ProgrammeLifecycleError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        prog.refresh_from_db()
+        return Response(self.get_serializer(prog).data)
+
+    @extend_schema(
+        tags=["partners"],
+        summary="Suspend an active programme",
+        description="ACTIVE → SUSPENDED. Reason mandatory (≥ 20 chars).",
+    )
+    @action(detail=True, methods=["post"], url_path="suspend")
+    def suspend(self, request, pk=None):
+        from apps.partners.services import programme_lifecycle
+        prog = self.get_object()
+        try:
+            programme_lifecycle.suspend_programme(
+                prog,
+                actor=str(request.user.username or request.user.id),
+                reason=request.data.get("reason", ""),
+            )
+        except programme_lifecycle.ProgrammeLifecycleError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        prog.refresh_from_db()
+        return Response(self.get_serializer(prog).data)
+
+    @extend_schema(
+        tags=["partners"],
+        summary="Move an active programme into CLOSING",
+        description=(
+            "ACTIVE → CLOSING. The CLOSING → CLOSED transition is "
+            "driven by enrolment exits and lands in a follow-up "
+            "(HANDOFF §3.3 — close_programme). Reason mandatory."
+        ),
+    )
+    @action(detail=True, methods=["post"], url_path="close")
+    def close(self, request, pk=None):
+        from apps.partners.services import programme_lifecycle
+        prog = self.get_object()
+        try:
+            programme_lifecycle.close_programme(
+                prog,
+                actor=str(request.user.username or request.user.id),
+                reason=request.data.get("reason", ""),
+            )
+        except programme_lifecycle.ProgrammeLifecycleError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        prog.refresh_from_db()
+        return Response(self.get_serializer(prog).data)
 
 
 @extend_schema(

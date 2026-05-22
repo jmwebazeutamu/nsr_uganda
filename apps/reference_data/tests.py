@@ -39,10 +39,13 @@ class TestSeededChoiceLists:
         # 499 (after US-S25-006) + 5 referral-status options
         # (US-S26-002: sent/accepted/enrolled/rejected/exited)
         # + 199 detail-entity options (US-S22-DE-02)
-        # + 4 pmt_trigger_source options (US-PMT-014) = 707.
+        # + 4 pmt_trigger_source options (US-PMT-014)
+        # + 4 programme_status lifecycle codes (US-180,
+        #   migration 0010: pending_approval/suspended/
+        #   pending_amendment/closing) = 711.
         assert ChoiceOption.objects.filter(
             choice_list__version=1,
-        ).count() == 707
+        ).count() == 711
 
     def test_partner_lists_seeded(self):
         names = set(
