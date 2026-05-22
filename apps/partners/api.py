@@ -468,8 +468,35 @@ class DsaViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
         if partner:
             qs = qs.filter(partner_id=partner)
         st = self.request.query_params.get("status")
-        if st:
-            qs = qs.filter(status=st)
+        if st and st != "all":
+            # Comma-separated multi-status (e.g. ?status=active,expiring)
+            # so the DSA workspace can render a single "live" view.
+            # `?status=all` is honoured as an explicit no-op so the
+            # workspace can document its intent in the URL.
+            codes = [c.strip() for c in st.split(",") if c.strip() and c.strip() != "all"]
+            if codes:
+                qs = qs.filter(status__in=codes) if len(codes) > 1 else qs.filter(status=codes[0])
+        # Free-text search across reference + partner code/name. Used by
+        # the workspace search bar and the console quick-find affordance.
+        q = (self.request.query_params.get("q") or "").strip()
+        if q:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(reference__icontains=q)
+                | Q(partner__code__icontains=q)
+                | Q(partner__name__icontains=q),
+            )
+        # Renewal triage: DSAs whose effective_to is within N days
+        # (positive N = upcoming; "0" means expired today). Negative
+        # values aren't useful here so we clamp.
+        within = self.request.query_params.get("expiring_within_days")
+        if within:
+            try:
+                n = max(0, int(within))
+            except (TypeError, ValueError):
+                n = 0
+            cutoff = date.today() + timedelta(days=n)
+            qs = qs.filter(effective_to__isnull=False, effective_to__lte=cutoff)
         return qs
 
     def partial_update(self, request, *args, **kwargs):
