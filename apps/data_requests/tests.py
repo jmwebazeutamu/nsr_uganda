@@ -1044,17 +1044,19 @@ class TestPartnerSelfService:
         c.force_authenticate(user=u)
         r = c.get("/api/v1/drs/requests/mine/")
         row = (r.data["results"] if isinstance(r.data, dict) else r.data)[0]
-        # Slim shape: keys explicitly include dsa_reference + download_url,
-        # explicitly EXCLUDE admin/internal fields.
+        # Partner-facing shape: payload + decision metadata are exposed
+        # so the "My data requests" rail can render FIELDS REQUESTED +
+        # CRITERIA + rejection reason. Operator identifiers
+        # (approver, requester) are still withheld.
         assert set(row.keys()) == {
-            "id", "dsa_reference", "status", "submitted_at",
-            "delivered_at", "expires_at", "manifest_sha256",
-            "row_count_delivered", "download_url",
+            "id", "dsa_reference", "status",
+            "created_at", "submitted_at", "decided_at",
+            "delivered_at", "expires_at",
+            "decision_reason", "request_payload",
+            "manifest_sha256", "row_count_delivered", "download_url",
         }
-        assert "decision_reason" not in row
         assert "approver" not in row
         assert "requester" not in row
-        assert "request_payload" not in row
 
     def test_download_url_null_when_not_delivered(
         self, two_partners_with_requests, django_user_model,

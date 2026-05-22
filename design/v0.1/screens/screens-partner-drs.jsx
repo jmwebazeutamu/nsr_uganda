@@ -142,6 +142,16 @@ const PartnerDRSScreen = () => {
   // (file:// preview or unauthenticated session).
   const [liveRequests, setLiveRequests] = useStatePDrs(null);
   const [dataSource, setDataSource] = useStatePDrs("mock");
+  // Field catalogue keyed by dotted key. Drives label resolution on
+  // the FIELDS REQUESTED chips + the criteria-tree walker on the
+  // detail rail. Same shape the operator side reads.
+  const [catalogueByKey, setCatalogueByKey] = useStatePDrs({});
+  // Data-sample preview modal — re-uses PreviewStep from
+  // screens-drs.jsx so partner + operator surfaces stay in lockstep.
+  // The live preview endpoint (DRS-O-PREVIEW) is still deferred;
+  // the modal labels itself as design-time.
+  const [previewOpen, setPreviewOpen] = useStatePDrs(false);
+
   useEffectPDrs(() => {
     let cancelled = false;
     fetch("/api/v1/drs/requests/mine/", {
@@ -153,14 +163,31 @@ const PartnerDRSScreen = () => {
         if (cancelled) return;
         const rows = (data.results || data || []).map(r => ({
           ...r,
-          // request_payload isn't on MyDataRequestSerializer (slim
-          // partner-facing projection); fill an empty object so the
-          // detail rail's `(current.request_payload.fields || [])`
-          // pattern stays safe.
+          // request_payload now ships on MyDataRequestSerializer — but
+          // guard for legacy / mock rows that may still omit it.
           request_payload: r.request_payload || { fields: [] },
         }));
         setLiveRequests(rows);
         setDataSource(rows.length === 0 ? "live-empty" : "live");
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // Fetch the builder-schema once so the detail rail can show
+  // human-readable field labels instead of `household.sub_region_code`.
+  useEffectPDrs(() => {
+    let cancelled = false;
+    fetch("/api/v1/drs/requests/builder-schema/", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then(d => {
+        if (cancelled) return;
+        const map = {};
+        for (const f of (d.fields || [])) map[f.key] = f;
+        setCatalogueByKey(map);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -462,28 +489,92 @@ const PartnerDRSScreen = () => {
                 <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:6}}>DSA</div>
                 <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>{current.dsa_reference}</div>
 
-                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>FIELDS REQUESTED</div>
+                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>FIELDS REQUESTED ({(current.request_payload.fields || []).length})</div>
                 <div className="row-wrap" style={{display:"flex", flexWrap:"wrap", gap:6}}>
-                  {(current.request_payload.fields || []).map(f => (
-                    <Chip key={f} size="sm" tone="programme">{f}</Chip>
-                  ))}
+                  {(current.request_payload.fields || []).length === 0
+                    ? <span className="t-bodysm muted">— none —</span>
+                    : (current.request_payload.fields || []).map(f => {
+                        const def = catalogueByKey[f] || {};
+                        return (
+                          <Chip key={f} size="sm" tone="programme" title={def.label || f}>
+                            {def.label || f}
+                          </Chip>
+                        );
+                      })}
                 </div>
 
-                {current.request_payload.sub_region_codes && (
-                  <>
-                    <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>GEOGRAPHY</div>
-                    <div className="row-wrap" style={{display:"flex", flexWrap:"wrap", gap:6}}>
-                      {current.request_payload.sub_region_codes.map(s => (
-                        <Chip key={s} size="sm" tone="data">{s}</Chip>
-                      ))}
+                {/* CRITERIA tree — same recursive walker the operator
+                    side uses, surfaced on the global window export by
+                    screens-drs.jsx (BUG-S27-026). Lets the partner
+                    review the WHERE clause they built before they hit
+                    download. Falls back to flat geo / programme chips
+                    for legacy rows that pre-date the criteria tree. */}
+                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>CRITERIA</div>
+                {current.request_payload.criteria
+                  ? <div className="card" style={{padding:10, background:"var(--neutral-50, #f7f8fa)", borderRadius:6}}>
+                      {typeof window._drsRenderCriteriaNode === "function"
+                        ? window._drsRenderCriteriaNode(current.request_payload.criteria, catalogueByKey)
+                        : <div className="t-bodysm muted">Criteria renderer not loaded.</div>}
                     </div>
-                  </>
-                )}
+                  : <div className="t-bodysm muted">
+                      No structured criteria recorded.
+                      {(current.request_payload.sub_region_codes
+                        || current.request_payload.region_codes
+                        || current.request_payload.district_codes
+                        || current.request_payload.programme_codes)
+                        ? " Flat-key fallback below."
+                        : " The request runs unconstrained within DSA scope."}
+                    </div>}
+
+                {/* Flat-key fallback for legacy rows / current
+                    validator-enforced keys. */}
+                {["region_codes","sub_region_codes","district_codes",
+                  "county_codes","sub_county_codes","parish_codes",
+                  "village_codes","programme_codes"].map(k => (
+                  current.request_payload[k] && current.request_payload[k].length > 0 ? (
+                    <div key={k} style={{marginTop:8}}>
+                      <div className="t-cap" style={{color:"var(--neutral-600)", marginBottom:4}}>{k.replace(/_/g, " ").toUpperCase()}</div>
+                      <div className="row-wrap" style={{display:"flex", flexWrap:"wrap", gap:4}}>
+                        {current.request_payload[k].map(s => (
+                          <Chip key={s} size="sm" tone="data">{s}</Chip>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null
+                ))}
 
                 {current.request_payload.max_rows && (
                   <>
                     <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>ROW CAP</div>
                     <div className="t-mono" style={{fontSize:13}}>{current.request_payload.max_rows.toLocaleString()}</div>
+                  </>
+                )}
+
+                {/* Data sample — opens the same masked PreviewStep
+                    the operator approver sees. Useful before download
+                    to spot-check the shape of the request. */}
+                <div style={{marginTop:14}}>
+                  <button
+                    className="btn btn-sm"
+                    onClick={() => setPreviewOpen(true)}
+                    disabled={(current.request_payload.fields || []).length === 0}
+                    title={(current.request_payload.fields || []).length === 0
+                      ? "No fields to preview"
+                      : "Open a masked data sample for this request"}
+                  >
+                    <Icon name="eye" size={13}/> View data sample
+                  </button>
+                </div>
+
+                {/* Decision metadata — partner sees both reason +
+                    decided_at. Approved requests get a "waiting on
+                    delivery" hint instead of an empty Actions panel. */}
+                {current.decided_at && (
+                  <>
+                    <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>DECIDED ON</div>
+                    <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>
+                      {(current.decided_at || "").slice(0, 10)}
+                    </div>
                   </>
                 )}
 
@@ -585,7 +676,9 @@ const PartnerDRSScreen = () => {
               </div>
             </div>
 
-            {/* Actions */}
+            {/* Actions — content adapts to status so the panel is
+                never empty (the earlier version rendered a bare card
+                heading on every status that wasn't delivered/rejected). */}
             <div className="card">
               <div style={{padding:"12px 16px"}}>
                 <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:8}}>ACTIONS</div>
@@ -594,6 +687,25 @@ const PartnerDRSScreen = () => {
                     <button className="btn primary" onClick={() => onDownload(current)}>
                       <Icon name="download" size={13}/> Download NDJSON ({current.row_count_delivered.toLocaleString()} rows)
                     </button>
+                  )}
+                  {current.status === "submitted" && (
+                    <div className="tint-update" style={{padding:10, borderRadius:6, borderLeft:"3px solid var(--accent-update)"}}>
+                      <div className="row gap-2"><Icon name="clock" size={14} color="var(--accent-update)"/><strong className="t-bodysm">Pending NSR Unit + DPO approval</strong></div>
+                      <p className="t-bodysm" style={{margin:"4px 0 0", color:"var(--neutral-700)"}}>
+                        You'll be notified when a decision is recorded. The
+                        approver checks scope + budget + DPIA alignment.
+                      </p>
+                    </div>
+                  )}
+                  {current.status === "approved" && !current.download_url && (
+                    <div className="tint-data" style={{padding:10, borderRadius:6, borderLeft:"3px solid var(--accent-data)"}}>
+                      <div className="row gap-2"><Icon name="checkCircle" size={14} color="var(--accent-data)"/><strong className="t-bodysm">Approved · awaiting delivery</strong></div>
+                      <p className="t-bodysm" style={{margin:"4px 0 0", color:"var(--neutral-700)"}}>
+                        The NSR Unit will render the bundle and email a
+                        download link. Download becomes available here as
+                        soon as DRS-O-02 (signed-URL delivery) lands.
+                      </p>
+                    </div>
                   )}
                   {current.status === "rejected" && (
                     <button className="btn">
@@ -634,6 +746,31 @@ const PartnerDRSScreen = () => {
         ] : []}
         onClose={() => setAuditOpen(false)}
       />
+      <Modal open={previewOpen && !!current} onClose={() => setPreviewOpen(false)}
+        title={current ? `Data sample · ${current.id.slice(0,16)}…` : "Data sample"}
+        width={1080}
+        footer={<>
+          <button className="btn" onClick={() => setPreviewOpen(false)}>Close</button>
+        </>}>
+        {current && (() => {
+          const fields = current.request_payload.fields || [];
+          const tree = current.request_payload.criteria || null;
+          const Preview = window.PreviewStep;
+          if (typeof Preview !== "function") {
+            return <div className="t-bodysm muted">Preview template not loaded.</div>;
+          }
+          return (
+            <div className="col gap-3">
+              <div className="t-cap muted">
+                Partner view · masked sample of the request shape. The
+                live preview endpoint (DRS-O-PREVIEW) lands in a
+                follow-up slice; today's modal is a design-time sample.
+              </div>
+              <Preview selected={fields} catalogueByKey={catalogueByKey} tree={tree}/>
+            </div>
+          );
+        })()}
+      </Modal>
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>
   );

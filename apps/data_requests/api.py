@@ -62,10 +62,14 @@ class DataRequestSerializer(serializers.ModelSerializer):
 
 
 class MyDataRequestSerializer(serializers.ModelSerializer):
-    """Slim partner-facing projection of DataRequest.
+    """Partner-facing projection of DataRequest.
 
-    Excludes admin-only fields (decision_reason, approver, requester
-    of OTHER users — partner sees only their own). Adds a download_url
+    Returns enough payload for the partner's own portal to render the
+    request the partner themselves built: fields requested, criteria
+    tree, geographic / programme leaves, row cap, and decision
+    metadata (reason + when). Earlier versions were too slim — the
+    "My data requests" rail had an empty FIELDS REQUESTED block
+    because request_payload wasn't on the wire. Adds a download_url
     placeholder that points at the future signed-URL endpoint."""
 
     dsa_reference = serializers.CharField(source="dsa.reference", read_only=True)
@@ -73,8 +77,18 @@ class MyDataRequestSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = DataRequest
-        fields = ("id", "dsa_reference", "status", "submitted_at",
-                  "delivered_at", "expires_at", "manifest_sha256",
+        fields = ("id", "dsa_reference", "status",
+                  # Audit + decision metadata — partner has a right
+                  # to know why a request was rejected and when each
+                  # transition happened.
+                  "created_at", "submitted_at", "decided_at",
+                  "delivered_at", "expires_at",
+                  "decision_reason",
+                  # The actual content of the request — fields,
+                  # criteria tree, max_rows. Needed by the detail
+                  # rail's FIELDS REQUESTED + CRITERIA sections.
+                  "request_payload",
+                  "manifest_sha256",
                   "row_count_delivered", "download_url")
         read_only_fields = fields
 
