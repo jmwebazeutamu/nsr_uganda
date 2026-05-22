@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -31,6 +31,7 @@ const NAV = [
   { id: "receipt", label: "Receipt slip",  icon: "print" },
   { section: "PARTNERS" },
   { id: "partners", label: "Partners",     icon: "users",     screen: true },
+  { id: "dsas",     label: "Data Sharing Agreements", icon: "file", screen: true },
 ];
 
 function App() {
@@ -45,6 +46,10 @@ function App() {
   // user navigates away. Lets GRM → UPD pass a changeRequestId
   // without inventing a real URL router for the mockup harness.
   const [screenPayload, setScreenPayload] = useStateApp(null);
+  // Console quick-find overlay — global affordance to jump to a DSA
+  // from anywhere in the app. ⌘/Ctrl-K opens it; clicking a result
+  // navigates to the DSA detail screen.
+  const [dsaFindOpen, setDsaFindOpen] = useStateApp(false);
 
   const navigate = (nextScreen, payload = null) => {
     setScreen(nextScreen);
@@ -70,9 +75,9 @@ function App() {
       if (role === "partner-analyst" && n.section === "PARTNERS") return false;
       return true;
     }
-    if (role === "parish" && ["dih","drs","dedup","partner-drs","partners","beneficiaries"].includes(n.id)) return false;
+    if (role === "parish" && ["dih","drs","dedup","partner-drs","partners","beneficiaries","dsas"].includes(n.id)) return false;
     if (role === "dpo"    && ["capture","upd","dedup","grm","receipt","partner-drs"].includes(n.id)) return false;
-    if (role === "cdo"    && ["dih","drs","partner-drs","partners"].includes(n.id)) return false;
+    if (role === "cdo"    && ["dih","drs","partner-drs","partners","dsas"].includes(n.id)) return false;
     if (role === "nsr-unit" && n.id === "partner-drs") return false;
     if (role === "partner-analyst" && !["home","partner-drs","kit"].includes(n.id)) return false;
     // Registry + Beneficiaries are operator-only — partners use the
@@ -103,6 +108,12 @@ function App() {
 
         <div className="topbar-actions">
           <span className="role-chip"><span className="muted">Role</span> <strong>{roleData.name}</strong></span>
+          {role !== "partner-analyst" && (
+            <button className="icon-btn" title="Find a DSA"
+                    onClick={() => setDsaFindOpen(true)}>
+              <Icon name="file" size={18}/>
+            </button>
+          )}
           <button className="icon-btn" title="Notifications"><Icon name="bell" size={18}/><span className="dot"/></button>
           <button className="icon-btn" title="Settings"><Icon name="settings" size={18}/></button>
           <button className="avatar" title={roleData.person}>{roleData.person.split(' ').map(p => p[0]).slice(0,2).join('')}</button>
@@ -155,7 +166,7 @@ function App() {
         {screen === "dih"     && <DIHScreen/>}
         {screen === "dedup"   && <DedupScreen/>}
         {screen === "upd"     && <UPDScreen changeRequestId={screenPayload?.changeRequestId}/>}
-        {screen === "drs"     && <DRSScreen/>}
+        {screen === "drs"     && <DRSScreen onNavigate={navigate}/>}
         {screen === "grm"     && <GRMScreen onNavigate={navigate}/>}
         {screen === "partner-drs" && <PartnerDRSScreen/>}
         {screen === "reports" && <ReportsScreen role={role}/>}
@@ -172,13 +183,37 @@ function App() {
         {screen === "partner-detail" && <PartnerDetailScreen
             partnerId={screenPayload?.partnerId}
             onBack={() => navigate("partners")}
-            onRegisterProgramme={() => navigate("programme-new")}/>}
+            onRegisterProgramme={() => navigate("programme-new")}
+            onNavigate={navigate}/>}
         {screen === "programme-new" && <ProgrammeRegistrationScreen
             onBack={() => navigate("partners")}/>}
         {screen === "beneficiaries" && <BeneficiariesScreen
             onOpenHousehold={(rid) => navigate("household", { householdId: rid })}
             onNewProgramme={() => navigate("programme-new")}/>}
+        {screen === "dsas" && <DsasScreen
+            onOpen={(dsaId) => navigate("dsa-detail", { dsaId })}
+            onNew={() => navigate("dsa-new")}
+            onNavigate={navigate}/>}
+        {screen === "dsa-detail" && <DsaDetailScreen
+            dsaId={screenPayload?.dsaId}
+            onBack={() => navigate("dsas")}
+            onNavigate={navigate}/>}
+        {screen === "dsa-new" && <DsaCreateWizard
+            prefillPartnerId={screenPayload?.partnerId}
+            onBack={() => navigate("dsas")}
+            onCreated={(dsa) => navigate("dsa-detail", { dsaId: dsa.id })}/>}
       </main>
+
+      {/* Global DSA quick-find overlay — wired from the topbar icon
+          and (later) ⌘K. Same surface from every screen. */}
+      <DsaQuickFind
+        open={dsaFindOpen}
+        onClose={() => setDsaFindOpen(false)}
+        onPick={(dsa) => {
+          setDsaFindOpen(false);
+          navigate("dsa-detail", { dsaId: dsa.id });
+        }}
+      />
 
       {/* Tweaks */}
       <TweaksPanel title="Tweaks">

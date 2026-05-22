@@ -305,7 +305,7 @@ const PD_TABS = [
    the activity projection in parallel. Builds the `p` shape the
    tab components expect via _buildDetail.
    ============================================================ */
-const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme }) => {
+const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme, onNavigate }) => {
   const [partnerResp, partnerMeta] = useApi(
     partnerId ? `/api/v1/partners/${partnerId}/` : null,
   );
@@ -491,7 +491,7 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme }) => {
       {/* Tab body */}
       <div className="card" style={{borderTopLeftRadius:0, borderTopRightRadius:0, padding:0, marginTop:0}}>
         {tab === "over" && <PDOverview p={p}/>}
-        {tab === "dsa"  && <PDDsas p={p} onToast={setToast} onRefresh={dsasMeta.refresh} onEditScope={openScopeEditor}/>}
+        {tab === "dsa"  && <PDDsas p={p} onToast={setToast} onRefresh={dsasMeta.refresh} onEditScope={openScopeEditor} onOpenDsa={(id) => onNavigate && onNavigate("dsa-detail", { dsaId: id })} onNewDsa={() => onNavigate && onNavigate("dsa-new", { partnerId: p.id })}/>}
         {tab === "prog" && <PDProgrammes p={p} onRegisterProgramme={onRegisterProgramme}/>}
         {tab === "con"  && <PDContacts p={p}/>}
         {tab === "use"  && <PDUsage p={p}/>}
@@ -642,11 +642,19 @@ const BigSpark = ({ points }) => {
 
 /* ---------- DSAs ---------- */
 const _PD_SCOPE_EDITABLE = new Set(["draft", "active"]);
-const PDDsas = ({ p, onToast, onRefresh, onEditScope }) => {
+const PDDsas = ({ p, onToast, onRefresh, onEditScope, onOpenDsa, onNewDsa }) => {
   const [openIdx, setOpenIdx] = useStatePD(0);
   const [creating, setCreating] = useStatePD(false);
 
   const createDraftDsa = async () => {
+    // If the host wired the standalone DSA wizard, route there so the
+    // operator can set scope + sign-off contacts in one flow. The
+    // inline draft-creation is a fallback for older mounts (kept so
+    // PartnerDetailScreen still works in isolation).
+    if (onNewDsa) {
+      onNewDsa();
+      return;
+    }
     if (creating) return;
     setCreating(true);
     // Reference shape mirrors the partner-registration wizard's
@@ -769,6 +777,11 @@ const PDDsas = ({ p, onToast, onRefresh, onEditScope }) => {
                   </div>
 
                   <div className="row gap-2 mt-4" style={{justifyContent:'flex-end'}}>
+                    {onOpenDsa && d.id && (
+                      <button className="btn btn-sm btn-primary" onClick={() => onOpenDsa(d.id)}>
+                        <Icon name="arrowRight" size={13}/> Open in workspace
+                      </button>
+                    )}
                     <button className="btn btn-sm"><Icon name="history" size={13}/> Version history</button>
                     <button className="btn btn-sm"
                             disabled={!_PD_SCOPE_EDITABLE.has(d.status_code)}

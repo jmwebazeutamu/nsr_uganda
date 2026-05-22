@@ -443,6 +443,15 @@ const HomeScreen = ({ role, onNavigate }) => {
         {kpis.map((k, i) => <KPI key={i} {...k}/>)}
       </div>
 
+      {/* DSA workspace shortcut — operator / DPO roles get a one-click
+          path into the DSA management surface. Lives under the KPI strip
+          rather than inside it so it survives KPI rearrangement, and
+          shows partner-side totals from /partners/summary/ regardless of
+          which sub-region drill-down is active. */}
+      {(role === "nsr-unit" || role === "dpo") && (
+        <DsaWorkspaceTile onNavigate={onNavigate}/>
+      )}
+
       <div className="grid grid-2 mt-5">
         {queues.map((q, i) => {
           const target = q._target || "dih";
@@ -530,6 +539,61 @@ const RegistryStat = ({ label, value, sub }) => (
     <div className="t-cap" style={{color:'var(--neutral-700)'}}>{sub}</div>
   </div>
 );
+
+// Operator/DPO dashboard shortcut to the DSA workspace. Pulls live
+// counts from /partners/summary/ so the tile says something useful
+// before the user clicks through. Falls back to dashes when offline.
+const DsaWorkspaceTile = ({ onNavigate }) => {
+  const [summary, setSummary] = useStateHome(null);
+  useEffectHome(() => {
+    let cancelled = false;
+    fetch("/api/v1/partners/summary/", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { if (!cancelled) setSummary(d); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  const active   = summary?.active_dsas;
+  const expiring = summary?.dsas_expiring_30d;
+  const overBudget = summary?.dsas_over_budget_30d;
+  return (
+    <div
+      className="card mt-4"
+      style={{
+        padding: 16, display: "flex", alignItems: "center", gap: 16,
+        borderLeft: "3px solid var(--accent-system)",
+      }}
+    >
+      <div style={{
+        width: 40, height: 40, borderRadius: 8,
+        background: "var(--accent-system-bg)",
+        color: "var(--accent-system)",
+        display: "grid", placeItems: "center",
+      }}>
+        <Icon name="file" size={20}/>
+      </div>
+      <div style={{flex: 1, minWidth: 0}}>
+        <div style={{fontWeight: 600, fontSize: 14.5}}>Data Sharing Agreements</div>
+        <div className="t-cap" style={{marginTop: 2, color: "var(--neutral-700)"}}>
+          {active != null ? `${active} active` : "—"}
+          {" · "}
+          {expiring != null
+            ? <strong style={{color: expiring > 0 ? "var(--accent-update)" : undefined}}>{expiring} expiring in 30d</strong>
+            : "—"}
+          {overBudget != null && overBudget > 0 && (
+            <> · <strong style={{color: "var(--accent-danger)"}}>{overBudget} over budget</strong></>
+          )}
+        </div>
+      </div>
+      <button className="btn btn-primary btn-sm" onClick={() => onNavigate?.("dsas")}>
+        Open workspace <Icon name="chevronRight" size={13}/>
+      </button>
+    </div>
+  );
+};
 
 /* ============================================================
    Kit page — design system reference

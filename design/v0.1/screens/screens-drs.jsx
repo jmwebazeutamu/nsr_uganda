@@ -139,7 +139,7 @@ const _drsRenderCriteriaNode = (node, catalogueByKey, depth = 0) => {
   );
 };
 
-const OperatorDRSList = ({ onNewRequest }) => {
+const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
   // US-S14-002 — operator list view. Mirrors the partner list
   // shape (S13-004) but reads /api/v1/drs/requests/ (full
   // DataRequestSerializer) and offers approve/reject actions
@@ -439,7 +439,20 @@ const OperatorDRSList = ({ onNewRequest }) => {
 
                 <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>DSA</div>
                 <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>
-                  {current.dsa_reference || `DSA ${current.dsa || "—"}`}
+                  {current.dsa && onNavigate ? (
+                    <button
+                      className="link-btn"
+                      onClick={() => onNavigate("dsa-detail", { dsaId: current.dsa })}
+                      title="Open DSA in workspace"
+                      style={{
+                        background: "none", border: 0, padding: 0,
+                        color: "var(--accent-system)", cursor: "pointer",
+                        textDecoration: "underline", font: "inherit",
+                      }}
+                    >{current.dsa_reference || `DSA ${current.dsa}`}</button>
+                  ) : (
+                    current.dsa_reference || `DSA ${current.dsa || "—"}`
+                  )}
                   {current.partner_name && (
                     <span className="t-cap muted" style={{marginLeft:8}}>· {current.partner_name}</span>
                   )}
@@ -1087,11 +1100,11 @@ const _resolveOptionsForSchema = async (schemaFields) => {
 // "New request". Partner invocation (role="partner") still mounts
 // the wizard directly — partners have their own list elsewhere in
 // PartnerDRSScreen.
-const DRSScreen = ({ role = "operator", onExit } = {}) => {
+const DRSScreen = ({ role = "operator", onExit, onNavigate } = {}) => {
   const isPartner = role === "partner";
   const [view, setView] = useStateDRS(isPartner ? "build" : "list");
   if (view === "list" && !isPartner) {
-    return <OperatorDRSList onNewRequest={() => setView("build")}/>;
+    return <OperatorDRSList onNewRequest={() => setView("build")} onNavigate={onNavigate}/>;
   }
   return <DRSWizard
     role={role}
