@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, MemberDetailScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, ProgrammesScreen, ProgrammeDetailScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, MemberDetailScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -26,6 +26,7 @@ const NAV = [
   { section: "DATA" },
   { id: "registry",         label: "Social Registry", icon: "users", screen: true },
   { id: "registry-members", label: "Members",         icon: "user",  screen: true, indent: 1 },
+  { id: "programmes",       label: "Programmes",      icon: "book",  screen: true },
   { id: "beneficiaries",    label: "Beneficiaries",   icon: "book",  screen: true },
   { id: "drs",     label: "Data Requests", icon: "download",  count: 9 },
   { id: "partner-drs", label: "My requests", icon: "download", count: 5 },
@@ -132,7 +133,7 @@ function App() {
     if (role === "partner-analyst" && !["home","partner-drs","my-dsa","my-programmes","kit"].includes(n.id)) return false;
     // Registry + Beneficiaries are operator-only — partners use the
     // DRS portal to request data, not browse the registry directly.
-    if (["registry","registry-members","beneficiaries"].includes(n.id) && role === "partner-analyst") return false;
+    if (["registry","registry-members","programmes","beneficiaries"].includes(n.id) && role === "partner-analyst") return false;
     return true;
   });
 
@@ -252,6 +253,14 @@ function App() {
             onNavigate={navigate}/>}
         {screen === "programme-new" && <ProgrammeRegistrationScreen
             onBack={() => navigate("partners")}/>}
+        {screen === "programmes" && <ProgrammesScreen
+            onOpen={(programmeId) => navigate("programme-detail", { programmeId })}
+            onRegister={() => navigate("programme-new")}/>}
+        {screen === "programme-detail" && <ProgrammeDetailScreen
+            programmeId={screenPayload?.programmeId}
+            onBack={() => navigate("programmes")}
+            onOpenPartner={(partnerId) => navigate("partner-detail", { partnerId })}
+            onOpenHousehold={(rid) => navigate("household", { householdId: rid })}/>}
         {screen === "beneficiaries" && <BeneficiariesScreen
             onOpenHousehold={(rid) => navigate("household", { householdId: rid })}
             onNewProgramme={() => navigate("programme-new")}/>}

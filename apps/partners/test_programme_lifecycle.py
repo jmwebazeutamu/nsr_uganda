@@ -515,3 +515,79 @@ class TestProgrammeActionEndpoints:
         )
         assert r.status_code == 400
         assert "not active" in r.data["detail"].lower()
+
+
+# ───────────────────────────────────────────────────────────────
+# Aggregates + signoffs read endpoints
+# ───────────────────────────────────────────────────────────────
+
+@pytest.mark.django_db
+class TestProgrammeReadEndpoints:
+
+    @pytest.fixture(autouse=True)
+    def _enable_flag(self, settings):
+        settings.PARTNERS_MODULE_ENABLED = True
+
+    def test_aggregates_returns_total_by_status_by_kind(
+        self, api, partner,
+    ):
+        Programme.objects.create(
+            partner=partner, code="P1", name="P1",
+            kind="cash_transfer", status="draft",
+        )
+        Programme.objects.create(
+            partner=partner, code="P2", name="P2",
+            kind="cash_transfer", status="active",
+        )
+        Programme.objects.create(
+            partner=partner, code="P3", name="P3",
+            kind="service", status="active",
+        )
+        r = api.get(f"{URL_PROG}aggregates/")
+        assert r.status_code == 200, r.data
+        assert r.data["total"] == 3
+        assert r.data["by_status"] == {"draft": 1, "active": 2}
+        assert r.data["by_kind"] == {"cash_transfer": 2, "service": 1}
+
+    def test_aggregates_honours_list_filters(
+        self, api, partner,
+    ):
+        Programme.objects.create(
+            partner=partner, code="P1", name="P1",
+            kind="cash_transfer", status="active",
+        )
+        Programme.objects.create(
+            partner=partner, code="P2", name="P2",
+            kind="service", status="active",
+        )
+        r = api.get(f"{URL_PROG}aggregates/?kind=service")
+        assert r.data["total"] == 1
+        assert r.data["by_kind"] == {"service": 1}
+
+    def test_signoffs_lists_current_revision_rows_in_step_order(
+        self, api, draft_programme, emails,
+    ):
+        programme_lifecycle.submit_for_signoff(
+            draft_programme, actor="florence", **emails,
+        )
+        r = api.get(f"{URL_PROG}{draft_programme.id}/signoffs/")
+        assert r.status_code == 200, r.data
+        assert r.data["revision"] == 1
+        assert r.data["current_revision"] == 1
+        steps = [item["step"] for item in r.data["items"]]
+        assert steps == [1, 2, 3, 4]
+        # All pending, expected_email round-trips
+        statuses = {item["status"] for item in r.data["items"]}
+        assert statuses == {"pending"}
+        assert r.data["items"][0]["expected_email"] == emails["nsr_coordinator_email"]
+
+    def test_signoffs_explicit_revision_query_param(
+        self, api, draft_programme, emails,
+    ):
+        # No chain on revision 99 — returns an empty list, not 404.
+        r = api.get(
+            f"{URL_PROG}{draft_programme.id}/signoffs/?revision=99",
+        )
+        assert r.status_code == 200
+        assert r.data["revision"] == 99
+        assert r.data["items"] == []

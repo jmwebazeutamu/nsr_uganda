@@ -853,6 +853,74 @@ class ProgrammeViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
         prog.refresh_from_db()
         return Response(self.get_serializer(prog).data)
 
+    # --- Aggregates + signoffs (US-180 — for the Programmes UI) -----------
+
+    @extend_schema(
+        tags=["partners"],
+        summary="Programme aggregates for the workspace KPI strip",
+        description=(
+            "Returns total / by_status / by_kind counts honouring the "
+            "same filter params as the list endpoint (partner, status, "
+            "kind, q). Drives the cross-partner Programmes screen "
+            "header tiles (HANDOFF §4.2)."
+        ),
+    )
+    @action(detail=False, methods=["get"], url_path="aggregates")
+    def aggregates(self, request):
+        from collections import Counter
+        qs = self.get_queryset()
+        by_status = Counter(qs.values_list("status", flat=True))
+        by_kind = Counter(qs.values_list("kind", flat=True))
+        return Response({
+            "total": qs.count(),
+            "by_status": dict(by_status),
+            "by_kind": dict(by_kind),
+        })
+
+    @extend_schema(
+        tags=["partners"],
+        summary="List sign-off rows for a programme's current revision",
+        description=(
+            "Returns the ProgrammeSignOff chain for the programme's "
+            "current_revision, ordered by step. Used by the Sign-off "
+            "& audit tab on ProgrammeDetailScreen."
+        ),
+    )
+    @action(detail=True, methods=["get"], url_path="signoffs")
+    def signoffs(self, request, pk=None):
+        from apps.partners.models import ProgrammeSignOff
+        prog = self.get_object()
+        # Default to the programme's current revision; let the caller
+        # peek at older chains via ?revision=N.
+        rev = request.query_params.get("revision")
+        try:
+            rev = int(rev) if rev else prog.current_revision
+        except (TypeError, ValueError):
+            rev = prog.current_revision
+        rows = list(
+            ProgrammeSignOff.objects
+            .filter(programme=prog, revision=rev)
+            .order_by("step"),
+        )
+        items = [{
+            "id": str(r.id),
+            "revision": r.revision,
+            "step": r.step,
+            "expected_role": r.expected_role,
+            "expected_email": r.expected_email,
+            "actual_email": r.actual_email,
+            "status": r.status,
+            "decided_at": r.decided_at.isoformat() if r.decided_at else "",
+            "decision_note": r.decision_note,
+            "audit_event_id": r.audit_event_id,
+        } for r in rows]
+        return Response({
+            "programme_id": str(prog.id),
+            "revision": rev,
+            "current_revision": prog.current_revision,
+            "items": items,
+        })
+
 
 @extend_schema(
     tags=["partners"],
