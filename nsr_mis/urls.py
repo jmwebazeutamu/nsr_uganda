@@ -41,4 +41,9 @@ urlpatterns = [
     # US-S23-008 — partners module (ADR-0011). Mounted at the bare
     # /api/v1/ prefix because the router itself owns "partners/".
     path("api/v1/", include("apps.partners.urls")),
+    # Admin Console DRF surface — group-gated per IsAdminConsoleUser.
+    path(
+        "api/v1/admin/",
+        include("apps.admin_console.admin_api_urls"),
+    ),
 ]

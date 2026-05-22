@@ -288,3 +288,141 @@ class PMTModelSignOff(models.Model):
             f"PMT v{self.model_version.version} "
             f"r{self.revision}/step{self.step} ({self.status})"
         )
+
+
+# ───────────────────────────────────────────────────────────────
+# Dashboard snapshot tables (HANDOFF — Admin Console + PMT §4.1)
+# ───────────────────────────────────────────────────────────────
+#
+# Nightly aggregates so the dashboard payload is read off pre-
+# computed rows instead of running multi-million-row group-bys on
+# every page load. Each table is append-only — query for the latest
+# `taken_at` per (model_version, dimension) when reading.
+
+
+class PMTBandSnapshot(models.Model):
+    """Band distribution count across the registry as-of `taken_at`.
+    One row per (model_version, band) per snapshot."""
+
+    id = ULIDField(primary_key=True)
+    model_version = models.ForeignKey(
+        PMTModelVersion, on_delete=models.PROTECT,
+        related_name="band_snapshots",
+    )
+    band = models.CharField(max_length=24, choices=Band.choices)
+    count = models.PositiveIntegerField()
+    pct = models.DecimalField(max_digits=5, decimal_places=2)
+    taken_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        verbose_name = "PMT band snapshot"
+        indexes = [
+            models.Index(fields=["model_version", "-taken_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"PMTBandSnapshot v{self.model_version_id} {self.band}={self.count}"
+
+
+class PMTSubregionSnapshot(models.Model):
+    """Per-sub-region poverty rate as-of `taken_at`. Rate is the
+    share of scored households in extreme_poverty + poverty bands."""
+
+    id = ULIDField(primary_key=True)
+    model_version = models.ForeignKey(
+        PMTModelVersion, on_delete=models.PROTECT,
+        related_name="subregion_snapshots",
+    )
+    sub_region_code = models.CharField(max_length=32)
+    sub_region_name = models.CharField(max_length=128, blank=True)
+    total_households = models.PositiveIntegerField(default=0)
+    scored_households = models.PositiveIntegerField(default=0)
+    in_poverty_count = models.PositiveIntegerField(default=0)
+    poverty_rate = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0,
+    )
+    taken_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        verbose_name = "PMT sub-region snapshot"
+        indexes = [
+            models.Index(fields=["model_version", "-taken_at"]),
+            models.Index(fields=["sub_region_code", "-taken_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"PMTSubregionSnapshot {self.sub_region_code} rate={self.poverty_rate}%"
+
+
+class PMTCoverageSnapshot(models.Model):
+    """Registry-wide PMT coverage stats — how many households are
+    scored, recent activity, staleness counts."""
+
+    id = ULIDField(primary_key=True)
+    total_households = models.PositiveIntegerField(default=0)
+    scored = models.PositiveIntegerField(default=0)
+    scored_30d = models.PositiveIntegerField(default=0)
+    scored_90d = models.PositiveIntegerField(default=0)
+    stale_12mo = models.PositiveIntegerField(default=0)
+    taken_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        verbose_name = "PMT coverage snapshot"
+
+    def __str__(self) -> str:
+        return f"PMTCoverageSnapshot scored={self.scored}/{self.total_households}"
+
+
+class PMTVariableInfluence(models.Model):
+    """Per-variable sample-mean × |weight| influence ranking, for
+    one model version. Populated on activation + nightly recompute."""
+
+    id = ULIDField(primary_key=True)
+    model_version = models.ForeignKey(
+        PMTModelVersion, on_delete=models.PROTECT,
+        related_name="variable_influences",
+    )
+    variable_name = models.CharField(max_length=128)
+    weight = models.DecimalField(max_digits=8, decimal_places=4)
+    sample_mean = models.DecimalField(
+        max_digits=10, decimal_places=4, default=0,
+    )
+    influence = models.DecimalField(
+        max_digits=10, decimal_places=4, default=0,
+    )
+    computed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "PMT variable influence"
+        indexes = [
+            models.Index(fields=["model_version", "-computed_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"PMTVariableInfluence {self.variable_name}={self.influence}"
+
+
+class PMTRecomputeJobRun(models.Model):
+    """One row per execution of recompute_band_thresholds_task.
+    Drives the dashboard's recent-runs table."""
+
+    OK = "ok"
+    FAILED = "failed"
+
+    id = ULIDField(primary_key=True)
+    started_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=24, default=OK)
+    rows_written = models.PositiveIntegerField(default=0)
+    sample_size = models.PositiveIntegerField(default=0)
+    actor = models.CharField(max_length=64, default="celery-beat")
+    note = models.TextField(blank=True)
+
+    class Meta:
+        verbose_name = "PMT recompute job run"
+        indexes = [
+            models.Index(fields=["-started_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"PMTRecomputeJobRun {self.started_at:%Y-%m-%d %H:%M} {self.status}"
