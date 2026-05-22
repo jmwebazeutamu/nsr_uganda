@@ -492,7 +492,8 @@ class TestPmtResultFkScope:
         from apps.pmt.models import Band, ModelStatus, PMTModelVersion, PMTResult
 
         model = PMTModelVersion.objects.create(
-            version=1, intercept=Decimal("50"), variables=[],
+            # version=900 — see apps/pmt/migrations/0006_seed_pmt_v1_active.py.
+            version=900, intercept=Decimal("50"), variables=[],
             band_cutoffs={
                 Band.EXTREME_POVERTY: 0, Band.POVERTY: 30,
                 Band.VULNERABLE: 60, Band.NOT_POOR: 80,

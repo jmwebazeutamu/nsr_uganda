@@ -58,8 +58,14 @@ def _add_members(household, n: int) -> None:
 
 
 def _active_model(*, intercept=50, weight=-5, author="seeder", approver="reviewer"):
+    # Version 900+ avoids colliding with the v1 ACTIVE seeded by
+    # apps/pmt/migrations/0006_seed_pmt_v1_active.py. Tests don't
+    # care about the specific number; the seeded v1 gets retired
+    # as a side effect when activate_model_version flips this row
+    # active — that's the legacy behaviour the suite already
+    # validates in TestActivation.
     v = PMTModelVersion.objects.create(
-        version=1, intercept=Decimal(str(intercept)), author=author,
+        version=900, intercept=Decimal(str(intercept)), author=author,
         variables=[{"variable": "member_count", "weight": weight, "transform": "identity"}],
         band_cutoffs={
             Band.EXTREME_POVERTY: 0,
@@ -99,22 +105,27 @@ class TestEngine:
 # --- Activation dual approval ----------------------------------------------
 
 class TestActivation:
+    # version=900+ to avoid colliding with the seeded production v1
+    # ACTIVE (apps/pmt/migrations/0006_seed_pmt_v1_active.py). The
+    # seeded row also gets retired as a side effect of these tests'
+    # activations — incidental, doesn't affect the test assertions.
+
     def test_activate_happy_path(self, db):
-        v = PMTModelVersion.objects.create(version=1, author="a", variables=[])
+        v = PMTModelVersion.objects.create(version=900, author="a", variables=[])
         activate_model_version(v, approver="b")
         v.refresh_from_db()
         assert v.status == ModelStatus.ACTIVE
         assert v.approved_by == "b"
 
     def test_author_cannot_approve(self, db):
-        v = PMTModelVersion.objects.create(version=1, author="alice", variables=[])
+        v = PMTModelVersion.objects.create(version=900, author="alice", variables=[])
         with pytest.raises(PMTApprovalError, match="differ"):
             activate_model_version(v, approver="alice")
 
     def test_activate_retires_prior(self, db):
-        v1 = PMTModelVersion.objects.create(version=1, author="a", variables=[])
+        v1 = PMTModelVersion.objects.create(version=900, author="a", variables=[])
         activate_model_version(v1, approver="b")
-        v2 = PMTModelVersion.objects.create(version=2, author="a", variables=[])
+        v2 = PMTModelVersion.objects.create(version=901, author="a", variables=[])
         activate_model_version(v2, approver="b")
         v1.refresh_from_db()
         assert v1.status == ModelStatus.RETIRED
@@ -135,7 +146,13 @@ class TestRecompute:
         assert household.current_vulnerability_band == Band.POVERTY
 
     def test_recompute_no_op_without_active_model(self, household):
-        # No PMTModelVersion ACTIVE
+        # Retire the migration-seeded v1 ACTIVE so we can verify the
+        # no-op path the original test was pinning. After this test
+        # nothing in the suite expects v1 to be active in this test
+        # method's transaction.
+        PMTModelVersion.objects.filter(status=ModelStatus.ACTIVE).update(
+            status=ModelStatus.RETIRED,
+        )
         assert get_active_model_version() is None
         result = recompute_for_household(household)
         assert result is None

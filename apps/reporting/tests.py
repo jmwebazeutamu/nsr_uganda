@@ -50,8 +50,10 @@ def households(two_sub_regions):
 
 @pytest.fixture
 def pmt_seeded(db, households):
+    # version=900 to avoid colliding with the production v1 ACTIVE
+    # seeded by apps/pmt/migrations/0006_seed_pmt_v1_active.py.
     model = PMTModelVersion.objects.create(
-        version=1, intercept=Decimal("50"), variables=[],
+        version=900, intercept=Decimal("50"), variables=[],
         band_cutoffs={
             Band.EXTREME_POVERTY: 0, Band.POVERTY: 30,
             Band.VULNERABLE: 60, Band.NOT_POOR: 80,

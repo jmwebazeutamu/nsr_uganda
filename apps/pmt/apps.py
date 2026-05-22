@@ -9,4 +9,11 @@ class PmtConfig(AppConfig):
 
     def ready(self) -> None:
         # Wire the UPD post-commit recompute hook.
-        from . import signals  # noqa: F401
+        # Import-side effect: every @register decoration in
+        # registered_features.py runs, populating apps.pmt.registry.
+        # Import the system-check module so its @register hooks fire.
+        from . import (
+            checks,  # noqa: F401
+            registered_features,  # noqa: F401
+            signals,  # noqa: F401
+        )

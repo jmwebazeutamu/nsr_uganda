@@ -48,10 +48,47 @@ class PMTModelVersion(models.Model):
         max_digits=4, decimal_places=3, null=True, blank=True,
     )
 
-    # Band cut-offs (inclusive lower bound).
+    # Band cut-offs. Semantics depend on band_strategy: when
+    # band_strategy="threshold" the values are score thresholds
+    # (inclusive lower bound); when band_strategy="percentile" the
+    # values are population percentile ranks (0–100) and the actual
+    # score thresholds live in PMTBandThreshold, recomputed daily.
     band_cutoffs = models.JSONField(
         default=dict, blank=True,
-        help_text='{"extreme_poverty": 0, "poverty": 30, "vulnerable": 60, "not_poor": 80}',
+        help_text=(
+            '{"extreme_poverty": 0, "poverty": 30, ...} — score thresholds '
+            'when band_strategy="threshold"; percentile ranks (0–100) when '
+            'band_strategy="percentile" (defaults from MGLSD policy: '
+            '{extreme_poverty: 10, poverty: 20, vulnerable: 30, not_poor: 100}).'
+        ),
+    )
+    # Configuration knob for the band classifier. "threshold" reads
+    # band_cutoffs as fixed score cuts (legacy behaviour); "percentile"
+    # reads the daily-recomputed PMTBandThreshold rows. Spec §4.7.
+    band_strategy = models.CharField(
+        max_length=24, default="threshold",
+        help_text=(
+            "Either 'threshold' (legacy fixed cutoffs read off "
+            "band_cutoffs) or 'percentile' (daily-recomputed "
+            "PMTBandThreshold rows). ADR-0024 sets percentile as the "
+            "policy default once the band-threshold job has populated."
+        ),
+    )
+
+    # Calibration provenance — pinned to the source dataset so the
+    # recalibration cadence (ADR-0023) is queryable. calibration_
+    # year_end is the trigger field the staleness alert reads.
+    calibration_dataset = models.CharField(
+        max_length=128, blank=True,
+        help_text="e.g. 'UNHS 2023/24'.",
+    )
+    calibration_year_end = models.PositiveSmallIntegerField(
+        null=True, blank=True,
+        help_text=(
+            "Latest year of the calibration dataset. Used by the "
+            "model-staleness check (recalibrate every 3 years per "
+            "ADR-0023)."
+        ),
     )
 
     status = models.CharField(max_length=24, choices=ModelStatus.choices, default=ModelStatus.DRAFT)

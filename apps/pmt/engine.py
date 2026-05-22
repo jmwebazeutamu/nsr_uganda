@@ -197,14 +197,31 @@ def _household_features(household) -> dict:
     # a fresh .filter() query.
     members = [m for m in household.members.all() if not m.is_deleted]
 
-    # Detail entities by type code so a model variable can reference
-    # `assets.radio.count` directly. iterating the prefetched cache.
-    assets_by_type: dict[str, object] = {
-        a.asset_type: a for a in household.assets.all() if not a.is_deleted
-    }
+    # Repeat-group children iterate the prefetched cache. The DSL
+    # (ADR-0025) consumes these as LISTS — `count_where` /
+    # `share_where` / `presence_in_collection` walk the rows. We also
+    # keep dict-by-type slices on the returned record for any
+    # legacy variable still using `assets.<type>.count` paths
+    # (e.g. the v22001 draft seed; all-zero weights so harmless).
+    assets_list = [a for a in household.assets.all() if not a.is_deleted]
+    livestock_list = [
+        ls for ls in household.livestock.all() if not ls.is_deleted
+    ]
+    crops_list = [
+        c for c in (getattr(household, "crops", []) or []).all()
+        if not getattr(c, "is_deleted", False)
+    ] if hasattr(household, "crops") else []
+    shocks_list = [
+        s for s in (getattr(household, "shocks", []) or []).all()
+        if not getattr(s, "is_deleted", False)
+    ] if hasattr(household, "shocks") else []
+    coping_list = [
+        cs for cs in (getattr(household, "coping_strategies", []) or []).all()
+        if not getattr(cs, "is_deleted", False)
+    ] if hasattr(household, "coping_strategies") else []
+    assets_by_type: dict[str, object] = {a.asset_type: a for a in assets_list}
     livestock_by_type: dict[str, object] = {
-        ls.livestock_type: ls
-        for ls in household.livestock.all() if not ls.is_deleted
+        ls.livestock_type: ls for ls in livestock_list
     }
 
     # Bulk-load per-member reverse-OneToOnes in 4 queries (not N×4).
@@ -270,16 +287,42 @@ def _household_features(household) -> dict:
         (under_15 + over_65) / working_age if working_age > 0 else 0.0
     )
 
+    # Reverse-OneToOne shortcuts on the record so the spec's DSL
+    # paths (`dwelling.floor_material`, `utilities.lighting_energy`,
+    # `head_member.education.highest_grade`) resolve without a
+    # `household.` prefix. _safe_attr handles missing rows as None.
+    head_member = _safe_attr(household, "head_member")
     return {
+        # Legacy access — `household.X.Y` paths in older variables.
         "household": household,
-        "members": members,
-        "assets": assets_by_type,
-        "livestock": livestock_by_type,
-        "member_count": len(members),
-        "disabled_member_count": disabled,
-        "chronic_ill_member_count": chronic_ill,
-        "school_age_out_of_school_count": school_age_out,
-        "dependency_ratio": dependency_ratio,
+        # DSL shortcuts (ADR-0025).
+        "head_member": head_member,
+        "dwelling":         _safe_attr(household, "dwelling"),
+        "utilities":        _safe_attr(household, "utilities"),
+        "livelihood":       _safe_attr(household, "livelihood"),
+        "food_security":    _safe_attr(household, "food_security"),
+        "food_consumption": _safe_attr(household, "food_consumption"),
+        # Collections. assets + livestock keep their dict-by-type
+        # shape (legacy code uses `assets.<type>.count` paths); the
+        # DSL's `_collection()` helper iterates dict values so
+        # `{"collection": "assets", "filter": {...}}` still walks the
+        # rows. crops / shocks / coping_strategies are plain lists.
+        "members":            members,
+        "assets":             assets_by_type,
+        "livestock":          livestock_by_type,
+        "crops":              crops_list,
+        "shocks":             shocks_list,
+        "coping_strategies":  coping_list,
+        # Materialised list slices for any DSL variable that needs a
+        # guaranteed list — e.g. a future `count_where` on `assets_list`.
+        "assets_list":        assets_list,
+        "livestock_list":     livestock_list,
+        # Scalars.
+        "member_count":                     len(members),
+        "disabled_member_count":            disabled,
+        "chronic_ill_member_count":         chronic_ill,
+        "school_age_out_of_school_count":   school_age_out,
+        "dependency_ratio":                 dependency_ratio,
     }
 
 
@@ -287,25 +330,67 @@ def compute_pmt(household, model_version: PMTModelVersion) -> tuple[float, str, 
     """Apply the model to a Household instance.
 
     Returns (score, band, inputs_snapshot) where inputs_snapshot logs
-    each variable's raw value + transformed contribution for later audit.
+    each variable's raw value + transformed contribution for later
+    audit.
+
+    Variable shape dispatch (ADR-0025): each row in
+    `model_version.variables` is either
+
+      legacy  — {"variable": "<dotted.path>", "weight": …, "transform": …}
+      DSL     — {"name": …, "weight": …, "feature": {"type": …, …}}
+
+    A row carrying a `feature` block routes through the JSON DSL
+    evaluator; everything else falls back to the legacy path+transform
+    pipeline so older DRAFT versions (e.g. the v22001 detail-entity
+    placeholder) keep scoring without a forced migration.
     """
+    from apps.pmt.feature_evaluator import (
+        FeatureEvaluationError,
+        evaluate_feature,
+    )
+
     snapshot: dict[str, dict] = {}
     score = float(model_version.intercept or 0)
     record = _household_features(household)
     for var in (model_version.variables or []):
-        path = var.get("variable", "")
         weight = float(var.get("weight", 0))
-        transform = var.get("transform", "identity")
-        raw = _get(record, path)
-        transformed = _transform(raw, transform)
-        contribution = weight * transformed
-        score += contribution
-        snapshot[path] = {
-            "raw": raw if isinstance(raw, (int, float, str)) else str(raw),
-            "transformed": transformed,
-            "weight": weight,
-            "contribution": contribution,
-        }
+        name = var.get("name") or var.get("variable") or ""
+        feature = var.get("feature") if isinstance(var, dict) else None
+        if isinstance(feature, dict):
+            # DSL path — evaluator owns the math.
+            try:
+                value = evaluate_feature(feature, record)
+            except FeatureEvaluationError as exc:
+                # One bad variable mustn't kill a household. Audit it,
+                # contribute 0, keep scoring.
+                value = 0.0
+                snapshot[name] = {
+                    "error": str(exc), "value": 0.0,
+                    "weight": weight, "contribution": 0.0,
+                }
+                continue
+            contribution = weight * value
+            score += contribution
+            snapshot[name] = {
+                "value": value,
+                "weight": weight,
+                "contribution": contribution,
+                "feature_type": feature.get("type"),
+            }
+        else:
+            # Legacy path+transform shape.
+            path = var.get("variable", "")
+            transform = var.get("transform", "identity")
+            raw = _get(record, path)
+            transformed = _transform(raw, transform)
+            contribution = weight * transformed
+            score += contribution
+            snapshot[path or name] = {
+                "raw": raw if isinstance(raw, (int, float, str)) else str(raw),
+                "transformed": transformed,
+                "weight": weight,
+                "contribution": contribution,
+            }
     # derive_band now resolves the model_version's threshold rows
     # first and only falls back to fixed cutoffs when none exist —
     # the polymorphic dispatch keeps callers (here + tests) simple.

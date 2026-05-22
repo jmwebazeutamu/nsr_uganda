@@ -20,6 +20,16 @@ from django.db import migrations
 
 
 def _backfill(apps, schema_editor):
+    # Migration-safe shortcut: if no PMTResult rows exist yet (fresh
+    # deploy) skip the recompute entirely — the daily beat job will
+    # populate when scores arrive. This also keeps the migration
+    # robust against any FUTURE schema additions to PMTModelVersion:
+    # without this guard, importing `recompute_band_thresholds` runs
+    # ORM queries with the live model class, which references columns
+    # the historical schema doesn't yet have.
+    PMTResult = apps.get_model("pmt", "PMTResult")
+    if not PMTResult.objects.exists():
+        return
     # Late-import the task helpers — apps.pmt.tasks pulls in
     # apps.security.audit which is fine post-migrate but not at
     # import time on a fresh schema.
