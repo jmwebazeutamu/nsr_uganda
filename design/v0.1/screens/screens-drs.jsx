@@ -300,6 +300,39 @@ const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
       .catch(e => setToast(`Reject failed: ${e.message}`));
   };
 
+  // BUG-S27-031 — operator-side delivery action. APPROVED requests
+  // had no UI surface to flip to DELIVERED, leaving the partner
+  // portal stuck on "Awaiting delivery" indefinitely. Posts to
+  // /render-and-deliver/ so the server renders the bundle, hashes
+  // it, and writes the manifest in one call — no client-side
+  // SHA-256 computation needed.
+  const [delivering, setDelivering] = useStateDRS(false);
+  const confirmDeliver = () => {
+    if (delivering || !current) return;
+    if (!isLive) {
+      setToast(`Delivery only available against the live API (current source: ${dataSource}).`);
+      return;
+    }
+    setDelivering(true);
+    _odrsPost(`/api/v1/drs/requests/${current.id}/render-and-deliver/`, {})
+      .then(async r => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.detail || `HTTP ${r.status}`);
+        }
+        return r.json();
+      })
+      .then(req => {
+        const rows = req.row_count_delivered != null
+          ? Number(req.row_count_delivered).toLocaleString()
+          : "?";
+        setToast(`Delivered · ${current.id.slice(0, 16)}… · ${rows} rows · manifest ${(req.manifest_sha256 || "").slice(0, 12)}…`);
+        setReloadKey(k => k + 1);
+      })
+      .catch(e => setToast(`Deliver failed: ${e.message}`))
+      .finally(() => setDelivering(false));
+  };
+
   const eyebrowSuffix = dataSource === "live" ? " · LIVE"
     : dataSource === "live-empty" ? " · live · queue empty"
     : "";
@@ -566,6 +599,48 @@ const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
                 </div>
                 <p className="t-cap" style={{marginTop:8, color:"var(--neutral-600)"}}>
                   Approver cannot be the original requester (AC-DRS-DUAL-ACTOR).
+                </p>
+              </div>
+            )}
+
+            {current.status === "approved" && (
+              <div className="card" style={{padding:16}}>
+                <div className="t-cap" style={{fontWeight:600, marginBottom:8}}>OPERATOR ACTIONS</div>
+                <div className="row gap-2" style={{flexWrap:"wrap"}}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={confirmDeliver}
+                    disabled={delivering}
+                    title="Render the NDJSON bundle, hash it, persist to the bundle store, and flip status to DELIVERED. Partner's download button lights up."
+                  >
+                    <Icon name="download" size={14}/> {delivering ? "Rendering…" : "Render & deliver"}
+                  </button>
+                </div>
+                <p className="t-cap" style={{marginTop:8, color:"var(--neutral-600)"}}>
+                  POSTs to <span className="t-mono">/render-and-deliver/</span> — server renders the bundle, locks the manifest SHA-256, and emits the delivery audit event in one transaction.
+                </p>
+              </div>
+            )}
+
+            {current.status === "delivered" && (
+              <div className="card" style={{padding:16}}>
+                <div className="t-cap" style={{fontWeight:600, marginBottom:8}}>BUNDLE</div>
+                <div className="t-bodysm">
+                  <span className="muted">Rows:</span>{" "}
+                  <span className="t-mono">{current.row_count_delivered != null ? Number(current.row_count_delivered).toLocaleString() : "—"}</span>
+                </div>
+                <div className="t-bodysm mt-1">
+                  <span className="muted">Manifest SHA-256:</span>{" "}
+                  <span className="t-mono" style={{fontSize:11, wordBreak:"break-all"}}>
+                    {current.manifest_sha256 || "—"}
+                  </span>
+                </div>
+                <div className="t-bodysm mt-1">
+                  <span className="muted">Expires:</span>{" "}
+                  <span>{(current.expires_at || "").slice(0, 10) || "—"}</span>
+                </div>
+                <p className="t-cap" style={{marginTop:10, color:"var(--neutral-600)"}}>
+                  The partner's download button is live; rate-limited to 10/min per DRS-O-02.
                 </p>
               </div>
             )}
