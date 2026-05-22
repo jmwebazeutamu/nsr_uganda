@@ -23,7 +23,7 @@
  */
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 let ScopeEditModal;
@@ -31,6 +31,7 @@ let buildEditScopePayload;
 let formatScopeError;
 let ENTITY_KEYS;
 let FIELD_GROUP_KEYS;
+let GEO_LEVELS;
 
 beforeAll(async () => {
   await import("./scope-edit-modal.jsx");
@@ -40,7 +41,18 @@ beforeAll(async () => {
     formatScopeError,
     ScopeEditModal_ENTITY_KEYS: ENTITY_KEYS,
     ScopeEditModal_FIELD_GROUP_KEYS: FIELD_GROUP_KEYS,
+    ScopeEditModal_GEO_LEVELS: GEO_LEVELS,
   } = globalThis);
+});
+
+// Stub apiClient — tests that exercise the geographic picker or the
+// chip-label resolver pass this so the modal can fetch units without
+// hitting the real network. Override per-test by passing a different
+// fetchUnitsByLevel / fetchUnitById.
+const stubApi = (over = {}) => ({
+  fetchUnitsByLevel: vi.fn(async () => []),
+  fetchUnitById: vi.fn(async () => null),
+  ...over,
 });
 
 afterEach(() => {
@@ -437,5 +449,178 @@ describe("catalogue helpers", () => {
     const keys = FIELD_GROUP_KEYS.map(f => f.key);
     expect(keys).toContain("Identifiers");
     expect(keys).toContain("PMT");
+  });
+  it("GEO_LEVELS spans the seven-level UBOS chain", () => {
+    expect(GEO_LEVELS.map(l => l.value)).toEqual([
+      "region", "sub_region", "district", "county",
+      "sub_county", "parish", "village",
+    ]);
+  });
+});
+
+
+// ───────────────────────────────────────────────────────────────
+// OI-S27-SCOPE-GEO — Geographic unit picker
+// ───────────────────────────────────────────────────────────────
+
+describe("ScopeEditModal — geographic picker", () => {
+  it("loads units for the default level (sub_region) on open", async () => {
+    const fetchUnitsByLevel = vi.fn(async (level) => [
+      { id: "GU-SR-1", level, code: "SR-B-S", name: "Buganda South" },
+      { id: "GU-SR-2", level, code: "SR-B-N", name: "Buganda North" },
+    ]);
+    const api = stubApi({ fetchUnitsByLevel });
+    render(<ScopeEditModal {...defaultProps({
+      apiClient: api, dsa: draftDsa({ geographic_scope: [] }),
+    })}/>);
+
+    await waitFor(() => expect(fetchUnitsByLevel).toHaveBeenCalledWith("sub_region"));
+    // The two units render as options under the Unit select
+    const picker = screen.getByTestId("geo-picker");
+    expect(within(picker).getByRole("option", { name: "Buganda South" })).toBeInTheDocument();
+    expect(within(picker).getByRole("option", { name: "Buganda North" })).toBeInTheDocument();
+  });
+
+  it("re-fetches units when the level changes", async () => {
+    const fetchUnitsByLevel = vi.fn(async (level) => (level === "district"
+      ? [{ id: "GU-D-1", level, code: "D-KAMPALA", name: "Kampala" }]
+      : []));
+    render(<ScopeEditModal {...defaultProps({
+      apiClient: stubApi({ fetchUnitsByLevel }),
+      dsa: draftDsa({ geographic_scope: [] }),
+    })}/>);
+
+    const picker = screen.getByTestId("geo-picker");
+    const levelSelect = within(picker).getAllByRole("combobox")[0];
+    fireEvent.change(levelSelect, { target: { value: "district" } });
+
+    await waitFor(() => expect(fetchUnitsByLevel).toHaveBeenCalledWith("district"));
+    await waitFor(() => expect(within(picker).getByRole("option", { name: "Kampala" })).toBeInTheDocument());
+  });
+
+  it("adds the picked unit on submit; payload contains the new id", async () => {
+    const user = userEvent.setup();
+    const fetchUnitsByLevel = vi.fn(async () => [
+      { id: "GU-SR-1", level: "sub_region", code: "SR-B-S", name: "Buganda South" },
+    ]);
+    const onSubmit = vi.fn(async (id, payload) => ({
+      id, reference: "X", version: 1, ...payload,
+    }));
+    render(<ScopeEditModal {...defaultProps({
+      apiClient: stubApi({ fetchUnitsByLevel }),
+      dsa: draftDsa({ geographic_scope: [] }),
+      onSubmit,
+    })}/>);
+
+    await waitFor(() => screen.getByRole("option", { name: "Buganda South" }));
+    const picker = screen.getByTestId("geo-picker");
+    const unitSelect = within(picker).getAllByRole("combobox")[1];
+    fireEvent.change(unitSelect, { target: { value: "GU-SR-1" } });
+    await user.click(within(picker).getByRole("button", { name: /Add to scope/i }));
+
+    // Chip rendered with name · level
+    const chips = await screen.findByTestId("geo-chips");
+    expect(chips).toHaveTextContent("Buganda South · Sub-region");
+
+    await user.click(screen.getByRole("button", { name: /Save changes/i }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    const [, payload] = onSubmit.mock.calls[0];
+    expect(payload.geographic_scope_ids).toEqual(["GU-SR-1"]);
+  });
+
+  it("disables Add button when the picked unit is already in scope", async () => {
+    const fetchUnitsByLevel = vi.fn(async () => [
+      { id: "GU-SR-1", level: "sub_region", code: "SR-B-S", name: "Buganda South" },
+    ]);
+    render(<ScopeEditModal {...defaultProps({
+      apiClient: stubApi({ fetchUnitsByLevel }),
+      dsa: draftDsa({ geographic_scope: ["GU-SR-1"] }),
+    })}/>);
+
+    await waitFor(() => screen.getByRole("option", { name: /Buganda South \(already added\)/i }));
+    const picker = screen.getByTestId("geo-picker");
+    const addBtn = within(picker).getByRole("button", { name: /Add to scope|Already added/i });
+    // No unit selected → button disabled
+    expect(addBtn).toBeDisabled();
+  });
+
+  it("does not double-add when the same id is clicked twice", async () => {
+    const user = userEvent.setup();
+    const fetchUnitsByLevel = vi.fn(async () => [
+      { id: "GU-SR-1", level: "sub_region", code: "SR-B-S", name: "Buganda South" },
+    ]);
+    render(<ScopeEditModal {...defaultProps({
+      apiClient: stubApi({ fetchUnitsByLevel }),
+      dsa: draftDsa({ geographic_scope: [] }),
+    })}/>);
+
+    await waitFor(() => screen.getByRole("option", { name: "Buganda South" }));
+    const picker = screen.getByTestId("geo-picker");
+    const unitSelect = within(picker).getAllByRole("combobox")[1];
+
+    fireEvent.change(unitSelect, { target: { value: "GU-SR-1" } });
+    await user.click(within(picker).getByRole("button", { name: /Add to scope/i }));
+    // After add, unitId resets to "" — pick again then try to add
+    fireEvent.change(unitSelect, { target: { value: "GU-SR-1" } });
+    // Now the option text shows "(already added)" and the Add button is disabled
+    const addBtn = within(picker).getByRole("button", { name: /Already added/i });
+    expect(addBtn).toBeDisabled();
+    const chips = screen.getByTestId("geo-chips");
+    expect(chips.querySelectorAll("[data-testid='geo-chip']")).toHaveLength(1);
+  });
+
+  it("renders an error caption when the units fetch rejects", async () => {
+    const fetchUnitsByLevel = vi.fn(async () => {
+      const e = new Error("HTTP 500");
+      e.status = 500;
+      e.body = { detail: "Reference data unavailable." };
+      throw e;
+    });
+    render(<ScopeEditModal {...defaultProps({
+      apiClient: stubApi({ fetchUnitsByLevel }),
+      dsa: draftDsa({ geographic_scope: [] }),
+    })}/>);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("geo-picker-error"))
+        .toHaveTextContent("Reference data unavailable.");
+    });
+  });
+});
+
+
+// ───────────────────────────────────────────────────────────────
+// OI-S27-SCOPE-GEO — Pre-existing chip label resolution
+// ───────────────────────────────────────────────────────────────
+
+describe("ScopeEditModal — chip label resolution", () => {
+  it("fetches a label for every id in dsa.geographic_scope on open", async () => {
+    const labels = {
+      "01HZA1111111111111111111GU1": { id: "01HZA1111111111111111111GU1", level: "region", code: "R-CENTRAL", name: "Central" },
+      "01HZA2222222222222222222GU2": { id: "01HZA2222222222222222222GU2", level: "sub_region", code: "SR-B-S", name: "Buganda South" },
+    };
+    const fetchUnitById = vi.fn(async (id) => labels[id] || null);
+    render(<ScopeEditModal {...defaultProps({
+      apiClient: stubApi({ fetchUnitById }),
+    })}/>);
+
+    await waitFor(() => {
+      const chips = screen.getByTestId("geo-chips");
+      expect(chips).toHaveTextContent("Central · Region");
+      expect(chips).toHaveTextContent("Buganda South · Sub-region");
+    });
+    expect(fetchUnitById).toHaveBeenCalledWith("01HZA1111111111111111111GU1");
+    expect(fetchUnitById).toHaveBeenCalledWith("01HZA2222222222222222222GU2");
+  });
+
+  it("falls back to the truncated id when the label fetch fails", async () => {
+    const fetchUnitById = vi.fn(async () => { throw new Error("not found"); });
+    render(<ScopeEditModal {...defaultProps({
+      apiClient: stubApi({ fetchUnitById }),
+    })}/>);
+
+    const chips = screen.getByTestId("geo-chips");
+    expect(chips).toHaveTextContent("01HZA111…");
+    expect(chips).toHaveTextContent("01HZA222…");
   });
 });

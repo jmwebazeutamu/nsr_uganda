@@ -28,6 +28,46 @@
 
 const { useState: useSEM, useEffect: useESEM, useMemo: useMSEM } = React;
 
+// UBOS administrative levels (same order as `_GEO_CHAIN` in
+// screens-drs-querybuilder.jsx). The picker defaults to sub_region —
+// the level most DSAs scope at — but operators can pick any level.
+const GEO_LEVELS = [
+  { value: "region",     label: "Region" },
+  { value: "sub_region", label: "Sub-region" },
+  { value: "district",   label: "District" },
+  { value: "county",     label: "County" },
+  { value: "sub_county", label: "Sub-county" },
+  { value: "parish",     label: "Parish" },
+  { value: "village",    label: "Village" },
+];
+
+const GEO_LEVEL_LABEL = Object.fromEntries(
+  GEO_LEVELS.map(l => [l.value, l.label]),
+);
+
+// Default API seam. Tests pass a stub via the `apiClient` prop so the
+// network never actually fires. In the browser harness it falls back
+// to window.nsrApi (US-S23-012). When window.nsrApi is missing (e.g.
+// jsdom) both methods resolve to safe empties so the picker mounts
+// without crashing — tests that exercise the picker pass an explicit
+// stub.
+const _defaultApiClient = () => ({
+  fetchUnitsByLevel: (level) => {
+    const api = typeof window !== "undefined" ? window.nsrApi : null;
+    if (!api) return Promise.resolve([]);
+    return api.get(
+      `/api/v1/reference-data/geographic-units/`
+      + `?level=${encodeURIComponent(level)}`
+      + `&status=active&page_size=500`,
+    ).then(r => (r && r.results) || r || []);
+  },
+  fetchUnitById: (id) => {
+    const api = typeof window !== "undefined" ? window.nsrApi : null;
+    if (!api) return Promise.resolve(null);
+    return api.get(`/api/v1/reference-data/geographic-units/${id}/`);
+  },
+});
+
 // Known entity flags that appear in entities_scope. The backend
 // stores the JSONField verbatim, so unknown keys round-trip; the
 // modal only renders checkboxes for the four documented entities.
@@ -103,6 +143,9 @@ const ScopeEditModal = ({
   onSubmit,      // (dsaId, payload) => Promise<dsaResponse>
                  //   default = nsrApi.post("/api/v1/dsas/{id}/edit-scope/", payload)
   onSuccess,     // (resultDsa, { cloned: bool }) => void
+  apiClient,     // optional test seam:
+                 //   { fetchUnitsByLevel(level), fetchUnitById(id) }
+                 //   defaults to window.nsrApi-backed implementation.
 }) => {
   const id = dsa?.id || "";
   const status = dsa?.status || "";
@@ -128,6 +171,14 @@ const ScopeEditModal = ({
   const [busy, setBusy] = useSEM(false);
   const [error, setError] = useSEM("");
 
+  // geoLabels: { [unitId]: { name, level } }. Populated for every id
+  // the picker adds (synchronously) and lazily for every id already
+  // present in dsa.geographic_scope on open via fetchUnitById. Chips
+  // render the resolved label when present and fall back to the id.
+  const [geoLabels, setGeoLabels] = useSEM({});
+
+  const api = apiClient || _defaultApiClient();
+
   useESEM(() => {
     if (!open || !dsa) return;
     setEntities({ ...(dsa.entities_scope || {}) });
@@ -139,8 +190,31 @@ const ScopeEditModal = ({
     setDpiaRef(dsa.dpia_document_ref || "");
     setBreachSla(dsa.breach_sla_hours == null ? "" : String(dsa.breach_sla_hours));
     setGeoIds(Array.isArray(dsa.geographic_scope) ? [...dsa.geographic_scope] : []);
+    setGeoLabels({});
     setBusy(false);
     setError("");
+  }, [open, dsa]);
+
+  // Resolve labels for ids already in geographic_scope on open. Each
+  // fetch is fire-and-forget — a failure leaves the chip on its
+  // truncated-id fallback rather than blocking the modal.
+  useESEM(() => {
+    if (!open || !dsa) return;
+    const ids = Array.isArray(dsa.geographic_scope) ? dsa.geographic_scope : [];
+    if (!ids.length) return;
+    let cancelled = false;
+    for (const id of ids) {
+      Promise.resolve(api.fetchUnitById(id))
+        .then((u) => {
+          if (cancelled || !u) return;
+          setGeoLabels(m => (m[id] ? m : { ...m, [id]: { name: u.name, level: u.level } }));
+        })
+        .catch(() => {});
+    }
+    return () => { cancelled = true; };
+    // Only re-run when modal opens against a new DSA; geoLabels writes
+    // would cause an infinite loop if listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, dsa]);
 
   // Disabled-submit logic: classification and DPIA ref are free-text
@@ -157,6 +231,16 @@ const ScopeEditModal = ({
 
   const removeGeo = (geoId) =>
     setGeoIds((ids) => ids.filter((x) => x !== geoId));
+
+  // The picker passes back the full unit object so we get the label
+  // for free (no extra round-trip). De-dupes against geoIds.
+  const addGeoUnit = (unit) => {
+    if (!unit || !unit.id) return;
+    setGeoIds((ids) => (ids.includes(unit.id) ? ids : [...ids, unit.id]));
+    setGeoLabels((m) => ({
+      ...m, [unit.id]: { name: unit.name, level: unit.level },
+    }));
+  };
 
   const form = useMSEM(() => ({
     entities_scope: entities,
@@ -319,39 +403,52 @@ const ScopeEditModal = ({
 
         {/* 4) Geographic scope */}
         <ScopeCard title={`Geographic scope · ${geoIds.length} unit${geoIds.length === 1 ? "" : "s"}`}
-          sub="Remove units here to narrow the scope. Adding new units uses the picker from the DRS query builder (OI-S27-SCOPE-GEO).">
-          <div style={{padding:16}}>
+          sub="Narrow or widen the scope by removing or adding UBOS administrative units. Empty = partner's full national geography.">
+          <div style={{padding:16, display:"flex", flexDirection:"column", gap:12}}>
             {geoIds.length === 0 ? (
               <div className="muted t-bodysm">
                 No geographic units pinned. Scope spans the partner's full
-                geography — use the admin to attach specific units.
+                geography — add specific units below to narrow it.
               </div>
             ) : (
-              <div className="row-wrap" data-testid="geo-chips"
+              <div data-testid="geo-chips"
                 style={{display:"flex", flexWrap:"wrap", gap:6}}>
-                {geoIds.map((gid) => (
-                  <span key={gid}
-                    style={{display:"inline-flex", alignItems:"center", gap:6,
-                            padding:"4px 8px",
-                            border:"1px solid var(--neutral-200)",
-                            borderRadius:999,
-                            background:"var(--neutral-50)",
-                            fontSize:12}}>
-                    <span className="t-mono">{String(gid).slice(0, 8)}…</span>
-                    <button type="button"
-                      aria-label={`Remove geographic unit ${gid}`}
-                      className="icon-btn"
-                      disabled={busy || blocked}
-                      onClick={() => removeGeo(gid)}
-                      style={{padding:0, lineHeight:0,
-                              background:"transparent", border:0,
-                              cursor:"pointer"}}>
-                      <Icon name="x" size={11}/>
-                    </button>
-                  </span>
-                ))}
+                {geoIds.map((gid) => {
+                  const lbl = geoLabels[gid];
+                  const text = lbl
+                    ? `${lbl.name} · ${GEO_LEVEL_LABEL[lbl.level] || lbl.level}`
+                    : `${String(gid).slice(0, 8)}…`;
+                  return (
+                    <span key={gid} data-testid="geo-chip"
+                      data-geo-id={gid}
+                      style={{display:"inline-flex", alignItems:"center", gap:6,
+                              padding:"4px 8px",
+                              border:"1px solid var(--neutral-200)",
+                              borderRadius:999,
+                              background:"var(--neutral-50)",
+                              fontSize:12}}>
+                      <span className={lbl ? "" : "t-mono"}>{text}</span>
+                      <button type="button"
+                        aria-label={`Remove geographic unit ${gid}`}
+                        className="icon-btn"
+                        disabled={busy || blocked}
+                        onClick={() => removeGeo(gid)}
+                        style={{padding:0, lineHeight:0,
+                                background:"transparent", border:0,
+                                cursor:"pointer"}}>
+                        <Icon name="x" size={11}/>
+                      </button>
+                    </span>
+                  );
+                })}
               </div>
             )}
+
+            <GeographicUnitPicker
+              api={api}
+              alreadyAdded={new Set(geoIds)}
+              disabled={busy || blocked}
+              onAdd={addGeoUnit}/>
           </div>
         </ScopeCard>
 
@@ -416,12 +513,111 @@ const CheckboxGrid = ({ items, values, onToggle, disabled }) => (
 );
 
 
+// GeographicUnitPicker — level dropdown + unit dropdown + Add button.
+// Lazy-loads units when the level changes via api.fetchUnitsByLevel.
+// Skips the Add button (or marks it disabled) when the picked unit is
+// already in alreadyAdded.
+const GeographicUnitPicker = ({ api, alreadyAdded, disabled, onAdd }) => {
+  const [level, setLevel] = useSEM("sub_region");
+  const [units, setUnits] = useSEM([]);
+  const [loading, setLoading] = useSEM(false);
+  const [unitId, setUnitId] = useSEM("");
+  const [err, setErr] = useSEM("");
+
+  useESEM(() => {
+    if (!level || !api) return;
+    let cancelled = false;
+    setLoading(true);
+    setErr("");
+    setUnitId("");
+    Promise.resolve(api.fetchUnitsByLevel(level))
+      .then((rows) => {
+        if (cancelled) return;
+        setUnits(Array.isArray(rows) ? rows : []);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setUnits([]);
+        setErr(formatScopeError(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [level]);
+
+  const picked = units.find((u) => u.id === unitId);
+  const isDup = !!picked && alreadyAdded.has(picked.id);
+  const canAdd = !!picked && !isDup && !disabled;
+
+  return (
+    <div data-testid="geo-picker"
+      style={{display:"grid",
+              gridTemplateColumns:"160px 1fr auto",
+              gap:8, alignItems:"center",
+              padding:"10px 12px",
+              background:"var(--neutral-50)",
+              border:"1px solid var(--neutral-200)",
+              borderRadius:6}}>
+      <label className="col gap-1" style={{minWidth:0}}>
+        <span className="t-cap">Level</span>
+        <select className="field-select"
+          value={level}
+          disabled={disabled}
+          onChange={(e) => setLevel(e.target.value)}>
+          {GEO_LEVELS.map(l => (
+            <option key={l.value} value={l.value}>{l.label}</option>
+          ))}
+        </select>
+      </label>
+      <label className="col gap-1" style={{minWidth:0}}>
+        <span className="t-cap">
+          Unit{loading ? " · loading…" : units.length ? ` · ${units.length} available` : ""}
+        </span>
+        <select className="field-select"
+          value={unitId}
+          disabled={disabled || loading}
+          onChange={(e) => setUnitId(e.target.value)}>
+          <option value="">
+            {loading ? "Loading…" : units.length ? "Pick a unit…" : "No units at this level"}
+          </option>
+          {units.map(u => (
+            <option key={u.id} value={u.id}
+              disabled={alreadyAdded.has(u.id)}>
+              {u.name}{alreadyAdded.has(u.id) ? " (already added)" : ""}
+            </option>
+          ))}
+        </select>
+        {err && (
+          <span className="t-cap" style={{color:"var(--accent-danger)"}}
+            data-testid="geo-picker-error">
+            {err}
+          </span>
+        )}
+      </label>
+      <button type="button" className="btn btn-sm btn-primary"
+        disabled={!canAdd}
+        onClick={() => {
+          if (!picked) return;
+          onAdd(picked);
+          setUnitId("");
+        }}
+        style={{alignSelf:"end"}}>
+        <Icon name="add" size={12}/>{" "}
+        {isDup ? "Already added" : "Add to scope"}
+      </button>
+    </div>
+  );
+};
+
+
 // Export helpers + the component for the test file.
 Object.assign(window, {
   ScopeEditModal,
   ScopeEditModal_ENTITY_KEYS: ENTITY_KEYS,
   ScopeEditModal_FIELD_GROUP_KEYS: FIELD_GROUP_KEYS,
   ScopeEditModal_SENSITIVITY_OPTIONS: SENSITIVITY_OPTIONS,
+  ScopeEditModal_GEO_LEVELS: GEO_LEVELS,
   buildEditScopePayload,
   formatScopeError,
 });
