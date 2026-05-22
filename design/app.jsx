@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, MemberDetailScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -24,8 +24,9 @@ const NAV = [
   { id: "dedup",   label: "Duplicates",    icon: "duplicate", count: 47 },
   { id: "grm",     label: "Grievances",    icon: "message",   count: 7 },
   { section: "DATA" },
-  { id: "registry",      label: "Social Registry", icon: "users", screen: true },
-  { id: "beneficiaries", label: "Beneficiaries",   icon: "book",  screen: true },
+  { id: "registry",         label: "Social Registry", icon: "users", screen: true },
+  { id: "registry-members", label: "Members",         icon: "user",  screen: true, indent: 1 },
+  { id: "beneficiaries",    label: "Beneficiaries",   icon: "book",  screen: true },
   { id: "drs",     label: "Data Requests", icon: "download",  count: 9 },
   { id: "partner-drs", label: "My requests", icon: "download", count: 5 },
   // Partner self-service surfaces — visible only when role is
@@ -131,7 +132,7 @@ function App() {
     if (role === "partner-analyst" && !["home","partner-drs","my-dsa","my-programmes","kit"].includes(n.id)) return false;
     // Registry + Beneficiaries are operator-only — partners use the
     // DRS portal to request data, not browse the registry directly.
-    if (["registry","beneficiaries"].includes(n.id) && role === "partner-analyst") return false;
+    if (["registry","registry-members","beneficiaries"].includes(n.id) && role === "partner-analyst") return false;
     return true;
   });
 
@@ -184,7 +185,10 @@ function App() {
           const liveCount = navCounts ? navCounts[n.id] : undefined;
           const displayCount = liveCount !== undefined ? liveCount : n.count;
           return (
-            <button key={n.id} className={`nav-item ${active ? 'active' : ''}`} onClick={() => navigate(n.id)}>
+            <button key={n.id}
+                    className={`nav-item ${active ? 'active' : ''}`}
+                    style={n.indent ? { paddingLeft: 32 } : undefined}
+                    onClick={() => navigate(n.id)}>
               <Icon name={n.icon} size={18}/>
               <span className="nav-label">{n.label}</span>
               {n.count !== undefined && <span className="nav-count">{displayCount}</span>}
@@ -224,8 +228,16 @@ function App() {
         {screen === "my-programmes" && <MyProgrammesScreen/>}
         {screen === "reports" && <ReportsScreen role={role}/>}
         {screen === "admin"   && <AdminScreen/>}
-        {screen === "registry" && <RegistryScreen onNavigate={navigate}/>}
+        {(screen === "registry" || screen === "registry-members") && <RegistryScreen
+            initialView={screen === "registry-members" ? "members" : (screenPayload?.initialView)}
+            onOpen={(rid) => navigate("household", { householdId: rid })}
+            onOpenMember={(mid) => navigate("registry-member-detail", { memberId: mid })}
+            onNavigate={navigate}/>}
         {screen === "household" && <HouseholdScreen householdId={screenPayload?.householdId} onNavigate={navigate}/>}
+        {screen === "registry-member-detail" && <MemberDetailScreen
+            memberId={screenPayload?.memberId}
+            onBack={() => navigate("registry", { initialView: "members" })}
+            onOpenHousehold={(rid) => navigate("household", { householdId: rid })}/>}
         {screen === "partners" && <PartnersScreen
             onRegister={() => navigate("partner-new")}
             onOpen={(partnerId) => navigate("partner-detail", { partnerId })}
