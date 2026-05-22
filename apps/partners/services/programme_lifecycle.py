@@ -243,14 +243,17 @@ def sign_step(
     row.decision_note = note
     row.save()
 
-    audit_id = emit_audit(
+    audit_event = emit_audit(
         "programme.signoff.signed", "programme", str(programme.id),
         actor=actor,
         reason=f"step={step} role={row.expected_role}",
         field_changes={"note": note},
     )
-    if audit_id:
-        row.audit_event_id = str(audit_id)
+    # emit_audit returns the AuditEvent row; persist its ULID (26 chars,
+    # fits the 64-char column). The earlier str(audit_event) produced
+    # the full repr and tripped Postgres' character_varying(64) gate.
+    if audit_event is not None:
+        row.audit_event_id = str(audit_event.id)
         row.save(update_fields=["audit_event_id", "updated_at"])
 
     # 4th sign — flip the programme to ACTIVE.
