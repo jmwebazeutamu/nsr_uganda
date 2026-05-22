@@ -210,3 +210,81 @@ class PMTBandThreshold(models.Model):
             f"{self.band_name}@p{self.percentile_rank} "
             f"= {self.score_threshold}"
         )
+
+
+class PMTModelSignOff(models.Model):
+    """One row per step in the 3-step PMT model approval chain
+    (HANDOFF — Admin Console + PMT §4.3).
+
+    Same shape as `apps.partners.models.ProgrammeSignOff` (US-182)
+    so the lifecycle service can reuse the proven no-self-approve
+    + distinct-signers + chain-ordering logic. Email-identified
+    signers; FK-to-User upgrade arrives when the admin-side role
+    bindings (HANDOFF §3.3 group resolution) get wired.
+
+    Chain (3 steps, fewer than the DSA chain because PMT calibration
+    is a narrower audience):
+        1. Author submission        (the analyst who built the model)
+        2. MGLSD Steward            (policy team confirmation)
+        3. Director General · UBOS  (statistical authority sign-off)
+
+    `revision` increments per submit cycle; a rejected-and-resubmitted
+    chain opens revision N+1. Statuses + role codes follow the
+    ProgrammeSignOff vocabulary so the operator-facing chain widget
+    is shared across modules.
+    """
+
+    PENDING = "pending"
+    SIGNED = "signed"
+    REJECTED = "rejected"
+    SKIPPED = "skipped"
+    HOLD = "on_hold"
+
+    ROLE_AUTHOR = "pmt_author"
+    ROLE_MGLSD_STEWARD = "mglsd_steward"
+    ROLE_UBOS_DG = "ubos_director_general"
+    ROLE_ORDER = (
+        ROLE_AUTHOR,
+        ROLE_MGLSD_STEWARD,
+        ROLE_UBOS_DG,
+    )
+
+    id = ULIDField(primary_key=True)
+    model_version = models.ForeignKey(
+        PMTModelVersion, on_delete=models.PROTECT, related_name="signoffs",
+    )
+    revision = models.PositiveIntegerField(default=1)
+    step = models.PositiveSmallIntegerField()  # 1..3
+    expected_role = models.CharField(max_length=64)
+    expected_email = models.CharField(max_length=254, blank=True)
+    actual_email = models.CharField(max_length=254, blank=True)
+    # Plain CharField per ADR-0010 — canonical codes seeded as
+    # `programme_signoff_status` ChoiceList (same vocabulary as
+    # ProgrammeSignOff; partners-lint rejects inline choices=[...]).
+    status = models.CharField(max_length=24, default=PENDING)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.TextField(blank=True)
+    audit_event_id = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "PMT model sign-off"
+        verbose_name_plural = "PMT model sign-offs"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["model_version", "revision", "step"],
+                name="pmt_signoff_step_unique",
+            ),
+        ]
+        ordering = ["model_version", "revision", "step"]
+        indexes = [
+            models.Index(fields=["model_version", "revision"]),
+            models.Index(fields=["status"]),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"PMT v{self.model_version.version} "
+            f"r{self.revision}/step{self.step} ({self.status})"
+        )

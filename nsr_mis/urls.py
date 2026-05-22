@@ -19,6 +19,8 @@ urlpatterns = [
     # the built React app through nginx with its own auth gateway.
     path("console/", console, name="console-home"),
     path("console/<path:path>", console, name="console-asset"),
+    # Admin Console — separate bundle, group-gated (HANDOFF §3.3).
+    path("admin-console/", include("apps.admin_console.urls")),
     path("api/schema/", schema_view, name="schema"),
     path("api/docs/", swagger_view, name="swagger-ui"),
     # Per-module routers — one OpenAPI tag per module.

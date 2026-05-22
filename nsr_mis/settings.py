@@ -57,6 +57,9 @@ INSTALLED_APPS = [
     "apps.security",
     "apps.reporting",
     "apps.reference_data",
+    # Admin Console — second front-end behind the same backend
+    # (HANDOFF — Admin Console + PMT 2026-05-22).
+    "apps.admin_console",
 ]
 
 # US-S23 — gate the partners-module UI surfaces and write endpoints
