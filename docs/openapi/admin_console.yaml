@@ -1,0 +1,167 @@
+openapi: 3.1.0
+info:
+  title: NSR Admin Console — Internal API
+  version: "0.2.0"
+  description: |
+    Endpoints exposed under `/api/v1/admin/`, gated on the five admin groups
+    (`nsr_admin`, `mglsd_statistics`, `dpo`, `nsr_dba`, `nsr_security`).
+    All write paths route through service-layer code that emits AuditEvent
+    rows; direct DB writes from views are forbidden.
+
+    Sprint 22 ships PMT. Sprint 23 Cat 1 adds Reference data (Choice lists +
+    Geography). Cat 2 (Workflow) and Cat 3 (Security) are scheduled for
+    sprints 24 and 25 respectively.
+
+servers:
+  - url: /api/v1/admin
+    description: Mounted under the main NSR backend.
+
+tags:
+  - name: pmt
+    description: Proxy Means Test — model versions, snapshots, simulator.
+  - name: refdata
+    description: Reference data — Choice lists + Geography hierarchy.
+
+paths:
+  # ─────────────────────────────────────────────────────────────
+  # PMT — sprint 22 surface (already in production)
+  # ─────────────────────────────────────────────────────────────
+  /pmt/dashboard/:
+    get:
+      tags: [pmt]
+      summary: PMT operational dashboard payload (single endpoint).
+      responses:
+        "200": { description: Full union payload. }
+        "403": { description: Caller is not in an admin group. }
+  /pmt/versions/:
+    get: { tags: [pmt], summary: List PMT model versions, responses: { "200": { description: OK } } }
+    post: { tags: [pmt], summary: Create a new DRAFT model version, responses: { "201": { description: Created } } }
+  /pmt/versions/{id}/:
+    get: { tags: [pmt], summary: Retrieve a model version, responses: { "200": { description: OK } } }
+    patch: { tags: [pmt], summary: Update a DRAFT model version, responses: { "200": { description: OK }, "409": { description: Active versions are immutable } } }
+  /pmt/versions/{id}/clone/:
+    post: { tags: [pmt], summary: Clone any version into a new DRAFT, responses: { "201": { description: Created } } }
+  /pmt/versions/{id}/submit/:
+    post: { tags: [pmt], summary: DRAFT → PENDING_APPROVAL, responses: { "200": { description: OK } } }
+  /pmt/versions/{id}/sign/{step}/:
+    post: { tags: [pmt], summary: Sign one of three approval steps, responses: { "200": { description: OK } } }
+  /pmt/versions/{id}/reject/{step}/:
+    post: { tags: [pmt], summary: Reject at any step (back to DRAFT), responses: { "200": { description: OK } } }
+  /pmt/versions/{id}/simulate/:
+    post: { tags: [pmt], summary: Score a synthetic household; no PMTResult persisted, responses: { "200": { description: OK } } }
+  /pmt/recompute/run-now/:
+    post: { tags: [pmt], summary: Enqueue an ad-hoc dashboard recompute, responses: { "202": { description: Accepted } } }
+  /pmt/transforms/:
+    get: { tags: [pmt], summary: DSL types + registered functions, responses: { "200": { description: OK } } }
+  /pmt/events/:
+    get: { tags: [pmt], summary: Recent PMT-related audit events, responses: { "200": { description: OK } } }
+
+  # ─────────────────────────────────────────────────────────────
+  # Refdata — sprint 23 Cat 1.1 — Choice lists
+  # ─────────────────────────────────────────────────────────────
+  /refdata/choice-lists/:
+    get:
+      tags: [refdata]
+      summary: Collapsed list of every ChoiceList by list_name.
+      responses:
+        "200": { description: One row per logical list, active + draft versions. }
+    post:
+      tags: [refdata]
+      summary: Create a new DRAFT for a brand-new list_name.
+      responses:
+        "201": { description: Created }
+        "409": { description: list_name already exists — use /clone/ }
+  /refdata/choice-lists/{list_name}/versions/:
+    get: { tags: [refdata], summary: All versions of a list_name (latest first), responses: { "200": { description: OK } } }
+  /refdata/choice-lists/{list_name}/clone/:
+    post:
+      tags: [refdata]
+      summary: Clone the latest version into a new DRAFT (max+1).
+      responses:
+        "201": { description: Draft created }
+        "404": { description: Unknown list_name }
+  /refdata/choice-lists/{list_name}/versions/{version}/options/:
+    get: { tags: [refdata], summary: Full options of a specific version, responses: { "200": { description: OK } } }
+    post:
+      tags: [refdata]
+      summary: Add a new option (DRAFT only).
+      responses:
+        "201": { description: Created }
+        "409": { description: Version is not a DRAFT, or code already exists }
+  /refdata/choice-lists/{list_name}/versions/{version}/options/{code}/:
+    patch:
+      tags: [refdata]
+      summary: Edit an option (DRAFT only). Pass `status=deprecated` to soft-delete.
+      responses:
+        "200": { description: OK }
+        "409": { description: Version is not a DRAFT }
+    delete:
+      tags: [refdata]
+      summary: Forbidden — deletion is not supported.
+      responses:
+        "405": { description: Use PATCH with status=deprecated instead }
+  /refdata/choice-lists/{list_name}/versions/{version}/submit/:
+    post: { tags: [refdata], summary: DRAFT → PENDING_APPROVAL, responses: { "200": { description: OK }, "409": { description: Already submitted or not DRAFT } } }
+  /refdata/choice-lists/{list_name}/versions/{version}/sign/:
+    post:
+      tags: [refdata]
+      summary: PENDING_APPROVAL → ACTIVE; atomically retires prior active.
+      responses:
+        "200": { description: OK }
+        "409": { description: Self-approve attempted, or status mismatch }
+  /refdata/choice-lists/{list_name}/versions/{version}/reject/:
+    post:
+      tags: [refdata]
+      summary: PENDING_APPROVAL → DRAFT with reason.
+      responses:
+        "200": { description: OK }
+        "409": { description: Not in PENDING_APPROVAL, or reason missing }
+
+  # ─────────────────────────────────────────────────────────────
+  # Refdata — sprint 23 Cat 1.2 — Geography
+  # ─────────────────────────────────────────────────────────────
+  /refdata/geography/:
+    get:
+      tags: [refdata]
+      summary: Drill-down list. Pass `level` + optional `parent_code`.
+      parameters:
+        - in: query
+          name: level
+          schema: { type: string, enum: [region, sub_region, district, county, sub_county, parish, village] }
+          required: true
+        - in: query
+          name: parent_code
+          schema: { type: string }
+        - in: query
+          name: include_inactive
+          schema: { type: boolean, default: false }
+      responses:
+        "200": { description: Active rows for the requested level. }
+    post:
+      tags: [refdata]
+      summary: Create a new active unit at the requested level.
+      responses:
+        "201": { description: Created }
+        "409": { description: Code already active at this level }
+  /refdata/geography/{level}/{code}/:
+    get:
+      tags: [refdata]
+      summary: Detail incl. ancestors chain + descendants_count.
+      responses:
+        "200": { description: OK }
+        "404": { description: No active row matches }
+    patch:
+      tags: [refdata]
+      summary: Replace via versioned write (supersede + insert).
+      responses:
+        "200": { description: New active row returned }
+        "409": { description: Replacement rejected (no change, or non-active source) }
+  /refdata/geography/{level}/{code}/history/:
+    get: { tags: [refdata], summary: Full version history incl. superseded rows, responses: { "200": { description: OK } } }
+  /refdata/geography/import-ubos/:
+    post:
+      tags: [refdata]
+      summary: Bulk import from UBOS feed. Restricted to `nsr_dba`.
+      responses:
+        "202": { description: Enqueued }
+        "403": { description: Caller is not nsr_dba }
