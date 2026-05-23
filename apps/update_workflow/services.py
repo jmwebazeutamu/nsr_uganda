@@ -32,7 +32,7 @@ from django.utils import timezone
 from apps.data_management.models import Household, HouseholdVersion, Member, MemberVersion
 from apps.security.audit import emit as emit_audit
 
-from .models import ChangeRequest, ChangeStatus, ChangeType, EntityType
+from .models import ChangeRequest, ChangeStatus, ChangeType, EntityType, UpdRoutingRule
 from .routing import route
 
 ESCALATION_ROLE = "district_m_and_e"
@@ -369,3 +369,122 @@ def escalate_stale_change_requests() -> dict[str, int]:
     for cr in stale:
         escalate_change_request(cr)
     return {"candidates": len(stale), "escalated": len(stale)}
+
+
+# ---------------------------------------------------------------------------
+# UpdRoutingRule — versioned replacement (HANDOFF Cat 2.1)
+
+class RoutingReplaceError(Exception):
+    """The requested routing-rule replacement is forbidden."""
+
+
+@transaction.atomic
+def replace_routing_rule(
+    *,
+    change_type: str,
+    pmt_relevant: bool,
+    required_role: str,
+    sla_hours: int,
+    note: str = "",
+    actor: str = "system",
+) -> UpdRoutingRule:
+    """Replace the active routing row for `(change_type, pmt_relevant)`
+    in two atomic steps:
+
+    1. Insert a new row with `is_active=True` carrying the new
+       `required_role` / `sla_hours` / `note`.
+    2. Flip the previous active row to `is_active=False`.
+
+    The model's partial-unique `upd_routing_unique_active_per_tuple`
+    constraint enforces "at most one active row" — if the trigger ever
+    fires we have a bug. Inactive rows are retained for the history
+    endpoint.
+
+    Emits `upd_routing.replaced` with old/new role + sla diff.
+    """
+    change_type = str(change_type)
+    if change_type not in {c.value for c in ChangeType}:
+        raise RoutingReplaceError(f"unknown change_type {change_type!r}")
+    if sla_hours <= 0:
+        raise RoutingReplaceError("sla_hours must be positive")
+    if not required_role:
+        raise RoutingReplaceError("required_role must be non-empty")
+
+    prior = (
+        UpdRoutingRule.objects
+        .select_for_update()
+        .filter(
+            change_type=change_type,
+            pmt_relevant=pmt_relevant,
+            is_active=True,
+        )
+        .first()
+    )
+
+    # Short-circuit no-ops so we don't spam the audit chain with
+    # identity replacements.
+    if prior and (
+        prior.required_role == required_role
+        and prior.sla_hours == sla_hours
+        and prior.note == note
+    ):
+        raise RoutingReplaceError("nothing changed")
+
+    if prior:
+        prior.is_active = False
+        prior.save(update_fields=["is_active", "updated_at"])
+
+    new_row = UpdRoutingRule.objects.create(
+        change_type=change_type,
+        pmt_relevant=pmt_relevant,
+        required_role=required_role,
+        sla_hours=sla_hours,
+        is_active=True,
+        note=note,
+    )
+
+    emit_audit(
+        action="upd_routing.replaced",
+        entity_type="update_workflow.routing_rule",
+        entity_id=str(new_row.pk),
+        actor=actor,
+        reason=f"change_type={change_type} pmt_relevant={pmt_relevant}",
+        field_changes={
+            "before": {
+                "id": prior.pk if prior else None,
+                "required_role": prior.required_role if prior else None,
+                "sla_hours": prior.sla_hours if prior else None,
+                "note": prior.note if prior else None,
+            },
+            "after": {
+                "id": new_row.pk,
+                "required_role": new_row.required_role,
+                "sla_hours": new_row.sla_hours,
+                "note": new_row.note,
+            },
+        },
+    )
+    return new_row
+
+
+def compute_breach_rate(*, change_type: str, days: int = 30) -> float:
+    """Percentage of ChangeRequests in the last `days` whose
+    `decided_at` exceeded `created_at + sla_hours`. Used by the Admin
+    Console UPD-routing stats column."""
+    cutoff = timezone.now() - timedelta(days=days)
+    qs = ChangeRequest.objects.filter(
+        change_type=change_type,
+        decided_at__isnull=False,
+        decided_at__gte=cutoff,
+    )
+    total = qs.count()
+    if total == 0:
+        return 0.0
+    # SLA is enforced via sla_deadline on the ChangeRequest itself —
+    # walk the queryset and count breaches in Python rather than try
+    # to express "decided_at > sla_deadline" cross-DB.
+    breached = sum(
+        1 for cr in qs.only("decided_at", "sla_deadline")
+        if cr.sla_deadline and cr.decided_at > cr.sla_deadline
+    )
+    return round(100.0 * breached / total, 2)
