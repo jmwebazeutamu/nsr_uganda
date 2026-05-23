@@ -21,6 +21,8 @@ tags:
     description: Proxy Means Test — model versions, snapshots, simulator.
   - name: refdata
     description: Reference data — Choice lists + Geography hierarchy.
+  - name: workflow
+    description: Workflow — UPD routing + DQA rules + DDUP model & pair queue.
 
 paths:
   # ─────────────────────────────────────────────────────────────
@@ -165,3 +167,102 @@ paths:
       responses:
         "202": { description: Enqueued }
         "403": { description: Caller is not nsr_dba }
+
+  # ─────────────────────────────────────────────────────────────
+  # Workflow — sprint 23 Cat 2.1 — UPD Routing
+  # ─────────────────────────────────────────────────────────────
+  /workflow/upd-routing/:
+    get:
+      tags: [workflow]
+      summary: Active routing rules with breach rate + open counts.
+      responses: { "200": { description: OK } }
+  /workflow/upd-routing/{change_type}/{pmt_relevant}/:
+    get: { tags: [workflow], summary: One active rule, responses: { "200": { description: OK }, "404": { description: No active rule } } }
+    patch:
+      tags: [workflow]
+      summary: Versioned replacement — new active row, archive previous.
+      responses:
+        "200": { description: New active row returned }
+        "409": { description: Identity replacement / no fields changed }
+  /workflow/upd-routing/history/:
+    get: { tags: [workflow], summary: Inactive (archived) routing rows, responses: { "200": { description: OK } } }
+  /workflow/upd-routing/stats/:
+    get: { tags: [workflow], summary: Per-change-type breach + volume aggregates, responses: { "200": { description: OK } } }
+
+  # ─────────────────────────────────────────────────────────────
+  # Workflow — sprint 23 Cat 2.2 — DQA Rules
+  # ─────────────────────────────────────────────────────────────
+  /workflow/dqa/rules/:
+    get: { tags: [workflow], summary: Latest non-retired version per rule_id, responses: { "200": { description: OK } } }
+  /workflow/dqa/rules/{rule_id}/:
+    get: { tags: [workflow], summary: Detail + recent preview runs, responses: { "200": { description: OK } } }
+    patch: { tags: [workflow], summary: Edit a DRAFT version, responses: { "200": { description: OK }, "409": { description: Not a DRAFT } } }
+  /workflow/dqa/rules/{rule_id}/clone/:
+    post: { tags: [workflow], summary: Clone latest non-retired into a new DRAFT, responses: { "201": { description: Draft created } } }
+  /workflow/dqa/rules/{rule_id}/preview/:
+    post:
+      tags: [workflow]
+      summary: Sandbox-run the rule against a sample. Persists sample size + counts + failed IDs only, never field values.
+      responses: { "200": { description: OK } }
+  /workflow/dqa/rules/{rule_id}/v{version}/submit/:
+    post: { tags: [workflow], summary: DRAFT → PENDING_APPROVAL, responses: { "200": { description: OK }, "409": { description: Not DRAFT } } }
+  /workflow/dqa/rules/{rule_id}/v{version}/sign/:
+    post:
+      tags: [workflow]
+      summary: PENDING_APPROVAL → ACTIVE; atomically retires prior active. AC-DQA-NO-SELF-APPROVE.
+      responses:
+        "200": { description: OK }
+        "409": { description: Self-approve attempted, or status mismatch }
+  /workflow/dqa/rules/{rule_id}/v{version}/reject/:
+    post: { tags: [workflow], summary: PENDING_APPROVAL → REJECTED with reason, responses: { "200": { description: OK }, "409": { description: Not in PENDING_APPROVAL, or reason missing } } }
+
+  # ─────────────────────────────────────────────────────────────
+  # Workflow — sprint 23 Cat 2.3 — DDUP
+  # ─────────────────────────────────────────────────────────────
+  /workflow/ddup/versions/:
+    get: { tags: [workflow], summary: DDUP model versions, responses: { "200": { description: OK } } }
+  /workflow/ddup/versions/{version_id}/:
+    get: { tags: [workflow], summary: Version detail, responses: { "200": { description: OK } } }
+    patch: { tags: [workflow], summary: Edit DRAFT (threshold / config), responses: { "200": { description: OK }, "409": { description: Not a DRAFT } } }
+  /workflow/ddup/versions/{version_id}/clone/:
+    post:
+      tags: [workflow]
+      summary: Clone an existing version with optional threshold_delta.
+      responses:
+        "201": { description: Draft created }
+        "409": { description: Threshold at clamp boundary }
+  /workflow/ddup/pairs/:
+    get:
+      tags: [workflow]
+      summary: Pending pair queue (or filter by status).
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [pending, merged, rejected, on_hold, cross_household] }
+      responses: { "200": { description: OK } }
+  /workflow/ddup/pairs/{pair_id}/:
+    get: { tags: [workflow], summary: Pair detail + per-field similarity, responses: { "200": { description: OK } } }
+  /workflow/ddup/pairs/{pair_id}/merge/:
+    post:
+      tags: [workflow]
+      summary: Atomic merge; creates a MergeDecision with a 30-day reverse window.
+      responses:
+        "200": { description: OK }
+        "400": { description: surviving id required }
+        "409": { description: Pair not PENDING, or merge service raised }
+  /workflow/ddup/pairs/{pair_id}/reject/:
+    post: { tags: [workflow], summary: Reject the pair with reason, responses: { "200": { description: OK }, "400": { description: reason required } } }
+  /workflow/ddup/pairs/{pair_id}/hold/:
+    post: { tags: [workflow], summary: Set pair status=on_hold, responses: { "200": { description: OK } } }
+  /workflow/ddup/pairs/{pair_id}/cross-household/:
+    post: { tags: [workflow], summary: Escalate pair to cross-household review, responses: { "200": { description: OK } } }
+  /workflow/ddup/decisions/{decision_id}/un-merge/:
+    post:
+      tags: [workflow]
+      summary: Reverse a merge within the 30-day window.
+      responses:
+        "200": { description: OK }
+        "409": { description: Reverse failed (e.g. underlying rows missing) }
+        "410": { description: 30-day reverse window has expired }
+  /workflow/ddup/queue-stats/:
+    get: { tags: [workflow], summary: Pair-status counters + reversible-window inventory, responses: { "200": { description: OK } } }

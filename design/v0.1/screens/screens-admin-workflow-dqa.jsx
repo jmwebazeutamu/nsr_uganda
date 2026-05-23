@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, PageHeader, KPI */
+/* global React, Icon, Chip, PageHeader, KPI, useApi */
 // NSR MIS — Admin · Workflow · DQA Rules
 // =========================================================
 // Versioned JSON-DSL rule engine. Sprint 0 item 4.

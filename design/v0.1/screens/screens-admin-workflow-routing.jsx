@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, PageHeader, KPI */
+/* global React, Icon, Chip, PageHeader, KPI, useApi */
 // NSR MIS — Admin · Workflow · UPD routing rules
 // =========================================================
 // Operations-managed routing for ChangeRequest types. Replaces the
@@ -83,18 +83,46 @@ const RR_VOLUME = {
   asset_change:    { open:  72,  weeklyAvg:  202, breachRate: 3.8 },
 };
 
+// Live overlay — pull active rules + per-change-type stats from the
+// new admin API. Falls back to RR_RULES / RR_VOLUME when the API
+// isn't reachable so the prototype keeps rendering.
+const _projectRoutingRules = (results) => {
+  if (!Array.isArray(results) || results.length === 0) return null;
+  return results.map(r => ({
+    changeType: r.change_type,
+    pmtRelevant: r.pmt_relevant,
+    requiredRole: r.required_role,
+    slaHours: r.sla_hours,
+    note: r.note,
+    breachRate: r.breach_rate_30d ?? 0,
+    open: r.open_count ?? 0,
+  }));
+};
+
 const AdminUpdRoutingScreen = () => {
+  const [respRules] = (typeof useApi === "function")
+    ? useApi("/api/v1/admin/workflow/upd-routing/")
+    : [null];
+  // eslint-disable-next-line no-shadow
+  const RR_RULES_LIVE = _projectRoutingRules(respRules && respRules.results) || RR_RULES;
+
   const [search, setSearch] = useStateRR("");
   const [roleFilter, setRoleFilter] = useStateRR("");
 
   // Build the matrix: rows = change types, columns = (PMT-relevant, non-PMT)
   const matrix = useMemoRR(() => {
     return RR_CHANGE_TYPES.map(ct => {
-      const ruleFalse = RR_RULES.find(r => r.changeType === ct.id && r.pmtRelevant === false);
-      const ruleTrue  = RR_RULES.find(r => r.changeType === ct.id && r.pmtRelevant === true);
-      return { ct, ruleFalse, ruleTrue, vol: RR_VOLUME[ct.id] };
+      const ruleFalse = RR_RULES_LIVE.find(r => r.changeType === ct.id && r.pmtRelevant === false);
+      const ruleTrue  = RR_RULES_LIVE.find(r => r.changeType === ct.id && r.pmtRelevant === true);
+      const liveVol = ruleFalse || ruleTrue;
+      return {
+        ct, ruleFalse, ruleTrue,
+        vol: liveVol
+          ? { open: liveVol.open, weeklyAvg: 0, breachRate: liveVol.breachRate }
+          : RR_VOLUME[ct.id],
+      };
     });
-  }, []);
+  }, [RR_RULES_LIVE]);
 
   const filtered = matrix.filter(m => {
     if (search && !(m.ct.id.includes(search.toLowerCase()) || m.ct.label.toLowerCase().includes(search.toLowerCase()))) return false;
@@ -103,7 +131,7 @@ const AdminUpdRoutingScreen = () => {
   });
 
   const breachingTypes = matrix.filter(m => m.vol.breachRate > 5).length;
-  const autoCommitTypes = RR_RULES.filter(r => r.requiredRole === "auto_committed").length;
+  const autoCommitTypes = RR_RULES_LIVE.filter(r => r.requiredRole === "auto_committed").length;
 
   return (
     <div className="page">
@@ -118,7 +146,7 @@ const AdminUpdRoutingScreen = () => {
       />
 
       <div className="grid grid-4">
-        <KPI title="Active rules" value={RR_RULES.length} foot={`${RR_CHANGE_TYPES.length} change types × 2 (PMT) = ${RR_CHANGE_TYPES.length * 2} expected`}/>
+        <KPI title="Active rules" value={RR_RULES_LIVE.length} foot={`${RR_CHANGE_TYPES.length} change types × 2 (PMT) = ${RR_CHANGE_TYPES.length * 2} expected`}/>
         <KPI title="Open CRs" value={Object.values(RR_VOLUME).reduce((a,v) => a + v.open, 0).toLocaleString()} foot="Currently in review queues"/>
         <KPI title="Auto-committed" value={autoCommitTypes} foot="No human review · 1% sample audited" trend="flat"/>
         <KPI title="Breaching SLA" value={breachingTypes} foot={`Types with >5% breach rate · ${breachingTypes ? 'review' : 'healthy'}`}/>
