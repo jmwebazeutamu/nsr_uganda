@@ -43,10 +43,26 @@ class GeographicUnit(models.Model):
     effective_to = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.ACTIVE)
 
+    # Denormalised counters maintained by the post-save signal /
+    # nightly recompute task. Reading these is O(1) for the drill
+    # endpoint, instead of N+1 counts per row.
+    children_count_cached = models.PositiveIntegerField(default=0)
+    households_count_cached = models.PositiveIntegerField(default=0)
+
     class Meta:
         constraints = [
             models.UniqueConstraint(
                 fields=["level", "code", "effective_from"], name="geounit_code_per_level_per_version"
+            ),
+            # Partial unique: at most one ACTIVE row per (level, code).
+            # The default `geounit_code_per_level_per_version`
+            # constraint already prevents collisions on
+            # effective_from; this constraint adds the active-row
+            # invariant relied on by replace_geographic_unit().
+            models.UniqueConstraint(
+                fields=["level", "code"],
+                condition=models.Q(status="active"),
+                name="geounit_one_active_per_code",
             ),
         ]
         indexes = [
@@ -164,6 +180,11 @@ class ChoiceList(models.Model):
     submitted_at = models.DateTimeField(null=True, blank=True)
     approval_note = models.TextField(blank=True)
     rejection_reason = models.TextField(blank=True)
+
+    # When true, codes from this list are PII (e.g. disability_type)
+    # and labels must be redacted in audit exports unless the caller
+    # has a DPO scope. Surfaced in the admin console list view.
+    is_pii_classified = models.BooleanField(default=False)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
