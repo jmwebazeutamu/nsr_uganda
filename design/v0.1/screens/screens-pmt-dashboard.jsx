@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, PageHeader, KPI, useApi */
+/* global React, Icon, Chip, PageHeader, KPI */
 // NSR MIS — PMT Dashboard (Admin · PMT)
 // =========================================================
 // Operational dashboard for the Proxy Means Test engine.
@@ -186,66 +186,8 @@ const BandChip = ({ band }) => {
 /* ============================================================
    PMT DASHBOARD
    ============================================================ */
-// Project the live `/api/v1/admin/pmt/dashboard/` response onto the
-// existing mock-shaped variables this screen renders against. When
-// the live fetch has data, it overrides the module-scope demo arrays;
-// when it doesn't yet (loading / 403 / not authenticated), the demo
-// constants stay visible so the prototype keeps rendering.
-const _projectActive = (raw) => raw ? {
-  version: raw.version,
-  status: raw.status,
-  description: raw.description,
-  author: raw.author,
-  approvedBy: raw.approved_by,
-  approvedAt: (raw.approved_at || "").slice(0, 10),
-  effectiveFrom: (raw.effective_from || "").slice(0, 10),
-  bandStrategy: raw.band_strategy,
-  intercept: raw.intercept,
-  validationRSquared: raw.validation_r_squared,
-  calibrationDataset: raw.calibration_dataset,
-  calibrationYearEnd: raw.calibration_year_end,
-  calibrationStale: raw.calibration_stale,
-  yearsToStale: raw.years_to_stale,
-  variablesCount: raw.variables_count,
-  bandCutoffsPercentile: raw.band_cutoffs_percentile,
-  thresholdsLatest: raw.thresholds_latest,
-  thresholdsComputedAt: raw.thresholds_computed_at,
-  thresholdsSampleSize: raw.thresholds_sample_size,
-} : PMT_ACTIVE;
-
-const _projectBands = (rows) => Array.isArray(rows) && rows.length ? rows.map(r => ({
-  band: r.band,
-  label: (r.band || "").replace("_", " ").replace(/\b\w/g, c => c.toUpperCase()),
-  pct: r.pct,
-  count: r.count,
-  color: {
-    extreme_poverty: "var(--accent-danger)",
-    poverty: "var(--accent-quality)",
-    vulnerable: "var(--accent-update)",
-    not_poor: "var(--accent-data)",
-  }[r.band] || "var(--neutral-300)",
-  tone: {
-    extreme_poverty: "danger",
-    poverty: "quality",
-    vulnerable: "update",
-    not_poor: "data",
-  }[r.band] || "neutral",
-})) : PMT_BANDS;
-
 const PmtDashboardScreen = ({ onOpenConfig }) => {
   const [periodFilter, setPeriodFilter] = useStatePMT('30d');
-  // Live data overlay — fetched once on mount, falls back to the
-  // prototype constants when the endpoint isn't reachable.
-  const [resp, meta] = (typeof useApi === 'function')
-    ? useApi('/api/v1/admin/pmt/dashboard/')
-    : [null, { loading: false, error: null }];
-  // Shadow the module-scope mock arrays with the live projections.
-  // JSX inside this function picks up the inner consts via lexical
-  // scope, so no JSX-level rename is required.
-  // eslint-disable-next-line no-shadow
-  const PMT_ACTIVE = _projectActive(resp && resp.active);
-  // eslint-disable-next-line no-shadow
-  const PMT_BANDS = _projectBands(resp && resp.bands);
 
   return (
     <div className="page">

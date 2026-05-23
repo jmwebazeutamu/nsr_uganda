@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, PageHeader, useApi,
+/* global React, Icon, Chip, PageHeader,
    PMT_ACTIVE, PMT_VARIABLES_TOP, BandChip */
 // NSR MIS — PMT Configuration (Admin · PMT)
 // =========================================================
@@ -144,45 +144,7 @@ const PCfgSection = ({ title, sub, action, children }) => (
 /* ============================================================
    PMT Configuration
    ============================================================ */
-// Project the live /api/v1/admin/pmt/versions/ response onto the
-// PCFG_VERSIONS row shape the registry table renders against.
-const _projectVersionsList = (raw) => {
-  const items = (raw && raw.results) || [];
-  if (!items.length) return null;
-  return items.map(v => ({
-    version: v.version,
-    status: v.status,
-    description: v.description || "",
-    author: v.author || "",
-    approvedBy: v.approved_by || "",
-    approvedAt: (v.approved_at || "").slice(0, 10),
-    activatedAt: (v.approved_at || "").slice(0, 10),
-    retiredAt: "",
-    bandStrategy: v.band_strategy || "threshold",
-    intercept: v.intercept,
-    r2: v.validation_r_squared,
-    calibrationDataset: v.calibration_dataset || "",
-    calibrationYearEnd: v.calibration_year_end,
-    variablesCount: v.variables_count || 0,
-    n: 0,            // sample size — populated when calibration metrics ship
-    id: v.id,
-  }));
-};
-
 const PmtConfigurationScreen = ({ onBack }) => {
-  // Live versions overlay — backend is wired (slice 2 endpoints).
-  // _liveVersions populates from /api/v1/admin/pmt/versions/ when
-  // the user has Admin Console access; the registry-table JSX in
-  // the next v0.2 pass will swap to read off _liveVersions when
-  // present. For now the existing JSX continues to render against
-  // the module-scope PCFG_VERSIONS prototype array — the data-
-  // shape projection above stays in lockstep with the live API
-  // so the JSX swap is mechanical.
-  const [versionsResp] = (typeof useApi === 'function')
-    ? useApi('/api/v1/admin/pmt/versions/?page_size=50')
-    : [null];
-  // eslint-disable-next-line no-unused-vars
-  const _liveVersions = _projectVersionsList(versionsResp);
   // Which version is selected in the right pane.
   const [selectedId, setSelectedId] = useStatePCfg(PCFG_VERSIONS[0].id);
   const [tab, setTab] = useStatePCfg("variables");

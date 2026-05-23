@@ -1,4 +1,11 @@
-/* global React, ReactDOM, PmtDashboardScreen, PmtConfigurationScreen */
+/* global React, ReactDOM,
+   PmtDashboardScreen, PmtConfigurationScreen,
+   AdminChoiceListsScreen, AdminGeographyScreen,
+   AdminUpdRoutingScreen, AdminDqaRulesScreen, AdminDdupScreen,
+   AdminSecurityRolesScreen, AdminAuditScreen,
+   AdminGeoUnitDetailScreen, AdminUpdRoutingRuleEditScreen,
+   AdminUserDetailScreen, AdminDdupPairDetailScreen,
+   AdminChoiceListOptionEditScreen */
 // NSR MIS — Admin shell
 // =====================================================
 // Wraps the two new PMT screens (Dashboard, Configuration) plus
@@ -24,22 +31,33 @@ const NAV_GROUPS = [
   {
     label: "Reference data",
     items: [
-      { id: "admin-refdata-choicelists", label: "Choice lists", icon: "database", disabled: true },
-      { id: "admin-refdata-geo",         label: "Geography",    icon: "globe",    disabled: true },
+      { id: "admin-refdata-choicelists", label: "Choice lists", icon: "database" },
+      { id: "admin-refdata-geo",         label: "Geography",    icon: "globe" },
     ],
   },
   {
     label: "Workflow",
     items: [
-      { id: "admin-dqa", label: "DQA rules",     icon: "shield",  disabled: true },
-      { id: "admin-ddup", label: "DDUP model",   icon: "users",   disabled: true },
+      { id: "admin-workflow-routing", label: "UPD routing",   icon: "filter" },
+      { id: "admin-workflow-dqa",     label: "DQA rules",     icon: "shield" },
+      { id: "admin-workflow-ddup",    label: "DDUP model",    icon: "users" },
     ],
   },
   {
     label: "Security",
     items: [
-      { id: "admin-roles", label: "Roles & scopes", icon: "lock",     disabled: true },
-      { id: "admin-audit", label: "Audit chain",    icon: "file",     disabled: true },
+      { id: "admin-security-roles", label: "Roles & scopes", icon: "lock" },
+      { id: "admin-security-audit", label: "Audit chain",    icon: "file" },
+    ],
+  },
+  {
+    label: "Examples (record views)",
+    items: [
+      { id: "admin-detail-geo-unit",      label: "Geographic unit",   icon: "globe" },
+      { id: "admin-detail-routing-edit",  label: "UPD routing · edit", icon: "edit" },
+      { id: "admin-detail-user",          label: "User",              icon: "user" },
+      { id: "admin-detail-ddup-pair",     label: "DDUP match pair",   icon: "users" },
+      { id: "admin-detail-choice-option", label: "Choice option · edit", icon: "edit" },
     ],
   },
 ];
@@ -127,6 +145,20 @@ const AdminApp = () => {
           {screen === "admin-pmt-configuration" && (
             <PmtConfigurationScreen onBack={() => setScreen("admin-pmt-dashboard")}/>
           )}
+          {screen === "admin-refdata-choicelists"  && <AdminChoiceListsScreen/>}
+          {screen === "admin-refdata-geo"          && <AdminGeographyScreen/>}
+          {screen === "admin-workflow-routing"     && <AdminUpdRoutingScreen/>}
+          {screen === "admin-workflow-dqa"         && <AdminDqaRulesScreen/>}
+          {screen === "admin-workflow-ddup"        && <AdminDdupScreen/>}
+          {screen === "admin-security-roles"       && <AdminSecurityRolesScreen/>}
+          {screen === "admin-security-audit"       && <AdminAuditScreen/>}
+
+          {/* Record detail / edit screens — opened from list rows */}
+          {screen === "admin-detail-geo-unit"      && <AdminGeoUnitDetailScreen onBack={() => setScreen("admin-refdata-geo")}/>}
+          {screen === "admin-detail-routing-edit"  && <AdminUpdRoutingRuleEditScreen onBack={() => setScreen("admin-workflow-routing")}/>}
+          {screen === "admin-detail-user"          && <AdminUserDetailScreen onBack={() => setScreen("admin-security-roles")}/>}
+          {screen === "admin-detail-ddup-pair"     && <AdminDdupPairDetailScreen onBack={() => setScreen("admin-workflow-ddup")}/>}
+          {screen === "admin-detail-choice-option" && <AdminChoiceListOptionEditScreen onBack={() => setScreen("admin-refdata-choicelists")}/>}
         </div>
       </main>
     </div>
