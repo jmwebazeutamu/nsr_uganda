@@ -1,4 +1,7 @@
-/* global React, Icon, Chip, KPI, PageHeader, Field, GeoTreePicker, Modal, ReasonModal, ActionBar */
+/* global React, Icon, Chip, KPI, PageHeader, Field, GeoTreePicker, Modal, ReasonModal, ActionBar,
+   useChoiceList,
+   RosterSection, HealthDisabilitySection, EducationSection, EmploymentSection,
+   HousingSection, FoodShocksSection */
 // NSR MIS — 11.1 Parish capture + 11.2 Receipt slip
 
 const { useState: useStateCap } = React;
@@ -12,7 +15,31 @@ const SECTIONS = [
   { id: "hous",  label: "Housing",            tint: "eligibility",icon:"home" },
   { id: "food",  label: "Food & Shocks",      tint: "grm",      icon: "alert" },
 ];
-const SECTION_PROG = { id: "done", rost: "active", hd: "todo", ed: "todo", emp: "todo", hous: "todo", food: "todo" };
+// Demo seed: Lokol Naume as head + spouse + 3 children. Operators
+// start from an empty list in production; this seed makes the
+// preview look populated.
+const _DEMO_MEMBERS = [
+  { line_number: 1, surname: "Lokol", first_name: "Naume", other_name: "",
+    relationship_to_head: "01", sex: "2", date_of_birth: "1992-03-12",
+    age_years: 33, marital_status: "1", nationality: "1", residency_status: "1",
+    birth_certificate_status: "1", nin_status: "1", nin_last4: "1234",
+    telephone_1: "+256 786 234567", telephone_2: "" },
+  { line_number: 2, surname: "Lokol", first_name: "Akello", other_name: "",
+    relationship_to_head: "03", sex: "2", date_of_birth: "1989-08-04",
+    age_years: 36, marital_status: "1", nationality: "1", residency_status: "1",
+    birth_certificate_status: "1", nin_status: "1", nin_last4: "5678",
+    telephone_1: "", telephone_2: "" },
+  { line_number: 3, surname: "Lokol", first_name: "Atim", other_name: "",
+    relationship_to_head: "04", sex: "2", date_of_birth: "2014-05-22",
+    age_years: 11, marital_status: "8", nationality: "1", residency_status: "1",
+    birth_certificate_status: "1", nin_status: "8", nin_last4: "",
+    telephone_1: "", telephone_2: "" },
+  { line_number: 4, surname: "Lokol", first_name: "Okello", other_name: "",
+    relationship_to_head: "04", sex: "1", date_of_birth: "2017-11-08",
+    age_years: 8, marital_status: "8", nationality: "1", residency_status: "1",
+    birth_certificate_status: "1", nin_status: "8", nin_last4: "",
+    telephone_1: "", telephone_2: "" },
+];
 
 const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
   const [active, setActive] = useStateCap("id");
@@ -21,9 +48,42 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
     parish: "Nakiloro", village: "Lopuwapuwa A"
   });
   const [consent, setConsent] = useStateCap("yes");
-  const [urbanRural, setUR] = useStateCap("rural");
+  const [urbanRural, setUR] = useStateCap("2"); // "1"=Urban, "2"=Rural per rural_urban list
   const [submitOpen, setSubmitOpen] = useStateCap(false);
   const [showReceipt, setShowReceipt] = useStateCap(false);
+
+  // ----- detail-entity state (per US-S22-DE models) -----
+  const [members, setMembers] = useStateCap(_DEMO_MEMBERS);
+  const [healthData, setHealthData] = useStateCap({});       // { line_number: { health: {...}, disability: {...} } }
+  const [educationData, setEducationData] = useStateCap({}); // { line_number: { ... } }
+  const [employmentData, setEmploymentData] = useStateCap({}); // { line_number: { ... } }
+  const [housing, setHousing] = useStateCap({
+    dwelling: {}, utilities: {}, livelihood: {},
+    assets: [], crops: [], livestock: [],
+  });
+  const [foodShocks, setFoodShocks] = useStateCap({
+    food_security: {}, food_consumption: {},
+    shocks: [], coping: [],
+  });
+
+  // Derived per-section progress — used by the stepper + left rail.
+  const SECTION_PROG = {
+    id: (geo.village && consent === "yes") ? "done" : "active",
+    rost: members.length > 0 ? "done" : "active",
+    hd: Object.keys(healthData).length > 0 ? "done" : "todo",
+    ed: Object.keys(educationData).length > 0 ? "done" : "todo",
+    emp: Object.keys(employmentData).length > 0 ? "done" : "todo",
+    hous: (housing.dwelling.tenure || housing.utilities.cooking_fuel) ? "done" : "todo",
+    food: (foodShocks.food_security.worried_food || foodShocks.shocks.length) ? "done" : "todo",
+  };
+  const _doneCount = Object.values(SECTION_PROG).filter(s => s === "done").length;
+  const _progPct = Math.round((_doneCount / 7) * 100);
+  const _nextSectionId = (() => {
+    const order = ["id", "rost", "hd", "ed", "emp", "hous", "food"];
+    const idx = order.indexOf(active);
+    return order[Math.min(idx + 1, order.length - 1)];
+  })();
+  const _nextSectionLabel = SECTIONS.find(s => s.id === _nextSectionId)?.label || "Done";
 
   if (device === "capi") {
     return <CapturePadCAPI onChangeDevice={onChangeDevice}/>;
@@ -100,93 +160,49 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
           })}
           <div className="divider"/>
           <div style={{padding:'8px 12px'}} className="t-cap">
-            <div>Progress <strong style={{color:'var(--neutral-900)'}}>1 of 7</strong></div>
+            <div>Progress <strong style={{color:'var(--neutral-900)'}}>{_doneCount} of 7</strong></div>
             <div style={{height:4, background:'var(--neutral-200)', borderRadius:2, marginTop:6}}>
-              <div style={{width:'14%', height:'100%', background:'var(--accent-data)', borderRadius:2}}/>
+              <div style={{width:`${_progPct}%`, height:'100%', background:'var(--accent-data)', borderRadius:2}}/>
             </div>
           </div>
         </div>
 
-        {/* Main form */}
+        {/* Main form — switches body by active section */}
         <div className="card">
-          <div className="card-header">
-            <div>
-              <div className="t-cap">SECTION 1 OF 7 · ACTIVE</div>
-              <h3 className="t-h2" style={{margin:0}}>Identification</h3>
-            </div>
-            <Chip>Draft</Chip>
-          </div>
-          <div style={{padding:20}}>
-            <h4 className="t-h3" style={{margin:'0 0 16px'}}>Location</h4>
-            <GeoTreePicker value={geo} onChange={setGeo}/>
-
-            <div className="divider mt-5"/>
-
-            <h4 className="t-h3" style={{margin:'8px 0 16px'}}>Household identifiers</h4>
-            <div className="field-row-3">
-              <Field label="Household number" required hint="Auto-generated on first save">
-                <input className="field-input" defaultValue="HH-7411-002-0148" readOnly/>
-              </Field>
-              <Field label="Urban / Rural" required>
-                <div className="seg">
-                  <button className={urbanRural==='urban' ? 'on' : ''} onClick={() => setUR('urban')}>Urban</button>
-                  <button className={urbanRural==='rural' ? 'on' : ''} onClick={() => setUR('rural')}>Rural</button>
-                </div>
-              </Field>
-              <Field label="Date captured">
-                <div className="row gap-2"><Icon name="clock" size={14} color="var(--neutral-500)"/><span className="t-bodysm">14 May 2026 · 14:34 EAT</span></div>
-              </Field>
-            </div>
-
-            <div className="divider mt-5"/>
-
-            <h4 className="t-h3" style={{margin:'8px 0 16px'}}>GPS reading</h4>
-            <div className="field-row-3">
-              <Field label="Latitude" required>
-                <input className="field-input t-mono" defaultValue="2.49423"/>
-              </Field>
-              <Field label="Longitude" required>
-                <input className="field-input t-mono" defaultValue="34.65103"/>
-              </Field>
-              <Field label="Accuracy" required hint="Must be ≤ 10m (AC-GPS-ACCURACY)" error="6 m — within limit">
-                <div className="input-affix" style={{borderColor:'var(--accent-data)'}}>
-                  <input defaultValue="6" className="t-mono"/>
-                  <span className="affix">m</span>
-                </div>
-              </Field>
-            </div>
-            <div className="t-cap mt-2" style={{display:'flex', alignItems:'center', gap:6}}>
-              <Icon name="mapPin" size={12} color="var(--accent-data)"/> Position captured 14:31 EAT · accuracy 6 m · device tablet-PCH-7411
-            </div>
-
-            <div className="divider mt-5"/>
-
-            <h4 className="t-h3" style={{margin:'8px 0 16px'}}>Respondent</h4>
-            <div className="field-row-3">
-              <Field label="Respondent name" required>
-                <input className="field-input" defaultValue="Lokol Naume"/>
-              </Field>
-              <Field label="Phone (E.164)" required hint="Format: +256 XXX XXXXXX">
-                <input className="field-input" defaultValue="+256 786 234567"/>
-              </Field>
-              <Field label="Head of household" hint="Auto-filled from Roster Person 01">
-                <input className="field-input" defaultValue="Lokol Naume" readOnly style={{background:'var(--neutral-50)', color:'var(--neutral-700)'}}/>
-              </Field>
-            </div>
-
-            <div className="divider mt-5"/>
-
-            <h4 className="t-h3" style={{margin:'8px 0 16px'}}>Consent <span style={{color:'var(--accent-danger)'}}>*</span></h4>
-            <div className="tint-update" style={{padding:16, borderRadius:6, borderLeft:'3px solid var(--accent-update)'}}>
-              <p style={{margin:'0 0 12px', fontSize:13, lineHeight:1.6}}>
-                "I, the respondent, consent to the collection and processing of my household's data by the Ministry of Gender, Labour and Social Development (MGLSD) under the Data Protection and Privacy Act 2019 of Uganda. I understand my data may be shared with partner agencies under a signed Data Sharing Agreement."
-              </p>
-              <div className="seg">
-                <button className={consent==='yes' ? 'on' : ''} onClick={() => setConsent('yes')}><Icon name="check" size={12}/> Yes — consented</button>
-                <button className={consent==='no' ? 'on' : ''} onClick={() => setConsent('no')}>No</button>
-              </div>
-            </div>
-          </div>
+          {active === "id" && (
+            <IdentificationSection
+              geo={geo} setGeo={setGeo}
+              urbanRural={urbanRural} setUR={setUR}
+              consent={consent} setConsent={setConsent}
+            />
+          )}
+          {active === "rost" && (
+            <RosterSection members={members} setMembers={setMembers}/>
+          )}
+          {active === "hd" && (
+            <HealthDisabilitySection
+              members={members}
+              healthData={healthData} setHealthData={setHealthData}
+            />
+          )}
+          {active === "ed" && (
+            <EducationSection
+              members={members}
+              educationData={educationData} setEducationData={setEducationData}
+            />
+          )}
+          {active === "emp" && (
+            <EmploymentSection
+              members={members}
+              employmentData={employmentData} setEmploymentData={setEmploymentData}
+            />
+          )}
+          {active === "hous" && (
+            <HousingSection housing={housing} setHousing={setHousing}/>
+          )}
+          {active === "food" && (
+            <FoodShocksSection foodShocks={foodShocks} setFoodShocks={setFoodShocks}/>
+          )}
         </div>
 
         {/* Right rail — helper */}
@@ -252,9 +268,11 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
 
       {/* Action bar */}
       <div style={{margin:'20px -24px 0', position:'sticky', bottom:0, zIndex:20}}>
-        <ActionBar left={<>Section 1 of 7 · 14% complete · <span className="stretchable">Auto-saved 14:34 EAT</span></>}>
+        <ActionBar left={<>Section {SECTIONS.findIndex(s => s.id === active) + 1} of 7 · {_progPct}% complete · <span className="stretchable">Auto-saved 14:34 EAT</span></>}>
           <button className="btn"><Icon name="save" size={14}/> Save draft</button>
-          <button className="btn"><Icon name="arrowRight" size={14}/> Next: Roster</button>
+          <button className="btn" onClick={() => setActive(_nextSectionId)}>
+            <Icon name="arrowRight" size={14}/> Next: {_nextSectionLabel}
+          </button>
           <button className="btn btn-primary" onClick={() => setSubmitOpen(true)}>
             <Icon name="check" size={14}/> Submit for promotion
           </button>
@@ -286,6 +304,102 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
       {/* Receipt overlay */}
       {showReceipt && <ReceiptOverlay onClose={() => setShowReceipt(false)}/>}
     </div>
+  );
+};
+
+/* ============================================================
+   Section 1 — Identification (extracted for the conditional shell)
+   ============================================================ */
+const IdentificationSection = ({ geo, setGeo, urbanRural, setUR, consent, setConsent }) => {
+  const [urOpts] = (typeof useChoiceList === "function")
+    ? useChoiceList("rural_urban")
+    : [[]];
+  return (
+    <>
+      <div className="card-header">
+        <div>
+          <div className="t-cap">SECTION 1 OF 7 · ACTIVE</div>
+          <h3 className="t-h2" style={{ margin: 0 }}>Identification</h3>
+        </div>
+        <Chip>Draft</Chip>
+      </div>
+      <div style={{ padding: 20 }}>
+        <h4 className="t-h3" style={{ margin: '0 0 16px' }}>Location</h4>
+        <GeoTreePicker value={geo} onChange={setGeo}/>
+
+        <div className="divider mt-5"/>
+
+        <h4 className="t-h3" style={{ margin: '8px 0 16px' }}>Household identifiers</h4>
+        <div className="field-row-3">
+          <Field label="Household number" required hint="Auto-generated on first save">
+            <input className="field-input" defaultValue="HH-7411-002-0148" readOnly/>
+          </Field>
+          <Field label="Urban / Rural" required>
+            <div className="seg">
+              {(urOpts.length ? urOpts : [{ code: "1", label: "Urban" }, { code: "2", label: "Rural" }]).map(o => (
+                <button key={o.code}
+                  className={urbanRural === o.code ? 'on' : ''}
+                  onClick={() => setUR(o.code)}>
+                  {o.label}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <Field label="Date captured">
+            <div className="row gap-2"><Icon name="clock" size={14} color="var(--neutral-500)"/><span className="t-bodysm">14 May 2026 · 14:34 EAT</span></div>
+          </Field>
+        </div>
+
+        <div className="divider mt-5"/>
+
+        <h4 className="t-h3" style={{ margin: '8px 0 16px' }}>GPS reading</h4>
+        <div className="field-row-3">
+          <Field label="Latitude" required>
+            <input className="field-input t-mono" defaultValue="2.49423"/>
+          </Field>
+          <Field label="Longitude" required>
+            <input className="field-input t-mono" defaultValue="34.65103"/>
+          </Field>
+          <Field label="Accuracy" required hint="Must be ≤ 10m (AC-GPS-ACCURACY)" error="6 m — within limit">
+            <div className="input-affix" style={{ borderColor: 'var(--accent-data)' }}>
+              <input defaultValue="6" className="t-mono"/>
+              <span className="affix">m</span>
+            </div>
+          </Field>
+        </div>
+        <div className="t-cap mt-2" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Icon name="mapPin" size={12} color="var(--accent-data)"/> Position captured 14:31 EAT · accuracy 6 m · device tablet-PCH-7411
+        </div>
+
+        <div className="divider mt-5"/>
+
+        <h4 className="t-h3" style={{ margin: '8px 0 16px' }}>Respondent</h4>
+        <div className="field-row-3">
+          <Field label="Respondent name" required>
+            <input className="field-input" defaultValue="Lokol Naume"/>
+          </Field>
+          <Field label="Phone (E.164)" required hint="Format: +256 XXX XXXXXX">
+            <input className="field-input" defaultValue="+256 786 234567"/>
+          </Field>
+          <Field label="Head of household" hint="Auto-filled from Roster Person 01">
+            <input className="field-input" defaultValue="Lokol Naume" readOnly style={{ background: 'var(--neutral-50)', color: 'var(--neutral-700)' }}/>
+          </Field>
+        </div>
+
+        <div className="divider mt-5"/>
+
+        <h4 className="t-h3" style={{ margin: '8px 0 16px' }}>Consent <span style={{ color: 'var(--accent-danger)' }}>*</span></h4>
+        <div className="tint-update" style={{ padding: 16, borderRadius: 6, borderLeft: '3px solid var(--accent-update)' }}>
+          <p style={{ margin: '0 0 12px', fontSize: 13, lineHeight: 1.6 }}>
+            "I, the respondent, consent to the collection and processing of my household's data by the Ministry of Gender, Labour and Social Development (MGLSD) under the Data Protection and Privacy Act 2019 of Uganda. I understand my data may be shared with partner agencies under a signed Data Sharing Agreement."
+          </p>
+          <div className="seg">
+            <button className={consent === 'yes' ? 'on' : ''} onClick={() => setConsent('yes')}><Icon name="check" size={12}/> Yes — consented</button>
+            <button className={consent === 'no' ? 'on' : ''} onClick={() => setConsent('no')}>No</button>
+          </div>
+        </div>
+      </div>
+    </>
   );
 };
 
