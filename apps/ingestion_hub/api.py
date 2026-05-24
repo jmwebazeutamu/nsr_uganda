@@ -1,6 +1,6 @@
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
-from rest_framework import serializers, status, viewsets
-from rest_framework.decorators import action
+from rest_framework import permissions, serializers, status, viewsets
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 
 from apps.security.abac import HouseholdIdScopedQuerysetMixin
@@ -12,7 +12,14 @@ from .models import (
     SourceSystem,
     StageRecord,
 )
-from .services import DihError, process_stage_record, promote_stage_record, reject_stage_record
+from .services import (
+    DihError,
+    process_stage_record,
+    promote_stage_record,
+    quarantine_stage_record,
+    reject_stage_record,
+    submit_walk_in_capture,
+)
 
 # --- Serializers -----------------------------------------------------------
 
@@ -217,3 +224,76 @@ class StageRecordViewSet(
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         stage.refresh_from_db()
         return Response(self.get_serializer(stage).data)
+
+    @extend_schema(
+        tags=["dih"],
+        summary="Archive a quality-failed stage record",
+        description=(
+            "Moves a quality_failed StageRecord to the archive "
+            "(state=quarantined). One-way — quarantined records cannot "
+            "be promoted into the registry. Reason is mandatory and "
+            "persisted on the audit trail."
+        ),
+        request=RejectRequestSerializer,
+        responses={
+            200: StageRecordSerializer,
+            400: OpenApiResponse(description="not quality_failed, or reason missing"),
+        },
+    )
+    @action(detail=True, methods=["post"], url_path="quarantine")
+    def quarantine(self, request, pk=None):
+        ser = RejectRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        stage = self.get_object()
+        try:
+            quarantine_stage_record(
+                stage,
+                actor=ser.validated_data["actor"],
+                reason=ser.validated_data["reason"],
+            )
+        except DihError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        stage.refresh_from_db()
+        return Response(self.get_serializer(stage).data)
+
+
+# ---------------------------------------------------------------------------
+# Walk-in submission endpoint (Slice A — US-S23-WALKIN)
+#
+# Top-level POST that creates a brand-new StageRecord from the
+# household-capture wizard. Not a detail action on the viewset
+# because the caller has no StageRecord ID yet.
+
+@extend_schema(
+    tags=["dih"],
+    summary="Submit a household captured at a parish office",
+    description=(
+        "Atomic: opens a ConnectorRun under the seeded PARISH-WALKIN "
+        "source, lands the canonical payload, stages it with a "
+        "provisional Registry ID. Response carries the "
+        "provisional_registry_id so the receipt slip can show it."
+    ),
+    request=None,  # canonical payload schema lives in the questionnaire spec
+    responses={
+        201: StageRecordSerializer,
+        400: OpenApiResponse(description="payload invalid or parish source not seeded"),
+    },
+)
+@api_view(["POST"])
+@permission_classes([permissions.IsAuthenticated])
+def walk_in_submit(request):
+    payload = request.data
+    if not isinstance(payload, dict) or not payload:
+        return Response(
+            {"detail": "payload must be a non-empty object"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    actor = (request.user.username or "").strip() or "anonymous"
+    try:
+        stage = submit_walk_in_capture(payload, actor=actor)
+    except DihError as e:
+        return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    return Response(
+        StageRecordSerializer(stage).data,
+        status=status.HTTP_201_CREATED,
+    )

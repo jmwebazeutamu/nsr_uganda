@@ -663,7 +663,10 @@ class TestStageRecordStateFilter:
         the operator complaint that drove this fix."""
         from apps.ingestion_hub.models import StageRecordState
         promoted = self._stage(StageRecordState.PROMOTED, connector, _payload(geo_codes))
-        pending = self._stage(StageRecordState.PENDING_PROMOTION, connector, _payload(geo_codes, head_first_name="Mary"))
+        pending = self._stage(
+            StageRecordState.PENDING_PROMOTION, connector,
+            _payload(geo_codes, head_first_name="Mary"),
+        )
 
         r = self._client(django_user_model).get(self.URL + "?state=pending_promotion")
         ids = {row["id"] for row in r.data["results"]}
@@ -683,3 +686,118 @@ class TestStageRecordStateFilter:
         assert a.id in ids
         assert b.id in ids
         assert c.id not in ids
+
+
+# ---------------------------------------------------------------------------
+# Walk-in submission endpoint (Slice A — US-S23-WALKIN)
+
+
+@pytest.mark.django_db
+class TestWalkInSubmit:
+    URL = "/api/v1/dih/walk-in-submissions/"
+
+    def _client(self, django_user_model):
+        u = django_user_model.objects.create_user(
+            username="parish-op", password="p",
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        return c
+
+    def test_creates_stage_record_with_provisional_id(self, django_user_model, geo_codes):
+        r = self._client(django_user_model).post(
+            self.URL, _payload(geo_codes), format="json",
+        )
+        assert r.status_code == 201, r.data
+        assert r.data["state"] == "provisional"
+        assert r.data["provisional_registry_id"]
+        # The record genuinely landed in DIH.
+        from apps.ingestion_hub.models import StageRecord
+        assert StageRecord.objects.filter(
+            provisional_registry_id=r.data["provisional_registry_id"],
+        ).exists()
+
+    def test_rejects_empty_payload(self, django_user_model):
+        r = self._client(django_user_model).post(self.URL, {}, format="json")
+        assert r.status_code == 400
+
+    def test_anonymous_caller_blocked(self):
+        c = APIClient()  # not authenticated
+        r = c.post(self.URL, _payload({}), format="json")
+        assert r.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# Quarantine endpoint (Slice B — archive workflow)
+
+
+@pytest.mark.django_db
+class TestQuarantineEndpoint:
+    URL_TPL = "/api/v1/dih/stage-records/{id}/quarantine/"
+
+    def _client(self, django_user_model):
+        u = django_user_model.objects.create_user(
+            username="nsr-unit", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        return c
+
+    def _staged(self, connector, geo_codes, state):
+        run = start_connector_run(connector)
+        landing = land_payload(run, _payload(geo_codes))
+        stage = stage_from_landing(landing, canonical_payload=_payload(geo_codes))
+        stage.state = state
+        stage.save(update_fields=["state"])
+        return stage
+
+    def test_quality_failed_can_be_quarantined(
+        self, django_user_model, connector, geo_codes,
+    ):
+        from apps.ingestion_hub.models import StageRecordState
+        stage = self._staged(connector, geo_codes, StageRecordState.QUALITY_FAILED)
+        r = self._client(django_user_model).post(
+            self.URL_TPL.format(id=stage.id),
+            {"actor": "nsr-unit", "reason": "Duplicate of HH-123, unfixable."},
+            format="json",
+        )
+        assert r.status_code == 200, r.data
+        assert r.data["state"] == "quarantined"
+
+    def test_pending_promotion_cannot_be_quarantined(
+        self, django_user_model, connector, geo_codes,
+    ):
+        from apps.ingestion_hub.models import StageRecordState
+        stage = self._staged(connector, geo_codes, StageRecordState.PENDING_PROMOTION)
+        r = self._client(django_user_model).post(
+            self.URL_TPL.format(id=stage.id),
+            {"actor": "nsr-unit", "reason": "wrong tab"},
+            format="json",
+        )
+        assert r.status_code == 400
+
+    def test_reason_required(self, django_user_model, connector, geo_codes):
+        from apps.ingestion_hub.models import StageRecordState
+        stage = self._staged(connector, geo_codes, StageRecordState.QUALITY_FAILED)
+        r = self._client(django_user_model).post(
+            self.URL_TPL.format(id=stage.id),
+            {"actor": "nsr-unit", "reason": ""},
+            format="json",
+        )
+        assert r.status_code == 400
+
+    def test_archive_visible_via_state_filter(
+        self, django_user_model, connector, geo_codes,
+    ):
+        from apps.ingestion_hub.models import StageRecordState
+        stage = self._staged(connector, geo_codes, StageRecordState.QUALITY_FAILED)
+        client = self._client(django_user_model)
+        client.post(
+            self.URL_TPL.format(id=stage.id),
+            {"actor": "nsr-unit", "reason": "archived"},
+            format="json",
+        )
+        r = client.get("/api/v1/dih/stage-records/?state=quarantined")
+        assert r.status_code == 200
+        ids = {row["id"] for row in r.data["results"]}
+        assert stage.id in ids

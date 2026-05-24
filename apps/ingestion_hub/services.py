@@ -875,3 +875,118 @@ def process_stage_record(
                     "idv": idv_status,
                 })
     return stage
+
+
+# ---------------------------------------------------------------------------
+# Walk-in submission (Slice A — US-S23-WALKIN)
+#
+# Operator captures a household at a parish office via the wizard;
+# submit_walk_in_capture lands the canonical payload as a StageRecord
+# under the dedicated PARISH-WALKIN source system. The provisional
+# Registry ID returned here is THE Registry ID once promoted.
+
+PARISH_WALKIN_SOURCE_CODE = "PARISH-WALKIN"
+PARISH_WALKIN_CONNECTOR_NAME = "parish-walkin"
+
+
+@transaction.atomic
+def submit_walk_in_capture(
+    payload: dict,
+    *,
+    actor: str,
+) -> StageRecord:
+    """Atomic write-path for parish-office captures.
+
+    Opens a tiny one-record ConnectorRun under the seeded parish
+    walk-in connector (so the lineage chain stays uniform with the
+    bulk connectors), lands the raw payload, stages it.
+
+    Returns the StageRecord; caller reads
+    .provisional_registry_id for the receipt slip.
+    """
+    if not isinstance(payload, dict) or not payload:
+        raise DihError("payload must be a non-empty object")
+    if not actor:
+        raise DihError("actor is required")
+
+    try:
+        connector = (
+            Connector.objects
+            .select_related("source_system")
+            .get(
+                source_system__code=PARISH_WALKIN_SOURCE_CODE,
+                name=PARISH_WALKIN_CONNECTOR_NAME,
+            )
+        )
+    except Connector.DoesNotExist as e:
+        raise DihError(
+            "parish walk-in connector not seeded — run migration "
+            "ingestion_hub.0004_seed_parish_walkin_source",
+        ) from e
+
+    run = start_connector_run(connector, actor=actor)
+    landing = land_payload(
+        run, payload,
+        source_reference=f"walkin:{actor}",
+    )
+    stage = stage_from_landing(landing, canonical_payload=payload)
+
+    # The walk-in form already ran client-side DQA + collected consent,
+    # so the run is one-shot. Close it immediately to keep
+    # ConnectorRun.is_running() honest.
+    ConnectorRun.objects.filter(pk=run.pk).update(
+        status=ConnectorRunStatus.SUCCEEDED,
+        finished_at=timezone.now(),
+    )
+
+    _emit_audit(
+        "create", "stage_record", stage.id,
+        actor=actor,
+        reason=f"parish walk-in submission · provisional={stage.provisional_registry_id}",
+    )
+    return stage
+
+
+# ---------------------------------------------------------------------------
+# Quarantine (Slice B — archive workflow for quality_failed records)
+
+@transaction.atomic
+def quarantine_stage_record(
+    stage: StageRecord,
+    *,
+    actor: str,
+    reason: str,
+) -> StageRecord:
+    """Move a quality_failed StageRecord into the archive
+    (state=quarantined). One-way transition — quarantined records
+    cannot be promoted into the registry.
+
+    Required when a record's quality issues are unfixable (e.g.
+    irreconcilable duplicates, fraudulent submissions, lost original
+    forms). The audit trail preserves the operator's reason.
+    """
+    if stage.state != StageRecordState.QUALITY_FAILED:
+        raise DihError(
+            f"only quality_failed records can be quarantined "
+            f"(got {stage.state})",
+        )
+    if not actor:
+        raise DihError("actor is required to quarantine a record")
+    if not reason or not reason.strip():
+        raise DihError("reason is required to quarantine a record")
+
+    before = stage.state
+    stage.state = StageRecordState.QUARANTINED
+    stage.rejected_reason = reason.strip()  # reuse existing column
+    stage.rejected_at = timezone.now()
+    stage.rejected_by = actor
+    stage.save(update_fields=[
+        "state", "rejected_reason", "rejected_at", "rejected_by", "updated_at",
+    ])
+    _emit_audit(
+        "quarantine", "stage_record", stage.id,
+        actor=actor,
+        reason=reason.strip(),
+        field_changes={"state_before": before, "state_after": stage.state},
+    )
+    return stage

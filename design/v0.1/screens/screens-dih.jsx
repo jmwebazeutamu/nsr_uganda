@@ -82,7 +82,11 @@ const _stageToRow = (stage) => {
     idv: idvLabel,
     ageH,
     sla,
+    state: stage.state || "pending",
     status: (stage.state || "pending").replace(/_/g, " "),
+    rejected_reason: stage.rejected_reason || "",
+    rejected_at: stage.rejected_at || "",
+    rejected_by: stage.rejected_by || "",
     // Lineage so the detail rail can pull it out without re-fetching.
     _payload: payload,
     _stage: stage,
@@ -120,14 +124,20 @@ const QUICK_FILTERS = [
 ];
 
 const DIHScreen = () => {
+  // Two-tab layout: "queue" shows everything actionable (provisional,
+  // pending_promotion, quality_failed, ddup_review, idv_pending);
+  // "archive" shows quarantined rows — operators land them there when
+  // a quality_failed record can't be fixed.
+  const [tab, setTab] = useStateDIH("queue");
   // Live row state; starts as the mock so the design preview renders
   // immediately. The effect below replaces it with live API rows when
   // available.
   const [rows, setRows] = useStateDIH(MOCK_DIH_ROWS);
-  const [dataSource, setDataSource] = useStateDIH("mock"); // 'mock' | 'live'
+  const [archiveRows, setArchiveRows] = useStateDIH([]);
+  const [dataSource, setDataSource] = useStateDIH("mock"); // 'mock' | 'live' | 'live-empty'
   const [selectedRow, setSelectedRow] = useStateDIH(MOCK_DIH_ROWS[1].id);
   const [auditOpen, setAuditOpen] = useStateDIH(false);
-  const [modal, setModal] = useStateDIH(null); // 'promote' | 'merge' | 'hold' | 'reject'
+  const [modal, setModal] = useStateDIH(null); // 'promote' | 'merge' | 'hold' | 'reject' | 'archive'
   const [toast, setToast] = useStateDIH("");
   const [selection, setSelection] = useStateDIH(new Set());
   const [quickFilter, setQuickFilter] = useStateDIH(null);
@@ -135,9 +145,10 @@ const DIHScreen = () => {
   // Fetch live data once on mount. Same-origin so the Django session
   // cookie flows automatically; cross-origin / file:// previews fall
   // through to the mock data with no console noise.
+  // Includes quality_failed in the queue so operators can archive them.
   useEffectDIH(() => {
     let cancelled = false;
-    fetch("/api/v1/dih/stage-records/?state=pending_promotion", {
+    fetch("/api/v1/dih/stage-records/?state=provisional,pending_promotion,quality_failed,ddup_review,idv_pending", {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
     })
@@ -159,6 +170,17 @@ const DIHScreen = () => {
       .catch(() => {
         // Stays on MOCK_DIH_ROWS; dataSource already 'mock'.
       });
+    // Archive tab: quarantined records.
+    fetch("/api/v1/dih/stage-records/?state=quarantined", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (cancelled) return;
+        setArchiveRows((data.results || data).map(_stageToRow));
+      })
+      .catch(() => { /* archive stays empty */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -306,7 +328,79 @@ const DIHScreen = () => {
         </>}
       />
 
-      {/* Filter bar */}
+      {/* Tab strip — Queue vs Archive */}
+      <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--neutral-200)", marginBottom: 16 }}>
+        {[
+          { id: "queue",   label: "Review queue",  count: rows.length, icon: "inbox" },
+          { id: "archive", label: "Archive",       count: archiveRows.length, icon: "archive" },
+        ].map(t => {
+          const active = tab === t.id;
+          return (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 8,
+                padding: "10px 18px", border: 0, background: "transparent",
+                borderBottom: active ? "2px solid var(--primary-900)" : "2px solid transparent",
+                marginBottom: -1, cursor: "pointer",
+                color: active ? "var(--primary-900)" : "var(--neutral-700)",
+                fontWeight: active ? 600 : 500, fontSize: 13.5,
+              }}>
+              <Icon name={t.icon} size={14}/>
+              {t.label}
+              <span style={{
+                padding: "1px 8px", borderRadius: 10,
+                background: active ? "var(--primary-100)" : "var(--neutral-100)",
+                color: "var(--neutral-700)", fontSize: 11,
+              }}>{t.count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Archive tab — read-only listing of quarantined records */}
+      {tab === "archive" && (
+        <div className="card" style={{ padding: 0 }}>
+          <div className="card-header" style={{ padding: "12px 16px" }}>
+            <strong>Quarantined records</strong>
+            <span className="t-cap">
+              Records that failed quality checks and were archived by an NSR Unit admin. Read-only — quarantined records cannot be promoted.
+            </span>
+          </div>
+          <table className="tbl" style={{ boxShadow: "none", marginBottom: 0 }}>
+            <thead>
+              <tr>
+                <th>Provisional ID</th>
+                <th>Head</th>
+                <th>Source</th>
+                <th>Reason</th>
+                <th>Archived at</th>
+                <th>Archived by</th>
+              </tr>
+            </thead>
+            <tbody>
+              {archiveRows.length === 0 && (
+                <tr><td colSpan={6} className="t-cap" style={{ padding: 16, color: "var(--neutral-500)" }}>
+                  No archived records.
+                </td></tr>
+              )}
+              {archiveRows.map(r => (
+                <tr key={r.id}>
+                  <td className="t-mono">{(r.id || "").slice(0, 12)}…</td>
+                  <td>{r.head || "—"}</td>
+                  <td><Chip size="sm">{r.source || "—"}</Chip></td>
+                  <td className="t-bodysm" style={{ color: "var(--neutral-700)" }}>{r.rejected_reason || "—"}</td>
+                  <td className="t-cap">{r.rejected_at ? r.rejected_at.slice(0, 10) : "—"}</td>
+                  <td className="t-cap">{r.rejected_by || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Queue tab body (filter bar + table + side panel + actions).
+          Wrapped so the Archive tab hides every queue-specific UI. */}
+      {tab === "queue" && <>
       <div className="card" style={{padding:'14px 20px', marginBottom:16}}>
         <div className="row gap-3" style={{flexWrap:'wrap'}}>
           <div className="row gap-2">
@@ -801,12 +895,18 @@ const DIHScreen = () => {
         <div style={{margin:'16px -24px 0', position:'sticky', bottom:0, zIndex:20}}>
           <ActionBar left={<>Reviewing <span className="t-mono" style={{color:'var(--neutral-900)'}}>{current.id.slice(0,18)}…</span> · {current.head} · {rows.indexOf(current) + 1} of {rows.length}</>}>
             <button className="btn btn-danger" onClick={() => setModal('reject')}><Icon name="xCircle" size={14}/> Reject</button>
+            {current.state === "quality_failed" && (
+              <button className="btn" onClick={() => setModal('archive')}>
+                <Icon name="archive" size={14}/> Archive (cannot promote)
+              </button>
+            )}
             <button className="btn btn-warn" onClick={() => setModal('hold')}><Icon name="clock" size={14}/> Hold for info</button>
             <button className="btn" onClick={() => setModal('merge')}><Icon name="duplicate" size={14}/> Promote-as-merge</button>
             <button className="btn btn-success" onClick={() => setModal('promote')}><Icon name="check" size={14}/> Promote</button>
           </ActionBar>
         </div>
       )}
+      </>}
 
       <AuditDrawer open={auditOpen} onClose={() => setAuditOpen(false)} events={auditEvents} title={`Audit · ${current?.head || ""}`}/>
 
@@ -823,6 +923,41 @@ const DIHScreen = () => {
       <ReasonModal open={modal === 'reject'} title="Reject submission" intent="danger"
         reasonOptions={reasonsReject} recordLabel={current?.id || ""}
         onClose={() => setModal(null)} onConfirm={fire}/>
+      <ReasonModal open={modal === 'archive'} title="Archive (cannot promote)" intent="danger"
+        reasonOptions={[
+          "Quality issues unfixable — original form lost",
+          "Confirmed duplicate of a registered household — keep canonical row",
+          "Operator captured fraudulent submission",
+          "Respondent revoked consent before submission completed",
+          "Other (specify in note)",
+        ]}
+        recordLabel={current?.id || ""}
+        onClose={() => setModal(null)}
+        onConfirm={(payload) => {
+          // payload = { reason, note } from the shared ReasonModal.
+          if (!current) { setModal(null); return; }
+          const body = {
+            actor: "nsr-unit",  // shell will replace with session user
+            reason: [payload?.reason, payload?.note].filter(Boolean).join(" — "),
+          };
+          fetch(`/api/v1/dih/stage-records/${current.id}/quarantine/`, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify(body),
+          })
+            .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(d.detail || "archive failed")))
+            .then(stage => {
+              setRows(rows.filter(r => r.id !== current.id));
+              setArchiveRows([...archiveRows, _stageToRow(stage)]);
+              setToast(`Archived stage ${current.id.slice(0, 12)}… — moved to Archive tab.`);
+              setModal(null);
+            })
+            .catch(err => {
+              setToast(`Archive failed: ${err}`);
+              setModal(null);
+            });
+        }}/>
 
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>

@@ -54,6 +54,12 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
   const [urbanRural, setUR] = useStateCap("2"); // "1"=Urban, "2"=Rural per rural_urban list
   const [submitOpen, setSubmitOpen] = useStateCap(false);
   const [showReceipt, setShowReceipt] = useStateCap(false);
+  // Receipt carries the real provisional_registry_id returned by
+  // /api/v1/dih/walk-in-submissions/. Null when the API call hasn't
+  // landed (or fell back to the mock receipt under file://).
+  const [provisionalId, setProvisionalId] = useStateCap(null);
+  const [submitting, setSubmitting] = useStateCap(false);
+  const [submitError, setSubmitError] = useStateCap(null);
 
   // ----- detail-entity state (per US-S22-DE models) -----
   const [members, setMembers] = useStateCap(_DEMO_MEMBERS);
@@ -285,9 +291,48 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
       {/* Submit modal */}
       <Modal open={submitOpen} onClose={() => setSubmitOpen(false)} title="Submit for promotion?"
         footer={<>
-          <button className="btn" onClick={() => setSubmitOpen(false)}>Cancel</button>
-          <button className="btn btn-primary" onClick={() => { setSubmitOpen(false); setShowReceipt(true); }}>
-            <Icon name="check" size={14}/> Confirm submission
+          <button className="btn" onClick={() => setSubmitOpen(false)} disabled={submitting}>Cancel</button>
+          <button className="btn btn-primary"
+            disabled={submitting}
+            onClick={async () => {
+              setSubmitError(null);
+              setSubmitting(true);
+              // Canonical payload assembled from the wizard state.
+              // Shape matches what apps.ingestion_hub.services.
+              // submit_walk_in_capture lands as canonical_payload —
+              // the connector accepts the wizard shape directly so
+              // no client-side mapping is needed.
+              const payload = {
+                geographic: geo,
+                urban_rural: urbanRural,
+                consent: consent,
+                gps_lat: "2.49423", gps_lng: "34.65103", gps_accuracy_m: "6.00",
+                members: members,
+                health: healthData,
+                education: educationData,
+                employment: employmentData,
+                housing: housing,
+                food_shocks: foodShocks,
+                source_channel: "parish_walkin",
+              };
+              try {
+                const api = (typeof window !== "undefined") ? window.nsrApi : null;
+                if (api && typeof api.post === "function") {
+                  const resp = await api.post("/api/v1/dih/walk-in-submissions/", payload);
+                  setProvisionalId(resp.provisional_registry_id || null);
+                } else {
+                  // No data layer (file:// preview). Show mock receipt.
+                  setProvisionalId(null);
+                }
+                setSubmitting(false);
+                setSubmitOpen(false);
+                setShowReceipt(true);
+              } catch (err) {
+                setSubmitting(false);
+                setSubmitError(String(err && err.message ? err.message : err));
+              }
+            }}>
+            <Icon name="check" size={14}/>{submitting ? "Submitting…" : "Confirm submission"}
           </button>
         </>}>
         <div className="col gap-3">
@@ -301,6 +346,11 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
             </ul>
           </div>
           <div className="t-cap">Audit entry will be written. SMS will be sent to +256 786 234567.</div>
+          {submitError && (
+            <div className="tint-danger" style={{padding:10, borderRadius:6, borderLeft:'3px solid var(--accent-danger)'}}>
+              <strong className="t-bodysm">Submission failed:</strong> <span className="t-bodysm">{submitError}</span>
+            </div>
+          )}
         </div>
       </Modal>
 
@@ -308,7 +358,7 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
           tell the shell to navigate away (default: DIH review tab,
           since the household lands in DIH staging next). */}
       {showReceipt && (
-        <ReceiptOverlay onClose={() => {
+        <ReceiptOverlay provisionalId={provisionalId} onClose={() => {
           // Reset every capture slot so a return lands on a fresh form.
           setShowReceipt(false);
           setActive("id");
@@ -507,14 +557,18 @@ const CapturePadCAPI = ({ onChangeDevice }) => {
 /* ============================================================
    11.2 Receipt slip overlay
    ============================================================ */
-const ReceiptOverlay = ({ onClose }) => {
+const ReceiptOverlay = ({ onClose, provisionalId }) => {
+  // Display the server-returned provisional Registry ID when present,
+  // fall back to a stable mock so the file:// preview still looks
+  // realistic. The SMS preview text mirrors whichever ID is shown.
+  const displayId = provisionalId || "01HXY7K3B2N9PVQE4M6FZRWS18";
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" style={{maxWidth:980, display:'grid', gridTemplateColumns:'1fr 1fr', gap:0, padding:0}} onClick={(e) => e.stopPropagation()}>
         {/* Left — A6 slip */}
         <div style={{padding:24, borderRight:'1px solid var(--neutral-200)', background:'var(--neutral-100)'}}>
           <div className="t-cap" style={{marginBottom:8}}>A6 PRINT · 105 × 148 mm · THERMAL-FRIENDLY</div>
-          <ReceiptSlipA6/>
+          <ReceiptSlipA6 provisionalId={displayId}/>
         </div>
         {/* Right — SMS + actions */}
         <div style={{padding:24}}>
@@ -528,7 +582,7 @@ const ReceiptOverlay = ({ onClose }) => {
           <div className="card" style={{padding:14, marginTop:12}}>
             <div className="t-cap" style={{marginBottom:6}}>SMS PREVIEW · 160 char</div>
             <div className="t-mono" style={{fontSize:12.5, lineHeight:1.55, padding:10, background:'var(--neutral-50)', borderRadius:4, color:'var(--neutral-900)'}}>
-              MGLSD NSR: Your provisional Registry ID is 01HXY7K3B2N9PVQE4M6FZRWS18. Pending approval. Track via parish office or SMS HELP to 8800.
+              MGLSD NSR: Your provisional Registry ID is {displayId}. Pending approval. Track via parish office or SMS HELP to 8800.
             </div>
             <div className="t-cap mt-2">158 / 160 characters · UTF-8 safe</div>
           </div>
@@ -556,7 +610,7 @@ const ReceiptOverlay = ({ onClose }) => {
   );
 };
 
-const ReceiptSlipA6 = () => (
+const ReceiptSlipA6 = ({ provisionalId } = {}) => (
   <div style={{
     width: 380, height: 540,
     background:'white', boxShadow:'0 8px 24px rgba(0,0,0,0.12)',
@@ -576,7 +630,7 @@ const ReceiptSlipA6 = () => (
     <div>
       <div style={{fontSize:9, color:'#444', letterSpacing:'.06em', textTransform:'uppercase'}}>Provisional Registry ID</div>
       <div style={{fontFamily:'"JetBrains Mono", ui-monospace, monospace', fontSize:12.5, letterSpacing:'.02em', wordBreak:'break-all', fontWeight:700, marginTop:2}}>
-        01HXY7K3B2N9PVQE4M6FZRWS18
+        {provisionalId || "01HXY7K3B2N9PVQE4M6FZRWS18"}
       </div>
     </div>
 
