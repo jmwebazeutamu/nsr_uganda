@@ -304,8 +304,30 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
         </div>
       </Modal>
 
-      {/* Receipt overlay */}
-      {showReceipt && <ReceiptOverlay onClose={() => setShowReceipt(false)}/>}
+      {/* Receipt overlay — on Done we reset form state to blank and
+          tell the shell to navigate away (default: DIH review tab,
+          since the household lands in DIH staging next). */}
+      {showReceipt && (
+        <ReceiptOverlay onClose={() => {
+          // Reset every capture slot so a return lands on a fresh form.
+          setShowReceipt(false);
+          setActive("id");
+          setGeo({
+            region: "", subregion: "", district: "",
+            county: "", subcounty: "", parish: "", village: "",
+          });
+          setConsent("yes");
+          setUR("2");
+          setMembers([]);
+          setHealthData({});
+          setEducationData({});
+          setEmploymentData({});
+          setHousing({ dwelling: {}, utilities: {}, livelihood: {}, assets: [], crops: [], livestock: [] });
+          setFoodShocks({ food_security: {}, food_consumption: {}, shocks: [], coping: [] });
+          // Notify the shell so it can leave the capture screen.
+          onPromoted && onPromoted();
+        }}/>
+      )}
     </div>
   );
 };

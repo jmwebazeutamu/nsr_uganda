@@ -219,7 +219,9 @@ function App() {
       <main className="main">
         {screen === "home"    && <HomeScreen role={role} onNavigate={navigate}/>}
         {screen === "kit"     && <KitScreen/>}
-        {screen === "capture" && <CaptureScreen device={device} onChangeDevice={setDevice}/>}
+        {screen === "capture" && <CaptureScreen
+          device={device} onChangeDevice={setDevice}
+          onPromoted={() => setScreen("dih")}/>}
         {screen === "receipt" && <ReceiptScreen/>}
         {screen === "dih"     && <DIHScreen/>}
         {screen === "dedup"   && <DedupScreen/>}
