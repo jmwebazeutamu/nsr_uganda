@@ -45,10 +45,10 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
   const [active, setActive] = useStateCap("id");
   // Empty geo state — operator drills the live GeographicUnit
   // hierarchy starting from Region. Each level resets descendants on
-  // change (see GeoTreePicker).
+  // change (see GeoTreePicker). 7-level chain matches the UBOS model.
   const [geo, setGeo] = useStateCap({
     region: "", subregion: "", district: "",
-    subcounty: "", parish: "", village: "",
+    county: "", subcounty: "", parish: "", village: "",
   });
   const [consent, setConsent] = useStateCap("yes");
   const [urbanRural, setUR] = useStateCap("2"); // "1"=Urban, "2"=Rural per rural_urban list

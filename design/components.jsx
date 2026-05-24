@@ -271,8 +271,10 @@ const Field = ({ label, required, hint, error, children }) => (
    ============================================================
    Drills the full UBOS hierarchy live from
    /api/v1/reference-data/geographic-units/.
-   6 levels: region → sub_region → district → sub_county → parish
-   → village. (County is skipped — capture vocabulary collapses it.)
+   7 levels: region → sub_region → district → county → sub_county →
+   parish → village. (County is needed as a traversal step because
+   sub_counties FK to counties, not districts — even though many
+   questionnaires collapse county away in their final payload.)
    Each <select> fetches its options on demand keyed by the parent's
    `code`. parent_code="" returns top-level rows (regions). */
 
@@ -315,7 +317,7 @@ const GeoTreePicker = ({ value, onChange }) => {
   const set = (k, val) => {
     const next = { ...v, [k]: val };
     // Cascading reset — clear every descendant level on a change.
-    const chain = ["region", "subregion", "district", "subcounty", "parish", "village"];
+    const chain = ["region", "subregion", "district", "county", "subcounty", "parish", "village"];
     const idx = chain.indexOf(k);
     if (idx >= 0) {
       chain.slice(idx + 1).forEach((c) => { next[c] = ""; });
@@ -341,9 +343,14 @@ const GeoTreePicker = ({ value, onChange }) => {
           onSelect={(c) => set("district", c)}/>
       </div>
       <div className="field-row-3">
-        <GeoLevel label="Sub-county" level="sub_county"
+        <GeoLevel label="County" level="county"
           parentCode={v.district} parentReady={!!v.district}
           placeholder="Choose district first"
+          value={v.county}
+          onSelect={(c) => set("county", c)}/>
+        <GeoLevel label="Sub-county" level="sub_county"
+          parentCode={v.county} parentReady={!!v.county}
+          placeholder="Choose county first"
           value={v.subcounty}
           onSelect={(c) => set("subcounty", c)}/>
         <GeoLevel label="Parish" level="parish"
@@ -351,16 +358,17 @@ const GeoTreePicker = ({ value, onChange }) => {
           placeholder="Choose sub-county first"
           value={v.parish}
           onSelect={(c) => set("parish", c)}/>
+      </div>
+      <div className="field-row-3">
         <GeoLevel label="Village" level="village"
           parentCode={v.parish} parentReady={!!v.parish}
           placeholder="Choose parish first"
           value={v.village}
           onSelect={(c) => set("village", c)}/>
-      </div>
-      <div className="field-row-3">
         <Field label="Enumeration Area" required hint="UBOS 2024 EA frame">
           <input className="field-input" placeholder="EA-7411-002" defaultValue="EA-7411-002"/>
         </Field>
+        <Field label=""/>
       </div>
     </div>
   );
