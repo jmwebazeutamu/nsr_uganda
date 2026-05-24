@@ -267,73 +267,97 @@ const Field = ({ label, required, hint, error, children }) => (
 );
 
 /* ============================================================
-   Geographic Tree Picker (simplified)
-   ============================================================ */
-const GEO = {
-  "Karamoja": {
-    "Moroto": { "Tapac": ["Nakiloro", "Lopuwapuwa", "Kakingol"] },
-    "Napak":  { "Lokopo": ["Lorengedwat", "Apeitolim"] },
-  },
-  "West Nile": {
-    "Arua":   { "Vurra": ["Anyiribu", "Logiri"] },
-    "Yumbe":  { "Romogi": ["Kuluba", "Lobe"] },
-  },
-  "Acholi": {
-    "Gulu":   { "Bobi":  ["Pageya", "Aywee"] },
-  },
+   Geographic Tree Picker
+   ============================================================
+   Drills the full UBOS hierarchy live from
+   /api/v1/reference-data/geographic-units/.
+   6 levels: region → sub_region → district → sub_county → parish
+   → village. (County is skipped — capture vocabulary collapses it.)
+   Each <select> fetches its options on demand keyed by the parent's
+   `code`. parent_code="" returns top-level rows (regions). */
+
+// One <GeoLevel/> per drop-down. Lazily fetches its options when
+// either the level itself changes or its parent code changes. Reads
+// `useApi` off the global so this stays loadable before
+// api-client.jsx parses (Babel-standalone resolves globals at
+// invocation time).
+const GeoLevel = ({ label, level, parentCode, parentReady, value, onSelect, placeholder }) => {
+  const url = parentReady
+    ? `/api/v1/reference-data/geographic-units/?level=${encodeURIComponent(level)}&parent_code=${encodeURIComponent(parentCode || "")}&status=active`
+    : null;
+  const useApiHook = (typeof window !== "undefined" && window.useApi) ? window.useApi : null;
+  const [resp, meta] = useApiHook
+    ? useApiHook(url)
+    : [null, { loading: false, error: null }];
+  const rows = (resp && Array.isArray(resp.results))
+    ? resp.results
+    : (Array.isArray(resp) ? resp : []);
+  const loading = meta && meta.loading;
+  return (
+    <Field label={label} required>
+      <select className="field-select"
+        value={value || ""}
+        disabled={!parentReady || loading}
+        onChange={(e) => onSelect && onSelect(e.target.value)}>
+        <option value="">
+          {!parentReady ? placeholder : (loading ? "Loading…" : "Select…")}
+        </option>
+        {rows.map(r => (
+          <option key={r.code} value={r.code}>{r.name}</option>
+        ))}
+      </select>
+    </Field>
+  );
 };
 
 const GeoTreePicker = ({ value, onChange }) => {
   const v = value || {};
-  const subs = Object.keys(GEO);
-  const districts = v.subregion ? Object.keys(GEO[v.subregion] || {}) : [];
-  const subcounties = (v.subregion && v.district) ? Object.keys(GEO[v.subregion][v.district] || {}) : [];
-  const parishes = (v.subregion && v.district && v.subcounty) ? (GEO[v.subregion][v.district][v.subcounty] || []) : [];
   const set = (k, val) => {
     const next = { ...v, [k]: val };
-    if (k === 'subregion')   { next.district = next.subcounty = next.parish = next.village = ""; }
-    if (k === 'district')    { next.subcounty = next.parish = next.village = ""; }
-    if (k === 'subcounty')   { next.parish = next.village = ""; }
-    if (k === 'parish')      { next.village = ""; }
-    onChange?.(next);
+    // Cascading reset — clear every descendant level on a change.
+    const chain = ["region", "subregion", "district", "subcounty", "parish", "village"];
+    const idx = chain.indexOf(k);
+    if (idx >= 0) {
+      chain.slice(idx + 1).forEach((c) => { next[c] = ""; });
+    }
+    onChange && onChange(next);
   };
   return (
     <div className="col gap-3">
       <div className="field-row-3">
-        <Field label="Sub-region" required>
-          <select className="field-select" value={v.subregion || ""} onChange={(e) => set('subregion', e.target.value)}>
-            <option value="">Select…</option>
-            {subs.map(s => <option key={s}>{s}</option>)}
-          </select>
-        </Field>
-        <Field label="District" required>
-          <select className="field-select" value={v.district || ""} disabled={!v.subregion} onChange={(e) => set('district', e.target.value)}>
-            <option value="">{v.subregion ? "Select…" : "Choose sub-region first"}</option>
-            {districts.map(s => <option key={s}>{s}</option>)}
-          </select>
-        </Field>
-        <Field label="Sub-county" required>
-          <select className="field-select" value={v.subcounty || ""} disabled={!v.district} onChange={(e) => set('subcounty', e.target.value)}>
-            <option value="">{v.district ? "Select…" : "Choose district first"}</option>
-            {subcounties.map(s => <option key={s}>{s}</option>)}
-          </select>
-        </Field>
+        <GeoLevel label="Region" level="region"
+          parentCode="" parentReady={true}
+          value={v.region}
+          onSelect={(c) => set("region", c)}/>
+        <GeoLevel label="Sub-region" level="sub_region"
+          parentCode={v.region} parentReady={!!v.region}
+          placeholder="Choose region first"
+          value={v.subregion}
+          onSelect={(c) => set("subregion", c)}/>
+        <GeoLevel label="District" level="district"
+          parentCode={v.subregion} parentReady={!!v.subregion}
+          placeholder="Choose sub-region first"
+          value={v.district}
+          onSelect={(c) => set("district", c)}/>
       </div>
       <div className="field-row-3">
-        <Field label="Parish" required>
-          <select className="field-select" value={v.parish || ""} disabled={!v.subcounty} onChange={(e) => set('parish', e.target.value)}>
-            <option value="">{v.subcounty ? "Select…" : "Choose sub-county first"}</option>
-            {parishes.map(s => <option key={s}>{s}</option>)}
-          </select>
-        </Field>
-        <Field label="Village" required>
-          <select className="field-select" value={v.village || ""} disabled={!v.parish} onChange={(e) => set('village', e.target.value)}>
-            <option value="">{v.parish ? "Select…" : "Choose parish first"}</option>
-            <option>Lopuwapuwa A</option>
-            <option>Lopuwapuwa B</option>
-            <option>Lopuwapuwa C</option>
-          </select>
-        </Field>
+        <GeoLevel label="Sub-county" level="sub_county"
+          parentCode={v.district} parentReady={!!v.district}
+          placeholder="Choose district first"
+          value={v.subcounty}
+          onSelect={(c) => set("subcounty", c)}/>
+        <GeoLevel label="Parish" level="parish"
+          parentCode={v.subcounty} parentReady={!!v.subcounty}
+          placeholder="Choose sub-county first"
+          value={v.parish}
+          onSelect={(c) => set("parish", c)}/>
+        <GeoLevel label="Village" level="village"
+          parentCode={v.parish} parentReady={!!v.parish}
+          placeholder="Choose parish first"
+          value={v.village}
+          onSelect={(c) => set("village", c)}/>
+      </div>
+      <div className="field-row-3">
         <Field label="Enumeration Area" required hint="UBOS 2024 EA frame">
           <input className="field-input" placeholder="EA-7411-002" defaultValue="EA-7411-002"/>
         </Field>

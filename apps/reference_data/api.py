@@ -54,8 +54,9 @@ class GeographicUnitViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         # filterset_fields needs django-filter (not installed); honour the
-        # ?level= / ?status= / ?parent= query params manually so the DRS
-        # wizard's value-picker fetches actually filter (US-S27-016).
+        # ?level= / ?status= / ?parent= / ?parent_code= query params
+        # manually so the DRS wizard's value-picker AND the household
+        # capture's GeoTreePicker can drill the hierarchy.
         qs = super().get_queryset()
         params = self.request.query_params
         level = params.get("level")
@@ -67,6 +68,15 @@ class GeographicUnitViewSet(viewsets.ReadOnlyModelViewSet):
         parent = params.get("parent")
         if parent:
             qs = qs.filter(parent_id=parent)
+        # Drill-by-code: the JSX picker doesn't know FK ids; it tracks
+        # the parent's UBOS code. parent_code="" matches top-level rows
+        # (region) where parent_id IS NULL.
+        if "parent_code" in params:
+            pc = params.get("parent_code") or ""
+            if pc == "":
+                qs = qs.filter(parent__isnull=True)
+            else:
+                qs = qs.filter(parent__code=pc)
         return qs
 
 

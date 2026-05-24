@@ -241,6 +241,52 @@ class TestGeographicUnitSerializer:
         rows = {row["code"]: row for row in r.data["results"]}
         assert rows["SR-BUGANDA-SOUTH"]["parent_code"] == "R-CENTRAL"
 
+    # ------------------------------------------------------------------
+    # parent_code drill — feeds the household-capture GeoTreePicker.
+    # ------------------------------------------------------------------
+
+    def test_parent_code_blank_returns_top_level(
+        self, django_user_model, _central_with_buganda_south,
+    ):
+        central, _ = _central_with_buganda_south
+        r = self._client(django_user_model).get(
+            self.URL + "?level=region&parent_code="
+        )
+        assert r.status_code == 200
+        codes = {row["code"] for row in r.data["results"]}
+        assert "R-CENTRAL" in codes
+
+    def test_parent_code_drills_to_children(
+        self, django_user_model, _central_with_buganda_south,
+    ):
+        r = self._client(django_user_model).get(
+            self.URL + "?level=sub_region&parent_code=R-CENTRAL"
+        )
+        assert r.status_code == 200
+        codes = {row["code"] for row in r.data["results"]}
+        assert "SR-BUGANDA-SOUTH" in codes
+
+    def test_parent_code_filters_out_unrelated_children(
+        self, django_user_model, _central_with_buganda_south,
+    ):
+        ef = date(2026, 1, 1)
+        # A foreign sub-region under a different region.
+        foreign_region = GeographicUnit.objects.create(
+            level="region", code="R-NORTHERN", name="Northern",
+            effective_from=ef, status="active",
+        )
+        GeographicUnit.objects.create(
+            level="sub_region", code="SR-ACHOLI", name="Acholi",
+            parent=foreign_region, effective_from=ef, status="active",
+        )
+        r = self._client(django_user_model).get(
+            self.URL + "?level=sub_region&parent_code=R-CENTRAL"
+        )
+        assert r.status_code == 200
+        codes = {row["code"] for row in r.data["results"]}
+        assert "SR-BUGANDA-SOUTH" in codes
+        assert "SR-ACHOLI" not in codes
+
 
 @pytest.mark.django_db
 class TestGeographicUnitTreeHelpers:
