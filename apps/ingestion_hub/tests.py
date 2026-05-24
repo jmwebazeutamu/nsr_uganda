@@ -19,6 +19,7 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from rest_framework.test import APIClient
 
 from apps.data_management.models import Household, Member
 from apps.dqa.models import DqaRule, RuleStatus, Severity
@@ -614,3 +615,71 @@ class TestConnectorRunAdmin:
         # Fresh run untouched.
         assert fresh.status == ConnectorRunStatus.RUNNING
         assert fresh.finished_at is None
+
+
+# ---------------------------------------------------------------------------
+# StageRecord list endpoint — ?state= query parameter (issue 2 from the
+# 2026-05-24 DIH review report: promoted records were still showing in
+# the queue because filterset_fields silently no-ops without django-filter)
+
+
+@pytest.mark.django_db
+class TestStageRecordStateFilter:
+    URL = "/api/v1/dih/stage-records/"
+
+    def _client(self, django_user_model):
+        u = django_user_model.objects.create_user(
+            username="dih-reader", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        return c
+
+    def _stage(self, state, connector, payload):
+        run = start_connector_run(connector)
+        landing = land_payload(run, payload)
+        stage = stage_from_landing(landing, canonical_payload=payload)
+        stage.state = state
+        stage.save(update_fields=["state"])
+        return stage
+
+    def test_state_filter_returns_only_matching(
+        self, django_user_model, connector, geo_codes,
+    ):
+        from apps.ingestion_hub.models import StageRecordState
+        a = self._stage(StageRecordState.PENDING_PROMOTION, connector, _payload(geo_codes))
+        b = self._stage(StageRecordState.PROMOTED, connector, _payload(geo_codes, head_first_name="Jane"))
+
+        r = self._client(django_user_model).get(self.URL + "?state=pending_promotion")
+        assert r.status_code == 200
+        ids = {row["id"] for row in r.data["results"]}
+        assert a.id in ids
+        assert b.id not in ids
+
+    def test_state_filter_excludes_promoted_by_default_when_set(
+        self, django_user_model, connector, geo_codes,
+    ):
+        """Promoted records must not appear in the DIH review queue —
+        the operator complaint that drove this fix."""
+        from apps.ingestion_hub.models import StageRecordState
+        promoted = self._stage(StageRecordState.PROMOTED, connector, _payload(geo_codes))
+        pending = self._stage(StageRecordState.PENDING_PROMOTION, connector, _payload(geo_codes, head_first_name="Mary"))
+
+        r = self._client(django_user_model).get(self.URL + "?state=pending_promotion")
+        ids = {row["id"] for row in r.data["results"]}
+        assert promoted.id not in ids
+        assert pending.id in ids
+
+    def test_state_csv_accepts_multiple_values(
+        self, django_user_model, connector, geo_codes,
+    ):
+        from apps.ingestion_hub.models import StageRecordState
+        a = self._stage(StageRecordState.PROVISIONAL, connector, _payload(geo_codes))
+        b = self._stage(StageRecordState.PENDING_PROMOTION, connector, _payload(geo_codes, head_first_name="Sam"))
+        c = self._stage(StageRecordState.PROMOTED, connector, _payload(geo_codes, head_first_name="Tim"))
+
+        r = self._client(django_user_model).get(self.URL + "?state=provisional,pending_promotion")
+        ids = {row["id"] for row in r.data["results"]}
+        assert a.id in ids
+        assert b.id in ids
+        assert c.id not in ids

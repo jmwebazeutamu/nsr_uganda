@@ -121,8 +121,22 @@ class StageRecordViewSet(
         # a region. Pre-promotion stages reference a Household by
         # provisional_registry_id, so we IN-subquery into the matching
         # Household IDs.
+        #
+        # The ?state= filter has to be applied manually because
+        # django-filter isn't installed, so filterset_fields silently
+        # no-ops. Without this the DIH review tab would show every
+        # stage record including the ones already promoted — see
+        # feedback memory.
         qs = super().get_queryset()
-        sr = self.request.query_params.get("sub_region_code")
+        params = self.request.query_params
+        state = params.get("state")
+        if state:
+            # Comma-separated supported so the DIH tab can express
+            # "show everything except promoted/rejected" with one URL.
+            states = [s.strip() for s in state.split(",") if s.strip()]
+            if states:
+                qs = qs.filter(state__in=states)
+        sr = params.get("sub_region_code")
         if sr:
             from apps.data_management.models import Household
             hh_ids = list(
