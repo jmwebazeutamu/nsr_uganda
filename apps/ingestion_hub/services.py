@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re as _re
 
 from django.db import models, transaction
 from django.db.models import F
@@ -474,6 +475,15 @@ def promote_stage_record(
 
     if stage.state in (StageRecordState.REJECTED, StageRecordState.QUARANTINED):
         raise DihError(f"cannot promote a {stage.state} stage record")
+
+    # AC-DIH-EDIT-NO-SELF-APPROVE — the operator who corrected the
+    # stage record cannot be the one who promotes it. Mirrors the
+    # DQA / DDUP / PMT dual-approval pattern.
+    if stage.last_edited_by and stage.last_edited_by == actor:
+        raise DihError(
+            f"actor {actor!r} edited this stage record and cannot also "
+            f"promote it (AC-DIH-EDIT-NO-SELF-APPROVE)",
+        )
 
     payload = stage.canonical_payload or {}
     geo_payload = payload.get("geographic", {})
@@ -989,4 +999,195 @@ def quarantine_stage_record(
         reason=reason.strip(),
         field_changes={"state_before": before, "state_after": stage.state},
     )
+    return stage
+
+
+# ---------------------------------------------------------------------------
+# In-place correction of a StageRecord (US-S23-DIH-EDIT)
+#
+# Whitelist of dotted paths into canonical_payload that NSR Unit
+# operators may correct without round-tripping the citizen. Three
+# whole categories are deliberately OUT:
+#   - NIN / nin_last4 / nin_hash    (legal identity — re-capture only)
+#   - geographic.*                  (chain integrity — re-capture only)
+#   - consent / urban_rural         (legal + PMT semantics)
+#
+# Paths support `members.<int>.<field>` for per-row corrections.
+
+EDITABLE_PATH_PATTERNS = (
+    _re.compile(r"^gps_(?:lat|lng|accuracy_m)$"),
+    _re.compile(
+        r"^members\.\d+\.(?:surname|first_name|other_name|date_of_birth|age_years|telephone_1|telephone_2)$",
+    ),
+)
+
+
+class StageEditError(Exception):
+    """The edit is forbidden under current state or path policy."""
+
+
+def _path_editable(path: str) -> bool:
+    return any(p.match(path) for p in EDITABLE_PATH_PATTERNS)
+
+
+def _set_dotted(node: dict, path: str, value):
+    """Walk node along the dotted path and write `value` at the leaf.
+    Numeric segments index an existing list element (will NOT extend
+    lists). Object segments may create missing leaf keys — the
+    whitelist already restricts which keys are reachable, and
+    operators legitimately add missing phone numbers / DoBs that
+    weren't captured originally."""
+    parts = path.split(".")
+    cur = node
+    for i, part in enumerate(parts):
+        last = (i == len(parts) - 1)
+        if part.isdigit():
+            idx = int(part)
+            if not isinstance(cur, list) or idx >= len(cur):
+                raise StageEditError(
+                    f"path {path!r} indexes a missing array element",
+                )
+            if last:
+                cur[idx] = value
+                return
+            cur = cur[idx]
+        else:
+            if not isinstance(cur, dict):
+                raise StageEditError(
+                    f"path {path!r} traverses a non-object node",
+                )
+            if last:
+                cur[part] = value
+                return
+            if part not in cur:
+                # Create the intermediate container so e.g.
+                # `housing.dwelling.roof_material` works when the
+                # `dwelling` block was empty.
+                cur[part] = {}
+            cur = cur[part]
+
+
+def _get_dotted(node, path: str, default=None):
+    parts = path.split(".")
+    cur = node
+    for part in parts:
+        if isinstance(cur, list) and part.isdigit():
+            idx = int(part)
+            if idx >= len(cur):
+                return default
+            cur = cur[idx]
+        elif isinstance(cur, dict) and part in cur:
+            cur = cur[part]
+        else:
+            return default
+    return cur
+
+
+_EDITABLE_STATES = frozenset({
+    StageRecordState.PROVISIONAL,
+    StageRecordState.QUALITY_FAILED,
+    StageRecordState.DDUP_REVIEW,
+})
+
+
+@transaction.atomic
+def edit_stage_record(
+    stage: StageRecord,
+    *,
+    field_changes: dict,
+    actor: str,
+    reason: str,
+    rerun_dqa: bool = True,
+) -> StageRecord:
+    """Apply sparse corrections to a StageRecord's canonical_payload.
+
+    `field_changes` is a dotted-path → new-value dict. Every path
+    must match EDITABLE_PATH_PATTERNS — anything outside that
+    whitelist is rejected before we touch the payload, so a bad
+    request can never persist.
+
+    On success:
+      - canonical_payload mutated (deep copy first; transaction.atomic
+        gives us rollback on any later raise).
+      - last_edited_by / last_edited_at stamped.
+      - One AuditEvent per changed field with before/after snapshots.
+      - DQA re-runs against the new payload (caller can disable with
+        `rerun_dqa=False` for unit tests).
+
+    `promote_stage_record` reads last_edited_by to block the same
+    operator from promoting a record they just edited
+    (AC-DIH-EDIT-NO-SELF-APPROVE).
+    """
+    if stage.state not in _EDITABLE_STATES:
+        raise StageEditError(
+            f"only provisional / quality_failed / ddup_review stage "
+            f"records can be edited (got {stage.state})",
+        )
+    if not actor:
+        raise StageEditError("actor is required")
+    if not reason or not reason.strip():
+        raise StageEditError("reason is required")
+    if not isinstance(field_changes, dict) or not field_changes:
+        raise StageEditError("field_changes must be a non-empty object")
+
+    illegal = [p for p in field_changes if not _path_editable(p)]
+    if illegal:
+        raise StageEditError(
+            "paths outside the editable whitelist: " + ", ".join(sorted(illegal)),
+        )
+
+    import copy
+    new_payload = copy.deepcopy(stage.canonical_payload or {})
+    diffs = []
+    for path, new_val in field_changes.items():
+        before = _get_dotted(new_payload, path)
+        _set_dotted(new_payload, path, new_val)
+        diffs.append({"path": path, "before": before, "after": new_val})
+
+    stage.canonical_payload = new_payload
+    stage.last_edited_by = actor
+    stage.last_edited_at = timezone.now()
+    stage.save(update_fields=[
+        "canonical_payload", "last_edited_by", "last_edited_at", "updated_at",
+    ])
+
+    for d in diffs:
+        _emit_audit(
+            "edit", "stage_record", stage.id,
+            actor=actor,
+            reason=reason.strip(),
+            field_changes={"path": d["path"], "before": d["before"], "after": d["after"]},
+        )
+
+    if rerun_dqa:
+        # Re-run DQA against the new payload. Reuse the existing
+        # evaluator; the DDUP + IDV gates do not re-run because their
+        # inputs (NIN, geo) are not in the editable whitelist.
+        try:
+            results = dqa_evaluate_all(
+                new_payload,
+                record_type="stage_record",
+                record_id=stage.id,
+            )
+            blocking = [r.rule_id for r in results if not r.passed and r.severity == "blocking"]
+            warnings = [r.rule_id for r in results if not r.passed and r.severity == "warning"]
+            info = [r.rule_id for r in results if not r.passed and r.severity == "info"]
+            stage.dqa_summary = {
+                "blocking_failures": blocking,
+                "warnings": warnings,
+                "info": info,
+                "rerun_after_edit": True,
+            }
+            # If the edit cleared every blocking failure, the record
+            # automatically returns to PROVISIONAL so the queue treats
+            # it as actionable again.
+            if stage.state == StageRecordState.QUALITY_FAILED and not blocking:
+                stage.state = StageRecordState.PROVISIONAL
+            stage.save(update_fields=["dqa_summary", "state", "updated_at"])
+        except Exception as exc:  # noqa: BLE001 — DQA must not fail the edit
+            log.warning(
+                "dqa rerun after edit failed: %s", exc,
+                extra={"stage_id": stage.id},
+            )
+
     return stage

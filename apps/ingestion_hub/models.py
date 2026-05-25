@@ -305,6 +305,12 @@ class StageRecord(models.Model):
     rejected_at = models.DateTimeField(null=True, blank=True)
     rejected_by = models.CharField(max_length=64, blank=True)
 
+    # In-place corrections — last operator to PATCH canonical_payload.
+    # Used by promote_stage_record to enforce AC-DIH-NO-SELF-APPROVE
+    # (the operator who edited cannot be the one who promotes).
+    last_edited_by = models.CharField(max_length=64, blank=True)
+    last_edited_at = models.DateTimeField(null=True, blank=True)
+
     sla_deadline = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)

@@ -141,6 +141,15 @@ const DIHScreen = () => {
   const [toast, setToast] = useStateDIH("");
   const [selection, setSelection] = useStateDIH(new Set());
   const [quickFilter, setQuickFilter] = useStateDIH(null);
+  // Inline correction state — editMode toggles the staged column into
+  // editable inputs; editDraft holds the dotted-path → new-value
+  // patch the operator is composing; the Save button opens the modal
+  // that captures the mandatory reason.
+  const [editMode, setEditMode] = useStateDIH(false);
+  const [editDraft, setEditDraft] = useStateDIH({});
+  const [editError, setEditError] = useStateDIH("");
+  const [editSaving, setEditSaving] = useStateDIH(false);
+  const [showEditModal, setShowEditModal] = useStateDIH(false);
 
   // Fetch live data once on mount. Same-origin so the Django session
   // cookie flows automatically; cross-origin / file:// previews fall
@@ -544,11 +553,44 @@ const DIHScreen = () => {
               <div className="t-cap" style={{color:'var(--accent-data)'}}><Icon name="database" size={11}/> STAGED RECORD</div>
               <h3 className="t-h3" style={{margin:'2px 0 0'}}>{current.head}</h3>
               <div className="t-cap">{current.parish} · HH {current.hh} · Captured 14:35 EAT today</div>
+              {current._stage && current._stage.last_edited_by && (
+                <div className="t-cap" style={{marginTop:4, color:'var(--accent-update)'}}>
+                  <Icon name="edit" size={10}/> Last edited by {current._stage.last_edited_by}
+                  {current._stage.last_edited_at ? ` · ${current._stage.last_edited_at.slice(0, 10)}` : ""}
+                </div>
+              )}
             </div>
-            <Chip>{current.status}</Chip>
+            <div className="row gap-2">
+              <Chip>{current.status}</Chip>
+              {editMode ? (
+                <>
+                  <button className="btn btn-sm" disabled={editSaving}
+                    onClick={() => { setEditMode(false); setEditDraft({}); setEditError(""); }}>
+                    Cancel
+                  </button>
+                  <button className="btn btn-sm btn-primary" disabled={editSaving}
+                    onClick={() => setShowEditModal(true)}>
+                    <Icon name="check" size={12}/> Save edits
+                  </button>
+                </>
+              ) : (
+                ["provisional", "quality_failed", "ddup_review"].includes(current.state) && (
+                  <button className="btn btn-sm" onClick={() => setEditMode(true)}>
+                    <Icon name="edit" size={12}/> Edit
+                  </button>
+                )
+              )}
+            </div>
           </div>
           <div style={{padding:16}}>
-            {(() => {
+            {editMode && (
+              <EditPanel
+                payload={current._payload || {}}
+                draft={editDraft}
+                onDraftChange={setEditDraft}
+              />
+            )}
+            {!editMode && (() => {
               // Live mode: derive the summary + roster from the
               // canonical payload the API returned. Mock mode: fall
               // back to the original hardcoded fields so the design
@@ -923,6 +965,54 @@ const DIHScreen = () => {
       <ReasonModal open={modal === 'reject'} title="Reject submission" intent="danger"
         reasonOptions={reasonsReject} recordLabel={current?.id || ""}
         onClose={() => setModal(null)} onConfirm={fire}/>
+      {/* Inline-edit save confirmation — captures the mandatory reason
+          and POSTs the diff to /edit/. */}
+      <ReasonModal open={showEditModal} title="Save corrections" intent="primary"
+        reasonOptions={[
+          "Operator typo on capture — name spelling",
+          "Operator typo on capture — phone number",
+          "Operator typo on capture — date of birth",
+          "GPS drift on first reading — re-pinned",
+          "Respondent corrected information at parish review",
+          "Other (specify in note)",
+        ]}
+        recordLabel={current?.id || ""}
+        onClose={() => setShowEditModal(false)}
+        onConfirm={(payload) => {
+          if (!current) { setShowEditModal(false); return; }
+          if (!Object.keys(editDraft).length) {
+            setEditError("no field changes");
+            setShowEditModal(false);
+            return;
+          }
+          const body = {
+            actor: "nsr-corrector",   // shell wires session username later
+            reason: [payload?.reason, payload?.note].filter(Boolean).join(" — "),
+            field_changes: editDraft,
+          };
+          setEditSaving(true);
+          fetch(`/api/v1/dih/stage-records/${current.id}/edit/`, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify(body),
+          })
+            .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(d.detail || "edit failed")))
+            .then(stage => {
+              // Replace the row in place with the server's view.
+              setRows(rows.map(r => r.id === stage.id ? _stageToRow(stage) : r));
+              setToast(`Saved ${Object.keys(editDraft).length} field(s) — DQA re-run, audit emitted.`);
+              setEditDraft({});
+              setEditMode(false);
+              setEditSaving(false);
+              setShowEditModal(false);
+            })
+            .catch(err => {
+              setEditError(String(err));
+              setEditSaving(false);
+              setShowEditModal(false);
+            });
+        }}/>
       <ReasonModal open={modal === 'archive'} title="Archive (cannot promote)" intent="danger"
         reasonOptions={[
           "Quality issues unfixable — original form lost",
@@ -960,6 +1050,117 @@ const DIHScreen = () => {
         }}/>
 
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
+    </div>
+  );
+};
+
+/* ============================================================
+   Inline edit panel — whitelisted field corrections
+   ============================================================
+   Mirrors the EDITABLE_PATH_PATTERNS list in
+   apps/ingestion_hub/services.py. Anything outside this set is
+   server-side blocked, so the UI doesn't expose it. */
+
+const _editableValue = (payload, path) => {
+  // Get the current value (from draft if edited, else from payload).
+  const parts = path.split(".");
+  let cur = payload;
+  for (const p of parts) {
+    if (cur == null) return "";
+    if (/^\d+$/.test(p)) cur = Array.isArray(cur) ? cur[Number(p)] : undefined;
+    else cur = cur[p];
+  }
+  return cur ?? "";
+};
+
+const EditPanel = ({ payload, draft, onDraftChange }) => {
+  const members = payload.members || [];
+  const setField = (path, value) => {
+    const next = { ...draft };
+    if (value === "" || value == null) {
+      delete next[path];
+    } else {
+      next[path] = value;
+    }
+    onDraftChange(next);
+  };
+  const fieldVal = (path) => (path in draft) ? draft[path] : _editableValue(payload, path);
+
+  return (
+    <div className="col gap-3" style={{ background: "var(--accent-update-bg)", padding: 12, borderRadius: 6, borderLeft: "3px solid var(--accent-update)" }}>
+      <div className="row gap-2">
+        <Icon name="edit" size={13} color="var(--accent-update)"/>
+        <strong className="t-bodysm">Inline correction</strong>
+        <span className="t-cap">
+          Only phone, name, DoB and GPS can be edited here. NIN and
+          geography require re-capture. Audit emitted per change.
+        </span>
+      </div>
+
+      {/* GPS row */}
+      <div className="field-row-3">
+        <Field label="GPS lat">
+          <input className="field-input t-mono" value={fieldVal("gps_lat")}
+            onChange={(e) => setField("gps_lat", e.target.value)}/>
+        </Field>
+        <Field label="GPS lng">
+          <input className="field-input t-mono" value={fieldVal("gps_lng")}
+            onChange={(e) => setField("gps_lng", e.target.value)}/>
+        </Field>
+        <Field label="Accuracy (m)">
+          <input className="field-input t-mono" value={fieldVal("gps_accuracy_m")}
+            onChange={(e) => setField("gps_accuracy_m", e.target.value)}/>
+        </Field>
+      </div>
+
+      {/* Per-member rows */}
+      <div className="t-cap" style={{ marginTop: 4 }}>MEMBERS</div>
+      {members.length === 0 && (
+        <div className="t-bodysm muted">No members in payload.</div>
+      )}
+      {members.map((m, i) => (
+        <div key={i} style={{ borderTop: "1px solid var(--neutral-200)", paddingTop: 8 }}>
+          <div className="t-cap" style={{ marginBottom: 4 }}>
+            Person {m.line_number || i + 1}
+            {m.is_head && <Chip size="sm" tone="programme" style={{ marginLeft: 6 }}>Head</Chip>}
+          </div>
+          <div className="field-row-3">
+            <Field label="Surname">
+              <input className="field-input" value={fieldVal(`members.${i}.surname`)}
+                onChange={(e) => setField(`members.${i}.surname`, e.target.value)}/>
+            </Field>
+            <Field label="First name">
+              <input className="field-input" value={fieldVal(`members.${i}.first_name`)}
+                onChange={(e) => setField(`members.${i}.first_name`, e.target.value)}/>
+            </Field>
+            <Field label="Other name(s)">
+              <input className="field-input" value={fieldVal(`members.${i}.other_name`)}
+                onChange={(e) => setField(`members.${i}.other_name`, e.target.value)}/>
+            </Field>
+          </div>
+          <div className="field-row-3">
+            <Field label="Date of birth">
+              <input className="field-input t-mono" type="date"
+                value={fieldVal(`members.${i}.date_of_birth`)}
+                onChange={(e) => setField(`members.${i}.date_of_birth`, e.target.value)}/>
+            </Field>
+            <Field label="Age (years)">
+              <input className="field-input t-num" type="number" min="0" max="120"
+                value={fieldVal(`members.${i}.age_years`)}
+                onChange={(e) => setField(`members.${i}.age_years`, e.target.value === "" ? "" : Number(e.target.value))}/>
+            </Field>
+            <Field label="Phone (E.164)">
+              <input className="field-input" value={fieldVal(`members.${i}.telephone_1`)}
+                onChange={(e) => setField(`members.${i}.telephone_1`, e.target.value)}/>
+            </Field>
+          </div>
+        </div>
+      ))}
+
+      <div className="t-cap" style={{ marginTop: 8 }}>
+        <strong>{Object.keys(draft).length}</strong> field{Object.keys(draft).length === 1 ? "" : "s"} changed.
+        Save will require a reason and re-run DQA before promotion.
+      </div>
     </div>
   );
 };

@@ -14,6 +14,8 @@ from .models import (
 )
 from .services import (
     DihError,
+    StageEditError,
+    edit_stage_record,
     process_stage_record,
     promote_stage_record,
     quarantine_stage_record,
@@ -53,6 +55,7 @@ class StageRecordSerializer(serializers.ModelSerializer):
             "dqa_summary", "ddup_candidates", "idv_outcome",
             "promoted_household_id", "promoted_at",
             "rejected_reason", "rejected_at", "rejected_by",
+            "last_edited_by", "last_edited_at",
             "sla_deadline", "created_at", "updated_at",
         )
 
@@ -70,6 +73,21 @@ class RejectRequestSerializer(serializers.Serializer):
 class ProcessRequestSerializer(serializers.Serializer):
     actor = serializers.CharField(max_length=64, default="system")
     allow_fast_track = serializers.BooleanField(default=True)
+
+
+class EditRequestSerializer(serializers.Serializer):
+    """In-place correction of a StageRecord's canonical_payload."""
+    actor = serializers.CharField(max_length=64)
+    reason = serializers.CharField()
+    field_changes = serializers.DictField(
+        child=serializers.JSONField(),
+        allow_empty=False,
+        help_text=(
+            "Dotted-path → new-value. Only the whitelisted paths in "
+            "apps.ingestion_hub.services.EDITABLE_PATH_PATTERNS may "
+            "be edited (gps_* and members.<i>.<safe-field>)."
+        ),
+    )
 
 
 # --- ViewSets --------------------------------------------------------------
@@ -252,6 +270,40 @@ class StageRecordViewSet(
                 reason=ser.validated_data["reason"],
             )
         except DihError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        stage.refresh_from_db()
+        return Response(self.get_serializer(stage).data)
+
+    @extend_schema(
+        tags=["dih"],
+        summary="Edit a stage record's canonical payload",
+        description=(
+            "Sparse correction of the staged payload before promotion. "
+            "Only whitelisted paths may be edited (gps_lat/lng/accuracy_m "
+            "and members.<i>.<surname|first_name|other_name|date_of_birth|"
+            "age_years|telephone_1|telephone_2>). NIN, consent, and the "
+            "geographic chain are NOT editable — those require re-capture. "
+            "AC-DIH-EDIT-NO-SELF-APPROVE: the editor cannot also promote."
+        ),
+        request=EditRequestSerializer,
+        responses={
+            200: StageRecordSerializer,
+            400: OpenApiResponse(description="state guard / whitelist / shape violation"),
+        },
+    )
+    @action(detail=True, methods=["post"], url_path="edit")
+    def edit(self, request, pk=None):
+        ser = EditRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        stage = self.get_object()
+        try:
+            edit_stage_record(
+                stage,
+                field_changes=ser.validated_data["field_changes"],
+                actor=ser.validated_data["actor"],
+                reason=ser.validated_data["reason"],
+            )
+        except StageEditError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         stage.refresh_from_db()
         return Response(self.get_serializer(stage).data)

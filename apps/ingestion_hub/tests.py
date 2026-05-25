@@ -801,3 +801,200 @@ class TestQuarantineEndpoint:
         assert r.status_code == 200
         ids = {row["id"] for row in r.data["results"]}
         assert stage.id in ids
+
+
+# ---------------------------------------------------------------------------
+# In-place correction (US-S23-DIH-EDIT)
+
+
+@pytest.mark.django_db
+class TestEditStageRecord:
+    URL_TPL = "/api/v1/dih/stage-records/{id}/edit/"
+
+    def _client(self, django_user_model, *, username="nsr-corrector"):
+        u, _ = django_user_model.objects.get_or_create(
+            username=username,
+            defaults={"is_superuser": True},
+        )
+        u.set_password("p")
+        u.save()
+        c = APIClient()
+        c.force_authenticate(user=u)
+        return c
+
+    def _staged(self, connector, geo_codes, state):
+        run = start_connector_run(connector)
+        landing = land_payload(run, _payload(geo_codes))
+        stage = stage_from_landing(landing, canonical_payload=_payload(geo_codes))
+        stage.state = state
+        stage.save(update_fields=["state"])
+        return stage
+
+    def test_edit_succeeds_on_provisional(
+        self, django_user_model, connector, geo_codes,
+    ):
+        stage = self._staged(connector, geo_codes, StageRecordState.PROVISIONAL)
+        r = self._client(django_user_model).post(
+            self.URL_TPL.format(id=stage.id),
+            {
+                "actor": "nsr-corrector",
+                "reason": "Phone digit transposition spotted on intake review",
+                "field_changes": {
+                    "members.0.telephone_1": "+256 786 999999",
+                    "gps_accuracy_m": "4.50",
+                },
+            },
+            format="json",
+        )
+        assert r.status_code == 200, r.data
+        stage.refresh_from_db()
+        assert stage.canonical_payload["members"][0]["telephone_1"] == "+256 786 999999"
+        assert stage.canonical_payload["gps_accuracy_m"] == "4.50"
+        assert stage.last_edited_by == "nsr-corrector"
+        assert stage.last_edited_at is not None
+
+    def test_edit_rejected_on_promoted_state(
+        self, django_user_model, connector, geo_codes,
+    ):
+        stage = self._staged(connector, geo_codes, StageRecordState.PROMOTED)
+        r = self._client(django_user_model).post(
+            self.URL_TPL.format(id=stage.id),
+            {
+                "actor": "x", "reason": "y",
+                "field_changes": {"gps_accuracy_m": "4.0"},
+            },
+            format="json",
+        )
+        assert r.status_code == 400
+
+    def test_whitelist_blocks_nin_edit(
+        self, django_user_model, connector, geo_codes,
+    ):
+        stage = self._staged(connector, geo_codes, StageRecordState.PROVISIONAL)
+        r = self._client(django_user_model).post(
+            self.URL_TPL.format(id=stage.id),
+            {
+                "actor": "x", "reason": "y",
+                "field_changes": {"members.0.nin": "CM00000000XXXX"},
+            },
+            format="json",
+        )
+        assert r.status_code == 400
+        assert "whitelist" in r.data["detail"].lower()
+
+    def test_whitelist_blocks_geo_chain_edit(
+        self, django_user_model, connector, geo_codes,
+    ):
+        stage = self._staged(connector, geo_codes, StageRecordState.PROVISIONAL)
+        r = self._client(django_user_model).post(
+            self.URL_TPL.format(id=stage.id),
+            {
+                "actor": "x", "reason": "y",
+                "field_changes": {"geographic.district": "T-D-OTHER"},
+            },
+            format="json",
+        )
+        assert r.status_code == 400
+
+    def test_reason_required(self, django_user_model, connector, geo_codes):
+        stage = self._staged(connector, geo_codes, StageRecordState.PROVISIONAL)
+        r = self._client(django_user_model).post(
+            self.URL_TPL.format(id=stage.id),
+            {
+                "actor": "x", "reason": "",
+                "field_changes": {"gps_accuracy_m": "1.0"},
+            },
+            format="json",
+        )
+        assert r.status_code == 400
+
+    def test_edit_emits_audit_per_field(
+        self, django_user_model, connector, geo_codes,
+    ):
+        from apps.security.models import AuditEvent
+        stage = self._staged(connector, geo_codes, StageRecordState.PROVISIONAL)
+        before = AuditEvent.objects.filter(
+            entity_type="stage_record", action="edit",
+        ).count()
+        self._client(django_user_model).post(
+            self.URL_TPL.format(id=stage.id),
+            {
+                "actor": "nsr-corrector",
+                "reason": "Operator typo on capture",
+                "field_changes": {
+                    "members.0.surname": "Okoth",  # was "Okot"
+                    "members.0.telephone_1": "+256 786 111222",
+                },
+            },
+            format="json",
+        )
+        after = AuditEvent.objects.filter(
+            entity_type="stage_record", action="edit",
+        ).count()
+        assert after == before + 2  # one event per changed field
+
+    def test_quality_failed_returns_to_provisional_when_dqa_clears(
+        self, django_user_model, connector, geo_codes,
+    ):
+        """If the edit fixes every blocking failure, the record flips
+        back to provisional so the queue treats it as actionable."""
+        stage = self._staged(connector, geo_codes, StageRecordState.QUALITY_FAILED)
+        self._client(django_user_model).post(
+            self.URL_TPL.format(id=stage.id),
+            {
+                "actor": "nsr-corrector",
+                "reason": "spelling fix",
+                "field_changes": {"members.0.surname": "Okoth"},
+            },
+            format="json",
+        )
+        stage.refresh_from_db()
+        # No DQA rules active in the test DB, so blocking_failures = [].
+        # The transition should fire.
+        assert stage.state == StageRecordState.PROVISIONAL
+
+
+@pytest.mark.django_db
+class TestEditNoSelfApprove:
+    """The same operator cannot edit AND promote a stage record."""
+
+    def test_self_promote_blocked(self, connector, geo_codes):
+        from apps.ingestion_hub.services import edit_stage_record
+        run = start_connector_run(connector)
+        landing = land_payload(run, _payload(geo_codes))
+        stage = stage_from_landing(landing, canonical_payload=_payload(geo_codes))
+        stage.state = StageRecordState.PENDING_PROMOTION
+        stage.save(update_fields=["state"])
+        # Move to provisional so the edit is allowed, then back.
+        stage.state = StageRecordState.PROVISIONAL
+        stage.save(update_fields=["state"])
+        edit_stage_record(
+            stage,
+            field_changes={"gps_accuracy_m": "4.0"},
+            actor="alice",
+            reason="fix",
+            rerun_dqa=False,
+        )
+        stage.refresh_from_db()
+        stage.state = StageRecordState.PENDING_PROMOTION
+        stage.save(update_fields=["state"])
+
+        with pytest.raises(DihError, match="EDIT-NO-SELF-APPROVE"):
+            promote_stage_record(stage, actor="alice")
+
+    def test_other_promoter_succeeds(self, connector, geo_codes):
+        from apps.ingestion_hub.services import edit_stage_record
+        run = start_connector_run(connector)
+        landing = land_payload(run, _payload(geo_codes))
+        stage = stage_from_landing(landing, canonical_payload=_payload(geo_codes))
+        edit_stage_record(
+            stage,
+            field_changes={"gps_accuracy_m": "4.0"},
+            actor="alice",
+            reason="fix",
+            rerun_dqa=False,
+        )
+        stage.refresh_from_db()
+        # A different operator can promote.
+        hh = promote_stage_record(stage, actor="bob")
+        assert hh.id == stage.provisional_registry_id
