@@ -5,7 +5,8 @@
    AdminSecurityRolesScreen, AdminAuditScreen,
    AdminGeoUnitDetailScreen, AdminUpdRoutingRuleEditScreen,
    AdminUserDetailScreen, AdminDdupPairDetailScreen,
-   AdminChoiceListOptionEditScreen */
+   AdminChoiceListOptionEditScreen,
+   ErrorBoundary */
 // NSR MIS — Admin shell
 // =====================================================
 // Wraps the two new PMT screens (Dashboard, Configuration) plus
@@ -139,6 +140,7 @@ const AdminApp = () => {
       {/* Main content */}
       <main style={{ flex: 1, minWidth: 0, overflow: "auto" }}>
         <div style={{ maxWidth: 1440, margin: "0 auto", padding: "24px 24px 64px" }}>
+          <ErrorBoundary>
           {screen === "admin-pmt-dashboard" && (
             <PmtDashboardScreen onOpenConfig={() => setScreen("admin-pmt-configuration")}/>
           )}
@@ -159,6 +161,7 @@ const AdminApp = () => {
           {screen === "admin-detail-user"          && <AdminUserDetailScreen onBack={() => setScreen("admin-security-roles")}/>}
           {screen === "admin-detail-ddup-pair"     && <AdminDdupPairDetailScreen onBack={() => setScreen("admin-workflow-ddup")}/>}
           {screen === "admin-detail-choice-option" && <AdminChoiceListOptionEditScreen onBack={() => setScreen("admin-refdata-choicelists")}/>}
+          </ErrorBoundary>
         </div>
       </main>
     </div>

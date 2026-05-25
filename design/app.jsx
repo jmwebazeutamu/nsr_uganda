@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, ProgrammesScreen, ProgrammeDetailScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, MemberDetailScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, ProgrammesScreen, ProgrammeDetailScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, MemberDetailScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts, ErrorBoundary */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -217,6 +217,7 @@ function App() {
 
       {/* Main */}
       <main className="main">
+        <ErrorBoundary>
         {screen === "home"    && <HomeScreen role={role} onNavigate={navigate}/>}
         {screen === "kit"     && <KitScreen/>}
         {screen === "capture" && <CaptureScreen
@@ -280,6 +281,7 @@ function App() {
             prefillPartnerId={screenPayload?.partnerId}
             onBack={() => navigate("dsas")}
             onCreated={(dsa) => navigate("dsa-detail", { dsaId: dsa.id })}/>}
+        </ErrorBoundary>
       </main>
 
       {/* Global DSA quick-find overlay — wired from the topbar icon

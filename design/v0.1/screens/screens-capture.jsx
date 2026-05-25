@@ -15,6 +15,77 @@ const SECTIONS = [
   { id: "hous",  label: "Housing",            tint: "eligibility",icon:"home" },
   { id: "food",  label: "Food & Shocks",      tint: "grm",      icon: "alert" },
 ];
+
+/* ============================================================
+   Per-section validators
+   ============================================================
+   Each validator returns an array of human-readable error strings.
+   Empty array = section is good to leave. The stepper colours the
+   tab red and shows a count when errors are present; the "Next"
+   button is disabled when the current section's array is non-empty.
+
+   Validation policy:
+   - Section 1 (Identification): full geo chain to village + consent.
+   - Section 2 (Roster): at least one member, head has surname +
+     first_name + sex + DoB-or-age, every member has surname +
+     first_name + sex + relationship_to_head.
+   - Sections 3–7: optional in the prototype — the model accepts
+     partials and the post-promotion edit flow can fill the rest.
+     We DO surface advisory warnings in their step indicator so
+     operators can see at a glance what's still missing.
+
+   When detail-entity sections graduate to "strict", flip the
+   ADVISORY-only validators below to return into the errors array
+   rather than the (unused) warnings channel. */
+
+const _validateId = ({ geo, consent }) => {
+  const errs = [];
+  if (!geo.region)    errs.push("Region is required");
+  if (!geo.subregion) errs.push("Sub-region is required");
+  if (!geo.district)  errs.push("District is required");
+  if (!geo.county)    errs.push("County is required");
+  if (!geo.subcounty) errs.push("Sub-county is required");
+  if (!geo.parish)    errs.push("Parish is required");
+  if (!geo.village)   errs.push("Village is required");
+  if (consent !== "yes") errs.push("Consent must be granted before submission");
+  return errs;
+};
+
+const _validateRoster = ({ members }) => {
+  const errs = [];
+  if (!members || members.length === 0) {
+    errs.push("Add at least one member (the head of household)");
+    return errs;
+  }
+  const hasHead = members.some(m => m.relationship_to_head === "01");
+  if (!hasHead) errs.push("Person 1 must be marked as the head of household");
+  members.forEach((m, i) => {
+    const tag = `Person ${m.line_number || i + 1}`;
+    if (!m.surname)              errs.push(`${tag}: surname is required`);
+    if (!m.first_name)           errs.push(`${tag}: first name is required`);
+    if (!m.sex)                  errs.push(`${tag}: sex is required`);
+    if (!m.relationship_to_head) errs.push(`${tag}: relationship to head is required`);
+    if (!m.date_of_birth && (m.age_years == null || m.age_years === ""))
+      errs.push(`${tag}: date of birth OR age is required`);
+  });
+  return errs;
+};
+
+// Sections 3–7 stay advisory in the prototype. Returning empty
+// keeps the Next button enabled; the stepper still shows a count
+// when records are missing so operators see what's unfilled.
+const _validateAdvisory = () => [];
+
+const SECTION_VALIDATORS = {
+  id:   _validateId,
+  rost: _validateRoster,
+  hd:   _validateAdvisory,
+  ed:   _validateAdvisory,
+  emp:  _validateAdvisory,
+  hous: _validateAdvisory,
+  food: _validateAdvisory,
+};
+
 const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
   const [active, setActive] = useStateCap("id");
   // Empty geo state — operator drills the live GeographicUnit
@@ -51,16 +122,40 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
     shocks: [], coping: [],
   });
 
-  // Derived per-section progress — used by the stepper + left rail.
-  const SECTION_PROG = {
-    id: (geo.village && consent === "yes") ? "done" : "active",
-    rost: members.length > 0 ? "done" : "active",
-    hd: Object.keys(healthData).length > 0 ? "done" : "todo",
-    ed: Object.keys(educationData).length > 0 ? "done" : "todo",
-    emp: Object.keys(employmentData).length > 0 ? "done" : "todo",
-    hous: (housing.dwelling.tenure || housing.utilities.cooking_fuel) ? "done" : "todo",
-    food: (foodShocks.food_security.worried_food || foodShocks.shocks.length) ? "done" : "todo",
+  // Per-section validation — runs in real time against the wizard
+  // state. Section errors gate the Next button + colour the stepper.
+  const _sectionState = {
+    geo, consent, members,
+    healthData, educationData, employmentData, housing, foodShocks,
   };
+  const SECTION_ERRORS = Object.fromEntries(
+    Object.entries(SECTION_VALIDATORS).map(
+      ([sid, fn]) => [sid, fn(_sectionState)],
+    ),
+  );
+  const _currentErrors = SECTION_ERRORS[active] || [];
+  const _canAdvance = _currentErrors.length === 0;
+
+  // Derived per-section progress — `done` when the section's
+  // validator returns zero errors AND the operator has touched it
+  // (we infer "touched" from having any data in the slice).
+  const _touched = {
+    id: !!(geo.region || geo.village || consent === "yes"),
+    rost: members.length > 0,
+    hd: Object.keys(healthData).length > 0,
+    ed: Object.keys(educationData).length > 0,
+    emp: Object.keys(employmentData).length > 0,
+    hous: !!(housing.dwelling.tenure || housing.utilities.cooking_fuel),
+    food: !!(foodShocks.food_security.worried_food || foodShocks.shocks.length),
+  };
+  const SECTION_PROG = Object.fromEntries(
+    SECTIONS.map(s => {
+      const errs = SECTION_ERRORS[s.id] || [];
+      if (errs.length > 0) return [s.id, "error"];
+      if (_touched[s.id])  return [s.id, "done"];
+      return [s.id, s.id === active ? "active" : "todo"];
+    }),
+  );
   const _doneCount = Object.values(SECTION_PROG).filter(s => s === "done").length;
   const _progPct = Math.round((_doneCount / 7) * 100);
   const _nextSectionId = (() => {
@@ -69,6 +164,7 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
     return order[Math.min(idx + 1, order.length - 1)];
   })();
   const _nextSectionLabel = SECTIONS.find(s => s.id === _nextSectionId)?.label || "Done";
+  const _totalErrors = Object.values(SECTION_ERRORS).reduce((n, arr) => n + arr.length, 0);
 
   if (device === "capi") {
     return <CapturePadCAPI onChangeDevice={onChangeDevice}/>;
@@ -95,23 +191,49 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
           const state = SECTION_PROG[s.id];
           const isActive = s.id === active;
           const done = state === "done";
+          const hasError = state === "error";
+          const errCount = (SECTION_ERRORS[s.id] || []).length;
+          // Active wins the colour even when it has errors; the
+          // operator's currently editing — they don't need the
+          // stepper screaming red at them while they type. Other
+          // tabs with errors render in danger.
+          const tabColor = isActive
+            ? "var(--accent-data)"
+            : hasError ? "var(--accent-danger)"
+            : done ? "var(--neutral-700)"
+            : "var(--neutral-500)";
+          const circleBg = isActive
+            ? "var(--accent-data)"
+            : hasError ? "var(--accent-danger-bg)"
+            : done ? "var(--accent-data-bg)"
+            : "var(--neutral-100)";
+          const circleFg = isActive
+            ? "white"
+            : hasError ? "var(--accent-danger)"
+            : done ? "var(--accent-data)"
+            : "var(--neutral-500)";
+          const circleBorder = isActive ? "0"
+            : `1px solid ${hasError ? "var(--accent-danger)" : done ? "var(--accent-data)" : "var(--neutral-300)"}`;
           return (
             <React.Fragment key={s.id}>
-              <button onClick={() => setActive(s.id)} style={{
+              <button onClick={() => setActive(s.id)}
+                title={hasError ? `${errCount} error${errCount === 1 ? "" : "s"} on this step` : ""}
+                style={{
                 display:'flex', alignItems:'center', gap:8,
                 padding:'6px 10px', border:0, background:'transparent',
-                color: isActive ? 'var(--accent-data)' : done ? 'var(--neutral-700)' : 'var(--neutral-500)',
+                color: tabColor,
                 fontWeight: isActive ? 600 : 500, fontSize: 13,
               }}>
                 <span style={{
                   width:22, height:22, borderRadius:'50%',
                   display:'grid', placeItems:'center',
-                  background: isActive ? 'var(--accent-data)' : done ? 'var(--accent-data-bg)' : 'var(--neutral-100)',
-                  color: isActive ? 'white' : done ? 'var(--accent-data)' : 'var(--neutral-500)',
+                  background: circleBg, color: circleFg,
                   fontSize:11, fontWeight:600,
-                  border: isActive ? '0' : `1px solid ${done ? 'var(--accent-data)' : 'var(--neutral-300)'}`,
+                  border: circleBorder,
                 }}>
-                  {done ? <Icon name="check" size={12}/> : i+1}
+                  {done ? <Icon name="check" size={12}/>
+                   : hasError ? <Icon name="alert" size={12}/>
+                   : i+1}
                 </span>
                 <span className="stretchable">{s.label}</span>
               </button>
@@ -128,18 +250,36 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
           {SECTIONS.map((s) => {
             const state = SECTION_PROG[s.id];
             const isActive = s.id === active;
+            const hasError = state === "error";
+            const errCount = (SECTION_ERRORS[s.id] || []).length;
             return (
-              <button key={s.id} onClick={() => setActive(s.id)} style={{
+              <button key={s.id} onClick={() => setActive(s.id)}
+                title={hasError ? `${errCount} error${errCount === 1 ? "" : "s"} on this step` : ""}
+                style={{
                 display:'flex', alignItems:'center', gap:10, width:'100%',
-                padding:'10px 12px', border:0, background: isActive ? 'var(--accent-data-bg)' : 'transparent',
-                borderLeft: isActive ? '3px solid var(--accent-data)' : '3px solid transparent',
-                color: isActive ? 'var(--accent-data)' : 'var(--neutral-900)',
+                padding:'10px 12px', border:0,
+                background: isActive ? 'var(--accent-data-bg)' : 'transparent',
+                borderLeft: isActive ? '3px solid var(--accent-data)'
+                          : hasError ? '3px solid var(--accent-danger)'
+                          : '3px solid transparent',
+                color: isActive ? 'var(--accent-data)'
+                     : hasError ? 'var(--accent-danger)'
+                     : 'var(--neutral-900)',
                 textAlign:'left', borderRadius:4, cursor:'pointer',
                 fontWeight: isActive ? 600 : 500, fontSize:13,
               }}>
                 <Icon name={s.icon} size={16}/>
                 <span style={{flex:1}} className="stretchable">{s.label}</span>
                 {state === 'done' && <Icon name="check" size={14} color="var(--accent-data)"/>}
+                {hasError && (
+                  <span style={{
+                    minWidth: 18, height: 18, padding: "0 5px",
+                    background: "var(--accent-danger)",
+                    color: "white", borderRadius: 9,
+                    display: "grid", placeItems: "center",
+                    fontSize: 10, fontWeight: 700,
+                  }}>{errCount}</span>
+                )}
               </button>
             );
           })}
@@ -154,6 +294,30 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
 
         {/* Main form — switches body by active section */}
         <div className="card">
+          {_currentErrors.length > 0 && (
+            <div className="tint-danger" style={{
+              margin: 16, padding: 14, borderRadius: 6,
+              borderLeft: "3px solid var(--accent-danger)",
+            }}>
+              <div className="row gap-2" style={{ marginBottom: 6 }}>
+                <Icon name="alert" size={14} color="var(--accent-danger)"/>
+                <strong className="t-bodysm">
+                  {_currentErrors.length} item{_currentErrors.length === 1 ? "" : "s"} to fix before continuing
+                </strong>
+              </div>
+              <ul className="t-bodysm" style={{
+                margin: "4px 0 0 22px", color: "var(--neutral-700)",
+                lineHeight: 1.65,
+              }}>
+                {_currentErrors.slice(0, 8).map((msg, i) => <li key={i}>{msg}</li>)}
+                {_currentErrors.length > 8 && (
+                  <li style={{ color: "var(--neutral-500)" }}>
+                    …and {_currentErrors.length - 8} more
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
           {active === "id" && (
             <IdentificationSection
               geo={geo} setGeo={setGeo}
@@ -253,12 +417,38 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
 
       {/* Action bar */}
       <div style={{margin:'20px -24px 0', position:'sticky', bottom:0, zIndex:20}}>
-        <ActionBar left={<>Section {SECTIONS.findIndex(s => s.id === active) + 1} of 7 · {_progPct}% complete · <span className="stretchable">Auto-saved 14:34 EAT</span></>}>
+        <ActionBar left={<>
+          Section {SECTIONS.findIndex(s => s.id === active) + 1} of 7 · {_progPct}% complete
+          {_totalErrors > 0 && (
+            <span style={{
+              marginLeft: 10, padding: "2px 8px",
+              background: "var(--accent-danger-bg)",
+              color: "var(--accent-danger)",
+              borderRadius: 10, fontSize: 11, fontWeight: 600,
+            }}>
+              {_totalErrors} unresolved
+            </span>
+          )}
+          {" · "}<span className="stretchable">Auto-saved 14:34 EAT</span>
+        </>}>
           <button className="btn"><Icon name="save" size={14}/> Save draft</button>
-          <button className="btn" onClick={() => setActive(_nextSectionId)}>
+          <button className="btn"
+            disabled={!_canAdvance}
+            title={
+              _canAdvance
+                ? `Advance to ${_nextSectionLabel}`
+                : `Fix ${_currentErrors.length} issue${_currentErrors.length === 1 ? "" : "s"} on this step first`
+            }
+            onClick={() => _canAdvance && setActive(_nextSectionId)}>
             <Icon name="arrowRight" size={14}/> Next: {_nextSectionLabel}
           </button>
-          <button className="btn btn-primary" onClick={() => setSubmitOpen(true)}>
+          <button className="btn btn-primary"
+            disabled={_totalErrors > 0}
+            title={_totalErrors > 0
+              ? `${_totalErrors} unresolved error${_totalErrors === 1 ? "" : "s"} across the wizard — fix them before submitting`
+              : "Submit for promotion"
+            }
+            onClick={() => _totalErrors === 0 && setSubmitOpen(true)}>
             <Icon name="check" size={14}/> Submit for promotion
           </button>
         </ActionBar>
