@@ -160,7 +160,10 @@ const ROLE_CONTENT = {
         { id: "01HXZBVK6QN8M2PFB7K6FZRWS41", who: "Onyango David · Logiri, Arua", note: "Bulk OPM-PDM · 0 warnings", chip: "Pending", age: "2h" },
         { id: "01HXZGN3W8MN6P2FB7K6FZRWS52", who: "Nakato Sarah · Kuluba, Yumbe", note: "Walk-in · NIRA mismatch · 1 blocking", chip: "Pending", age: "3h" },
       ]},
-      { title: "Bulk batches awaiting dual-approval", icon: "duplicate", count: 4, items: [
+      // Bulk DRS dual-approval queue — routes to the DRS screen,
+      // NOT the DIH default. CR-YYYY-MM-DD IDs are change-request
+      // identifiers for partner bulk requests (US-108).
+      { title: "Bulk batches awaiting dual-approval", icon: "duplicate", count: 4, _target: "drs", items: [
         { id: "CR-2026-05-13-00112", who: "UBOS-NUSAF-2026-BULK", note: "11,402 records · awaits second approver", chip: "Pending Approval", age: "yesterday" },
         { id: "CR-2026-05-12-00031", who: "OPM-PDM-2026-Q2-BULK",  note: "8,213 records · awaits second approver",  chip: "Pending Approval", age: "2d" },
       ]},
