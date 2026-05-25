@@ -1,12 +1,17 @@
 """Tiny landing view at / plus a same-origin shim that serves the
 React design harness from /console/ so it can hit /api/v1/... with
-the existing Django session cookie (no CORS dance required)."""
+the existing Django session cookie (no CORS dance required).
+
+The /manual/ route mirrors the same pattern for the MkDocs-built
+user manual under /docs/user-manual/site/."""
 
 from pathlib import Path
 
 from django.http import FileResponse, Http404, HttpResponse
 
-DESIGN_DIR = Path(__file__).resolve().parent.parent / "design"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DESIGN_DIR = REPO_ROOT / "design"
+MANUAL_DIR = REPO_ROOT / "docs" / "user-manual" / "site"
 
 
 def console(_request, path: str = "nsr-mis-console.html"):
@@ -26,6 +31,47 @@ def console(_request, path: str = "nsr-mis-console.html"):
     # Babel + JSX use text/javascript via the type='text/babel'
     # script tag; serving as the right MIME type avoids browser
     # warnings.
+    return FileResponse(open(target, "rb"))  # noqa: SIM115
+
+
+def manual(_request, path: str = ""):
+    """Serve the MkDocs-built user manual under /manual/{path}.
+
+    MkDocs uses use_directory_urls=True so every page is foo/index.html,
+    not foo.html. This view resolves directory-style URLs to the
+    index.html inside them.
+
+        /manual/                          -> site/index.html
+        /manual/admin/                    -> site/admin/index.html
+        /manual/admin/install/            -> site/admin/install/index.html
+        /manual/assets/stylesheets/x.css  -> site/assets/stylesheets/x.css
+
+    Rebuild with:  cd docs/user-manual && mkdocs build
+    Dev-only; production should serve these static files through nginx."""
+    if not MANUAL_DIR.is_dir():
+        return HttpResponse(
+            "<h1>Manual not built</h1>"
+            "<p>Run <code>cd docs/user-manual && mkdocs build</code> "
+            "then reload this page.</p>",
+            status=503,
+            content_type="text/html",
+        )
+
+    clean = path.strip("/")
+    candidate = (MANUAL_DIR / clean) if clean else MANUAL_DIR
+    if candidate.is_dir():
+        candidate = candidate / "index.html"
+    target = candidate.resolve()
+
+    # Defence against ".." traversal — the resolved path must still
+    # live under MANUAL_DIR.
+    try:
+        target.relative_to(MANUAL_DIR)
+    except ValueError as exc:
+        raise Http404("path outside manual root") from exc
+    if not target.is_file():
+        raise Http404(f"manual asset not found: {path}")
+
     return FileResponse(open(target, "rb"))  # noqa: SIM115
 
 HOME_HTML = """<!doctype html>
@@ -49,6 +95,7 @@ HOME_HTML = """<!doctype html>
 <h1>NSR MIS</h1>
 <p class="sub">Uganda National Social Registry — Sprint 0 baseline.</p>
 <ul>
+ <li><a href="/manual/">/manual/</a> &middot; <span class="desc">User manual (MkDocs site)</span></li>
  <li><a href="/admin/">/admin/</a> &middot; <span class="desc">Django admin (login required)</span></li>
  <li><a href="/api/docs/">/api/docs/</a> &middot; <span class="desc">Swagger UI</span></li>
  <li><a href="/api/schema/">/api/schema/</a> &middot; <span class="desc">OpenAPI 3.1 JSON</span></li>

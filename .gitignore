@@ -61,3 +61,6 @@ design/v0.1/*-source/
 # regenerated on demand via /render-and-deliver/ + the download
 # endpoint's lazy-regen path.
 .drs-bundles/
+
+# MkDocs build output for the user manual
+/docs/user-manual/site/

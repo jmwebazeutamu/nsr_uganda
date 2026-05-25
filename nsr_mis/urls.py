@@ -3,7 +3,7 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.permissions import AllowAny
 
-from .views import console, home
+from .views import console, home, manual
 
 # OpenAPI schema + Swagger UI stay browsable without login (developer
 # convenience). Every other DRF endpoint requires IsAuthenticated per
@@ -19,6 +19,11 @@ urlpatterns = [
     # the built React app through nginx with its own auth gateway.
     path("console/", console, name="console-home"),
     path("console/<path:path>", console, name="console-asset"),
+    # User manual — MkDocs-built site under docs/user-manual/site/.
+    # Same dev-convenience pattern as /console/; production should
+    # serve these static files through nginx.
+    path("manual/", manual, name="manual-home"),
+    path("manual/<path:path>", manual, name="manual-asset"),
     # Admin Console — separate bundle, group-gated (HANDOFF §3.3).
     path("admin-console/", include("apps.admin_console.urls")),
     path("api/schema/", schema_view, name="schema"),
