@@ -23,13 +23,11 @@ dependencies = [
   # an async client would force a different DRF view layer.
   "requests>=2.32",
   # Chatbot Assistant (ADR-0021). `anthropic` for the Claude
-  # Messages client; `pgvector` for the embedding column +
-  # cosine retrieval on Postgres; `sentence-transformers` for
-  # local 384-d embeddings (all-MiniLM-L6-v2, no second API key).
-  # CI runs on sqlite so the pgvector extension is a Postgres-
-  # only requirement at deploy time.
+  # Messages client; `sentence-transformers` for local 384-d
+  # embeddings (all-MiniLM-L6-v2, no second API key). v1
+  # retrieval is Python-side cosine over a JSONField; pgvector
+  # graduates when the corpus exceeds the ADR-0021 threshold.
   "anthropic>=0.40",
-  "pgvector>=0.3",
   "sentence-transformers>=3.0",
 ]
 

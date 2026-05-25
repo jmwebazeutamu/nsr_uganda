@@ -38,11 +38,15 @@ RAG-grounded chat assistant over the user manuals.
   `claude-sonnet-4-6` (1 M context, lower cost than Opus for chat).
   Key read from `ANTHROPIC_API_KEY` via `django-environ`. No key is
   committed (per CLAUDE.md anti-pattern).
-- **Retrieval**: **RAG with pgvector**. `ManualChunk` table holds
-  chunked manual content + a `vector(384)` embedding column.
-  Top-k cosine retrieval per turn. Dev/CI on sqlite falls back to a
-  JSON column + in-memory cosine so unit tests run without a
-  Postgres extension.
+- **Retrieval**: **RAG with cosine top-k**. `ManualChunk` table
+  holds chunked manual content + a `JSONField` embedding column
+  (list of 384 floats). v1 retrieval is Python-side cosine over
+  all chunks — the manuals corpus is hundreds of chunks, fits
+  comfortably in memory, and skips the pgvector/sqlite portability
+  dance. **pgvector graduation**: once the corpus grows past
+  ~10 k chunks (i.e. when "datasets later" lands) introduce a
+  `pgvector.django.VectorField` migration + IVF/HNSW index; the
+  retrieval call site is the only consumer.
 - **Embeddings**: **local sentence-transformers**
   (`all-MiniLM-L6-v2`, 384-d). In-process, no second API key, zero
   per-token cost. Model weights ship in the deploy image
