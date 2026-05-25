@@ -490,9 +490,17 @@ def promote_stage_record(
 
     # Resolve the geographic ladder. The caller is expected to supply
     # GeographicUnit codes; we look them up by (level, code).
-    def _geo(level: str) -> GeographicUnit:
+    # Levels in _OPTIONAL_LEVELS may be missing — _geo returns None
+    # without raising when the payload omits them (per the UBOS
+    # frame, village rows aren't seeded for every parish so they
+    # commonly arrive blank from field capture).
+    _optional_levels = {"village"}
+
+    def _geo(level: str):
         code = geo_payload.get(level)
         if not code:
+            if level in _optional_levels:
+                return None
             raise DihError(f"canonical_payload.geographic.{level} required")
         row = (
             GeographicUnit.objects

@@ -46,7 +46,9 @@ const _validateId = ({ geo, consent }) => {
   if (!geo.county)    errs.push("County is required");
   if (!geo.subcounty) errs.push("Sub-county is required");
   if (!geo.parish)    errs.push("Parish is required");
-  if (!geo.village)   errs.push("Village is required");
+  // Village is optional — the UBOS frame doesn't carry village rows
+  // for every parish, and field ops report village often unknown at
+  // capture time. Parish is the lowest mandatory level.
   if (consent !== "yes") errs.push("Consent must be granted before submission");
   return errs;
 };

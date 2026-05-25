@@ -1092,3 +1092,38 @@ class TestReprocessCommand:
             StageRecordState.PROMOTED.value,
             StageRecordState.PENDING_PROMOTION.value,
         )
+
+
+# ---------------------------------------------------------------------------
+# Village optional (US-S23-DIH-VILLAGE-OPTIONAL)
+
+
+@pytest.mark.django_db
+class TestVillageOptional:
+    """Field ops report village commonly unknown at capture; only the
+    19/10,872 parishes have seeded village rows. Promotion must
+    succeed when geographic.village is missing — parish is the
+    lowest mandatory level."""
+
+    def _payload_no_village(self, geo_codes):
+        p = _payload(geo_codes)
+        p["geographic"] = {k: v for k, v in p["geographic"].items() if k != "village"}
+        return p
+
+    def test_promote_without_village_succeeds(self, connector, geo_codes):
+        payload = self._payload_no_village(geo_codes)
+        run = start_connector_run(connector)
+        landing = land_payload(run, payload)
+        stage = stage_from_landing(landing, canonical_payload=payload)
+        hh = promote_stage_record(stage, actor="reviewer")
+        assert hh.parish.code == geo_codes["parish"]
+        assert hh.village is None  # parsed as missing, not lost
+
+    def test_promote_without_parish_still_fails(self, connector, geo_codes):
+        payload = _payload(geo_codes)
+        payload["geographic"] = {k: v for k, v in payload["geographic"].items() if k != "parish"}
+        run = start_connector_run(connector)
+        landing = land_payload(run, payload)
+        stage = stage_from_landing(landing, canonical_payload=payload)
+        with pytest.raises(DihError, match="parish"):
+            promote_stage_record(stage, actor="reviewer")

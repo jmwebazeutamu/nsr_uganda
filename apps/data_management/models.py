@@ -71,9 +71,14 @@ class Household(models.Model):
         "reference_data.GeographicUnit", on_delete=models.PROTECT,
         related_name="households_in_parish",
     )
+    # Village is OPTIONAL — the UBOS frame doesn't carry village rows
+    # for every parish (only ~19 of 10,872 are seeded), and field
+    # ops report village often unknown at parish-walk-in capture time.
+    # Parish is the lowest mandatory level.
     village = models.ForeignKey(
         "reference_data.GeographicUnit", on_delete=models.PROTECT,
         related_name="households_in_village",
+        null=True, blank=True,
     )
 
     urban_rural = models.CharField(max_length=32, blank=True)

@@ -283,7 +283,7 @@ const Field = ({ label, required, hint, error, children }) => (
 // `useApi` off the global so this stays loadable before
 // api-client.jsx parses (Babel-standalone resolves globals at
 // invocation time).
-const GeoLevel = ({ label, level, parentCode, parentReady, value, onSelect, placeholder }) => {
+const GeoLevel = ({ label, level, parentCode, parentReady, value, onSelect, placeholder, optional = false }) => {
   const url = parentReady
     ? `/api/v1/reference-data/geographic-units/?level=${encodeURIComponent(level)}&parent_code=${encodeURIComponent(parentCode || "")}&status=active`
     : null;
@@ -296,7 +296,7 @@ const GeoLevel = ({ label, level, parentCode, parentReady, value, onSelect, plac
     : (Array.isArray(resp) ? resp : []);
   const loading = meta && meta.loading;
   return (
-    <Field label={label} required>
+    <Field label={optional ? `${label} (optional)` : label} required={!optional}>
       <select className="field-select"
         value={value || ""}
         disabled={!parentReady || loading}
@@ -364,7 +364,8 @@ const GeoTreePicker = ({ value, onChange }) => {
           parentCode={v.parish} parentReady={!!v.parish}
           placeholder="Choose parish first"
           value={v.village}
-          onSelect={(c) => set("village", c)}/>
+          onSelect={(c) => set("village", c)}
+          optional/>
         <Field label="Enumeration Area" required hint="UBOS 2024 EA frame">
           <input className="field-input" placeholder="EA-7411-002" defaultValue="EA-7411-002"/>
         </Field>
