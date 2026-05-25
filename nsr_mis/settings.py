@@ -60,12 +60,19 @@ INSTALLED_APPS = [
     # Admin Console — second front-end behind the same backend
     # (HANDOFF — Admin Console + PMT 2026-05-22).
     "apps.admin_console",
+    # Chatbot Assistant — RAG over user manuals (ADR-0021).
+    "apps.chatbot",
 ]
 
 # US-S23 — gate the partners-module UI surfaces and write endpoints
 # behind a flag so the rollout can stage. Read endpoints stay open
 # (they're harmless until partner rows exist).
 PARTNERS_MODULE_ENABLED = True
+# US-CHB — gate the chatbot endpoints + Assistant nav entry behind a
+# flag. Defaults off — flip after DPIA sign-off (ADR-0021 CHB-O-02).
+CHATBOT_ENABLED = env("CHATBOT_ENABLED", default=False)
+ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default="")
+CHATBOT_MODEL = env("CHATBOT_MODEL", default="claude-sonnet-4-6")
 # DocuSign client off by default; the in-memory stub provider is the
 # default per ADR-0012. CI keeps this false.
 PARTNERS_DOCUSIGN_ENABLED = False
