@@ -967,7 +967,7 @@ const DIHScreen = () => {
                 title={
                   current.state === "provisional"
                     ? "Run DQA + IDV + DDUP gates"
-                    : `Re-run gates on this ${current.state.replace(/_/g, " ")} record (e.g. after a DQA rule change)`
+                    : `Re-run gates on this ${(current.state || "pending").replace(/_/g, " ")} record (e.g. after a DQA rule change)`
                 }
                 onClick={() => {
                 fetch(`/api/v1/dih/stage-records/${current.id}/process/`, {
@@ -980,7 +980,7 @@ const DIHScreen = () => {
                   .then(stage => {
                     const row = _stageToRow(stage);
                     setRows(rows.map(r => r.id === stage.id ? row : r));
-                    setToast(`Gates run — state is now ${stage.state.replace(/_/g, " ")}.`);
+                    setToast(`Gates run — state is now ${(stage.state || "pending").replace(/_/g, " ")}.`);
                   })
                   .catch(err => setToast(`Run gates failed: ${err}`));
               }}>
