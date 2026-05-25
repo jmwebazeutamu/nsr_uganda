@@ -460,6 +460,32 @@ const DIHScreen = () => {
             <span className="t-cap">8 of 342 shown · sort by SLA risk</span>
           </div>
           <div style={{flex:1}}/>
+          <button className="btn btn-sm"
+            disabled={selection.size === 0}
+            title="Re-run DQA + IDV + DDUP gates on the selected rows"
+            onClick={() => {
+              const ids = Array.from(selection);
+              if (ids.length === 0) return;
+              setToast(`Re-running gates on ${ids.length}…`);
+              Promise.all(ids.map(id =>
+                fetch(`/api/v1/dih/stage-records/${id}/process/`, {
+                  method: "POST",
+                  credentials: "same-origin",
+                  headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                  body: JSON.stringify({ actor: "nsr-reviewer", allow_fast_track: true }),
+                }).then(r => r.ok ? r.json() : Promise.reject(`${id} failed`))
+                  .then(_stageToRow)
+                  .catch(() => null),
+              )).then(results => {
+                const updated = results.filter(Boolean);
+                const updatedById = Object.fromEntries(updated.map(r => [r.id, r]));
+                setRows(rows.map(r => updatedById[r.id] || r));
+                setSelection(new Set());
+                setToast(`Re-ran gates on ${updated.length} of ${ids.length}.`);
+              });
+            }}>
+            <Icon name="play" size={14}/> Re-run gates ({selection.size})
+          </button>
           <button className="btn btn-sm" disabled={selection.size === 0}>
             <Icon name="check" size={14}/> Bulk approve ({selection.size})
           </button>
@@ -936,8 +962,14 @@ const DIHScreen = () => {
       {current && (
         <div style={{margin:'16px -24px 0', position:'sticky', bottom:0, zIndex:20}}>
           <ActionBar left={<>Reviewing <span className="t-mono" style={{color:'var(--neutral-900)'}}>{current.id.slice(0,18)}…</span> · {current.head} · {rows.indexOf(current) + 1} of {rows.length}</>}>
-            {current.state === "provisional" && (
-              <button className="btn" onClick={() => {
+            {!["promoted", "rejected", "quarantined"].includes(current.state) && (
+              <button className="btn"
+                title={
+                  current.state === "provisional"
+                    ? "Run DQA + IDV + DDUP gates"
+                    : `Re-run gates on this ${current.state.replace(/_/g, " ")} record (e.g. after a DQA rule change)`
+                }
+                onClick={() => {
                 fetch(`/api/v1/dih/stage-records/${current.id}/process/`, {
                   method: "POST",
                   credentials: "same-origin",
@@ -952,7 +984,7 @@ const DIHScreen = () => {
                   })
                   .catch(err => setToast(`Run gates failed: ${err}`));
               }}>
-                <Icon name="play" size={14}/> Run gates
+                <Icon name="play" size={14}/> {current.state === "provisional" ? "Run gates" : "Re-run gates"}
               </button>
             )}
             <button className="btn btn-danger" onClick={() => setModal('reject')}><Icon name="xCircle" size={14}/> Reject</button>

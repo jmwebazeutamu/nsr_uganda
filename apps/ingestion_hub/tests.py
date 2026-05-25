@@ -1015,3 +1015,80 @@ class TestEditNoSelfApprove:
         # A different operator can promote.
         hh = promote_stage_record(stage, actor="bob")
         assert hh.id == stage.provisional_registry_id
+
+
+# ---------------------------------------------------------------------------
+# Management command — process_stuck_stagerecords with --state filter
+# (US-S23-DIH-REPROCESS)
+
+
+@pytest.mark.django_db
+class TestReprocessCommand:
+    def _staged(self, connector, geo_codes, state):
+        run = start_connector_run(connector)
+        landing = land_payload(run, _payload(geo_codes))
+        stage = stage_from_landing(landing, canonical_payload=_payload(geo_codes))
+        stage.state = state
+        stage.save(update_fields=["state"])
+        return stage
+
+    def test_default_state_is_provisional(self, connector, geo_codes):
+        from io import StringIO
+
+        from django.core.management import call_command
+        s_prov = self._staged(connector, geo_codes, StageRecordState.PROVISIONAL)
+        s_qf = self._staged(connector, geo_codes, StageRecordState.QUALITY_FAILED)
+        out = StringIO()
+        call_command("process_stuck_stagerecords", "--dry-run", stdout=out)
+        text = out.getvalue()
+        assert s_prov.id in text
+        assert s_qf.id not in text
+
+    def test_state_flag_reprocesses_quality_failed(self, connector, geo_codes):
+        from io import StringIO
+
+        from django.core.management import call_command
+        s_qf = self._staged(connector, geo_codes, StageRecordState.QUALITY_FAILED)
+        out = StringIO()
+        call_command(
+            "process_stuck_stagerecords", "--state", "quality_failed",
+            "--dry-run", stdout=out,
+        )
+        assert s_qf.id in out.getvalue()
+
+    def test_state_csv_unions(self, connector, geo_codes):
+        from io import StringIO
+
+        from django.core.management import call_command
+        s_prov = self._staged(connector, geo_codes, StageRecordState.PROVISIONAL)
+        s_qf = self._staged(connector, geo_codes, StageRecordState.QUALITY_FAILED)
+        out = StringIO()
+        call_command(
+            "process_stuck_stagerecords", "--state",
+            "provisional,quality_failed", "--dry-run", stdout=out,
+        )
+        text = out.getvalue()
+        assert s_prov.id in text
+        assert s_qf.id in text
+
+    def test_terminal_state_rejected(self):
+        from django.core.management import CommandError, call_command
+        with pytest.raises(CommandError, match="terminal"):
+            call_command("process_stuck_stagerecords", "--state", "promoted")
+
+    def test_unknown_state_rejected(self):
+        from django.core.management import CommandError, call_command
+        with pytest.raises(CommandError, match="unknown state"):
+            call_command("process_stuck_stagerecords", "--state", "frobnicated")
+
+    def test_run_actually_routes_records(self, connector, geo_codes):
+        from django.core.management import call_command
+        s_qf = self._staged(connector, geo_codes, StageRecordState.QUALITY_FAILED)
+        call_command("process_stuck_stagerecords", "--state", "quality_failed")
+        s_qf.refresh_from_db()
+        # With no active DQA rules, the quality_failed record routes
+        # forward — to promoted (fast-track) or pending_promotion.
+        assert s_qf.state in (
+            StageRecordState.PROMOTED.value,
+            StageRecordState.PENDING_PROMOTION.value,
+        )
