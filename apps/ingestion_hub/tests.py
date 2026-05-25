@@ -709,13 +709,30 @@ class TestWalkInSubmit:
             self.URL, _payload(geo_codes), format="json",
         )
         assert r.status_code == 201, r.data
-        assert r.data["state"] == "provisional"
-        assert r.data["provisional_registry_id"]
+        # Walk-in auto-processes the record after staging, so we check
+        # for a valid provisional Registry ID (preserved across state
+        # transitions per AC-DIH-PROVISIONAL-ID) instead of asserting
+        # the post-process state.
+        assert len(r.data["provisional_registry_id"]) == 26
         # The record genuinely landed in DIH.
         from apps.ingestion_hub.models import StageRecord
         assert StageRecord.objects.filter(
             provisional_registry_id=r.data["provisional_registry_id"],
         ).exists()
+
+    def test_clean_walk_in_fast_tracks_through_gates(
+        self, django_user_model, geo_codes,
+    ):
+        """Clean walk-in (no DQA blocking, no DDUP, no NIN/IDV issue)
+        should route past provisional automatically — AC-DIH-FT-AUTO.
+        The receipt overlay tells the operator the next step."""
+        r = self._client(django_user_model).post(
+            self.URL, _payload(geo_codes), format="json",
+        )
+        assert r.status_code == 201, r.data
+        # The empty fixture environment has no DQA rules, no DDUP
+        # candidates, no NIN — so the record fast-tracks to promoted.
+        assert r.data["state"] in ("promoted", "pending_promotion")
 
     def test_rejects_empty_payload(self, django_user_model):
         r = self._client(django_user_model).post(self.URL, {}, format="json")

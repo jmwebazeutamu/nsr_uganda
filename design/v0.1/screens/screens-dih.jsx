@@ -936,6 +936,25 @@ const DIHScreen = () => {
       {current && (
         <div style={{margin:'16px -24px 0', position:'sticky', bottom:0, zIndex:20}}>
           <ActionBar left={<>Reviewing <span className="t-mono" style={{color:'var(--neutral-900)'}}>{current.id.slice(0,18)}…</span> · {current.head} · {rows.indexOf(current) + 1} of {rows.length}</>}>
+            {current.state === "provisional" && (
+              <button className="btn" onClick={() => {
+                fetch(`/api/v1/dih/stage-records/${current.id}/process/`, {
+                  method: "POST",
+                  credentials: "same-origin",
+                  headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                  body: JSON.stringify({ actor: "nsr-reviewer", allow_fast_track: true }),
+                })
+                  .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(d.detail || "process failed")))
+                  .then(stage => {
+                    const row = _stageToRow(stage);
+                    setRows(rows.map(r => r.id === stage.id ? row : r));
+                    setToast(`Gates run — state is now ${stage.state.replace(/_/g, " ")}.`);
+                  })
+                  .catch(err => setToast(`Run gates failed: ${err}`));
+              }}>
+                <Icon name="play" size={14}/> Run gates
+              </button>
+            )}
             <button className="btn btn-danger" onClick={() => setModal('reject')}><Icon name="xCircle" size={14}/> Reject</button>
             {current.state === "quality_failed" && (
               <button className="btn" onClick={() => setModal('archive')}>

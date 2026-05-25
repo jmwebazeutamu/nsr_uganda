@@ -345,6 +345,15 @@ def walk_in_submit(request):
         stage = submit_walk_in_capture(payload, actor=actor)
     except DihError as e:
         return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    # Auto-run the staging gates so a clean walk-in fast-tracks to
+    # promoted, and a dirty one routes to quality_failed / ddup_review /
+    # idv_pending without an extra operator click. Failures here don't
+    # invalidate the submission — the record stays at provisional and
+    # the operator can re-run via /process/ from the DIH detail rail.
+    try:
+        stage = process_stage_record(stage, actor=actor)
+    except DihError:  # noqa: PERF203 — surface as 201 with payload state
+        pass
     return Response(
         StageRecordSerializer(stage).data,
         status=status.HTTP_201_CREATED,
