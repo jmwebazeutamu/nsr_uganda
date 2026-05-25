@@ -393,7 +393,11 @@ const HomeScreen = ({ role, onNavigate }) => {
               ))}
             </select>
           )}
-          <button className="btn"><Icon name="download"/> Export brief</button>
+          <button className="btn"
+                  onClick={() => window.print()}
+                  title="Print or save as PDF — sidebar + topbar are hidden via the existing @media print rule">
+            <Icon name="download"/> Export brief
+          </button>
           <button className="btn btn-primary"
                   onClick={() => onNavigate?.("capture")}>
             <Icon name="plus"/> New capture
