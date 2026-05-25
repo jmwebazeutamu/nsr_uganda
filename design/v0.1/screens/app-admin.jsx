@@ -6,6 +6,7 @@
    AdminGeoUnitDetailScreen, AdminUpdRoutingRuleEditScreen,
    AdminUserDetailScreen, AdminDdupPairDetailScreen,
    AdminChoiceListOptionEditScreen,
+   ChatbotAssistantScreen,
    ErrorBoundary */
 // NSR MIS — Admin shell
 // =====================================================
@@ -49,6 +50,12 @@ const NAV_GROUPS = [
     items: [
       { id: "admin-security-roles", label: "Roles & scopes", icon: "lock" },
       { id: "admin-security-audit", label: "Audit chain",    icon: "file" },
+    ],
+  },
+  {
+    label: "Assistant",
+    items: [
+      { id: "chatbot-assistant", label: "Chatbot", icon: "message-square" },
     ],
   },
   {
@@ -154,6 +161,7 @@ const AdminApp = () => {
           {screen === "admin-workflow-ddup"        && <AdminDdupScreen/>}
           {screen === "admin-security-roles"       && <AdminSecurityRolesScreen/>}
           {screen === "admin-security-audit"       && <AdminAuditScreen/>}
+          {screen === "chatbot-assistant"          && <ChatbotAssistantScreen/>}
 
           {/* Record detail / edit screens — opened from list rows */}
           {screen === "admin-detail-geo-unit"      && <AdminGeoUnitDetailScreen onBack={() => setScreen("admin-refdata-geo")}/>}
