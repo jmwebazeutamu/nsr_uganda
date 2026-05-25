@@ -394,7 +394,10 @@ const HomeScreen = ({ role, onNavigate }) => {
             </select>
           )}
           <button className="btn"><Icon name="download"/> Export brief</button>
-          <button className="btn btn-primary"><Icon name="plus"/> New capture</button>
+          <button className="btn btn-primary"
+                  onClick={() => onNavigate?.("capture")}>
+            <Icon name="plus"/> New capture
+          </button>
         </>}
       />
 
