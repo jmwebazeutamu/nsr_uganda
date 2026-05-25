@@ -1,0 +1,123 @@
+openapi: 3.1.0
+info:
+  title: NSR MIS — Chatbot Assistant (CHB)
+  version: "0.1.0"
+  description: |
+    Internal-staff RAG assistant over the user manuals.
+
+    Gated by the `CHATBOT_ENABLED` feature flag — every endpoint
+    returns `404` when the flag is off. All endpoints require an
+    authenticated user; conversations are scoped to the caller.
+
+    See ADR-0021 for the architectural context.
+
+servers:
+  - url: /api/v1/chatbot
+
+paths:
+  /conversations/:
+    get:
+      tags: [chatbot]
+      summary: List the caller's conversations
+      responses:
+        "200":
+          description: Paginated conversation list
+    post:
+      tags: [chatbot]
+      summary: Create a new (empty) conversation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  maxLength: 200
+      responses:
+        "201":
+          description: Created
+  /conversations/{id}/:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, minLength: 26, maxLength: 26 }
+    get:
+      tags: [chatbot]
+      summary: Conversation detail with messages
+      responses:
+        "200": { description: OK }
+        "404": { description: Not found / not owned }
+    delete:
+      tags: [chatbot]
+      summary: Delete a conversation
+      responses:
+        "204": { description: Deleted }
+        "404": { description: Not found / not owned }
+  /conversations/{id}/messages/:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string, minLength: 26, maxLength: 26 }
+    get:
+      tags: [chatbot]
+      summary: List messages in a conversation
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [chatbot]
+      summary: Send a user prompt; receive the assistant reply
+      description: |
+        Persists the user message, retrieves top-k context from the
+        ManualChunk index, calls the configured LLM, persists the
+        assistant reply with token + source metadata, emits
+        `chatbot.message.send` and `chatbot.message.reply` audit
+        events. Returns both turns.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                  minLength: 1
+                  maxLength: 8000
+      responses:
+        "201":
+          description: Both turns persisted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user_message: { $ref: "#/components/schemas/Message" }
+                  assistant_message: { $ref: "#/components/schemas/Message" }
+
+components:
+  schemas:
+    Message:
+      type: object
+      properties:
+        id: { type: string }
+        role:
+          type: string
+          enum: [user, assistant, system]
+        content: { type: string }
+        tokens_in: { type: integer, nullable: true }
+        tokens_out: { type: integer, nullable: true }
+        model: { type: string }
+        retrieval_sources:
+          type: array
+          items:
+            type: object
+            properties:
+              chunk_id: { type: string }
+              source_path: { type: string }
+              heading_path: { type: string }
+              score: { type: number }
+        created_at: { type: string, format: date-time }

@@ -1,6 +1,8 @@
 from rest_framework.routers import DefaultRouter
 
+from .api import ConversationViewSet
+
 router = DefaultRouter()
-# Viewsets register in CHB-004 (provider + audit slice).
+router.register(r"conversations", ConversationViewSet, basename="chatbot-conversation")
 
 urlpatterns = router.urls
