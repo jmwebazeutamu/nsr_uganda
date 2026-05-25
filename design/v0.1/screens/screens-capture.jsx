@@ -15,32 +15,6 @@ const SECTIONS = [
   { id: "hous",  label: "Housing",            tint: "eligibility",icon:"home" },
   { id: "food",  label: "Food & Shocks",      tint: "grm",      icon: "alert" },
 ];
-// Demo seed: Lokol Naume as head + spouse + 3 children. Operators
-// start from an empty list in production; this seed makes the
-// preview look populated.
-const _DEMO_MEMBERS = [
-  { line_number: 1, surname: "Lokol", first_name: "Naume", other_name: "",
-    relationship_to_head: "01", sex: "2", date_of_birth: "1992-03-12",
-    age_years: 33, marital_status: "1", nationality: "1", residency_status: "1",
-    birth_certificate_status: "1", nin_status: "1", nin_last4: "1234",
-    telephone_1: "+256 786 234567", telephone_2: "" },
-  { line_number: 2, surname: "Lokol", first_name: "Akello", other_name: "",
-    relationship_to_head: "03", sex: "2", date_of_birth: "1989-08-04",
-    age_years: 36, marital_status: "1", nationality: "1", residency_status: "1",
-    birth_certificate_status: "1", nin_status: "1", nin_last4: "5678",
-    telephone_1: "", telephone_2: "" },
-  { line_number: 3, surname: "Lokol", first_name: "Atim", other_name: "",
-    relationship_to_head: "04", sex: "2", date_of_birth: "2014-05-22",
-    age_years: 11, marital_status: "8", nationality: "1", residency_status: "1",
-    birth_certificate_status: "1", nin_status: "8", nin_last4: "",
-    telephone_1: "", telephone_2: "" },
-  { line_number: 4, surname: "Lokol", first_name: "Okello", other_name: "",
-    relationship_to_head: "04", sex: "1", date_of_birth: "2017-11-08",
-    age_years: 8, marital_status: "8", nationality: "1", residency_status: "1",
-    birth_certificate_status: "1", nin_status: "8", nin_last4: "",
-    telephone_1: "", telephone_2: "" },
-];
-
 const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
   const [active, setActive] = useStateCap("id");
   // Empty geo state — operator drills the live GeographicUnit
@@ -62,7 +36,9 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
   const [submitError, setSubmitError] = useStateCap(null);
 
   // ----- detail-entity state (per US-S22-DE models) -----
-  const [members, setMembers] = useStateCap(_DEMO_MEMBERS);
+  // Start with an empty roster. Operators add members via the
+  // Roster tab's "+ Add member" button.
+  const [members, setMembers] = useStateCap([]);
   const [healthData, setHealthData] = useStateCap({});       // { line_number: { health: {...}, disability: {...} } }
   const [educationData, setEducationData] = useStateCap({}); // { line_number: { ... } }
   const [employmentData, setEmploymentData] = useStateCap({}); // { line_number: { ... } }
