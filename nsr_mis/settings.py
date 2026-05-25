@@ -73,6 +73,10 @@ PARTNERS_MODULE_ENABLED = True
 CHATBOT_ENABLED = env("CHATBOT_ENABLED", default=False)
 ANTHROPIC_API_KEY = env("ANTHROPIC_API_KEY", default="")
 CHATBOT_MODEL = env("CHATBOT_MODEL", default="claude-sonnet-4-6")
+# Embedder selector — "sentence" (all-MiniLM-L6-v2 via
+# sentence-transformers) for prod, "hash" (deterministic
+# dependency-free) for tests + dev without model weights.
+CHATBOT_EMBEDDER = env("CHATBOT_EMBEDDER", default="sentence")
 # DocuSign client off by default; the in-memory stub provider is the
 # default per ADR-0012. CI keeps this false.
 PARTNERS_DOCUSIGN_ENABLED = False
