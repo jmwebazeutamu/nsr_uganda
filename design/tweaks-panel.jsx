@@ -47,9 +47,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 const __TWEAKS_STYLE = `
-  .twk-panel{position:fixed;right:16px;bottom:16px;z-index:2147483646;width:280px;
+  .twk-panel{position:fixed;left:16px;bottom:16px;z-index:2147483646;width:280px;
     max-height:calc(100vh - 32px);display:flex;flex-direction:column;
-    transform:scale(var(--dc-inv-zoom,1));transform-origin:bottom right;
+    transform:scale(var(--dc-inv-zoom,1));transform-origin:bottom left;
     background:rgba(250,249,247,.78);color:#29261b;
     -webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);
     border:.5px solid rgba(255,255,255,.6);border-radius:14px;
@@ -108,7 +108,7 @@ const __TWEAKS_STYLE = `
     border-radius:6px;cursor:default;padding:4px 6px;line-height:1.2;
     overflow-wrap:anywhere}
 
-  .twk-fab{position:fixed;right:16px;bottom:16px;z-index:2147483646;
+  .twk-fab{position:fixed;left:16px;bottom:16px;z-index:2147483646;
     appearance:none;border:.5px solid rgba(255,255,255,.6);border-radius:999px;
     padding:6px 12px;font:600 11.5px/1.4 ui-sans-serif,system-ui,sans-serif;
     color:#29261b;background:rgba(250,249,247,.78);
@@ -242,13 +242,13 @@ function TweaksPanel({ title = 'Tweaks', noDeckControls = false, children }) {
     const panel = dragRef.current;
     if (!panel) return;
     const w = panel.offsetWidth, h = panel.offsetHeight;
-    const maxRight = Math.max(PAD, window.innerWidth - w - PAD);
+    const maxLeft = Math.max(PAD, window.innerWidth - w - PAD);
     const maxBottom = Math.max(PAD, window.innerHeight - h - PAD);
     offsetRef.current = {
-      x: Math.min(maxRight, Math.max(PAD, offsetRef.current.x)),
+      x: Math.min(maxLeft, Math.max(PAD, offsetRef.current.x)),
       y: Math.min(maxBottom, Math.max(PAD, offsetRef.current.y)),
     };
-    panel.style.right = offsetRef.current.x + 'px';
+    panel.style.left = offsetRef.current.x + 'px';
     panel.style.bottom = offsetRef.current.y + 'px';
   }, []);
 
@@ -285,11 +285,11 @@ function TweaksPanel({ title = 'Tweaks', noDeckControls = false, children }) {
     if (!panel) return;
     const r = panel.getBoundingClientRect();
     const sx = e.clientX, sy = e.clientY;
-    const startRight = window.innerWidth - r.right;
+    const startLeft = r.left;
     const startBottom = window.innerHeight - r.bottom;
     const move = (ev) => {
       offsetRef.current = {
-        x: startRight - (ev.clientX - sx),
+        x: startLeft + (ev.clientX - sx),
         y: startBottom - (ev.clientY - sy),
       };
       clampToViewport();
@@ -325,7 +325,7 @@ function TweaksPanel({ title = 'Tweaks', noDeckControls = false, children }) {
     <>
       <style>{__TWEAKS_STYLE}</style>
       <div ref={dragRef} className="twk-panel" data-noncommentable=""
-           style={{ right: offsetRef.current.x, bottom: offsetRef.current.y }}>
+           style={{ left: offsetRef.current.x, bottom: offsetRef.current.y }}>
         <div className="twk-hd" onMouseDown={onDragStart}>
           <b>{title}</b>
           <button className="twk-x" aria-label="Close tweaks"
