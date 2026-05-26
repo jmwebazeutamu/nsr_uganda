@@ -7,7 +7,13 @@ from apps.security.abac import MatchPairScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 
 from .models import DdupModelVersion, MatchPair, MergeDecision
-from .services import MergeError, merge_member_pair, reject_pair, reverse_merge_decision
+from .services import (
+    MergeError,
+    discard_duplicate,
+    merge_member_pair,
+    reject_pair,
+    reverse_merge_decision,
+)
 
 
 class DdupModelVersionSerializer(serializers.ModelSerializer):
@@ -75,6 +81,21 @@ class _MergeRequest(serializers.Serializer):
 class _RejectPairRequest(serializers.Serializer):
     actor = serializers.CharField(max_length=64)
     reason = serializers.CharField()
+
+
+class _DiscardPairRequest(serializers.Serializer):
+    """Payload for POST /api/v1/ddup/match-pairs/{id}/discard/.
+
+    surviving_id picks the record kept intact (must match
+    record_a_id or record_b_id on the pair). The other side is
+    soft-deleted; no field values are copied (that's the whole
+    point — use /merge/ if you want to combine fields). Reason is
+    mandatory at >= 6 chars for the audit chain.
+    """
+
+    surviving_id = serializers.CharField(max_length=26)
+    actor = serializers.CharField(max_length=64)
+    reason = serializers.CharField(min_length=6)
 
 
 @extend_schema_view(
@@ -160,6 +181,38 @@ class MatchPairViewSet(
         try:
             decision = reject_pair(
                 pair,
+                actor=ser.validated_data["actor"],
+                reason=ser.validated_data["reason"],
+            )
+        except MergeError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(MergeDecisionSerializer(decision).data)
+
+    @extend_schema(
+        tags=["ddup"],
+        summary="Discard one record as a bad duplicate, keep the other intact",
+        description=(
+            "Both records ARE the same person, but the loser is bad "
+            "data (test entry, double-submission, garbled re-capture). "
+            "Survivor's fields stay untouched; loser is soft-deleted "
+            "with merged_into=survivor. Reversible through the same "
+            "30-day window as a merge."
+        ),
+        request=_DiscardPairRequest,
+        responses={
+            200: MergeDecisionSerializer,
+            400: OpenApiResponse(description="Guard violation"),
+        },
+    )
+    @action(detail=True, methods=["post"], url_path="discard")
+    def discard(self, request, pk=None):
+        ser = _DiscardPairRequest(data=request.data)
+        ser.is_valid(raise_exception=True)
+        pair = self.get_object()
+        try:
+            decision = discard_duplicate(
+                pair,
+                surviving_id=ser.validated_data["surviving_id"],
                 actor=ser.validated_data["actor"],
                 reason=ser.validated_data["reason"],
             )

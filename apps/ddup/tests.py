@@ -22,6 +22,7 @@ from apps.ddup.services import (
     DdupApprovalError,
     MergeError,
     activate_model_version,
+    discard_duplicate,
     discover_nin_pairs,
     discover_phone_pairs,
     merge_member_pair,
@@ -254,6 +255,128 @@ class TestReject:
         pair = discover_nin_pairs(actor="system")[0]
         with pytest.raises(MergeError, match="reason"):
             reject_pair(pair, actor="op-1", reason="")
+
+
+# --- Discard duplicate ------------------------------------------------------
+
+class TestDiscardDuplicate:
+    """discard_duplicate: both records ARE the same person but the loser is
+    bad data (test entry, double-submission, garbled re-capture). Survivor's
+    fields stay untouched; loser is soft-deleted exactly as in merge."""
+
+    def _build_pair(self, household):
+        h = _hash("CM1234567890CD")
+        a = Member.objects.create(household=household, line_number=1,
+                                  surname="Akello", first_name="Grace",
+                                  sex="2", nin_hash=h, nin_last4="00CD",
+                                  telephone_1="+256700111111")
+        b = Member.objects.create(household=household, line_number=2,
+                                  surname="GARBLED-CAPTURE", first_name="???",
+                                  sex="2", nin_hash=h, nin_last4="00CD",
+                                  telephone_1="")
+        return discover_nin_pairs(actor="system")[0], a, b
+
+    def test_keeps_survivor_intact_and_soft_deletes_loser(self, household, active_model):
+        pair, a, b = self._build_pair(household)
+        decision = discard_duplicate(
+            pair, surviving_id=a.id,
+            actor="op-1", reason="bad capture from tablet sync",
+        )
+
+        a.refresh_from_db()
+        b.refresh_from_db()
+        pair.refresh_from_db()
+        assert a.is_deleted is False
+        # Survivor's fields are NOT rewritten — that's the contract.
+        assert a.surname == "Akello"
+        assert a.first_name == "Grace"
+        assert b.is_deleted is True
+        assert b.deleted_at is not None
+        assert b.merged_into_id == a.id
+        assert pair.status == PairStatus.MERGED
+        assert decision.action == MergeAction.DISCARD_LOSER
+        assert decision.chosen_field_values == {}
+
+    def test_re_points_household_head_to_survivor(self, household, active_model):
+        pair, a, b = self._build_pair(household)
+        household.head_member = b  # the bad record was somehow head
+        household.save()
+        discard_duplicate(
+            pair, surviving_id=a.id,
+            actor="op-1", reason="bad capture from tablet sync",
+        )
+        household.refresh_from_db()
+        assert household.head_member_id == a.id
+
+    def test_writes_discard_loser_audit_event(self, household, active_model):
+        pair, a, b = self._build_pair(household)
+        prior = AuditEvent.objects.count()
+        discard_duplicate(
+            pair, surviving_id=a.id,
+            actor="op-1", reason="duplicate from tablet double-tap",
+        )
+        new_events = AuditEvent.objects.order_by("occurred_at")[prior:]
+        discard_events = [e for e in new_events if e.action == "discard_loser"]
+        assert len(discard_events) == 1
+        assert discard_events[0].actor_id == "op-1"
+
+    def test_records_reverse_window(self, household, active_model):
+        pair, a, b = self._build_pair(household)
+        decision = discard_duplicate(
+            pair, surviving_id=a.id,
+            actor="op-1", reason="bad capture from tablet sync",
+        )
+        assert decision.reverse_window_until is not None
+        # No surviving_overrides — the survivor was never written.
+        assert decision.pre_merge_snapshot["surviving_overrides"] == {}
+
+    def test_cannot_discard_non_pending_pair(self, household, active_model):
+        pair, a, b = self._build_pair(household)
+        discard_duplicate(
+            pair, surviving_id=a.id,
+            actor="op-1", reason="bad capture from tablet sync",
+        )
+        with pytest.raises(MergeError, match="PENDING"):
+            discard_duplicate(
+                pair, surviving_id=a.id,
+                actor="op-1", reason="second attempt should fail",
+            )
+
+    def test_surviving_id_must_be_in_pair(self, household, active_model):
+        pair, a, b = self._build_pair(household)
+        with pytest.raises(MergeError, match="surviving_id"):
+            discard_duplicate(
+                pair, surviving_id="01OUTSIDETHEPAIR0000000000",
+                actor="op-1", reason="off-pair survivor",
+            )
+
+    def test_reason_minimum_length_enforced(self, household, active_model):
+        pair, a, b = self._build_pair(household)
+        with pytest.raises(MergeError, match="reason"):
+            discard_duplicate(
+                pair, surviving_id=a.id,
+                actor="op-1", reason="oops",  # < 6 chars
+            )
+
+    def test_reversal_restores_loser(self, household, active_model):
+        """A discard is reversible through the same 30-day window as
+        a merge — operator gets a chance to undo within the audit
+        window even though no field overrides were written."""
+        pair, a, b = self._build_pair(household)
+        decision = discard_duplicate(
+            pair, surviving_id=a.id,
+            actor="op-1", reason="bad capture from tablet sync",
+        )
+        reverse_merge_decision(
+            decision, actor="reviewer-1",
+            reason="re-examined: garbled fields were recoverable from raw upload",
+        )
+        a.refresh_from_db()
+        b.refresh_from_db()
+        pair.refresh_from_db()
+        assert b.is_deleted is False
+        assert b.merged_into_id is None
+        assert pair.status == PairStatus.PENDING
 
 
 # --- Tier 2 phone normalisation + discovery (US-S2-007) --------------------
@@ -627,6 +750,49 @@ class TestMergePairApi:
         pair.refresh_from_db()
         from apps.ddup.models import PairStatus
         assert pair.status == PairStatus.REJECTED
+
+    def test_discard_via_api(self, household, active_model, django_user_model):
+        from rest_framework.test import APIClient
+        pair, b = self._build_pending_pair(household)
+        u = django_user_model.objects.create_user(
+            username="reviewer", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.post(
+            f"/api/v1/ddup/match-pairs/{pair.id}/discard/",
+            data={
+                "surviving_id": b.id,
+                "actor": "reviewer-2",
+                "reason": "second submission is a tablet double-tap",
+            },
+            format="json",
+        )
+        assert r.status_code == 200, r.data
+        assert r.data["action"] == "discard_loser"
+        assert r.data["surviving_record_id"] == b.id
+        assert r.data["chosen_field_values"] == {}
+        pair.refresh_from_db()
+        from apps.ddup.models import PairStatus
+        assert pair.status == PairStatus.MERGED
+
+    def test_discard_via_api_requires_reason(
+        self, household, active_model, django_user_model,
+    ):
+        from rest_framework.test import APIClient
+        pair, b = self._build_pending_pair(household)
+        u = django_user_model.objects.create_user(
+            username="reviewer", password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        # Serializer-level reject — min_length=6 on the field.
+        r = c.post(
+            f"/api/v1/ddup/match-pairs/{pair.id}/discard/",
+            data={"surviving_id": b.id, "actor": "reviewer-2", "reason": "no"},
+            format="json",
+        )
+        assert r.status_code == 400
 
 
 class TestReverseMergeAdmin:

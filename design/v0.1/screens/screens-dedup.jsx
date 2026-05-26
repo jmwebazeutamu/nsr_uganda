@@ -142,6 +142,12 @@ const DedupScreen = () => {
   const [note, setNote] = useStateDup("");
   const [confirm, setConfirm] = useStateDup(false);
   const [rejectOpen, setRejectOpen] = useStateDup(false);
+  // "Discard duplicate" modal — keeps one record intact, soft-deletes
+  // the other. Different from Merge (no field combining) and Reject
+  // (which marks the pair as not-a-duplicate, leaving both registered).
+  const [discardOpen, setDiscardOpen] = useStateDup(false);
+  const [discardSide, setDiscardSide] = useStateDup("A");
+  const [discardReason, setDiscardReason] = useStateDup("");
   const [toast, setToast] = useStateDup("");
 
   const allChosen = activePair.fields.every(f => f.fixed || choice[f.key]);
@@ -219,6 +225,33 @@ const DedupScreen = () => {
       })
       .catch(e => setToast(`Merge failed: ${e.message}`));
   };
+  const commitDiscard = () => {
+    setDiscardOpen(false);
+    if (!livePair) {
+      const kept = discardSide === "A" ? "A" : "B";
+      setToast(`Discarded duplicate · kept candidate ${kept}. (preview — not persisted)`);
+      return;
+    }
+    const survivor = discardSide === "A" ? livePair._memberA : livePair._memberB;
+    _post(`/api/v1/ddup/match-pairs/${activePair.id}/discard/`, {
+      surviving_id: survivor.id,
+      actor: "admin",
+      reason: discardReason || "discarded via DDUP screen",
+    })
+      .then(async r => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.detail || `HTTP ${r.status}`);
+        }
+        return r.json();
+      })
+      .then(() => {
+        setToast(`Duplicate discarded · kept ${survivor.id.slice(0, 12)}…`);
+        setDiscardReason("");
+        _refreshNext();
+      })
+      .catch(e => setToast(`Discard failed: ${e.message}`));
+  };
   const commitReject = ({ reason, note: rNote } = {}) => {
     setRejectOpen(false);
     if (!livePair) {
@@ -283,6 +316,7 @@ const DedupScreen = () => {
         </div>
         <div style={{flex:1}}/>
         <button className="btn btn-danger" onClick={() => setRejectOpen(true)}><Icon name="xCircle" size={14}/> Reject pair</button>
+        <button className="btn" onClick={() => setDiscardOpen(true)}><Icon name="trash" size={14}/> Discard duplicate</button>
         <button className="btn"><Icon name="clock" size={14}/> Hold</button>
         <button className="btn"><Icon name="save" size={14}/> Save draft</button>
       </div>
@@ -420,6 +454,70 @@ const DedupScreen = () => {
       <ReasonModal open={rejectOpen} title="Reject this pair" intent="danger"
         reasonOptions={REASON_OPTS_REJECT} recordLabel={activePair.id}
         onClose={() => setRejectOpen(false)} onConfirm={commitReject}/>
+
+      {/* Discard-duplicate modal — same person, but one record is bad
+          data (test entry, double-submission, garbled re-capture).
+          No field combining — the surviving record stays exactly as
+          captured. The discarded record is soft-deleted the same way
+          a merge loser is, so the 30-day reverse window applies. */}
+      <Modal open={discardOpen} onClose={() => setDiscardOpen(false)}
+        title="Discard one record, keep the other" width={560}
+        footer={<>
+          <button className="btn" onClick={() => setDiscardOpen(false)}>Cancel</button>
+          <button className="btn btn-danger"
+            disabled={discardReason.trim().length < 6}
+            onClick={commitDiscard}>
+            <Icon name="trash" size={14}/> Confirm discard
+          </button>
+        </>}>
+        <div className="col gap-3">
+          <p style={{margin:0}}>
+            Use this when both records ARE the same person but one is
+            bad data (test entry, double-tap submission, garbled
+            re-capture). The kept record stays untouched — no field
+            values are copied. Reversible by an NSR Unit Coordinator
+            within the same 30-day window as a merge.
+          </p>
+          <div>
+            <div className="t-cap" style={{marginBottom:6}}>KEEP WHICH RECORD?</div>
+            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:8}}>
+              {(() => {
+                const aId = livePair ? livePair._memberA.id : "01HXY7K3B2N9PVQE4M6FZRWS18";
+                const bId = livePair ? livePair._memberB.id : "01HZ9NK2P5M3QFB7K6FZRWS22";
+                const opt = (side, label, id, tone) => {
+                  const sel = discardSide === side;
+                  return (
+                    <button key={side} type="button" onClick={() => setDiscardSide(side)}
+                      style={{
+                        textAlign:'left', padding:'10px 12px',
+                        border: sel ? `2px solid var(--accent-${tone})` : '1px solid var(--neutral-300)',
+                        borderRadius:6, background: sel ? `var(--accent-${tone}-bg)` : 'white',
+                        cursor:'pointer',
+                      }}>
+                      <div className="t-cap" style={{color:`var(--accent-${tone})`}}>{label}</div>
+                      <div className="t-mono" style={{fontSize:12, marginTop:2}}>{id}</div>
+                      <div className="t-bodysm muted" style={{marginTop:4}}>
+                        {sel ? "Kept · stays in registry" : "Discard · soft-deleted"}
+                      </div>
+                    </button>
+                  );
+                };
+                return [
+                  opt("A", "CANDIDATE A", aId, "data"),
+                  opt("B", "CANDIDATE B", bId, "update"),
+                ];
+              })()}
+            </div>
+          </div>
+          <div>
+            <div className="t-cap" style={{marginBottom:6}}>REASON <span style={{color:'var(--accent-danger)'}}>*</span></div>
+            <textarea className="field-textarea" rows={3}
+              placeholder="Why is the discarded record bad data? (min 6 chars · written to audit chain)"
+              value={discardReason} onChange={(e) => setDiscardReason(e.target.value)}/>
+            <div className="t-cap" style={{marginTop:4}}>{discardReason.length} chars · min 6</div>
+          </div>
+        </div>
+      </Modal>
 
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>

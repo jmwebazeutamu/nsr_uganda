@@ -474,16 +474,20 @@ def reverse_merge_decision(
     the decision. Emits AuditEvent action=unmerge.
 
     Guards:
-    - decision.action must be MERGE (other actions have nothing to
-      reverse).
+    - decision.action must be MERGE or DISCARD_LOSER. Both wrote a
+      pre_merge_snapshot + reverse_window_until; the on-disk effect
+      of a discard is a strict subset of a merge (loser soft-deleted,
+      household head-pointers repointed, no field overrides), so the
+      same code path reverses both.
     - timezone.now() must be <= reverse_window_until.
     - decision must not already be reversed.
     - reason must be non-empty (DPPA accountability — every un-merge
       needs a defensible trail).
     """
-    if decision.action != MergeAction.MERGE:
+    if decision.action not in (MergeAction.MERGE, MergeAction.DISCARD_LOSER):
         raise MergeError(
-            f"only MERGE decisions can be reversed (got {decision.action})",
+            f"only MERGE / DISCARD_LOSER decisions can be reversed "
+            f"(got {decision.action})",
         )
     if decision.reversed_at is not None:
         raise MergeError(
@@ -618,6 +622,90 @@ def auto_merge_high_confidence_pairs(
             # skip without aborting the batch.
             skipped += 1
     return {"processed": processed, "merged": merged, "skipped": skipped}
+
+
+@transaction.atomic
+def discard_duplicate(
+    pair: MatchPair,
+    *,
+    surviving_id: str,
+    actor: str,
+    reason: str,
+) -> MergeDecision:
+    """Both records ARE the same person, but the loser is bad data
+    (test entry, accidental re-submission, corrupted re-capture).
+
+    On-disk effect mirrors merge_member_pair with empty
+    chosen_field_values: survivor's fields stay untouched, loser is
+    soft-deleted with merged_into=survivor, Household.head_member
+    references on the loser flip to the survivor. The pair lands in
+    MERGED state — still a duplicate-resolved outcome. The 30-day
+    reverse_merge_decision window applies (action=DISCARD_LOSER is
+    distinguishable in audit, but reversal does the same thing).
+
+    Reason is mandatory (>= 6 chars) so the audit chain always
+    carries a why — matches reject_pair's discipline.
+    """
+    if pair.record_type != "member":
+        raise MergeError("discard_duplicate only handles member pairs")
+    if pair.status != PairStatus.PENDING:
+        raise MergeError(
+            f"pair is {pair.status}; only PENDING pairs can be discarded",
+        )
+    if surviving_id not in (pair.record_a_id, pair.record_b_id):
+        raise MergeError("surviving_id must be one of the pair members")
+    if len(reason.strip()) < 6:
+        raise MergeError("discard requires a reason of at least 6 characters")
+
+    losing_id = (
+        pair.record_b_id if surviving_id == pair.record_a_id else pair.record_a_id
+    )
+    surviving = Member.objects.select_for_update().get(id=surviving_id)
+    loser = Member.objects.select_for_update().get(id=losing_id)
+    if loser.is_deleted:
+        raise MergeError("loser already soft-deleted")
+
+    # Soft-delete the loser. No field copying — that's the whole
+    # point of this code path versus merge_member_pair.
+    loser.is_deleted = True
+    loser.deleted_at = timezone.now()
+    loser.merged_into = surviving
+    loser.save(update_fields=[
+        "is_deleted", "deleted_at", "merged_into", "updated_at",
+    ])
+
+    # Re-point any Household.head_member references on the loser.
+    from apps.data_management.models import Household
+    repointed_household_ids = list(
+        Household.objects.filter(head_member=loser).values_list("id", flat=True),
+    )
+    Household.objects.filter(head_member=loser).update(head_member=surviving)
+
+    pair.status = PairStatus.MERGED
+    pair.save(update_fields=["status", "updated_at"])
+
+    decision = MergeDecision.objects.create(
+        match_pair=pair, action=MergeAction.DISCARD_LOSER,
+        surviving_record_id=surviving.id, losing_record_id=loser.id,
+        chosen_field_values={}, reason=reason,
+        decided_by=actor,
+        reverse_window_until=timezone.now() + timezone.timedelta(days=30),
+        pre_merge_snapshot={
+            # No surviving_overrides — survivor was never written.
+            "surviving_overrides": {},
+            "households_repointed_to_survivor": repointed_household_ids,
+        },
+    )
+
+    _emit_audit(
+        action="discard_loser", entity_type="match_pair", entity_id=pair.id,
+        actor=actor, reason=reason,
+        field_changes={
+            "surviving": surviving.id, "discarded": loser.id,
+            "households_repointed": repointed_household_ids,
+        },
+    )
+    return decision
 
 
 @transaction.atomic

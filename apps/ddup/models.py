@@ -34,6 +34,12 @@ class MergeAction(models.TextChoices):
     REJECT = "reject"
     ON_HOLD = "on_hold"
     CROSS_HOUSEHOLD = "cross_household"
+    # Both records ARE the same person, but one is bad data (test entry,
+    # double-submission, garbled re-capture). Survivor's fields stay
+    # untouched; loser is soft-deleted exactly like a MERGE loser.
+    # Reversible through the same 30-day window since the on-disk
+    # effect mirrors merge.
+    DISCARD_LOSER = "discard_loser"
 
 
 class DdupModelVersion(models.Model):
