@@ -450,3 +450,94 @@ class TestKoboCanonicalMapper:
         rosterless = {**SAMPLE_KOBO_PAYLOAD, "household_members": []}
         with pytest.raises(KeyError, match="household_members"):
             kobo_to_canonical(rosterless)
+
+
+# --- US-S11-029 — v1 legacy form (group-prefixed keys + encoded codes) ---
+
+# Replica of run 01KSKABN80NB6M0CDG40E8FZVX's payload shape. The v1
+# Kobo questionnaire nests every field under a `begin_group` (so the
+# wire key is `identification/a0_region` rather than `a0_region`) AND
+# emits already-encoded geographic codes (`R-EASTERN` rather than the
+# raw name `eastern` the current form uses).
+V1_LEGACY_KOBO_PAYLOAD = {
+    "_id": 763649275,
+    "_uuid": "v1-legacy-test",
+    "_xform_id_string": "ak2w5k5WAbU53ChwwM8bC7",
+    "_submission_time": "2026-05-26T20:45:28",
+    "_submitted_by": "field-ops",
+    "identification/a0_region": "R-EASTERN",
+    "identification/a1_subregion": "SR-BUKEDI-EASTERN",
+    "identification/a2_district_city": "227",
+    "identification/a3_county_municipality": "227.1",
+    "identification/a4_subcounty_division_tc": "227.1.10",
+    "identification/a5_parish_ward": "227.1.10.02",
+    "identification/a6_lc1_village_cell": "Village 001",
+    "identification/a7_rural_urban": "1",
+    "identification/a11_12_gps": "2.775717 34.622528 0 5",
+    "identification/a13_interviewer_name_code": "INT-007",
+    "identification/a14_parish_supervisor_name_code": "SUP-004",
+    "survey_status/b1_respondent_name": "Okello Robert",
+    "survey_status/b3_address": "Bukedi 12",
+    "consent_group/consent": "1",
+    "household_members": [
+        {
+            "household_members/member_index": "1",
+            "household_members/c1_full_name": "Okello Robert",
+            "household_members/c2_relationship": "01",
+            "household_members/c4_sex": "1",
+            "household_members/c5_date_of_birth": "1996-11-24",
+            "household_members/c6_age_years": "30",
+            "household_members/c8_nin_status": "1",
+            "household_members/c9_nin": "NIN0000101UG",
+            # Nested sub-group inside the repeat — the flattener must
+            # alias the trailing key not just the first-level prefix.
+            "household_members/education_literacy/e1_literacy": "2",
+            "household_members/employment/f1_main_job": "04",
+        },
+    ],
+}
+
+
+class TestKoboV1LegacyForm:
+    """US-S11-029 — the legacy v1 questionnaire that ships group-prefixed
+    keys (identification/, survey_status/, consent_group/, ...). Run
+    01KSKABN80NB6M0CDG40E8FZVX quarantined 50/50 against this form on
+    2026-05-26 because canonicalize was looking for top-level `a0_region`
+    and the wire key was `identification/a0_region`."""
+
+    def test_canonicalize_succeeds_for_group_prefixed_payload(self):
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        out = kobo_to_canonical(V1_LEGACY_KOBO_PAYLOAD)
+        # Geographic codes survive intact — the v1 form's already-
+        # encoded values must NOT be double-prefixed (R-R-EASTERN).
+        assert out["geographic"]["region"] == "R-EASTERN"
+        assert out["geographic"]["sub_region"] == "SR-BUKEDI-EASTERN"
+        assert out["geographic"]["district"] == "227"
+        assert out["geographic"]["parish"] == "227.1.10.02"
+        # Members canonicalize through nested sub-groups too.
+        assert len(out["members"]) == 1
+        head = out["members"][0]
+        assert head["surname"] == "Okello"
+        assert head["first_name"] == "Robert"
+        assert head["sex"] == "1"
+        assert head["age_years"] == 30
+        assert head["is_head"] is True
+
+    def test_flatten_helper_preserves_originals(self):
+        # The original `identification/a0_region` key must remain in
+        # the dict the flattener returns so the RawLanding audit chain
+        # still shows the form's wire-truth paths.
+        from apps.ingestion_hub.connectors.kobo import _kobo_flatten
+        out = _kobo_flatten(V1_LEGACY_KOBO_PAYLOAD)
+        assert "identification/a0_region" in out
+        assert out["a0_region"] == "R-EASTERN"
+
+    def test_already_prefixed_region_is_not_double_prefixed(self):
+        # Direct regression — feed a payload with `R-WESTERN` in the
+        # region slot and assert no `R-R-WESTERN` ever escapes.
+        from apps.ingestion_hub.connectors.kobo import kobo_to_canonical
+        out = kobo_to_canonical(
+            {**V1_LEGACY_KOBO_PAYLOAD, "identification/a0_region": "R-WESTERN"},
+        )
+        assert out["geographic"]["region"] == "R-WESTERN"
+        assert "R-R-" not in out["geographic"]["region"]

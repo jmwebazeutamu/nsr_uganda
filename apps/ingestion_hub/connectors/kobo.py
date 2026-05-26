@@ -173,12 +173,35 @@ def _parse_kobo_gps(gps: str | None) -> tuple[float | None, float | None, float 
     return lat, lng, accuracy
 
 
+def _kobo_flatten(d: dict) -> dict:
+    """Return a copy of `d` with every group-prefixed key
+    (`group/subgroup/field`) also accessible as the trailing
+    segment (`field`). Kobo's `begin_group` produces these slash-
+    separated keys, and a form with group nesting (the v1 legacy
+    NSR questionnaire) would otherwise fail every `raw.get("...")`
+    in canonicalize.
+
+    First-wins on collision so an explicit top-level key isn't
+    masked by a deeper alias. Originals are preserved so the audit
+    chain on RawLanding still shows the form's true field paths.
+    """
+    out = dict(d)
+    for k, v in d.items():
+        if "/" in k:
+            tail = k.rsplit("/", 1)[-1]
+            out.setdefault(tail, v)
+    return out
+
+
 def _kobo_member_to_canonical(raw: dict, line_number: int) -> dict:
     """Convert one row from `household_members[]` to the canonical
     member shape. Kobo namespaces every field as
-    `household_members/c1_full_name` etc., so we strip the prefix
-    before consulting the dict."""
-    m = {k.removeprefix("household_members/"): v for k, v in raw.items()}
+    `household_members/c1_full_name` and nested sub-groups produce
+    `household_members/education_literacy/e1_literacy`; the
+    flatten helper aliases every group-prefixed key to its trailing
+    segment so the lookups below work for both flat and nested
+    forms."""
+    m = _kobo_flatten(raw)
     full = m.get("c1_full_name", "")
     surname, first_name = _split_full_name(full)
     # The first member with c2_relationship='01' is the head by the
@@ -405,11 +428,24 @@ def _canonicalize_kobo_geo(raw: dict) -> dict:
     parish_code = (raw.get("a5_parish_ward") or "").strip().replace("_", ".")
     village_name = (raw.get("a6_lc1_village_cell") or "").strip()
 
-    region_code = f"R-{_slug(region_name)}" if region_name else ""
-    subregion_code = (
-        f"SR-{_slug(subregion_name)}-{_slug(region_name)}"
-        if subregion_name and region_name else ""
-    )
+    # Idempotent prefix build — current Kobo form sends raw names
+    # ('Eastern', 'Bukedi') and we slug+prefix to get the canonical
+    # code. The v1 legacy form sends already-encoded codes
+    # ('R-EASTERN', 'SR-BUKEDI-EASTERN'); the startswith guards keep
+    # us from emitting 'R-R-EASTERN' / 'SR-SR-BUKEDI-...' in that case.
+    if region_name.startswith("R-"):
+        region_code = region_name
+    elif region_name:
+        region_code = f"R-{_slug(region_name)}"
+    else:
+        region_code = ""
+
+    if subregion_name.startswith("SR-"):
+        subregion_code = subregion_name
+    elif subregion_name and region_name:
+        subregion_code = f"SR-{_slug(subregion_name)}-{_slug(region_name)}"
+    else:
+        subregion_code = ""
     village_code = (
         f"{parish_code}.{_slug(village_name)}"
         if parish_code and village_name else ""
@@ -451,7 +487,15 @@ def kobo_to_canonical(raw: dict) -> dict:
     Best-effort:
         gps from a11_12_gps; urban/rural from a7_rural_urban
         ('1'=rural, '2'=urban per UBOS convention).
+
+    Both forms are handled: flat-key (current questionnaire) and
+    group-nested (legacy v1 — fields under identification/,
+    survey_status/, housing/, agriculture/, ...). `_kobo_flatten`
+    aliases every group-prefixed key to its trailing name; original
+    keys are preserved so the RawLanding audit chain still shows the
+    form's actual field paths.
     """
+    raw = _kobo_flatten(raw)
     geo_keys = (
         "a0_region", "a1_subregion", "a2_district_city",
         "a3_county_municipality", "a4_subcounty_division_tc",
