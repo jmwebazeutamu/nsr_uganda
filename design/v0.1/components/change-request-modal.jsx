@@ -1085,43 +1085,94 @@ const ChangeRequestModal = ({
                     {groupRows.map(r => {
                       const meta = FIELDS_FLAT[`${r.category}:${r.field}`];
                       const rowKey = `${r.category}:${r.field}`;
+                      const cv = effectiveCurrentValues[`${r.category}.${r.field}`];
+                      const cvFormatted = formatCurrent(cv, meta);
+                      const hasChanged = (r.value || "").trim() !== "";
                       return (
                         <div key={rowKey} data-row-key={rowKey}
                           style={{
-                            display:"grid",
-                            gridTemplateColumns:"1.2fr 1.1fr 16px 1.4fr 28px",
-                            gap:10, alignItems:"center",
-                            padding:"8px 12px",
-                            borderBottom:"1px solid var(--neutral-100)"}}>
-                          <div style={{fontSize:13}}>
-                            <strong>{meta.label}</strong>
-                            <div className="t-mono" style={{fontSize:11, color:"var(--neutral-500)"}}>
+                            padding:"10px 12px",
+                            borderBottom:"1px solid var(--neutral-100)",
+                            display:"flex", flexDirection:"column", gap:6,
+                          }}>
+                          {/* Row header — field label, key, remove. */}
+                          <div style={{display:"flex", alignItems:"center", gap:8}}>
+                            <strong style={{fontSize:13}}>{meta.label}</strong>
+                            <span className="t-mono" style={{fontSize:11, color:"var(--neutral-500)"}}>
                               {r.category}.{r.field}
+                            </span>
+                            {meta.pmt && (
+                              <Chip size="sm" tone="eligibility">PMT</Chip>
+                            )}
+                            <div style={{flex:1}}/>
+                            <button type="button" className="icon-btn"
+                              aria-label={`Remove ${meta.label}`}
+                              onClick={() => removeRow(r.category, r.field)}>
+                              <Icon name="x" size={14}/>
+                            </button>
+                          </div>
+                          {/* Before / After diff cards. Two columns side-by-
+                              side. Lights up green on the "after" side once
+                              the operator has typed a value. */}
+                          <div style={{
+                            display:"grid",
+                            gridTemplateColumns:"1fr 16px 1fr",
+                            gap:8, alignItems:"stretch",
+                          }}>
+                            <div data-testid={`before-${r.category}-${r.field}`}
+                                 style={{
+                                   padding:"8px 10px",
+                                   background:"var(--neutral-50)",
+                                   border:"1px solid var(--neutral-200)",
+                                   borderRadius:6,
+                                   minHeight:38,
+                                   display:"flex", flexDirection:"column", gap:2,
+                                 }}>
+                              <span style={{
+                                fontSize:10, fontWeight:600,
+                                letterSpacing:"0.06em", textTransform:"uppercase",
+                                color:"var(--neutral-500)",
+                              }}>Before</span>
+                              <span
+                                data-testid={`current-${r.category}-${r.field}`}
+                                title={cv == null ? "" : String(cv)}
+                                style={{
+                                  fontSize:13,
+                                  color: cvFormatted ? "var(--neutral-900)" : "var(--neutral-500)",
+                                  fontStyle: cvFormatted ? "normal" : "italic",
+                                  overflow:"hidden", textOverflow:"ellipsis",
+                                  whiteSpace:"nowrap",
+                                }}>
+                                {cvFormatted || "current —"}
+                              </span>
+                            </div>
+                            <div style={{
+                              display:"flex", alignItems:"center", justifyContent:"center",
+                              color: hasChanged ? "var(--accent-update)" : "var(--neutral-500)",
+                            }}>
+                              <Icon name="arrowRight" size={14}/>
+                            </div>
+                            <div data-testid={`after-${r.category}-${r.field}`}
+                                 style={{
+                                   padding:"8px 10px",
+                                   background: hasChanged ? "rgba(34, 139, 34, 0.06)" : "white",
+                                   border: hasChanged
+                                     ? "1px solid rgba(34, 139, 34, 0.5)"
+                                     : "1px solid var(--neutral-200)",
+                                   borderRadius:6,
+                                   minHeight:38,
+                                   display:"flex", flexDirection:"column", gap:2,
+                                 }}>
+                              <span style={{
+                                fontSize:10, fontWeight:600,
+                                letterSpacing:"0.06em", textTransform:"uppercase",
+                                color: hasChanged ? "rgb(34, 100, 34)" : "var(--neutral-500)",
+                              }}>After</span>
+                              <RowInput meta={meta} value={r.value}
+                                autoFocus={focusFieldKey === rowKey}
+                                onChange={(v) => updateValue(r.category, r.field, v)}/>
                             </div>
                           </div>
-                          {(() => {
-                            const cv = effectiveCurrentValues[`${r.category}.${r.field}`];
-                            const formatted = formatCurrent(cv, meta);
-                            return formatted
-                              ? <Chip size="sm" tone="neutral"
-                                      title={String(cv)}
-                                      data-testid={`current-${r.category}-${r.field}`}>
-                                  current: {formatted}
-                                </Chip>
-                              : <Chip size="sm" tone="neutral"
-                                      data-testid={`current-${r.category}-${r.field}`}>
-                                  current —
-                                </Chip>;
-                          })()}
-                          <Icon name="arrowRight" size={14} color="var(--neutral-500)"/>
-                          <RowInput meta={meta} value={r.value}
-                            autoFocus={focusFieldKey === rowKey}
-                            onChange={(v) => updateValue(r.category, r.field, v)}/>
-                          <button type="button" className="icon-btn"
-                            aria-label={`Remove ${meta.label}`}
-                            onClick={() => removeRow(r.category, r.field)}>
-                            <Icon name="x" size={14}/>
-                          </button>
                         </div>
                       );
                     })}

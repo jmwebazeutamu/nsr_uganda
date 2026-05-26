@@ -289,8 +289,8 @@ describe("current value display", () => {
       />,
     );
     await addRowViaComposer(user, "iden", "phone");
-    const chip = screen.getByTestId("current-iden-phone");
-    expect(chip).toHaveTextContent("current: +256 700 123 456");
+    expect(screen.getByTestId("current-iden-phone"))
+      .toHaveTextContent("+256 700 123 456");
   });
 
   it("formats a date current value", async () => {
@@ -311,8 +311,8 @@ describe("current value display", () => {
       target: { value: "01HMEM0000000000000000ONE0" },
     });
     await addRowViaComposer(user, "rost", "member_dob");
-    const chip = screen.getByTestId("current-rost-member_dob");
-    expect(chip).toHaveTextContent("current: 8 Apr 2018");
+    expect(screen.getByTestId("current-rost-member_dob"))
+      .toHaveTextContent("8 Apr 2018");
   });
 
   it("truncates long strings past 28 chars", async () => {
@@ -324,8 +324,9 @@ describe("current value display", () => {
       />,
     );
     await addRowViaComposer(user, "iden", "head_name");
-    const chip = screen.getByTestId("current-iden-head_name");
-    expect(chip.textContent).toMatch(/^current: .{1,27}…$/);
+    const el = screen.getByTestId("current-iden-head_name");
+    // 28-char truncation, ellipsis suffix.
+    expect(el.textContent).toMatch(/^.{1,27}…$/);
   });
 
   it("treats empty string the same as missing", async () => {
@@ -478,8 +479,7 @@ describe("member picker", () => {
       target: { value: SAMPLE_MEMBERS[2].id },
     });
     await addRowViaComposer(user, "hd", "chronic");
-    const chip = screen.getByTestId("current-hd-chronic");
-    expect(chip).toHaveTextContent("current: no");
+    expect(screen.getByTestId("current-hd-chronic")).toHaveTextContent("no");
   });
 });
 
