@@ -96,7 +96,7 @@ const AdminGeographyScreen = () => {
   const [showRetired, setShowRetired] = useStateGEO(true);
 
   const currentLevel = path[path.length - 1].level;
-  const currentParentCode = path.length > 1 ? path[path.length - 2].code : null;
+  const currentParentCode = path[path.length - 1].code;
 
   // Live overlay — fetch the current level when the breadcrumb changes.
   const _url = `/api/v1/admin/refdata/geography/?level=${currentLevel}${
@@ -124,9 +124,13 @@ const AdminGeographyScreen = () => {
     const nextLevelIdx = GEO_LEVELS.indexOf(currentLevel) + 1;
     if (nextLevelIdx >= GEO_LEVELS.length) return;
     const nextLevel = GEO_LEVELS[nextLevelIdx];
+    setQ("");
     setPath([...path, { level: nextLevel, code: row.code, name: row.name }]);
   };
-  const goTo = (idx) => setPath(path.slice(0, idx + 1));
+  const goTo = (idx) => {
+    setQ("");
+    setPath(path.slice(0, idx + 1));
+  };
 
   // KPIs — registry totals
   const totalUnits = 56 + 14 + 146 + 198 + 1602 + 10717 + 78293;

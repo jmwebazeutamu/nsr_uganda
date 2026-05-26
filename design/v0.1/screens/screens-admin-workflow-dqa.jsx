@@ -14,6 +14,27 @@
 
 const { useState: useStateDQA, useMemo: useMemoDQA } = React;
 
+// Live overlay — pull active rules from the admin API. Falls back
+// to DQA_RULES (mock) when the API is unreachable so the design
+// preview keeps rendering. Same pattern as the choice-lists screen.
+const _projectDqaRules = (results) => {
+  if (!Array.isArray(results) || results.length === 0) return null;
+  return results.map(r => ({
+    ruleId: r.rule_id,
+    latestVersion: r.version,
+    severity: r.severity,
+    status: r.status,
+    applicability: r.applicability || { entity: "household" },
+    description: r.description || "",
+    failRate7d: typeof r.fail_rate_7d === "number" ? r.fail_rate_7d : null,
+    evaluated7d: typeof r.evaluated_7d === "number" ? r.evaluated_7d : null,
+    author: r.author || "",
+    approvedBy: r.approved_by || null,
+    approvedAt: r.approved_at ? String(r.approved_at).slice(0, 10) : null,
+    submittedAt: r.submitted_at ? String(r.submitted_at).slice(0, 10) : null,
+  }));
+};
+
 const DQA_SEVERITY_TONE = { blocking: "danger", warning: "quality", info: "data" };
 const DQA_STATUS_TONE = {
   draft: "quality", pending_approval: "update", active: "data",
@@ -44,26 +65,36 @@ const DQA_PREVIEW_RUNS = [
 ];
 
 const AdminDqaRulesScreen = () => {
+  // Live overlay: fetch once on mount, fall back to mocks on error.
+  const [resp] = (typeof useApi === "function")
+    ? useApi("/api/v1/admin/workflow/dqa/rules/")
+    : [null];
+  // eslint-disable-next-line no-shadow
+  const DQA_RULES_LIVE = _projectDqaRules(resp && resp.results) || DQA_RULES;
+
   const [q, setQ] = useStateDQA("");
   const [severity, setSeverity] = useStateDQA("");
   const [status, setStatus] = useStateDQA("");
   const [selected, setSelected] = useStateDQA(null);
 
-  const rows = useMemoDQA(() => DQA_RULES.filter(r => {
-    if (q && !(r.ruleId.toLowerCase().includes(q.toLowerCase()) || r.description.toLowerCase().includes(q.toLowerCase()))) return false;
+  const rows = useMemoDQA(() => DQA_RULES_LIVE.filter(r => {
+    if (q && !(r.ruleId.toLowerCase().includes(q.toLowerCase()) || (r.description || "").toLowerCase().includes(q.toLowerCase()))) return false;
     if (severity && r.severity !== severity) return false;
     if (status && r.status !== status) return false;
     return true;
-  }), [q, severity, status]);
+  }), [q, severity, status, DQA_RULES_LIVE]);
 
   // KPIs
-  const total = DQA_RULES.length;
-  const active = DQA_RULES.filter(r => r.status === "active").length;
-  const pending = DQA_RULES.filter(r => r.status === "pending_approval").length;
-  const drafts = DQA_RULES.filter(r => r.status === "draft").length;
+  const total = DQA_RULES_LIVE.length;
+  const active = DQA_RULES_LIVE.filter(r => r.status === "active").length;
+  const pending = DQA_RULES_LIVE.filter(r => r.status === "pending_approval").length;
+  const drafts = DQA_RULES_LIVE.filter(r => r.status === "draft").length;
 
   if (selected) {
-    return <DqaRuleDetail rule={DQA_RULES.find(r => r.ruleId === selected)} onBack={() => setSelected(null)}/>;
+    const rule = DQA_RULES_LIVE.find(r => r.ruleId === selected)
+      || DQA_RULES.find(r => r.ruleId === selected);
+    if (!rule) { setSelected(null); return null; }
+    return <DqaRuleDetail rule={rule} onBack={() => setSelected(null)}/>;
   }
 
   return (
@@ -80,8 +111,8 @@ const AdminDqaRulesScreen = () => {
 
       <div className="grid grid-4">
         <KPI title="Total rules" value={total} foot={`${active} active · ${pending} pending · ${drafts} draft`}/>
-        <KPI title="Active blocking" value={DQA_RULES.filter(r => r.status === "active" && r.severity === "blocking").length} foot="Hard stops on submit"/>
-        <KPI title="Active warnings" value={DQA_RULES.filter(r => r.status === "active" && r.severity === "warning").length} foot="Reviewer sees yellow flag"/>
+        <KPI title="Active blocking" value={DQA_RULES_LIVE.filter(r => r.status === "active" && r.severity === "blocking").length} foot="Hard stops on submit"/>
+        <KPI title="Active warnings" value={DQA_RULES_LIVE.filter(r => r.status === "active" && r.severity === "warning").length} foot="Reviewer sees yellow flag"/>
         <KPI title="Preview runs last 7d" value="124" foot="Sandboxed evaluations — no PII persisted" trend="up" trendValue="+18"/>
       </div>
 
@@ -139,13 +170,13 @@ const AdminDqaRulesScreen = () => {
                   {r.applicability.age_band && <div className="t-cap mt-1">age {r.applicability.age_band}</div>}
                 </td>
                 <td>
-                  {r.failRate7d === null
+                  {typeof r.failRate7d !== "number"
                     ? <span className="muted t-cap">—</span>
                     : <>
                         <div className="t-num" style={{ fontWeight: 500, color: r.failRate7d > 5 ? 'var(--accent-danger)' : r.failRate7d > 2 ? 'var(--accent-quality)' : 'var(--neutral-700)' }}>
                           {r.failRate7d.toFixed(1)}%
                         </div>
-                        <div className="t-cap">{r.evaluated7d.toLocaleString()} evals</div>
+                        <div className="t-cap">{Number(r.evaluated7d ?? 0).toLocaleString()} evals</div>
                       </>}
                 </td>
                 <td className="t-cap">{r.author}</td>
@@ -178,7 +209,7 @@ const DqaRuleDetail = ({ rule, onBack }) => {
     <div className="page">
       <PageHeader
         eyebrow={<>ADMIN · WORKFLOW · DQA · <span className="t-mono">{rule.ruleId}</span> · v{rule.latestVersion}</>}
-        title={rule.description.slice(0, 60) + (rule.description.length > 60 ? '…' : '')}
+        title={(rule.description || rule.ruleId).slice(0, 60) + ((rule.description || "").length > 60 ? '…' : '')}
         sub={<>Author <strong>{rule.author}</strong> {rule.approvedBy && <>· Approved by <strong>{rule.approvedBy}</strong> on {rule.approvedAt}</>}</>}
         right={<>
           <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to rules</button>
@@ -268,16 +299,22 @@ const DqaRuleDetail = ({ rule, onBack }) => {
             : <table className="tbl" style={{ boxShadow: 'none' }}>
                 <thead><tr><th>Executed</th><th>Sample size</th><th>Pass</th><th>Fail</th><th>Fail rate</th><th>Executed by</th></tr></thead>
                 <tbody>
-                  {previewRuns.map((p, i) => (
-                    <tr key={i}>
-                      <td className="t-cap">{p.executedAt}</td>
-                      <td className="t-num">{p.sample.toLocaleString()}</td>
-                      <td className="t-num">{p.passCount.toLocaleString()}</td>
-                      <td className="t-num">{p.failCount.toLocaleString()}</td>
-                      <td><Chip size="sm" tone={(p.failCount/p.sample) > 0.05 ? 'danger' : (p.failCount/p.sample) > 0.02 ? 'quality' : 'data'}>{((p.failCount/p.sample)*100).toFixed(1)}%</Chip></td>
-                      <td className="t-bodysm">{p.executedBy}</td>
-                    </tr>
-                  ))}
+                  {previewRuns.map((p, i) => {
+                    const sample = Number(p.sample ?? 0);
+                    const passCount = Number(p.passCount ?? 0);
+                    const failCount = Number(p.failCount ?? 0);
+                    const failRate = sample > 0 ? failCount / sample : 0;
+                    return (
+                      <tr key={i}>
+                        <td className="t-cap">{p.executedAt}</td>
+                        <td className="t-num">{sample.toLocaleString()}</td>
+                        <td className="t-num">{passCount.toLocaleString()}</td>
+                        <td className="t-num">{failCount.toLocaleString()}</td>
+                        <td><Chip size="sm" tone={failRate > 0.05 ? 'danger' : failRate > 0.02 ? 'quality' : 'data'}>{(failRate * 100).toFixed(1)}%</Chip></td>
+                        <td className="t-bodysm">{p.executedBy}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>}
         </div>

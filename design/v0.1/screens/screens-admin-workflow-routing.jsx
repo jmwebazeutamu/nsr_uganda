@@ -109,18 +109,33 @@ const AdminUpdRoutingScreen = () => {
   const [search, setSearch] = useStateRR("");
   const [roleFilter, setRoleFilter] = useStateRR("");
 
-  // Build the matrix: rows = change types, columns = (PMT-relevant, non-PMT)
+  // Build the matrix: rows = change types, columns = (PMT-relevant, non-PMT).
+  //
+  // `vol` (open / weeklyAvg / breachRate) is a separate concern from routing
+  // rules — only the live API projection actually carries open_count /
+  // breach_rate_30d. Falling back to RR_RULES (mock) produces rows WITHOUT
+  // those fields, so we cannot use "we found a rule" as a proxy for "we
+  // have live volume". Compose from RR_VOLUME (mock) as the base and
+  // overlay live numbers only when present on the projection.
   const matrix = useMemoRR(() => {
     return RR_CHANGE_TYPES.map(ct => {
       const ruleFalse = RR_RULES_LIVE.find(r => r.changeType === ct.id && r.pmtRelevant === false);
       const ruleTrue  = RR_RULES_LIVE.find(r => r.changeType === ct.id && r.pmtRelevant === true);
-      const liveVol = ruleFalse || ruleTrue;
-      return {
-        ct, ruleFalse, ruleTrue,
-        vol: liveVol
-          ? { open: liveVol.open, weeklyAvg: 0, breachRate: liveVol.breachRate }
-          : RR_VOLUME[ct.id],
-      };
+      const mockVol = RR_VOLUME[ct.id] || { open: 0, weeklyAvg: 0, breachRate: 0 };
+      // Prefer a live-projected row that actually carries open_count.
+      // Projection sets open: r.open_count ?? 0 so a missing field
+      // surfaces as 0 rather than undefined.
+      const liveRule = [ruleFalse, ruleTrue].find(
+        r => r && typeof r.open === "number",
+      );
+      const vol = liveRule
+        ? {
+            open: liveRule.open,
+            weeklyAvg: mockVol.weeklyAvg,
+            breachRate: typeof liveRule.breachRate === "number" ? liveRule.breachRate : mockVol.breachRate,
+          }
+        : mockVol;
+      return { ct, ruleFalse, ruleTrue, vol };
     });
   }, [RR_RULES_LIVE]);
 
@@ -130,7 +145,7 @@ const AdminUpdRoutingScreen = () => {
     return true;
   });
 
-  const breachingTypes = matrix.filter(m => m.vol.breachRate > 5).length;
+  const breachingTypes = matrix.filter(m => (m.vol?.breachRate ?? 0) > 5).length;
   const autoCommitTypes = RR_RULES_LIVE.filter(r => r.requiredRole === "auto_committed").length;
 
   return (
@@ -147,7 +162,7 @@ const AdminUpdRoutingScreen = () => {
 
       <div className="grid grid-4">
         <KPI title="Active rules" value={RR_RULES_LIVE.length} foot={`${RR_CHANGE_TYPES.length} change types × 2 (PMT) = ${RR_CHANGE_TYPES.length * 2} expected`}/>
-        <KPI title="Open CRs" value={Object.values(RR_VOLUME).reduce((a,v) => a + v.open, 0).toLocaleString()} foot="Currently in review queues"/>
+        <KPI title="Open CRs" value={Object.values(RR_VOLUME).reduce((a,v) => a + Number(v?.open ?? 0), 0).toLocaleString()} foot="Currently in review queues"/>
         <KPI title="Auto-committed" value={autoCommitTypes} foot="No human review · 1% sample audited" trend="flat"/>
         <KPI title="Breaching SLA" value={breachingTypes} foot={`Types with >5% breach rate · ${breachingTypes ? 'review' : 'healthy'}`}/>
       </div>
@@ -194,13 +209,13 @@ const AdminUpdRoutingScreen = () => {
                   <div className="t-cap">{ct.desc}</div>
                 </td>
                 <td>
-                  <div className="t-num" style={{ fontWeight: 500 }}>{vol.open.toLocaleString()}</div>
-                  <div className="t-cap">{vol.weeklyAvg.toLocaleString()} / wk</div>
+                  <div className="t-num" style={{ fontWeight: 500 }}>{Number(vol?.open ?? 0).toLocaleString()}</div>
+                  <div className="t-cap">{Number(vol?.weeklyAvg ?? 0).toLocaleString()} / wk</div>
                 </td>
                 <td>
-                  {vol.breachRate === 0
+                  {!vol?.breachRate
                     ? <span className="muted t-cap">n/a (auto)</span>
-                    : <Chip size="sm" tone={vol.breachRate > 5 ? 'danger' : vol.breachRate > 3 ? 'quality' : 'data'}>{vol.breachRate.toFixed(1)}%</Chip>}
+                    : <Chip size="sm" tone={vol.breachRate > 5 ? 'danger' : vol.breachRate > 3 ? 'quality' : 'data'}>{Number(vol.breachRate).toFixed(1)}%</Chip>}
                 </td>
                 <RuleCell rule={ruleFalse}/>
                 <RuleCell rule={ruleTrue} tint/>

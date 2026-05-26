@@ -62,8 +62,20 @@ const DDUP_PAIR_STATUS_TONE = { pending:"quality", merged:"data", rejected:"dang
 
 const AdminDdupScreen = () => {
   const [tab, setTab] = useStateDDUP("versions");
-  const [selectedId, setSelectedId] = useStateDDUP(DDUP_VERSIONS[1].id);
-  const selected = DDUP_VERSIONS.find(v => v.id === selectedId);
+  const [selectedId, setSelectedId] = useStateDDUP(DDUP_VERSIONS[1]?.id || DDUP_VERSIONS[0]?.id);
+  const selected = DDUP_VERSIONS.find(v => v.id === selectedId) || DDUP_VERSIONS[0];
+  // Guard: if the mock array is empty we cannot render anything.
+  if (!selected) {
+    return <div className="page"><div className="t-cap muted" style={{ padding: 24 }}>No DDUP model versions available.</div></div>;
+  }
+  // Normalise numeric fields so a missing key doesn't crash .toFixed /
+  // .toLocaleString downstream — see feedback_jsx_null_safe_projections.
+  const cfg = selected.config || {};
+  const autoMergeThreshold = Number(cfg.autoMergeThreshold ?? 0);
+  const autoMergeCount = Number(selected.autoMergeCount ?? 0);
+  const manualMergeCount = Number(selected.manualMergeCount ?? 0);
+  const refRate = DDUP_VERSIONS.find(v => v.status === "active") || DDUP_VERSIONS[1] || DDUP_VERSIONS[0];
+  const refAutoReverseRate = refRate && typeof refRate.autoReverseRate === "number" ? refRate.autoReverseRate : null;
 
   return (
     <div className="page">
@@ -80,8 +92,8 @@ const AdminDdupScreen = () => {
       <div className="grid grid-4">
         <KPI title="Pending pairs" value={DDUP_QUEUE_STATS.pending} foot={`${DDUP_QUEUE_STATS.onHold} on hold · ${DDUP_QUEUE_STATS.crossHousehold} cross-household`} trend="up" trendValue="+34 today"/>
         <KPI title="Auto-merge today" value={DDUP_QUEUE_STATS.autoMergedToday} foot={`${DDUP_QUEUE_STATS.manualMergedToday} manual merges`}/>
-        <KPI title="Active threshold" value={selected.config.autoMergeThreshold.toFixed(2)} foot="Score ≥ this → auto-merge · v2"/>
-        <KPI title="Auto-reverse rate" value={`${(DDUP_VERSIONS[1].autoReverseRate * 100).toFixed(2)}%`} foot="of auto-merges reversed within 30d window" trend="flat"/>
+        <KPI title="Active threshold" value={autoMergeThreshold.toFixed(2)} foot="Score ≥ this → auto-merge · v2"/>
+        <KPI title="Auto-reverse rate" value={refAutoReverseRate === null ? "—" : `${(refAutoReverseRate * 100).toFixed(2)}%`} foot="of auto-merges reversed within 30d window" trend="flat"/>
       </div>
 
       {/* Sub-tabs: Model versions · Match queue · Decisions */}
@@ -158,10 +170,10 @@ const AdminDdupScreen = () => {
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', borderTop: '1px solid var(--neutral-200)' }}>
-                <Stat k="Auto-merge threshold" v={selected.config.autoMergeThreshold.toFixed(2)} sub="composite score cut" first/>
-                <Stat k="Auto-merges" v={selected.autoMergeCount.toLocaleString()} sub="tier-3 confident"/>
-                <Stat k="Manual merges" v={selected.manualMergeCount.toLocaleString()} sub="operator decisions"/>
-                <Stat k="Auto-reverse rate" v={selected.autoReverseRate !== null ? `${(selected.autoReverseRate*100).toFixed(2)}%` : '—'} sub="reversed within 30d window" last/>
+                <Stat k="Auto-merge threshold" v={autoMergeThreshold.toFixed(2)} sub="composite score cut" first/>
+                <Stat k="Auto-merges" v={autoMergeCount.toLocaleString()} sub="tier-3 confident"/>
+                <Stat k="Manual merges" v={manualMergeCount.toLocaleString()} sub="operator decisions"/>
+                <Stat k="Auto-reverse rate" v={typeof selected.autoReverseRate === "number" ? `${(selected.autoReverseRate*100).toFixed(2)}%` : '—'} sub="reversed within 30d window" last/>
               </div>
             </div>
 
@@ -179,21 +191,21 @@ const AdminDdupScreen = () => {
                     <td className="t-bodysm">Deterministic</td>
                     <td className="t-mono t-bodysm">NIN exact match · same village</td>
                     <td className="t-mono">1.00</td>
-                    <td>{selected.config.tier1 ? <Chip size="sm" tone="data">enabled</Chip> : <Chip size="sm">disabled</Chip>}</td>
+                    <td>{cfg.tier1 ? <Chip size="sm" tone="data">enabled</Chip> : <Chip size="sm">disabled</Chip>}</td>
                   </tr>
                   <tr>
                     <td><Chip tone="update">Tier 2</Chip></td>
                     <td className="t-bodysm">Deterministic-soft</td>
                     <td className="t-mono t-bodysm">Phone match (Soundex-normalised) · name similarity ≥ 0.85</td>
                     <td className="t-mono">0.85+</td>
-                    <td>{selected.config.tier2 ? <Chip size="sm" tone="data">enabled</Chip> : <Chip size="sm">disabled</Chip>}</td>
+                    <td>{cfg.tier2 ? <Chip size="sm" tone="data">enabled</Chip> : <Chip size="sm">disabled</Chip>}</td>
                   </tr>
                   <tr>
                     <td><Chip tone="quality">Tier 3</Chip></td>
                     <td className="t-bodysm">Probabilistic composite</td>
-                    <td className="t-mono t-bodysm">{selected.config.tier3Fields.join(' + ')}</td>
-                    <td className="t-mono">{selected.config.autoMergeThreshold.toFixed(2)}+</td>
-                    <td>{selected.config.tier3 ? <Chip size="sm" tone="data">enabled</Chip> : <Chip size="sm">disabled</Chip>}</td>
+                    <td className="t-mono t-bodysm">{(Array.isArray(cfg.tier3Fields) ? cfg.tier3Fields : []).join(' + ') || <span className="muted">—</span>}</td>
+                    <td className="t-mono">{autoMergeThreshold.toFixed(2)}+</td>
+                    <td>{cfg.tier3 ? <Chip size="sm" tone="data">enabled</Chip> : <Chip size="sm">disabled</Chip>}</td>
                   </tr>
                 </tbody>
               </table>
@@ -265,7 +277,7 @@ const AdminDdupScreen = () => {
                 background: 'var(--neutral-0)',
               }}>
                 <div className="t-cap">{s.label}</div>
-                <div className="t-num" style={{ fontSize: 22, fontWeight: 600, marginTop: 4 }}>{s.value.toLocaleString()}</div>
+                <div className="t-num" style={{ fontSize: 22, fontWeight: 600, marginTop: 4 }}>{Number(s.value ?? 0).toLocaleString()}</div>
               </div>
             ))}
           </div>

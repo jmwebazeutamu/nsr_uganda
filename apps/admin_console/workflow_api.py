@@ -180,6 +180,10 @@ def _dqa_row(rule: DqaRule, *, full: bool = False) -> dict:
         "version": rule.version,
         "status": rule.status,
         "severity": rule.severity,
+        # `description` is short enough to ship on the list endpoint
+        # — the Admin UI shows it as the per-row summary, so omitting
+        # it would force a per-row fetch.
+        "description": rule.description,
         "applicability": rule.applicability_filter,
         "author": rule.author,
         "approved_by": rule.approved_by,
