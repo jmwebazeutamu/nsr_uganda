@@ -1607,3 +1607,117 @@ class TestConnectorRunSerializerEnrichment:
         assert body["source_code"] == "KOBO-DASH"
         assert body["connector_name"] == "kobo-form-z"
         assert body["run_type"] in ("import", "test")
+
+
+# --- US-S11-023 — delete ConnectorRun ------------------------------------
+
+@pytest.mark.django_db
+class TestDeleteConnectorRun:
+    """POST /api/v1/dih/connector-runs/{id}/delete/ — cascades through
+    every PROTECT FK to ConnectorRun, refusing to remove runs that
+    produced promoted records (Household lineage preserved)."""
+
+    def _url(self, run) -> str:
+        return f"/api/v1/dih/connector-runs/{run.id}/delete/"
+
+    def _in_group(self, django_user_model, group_name):
+        from django.contrib.auth.models import Group
+        user = django_user_model.objects.create_user(
+            username=f"u-del-{group_name}", password="x",
+        )
+        grp, _ = Group.objects.get_or_create(name=group_name)
+        user.groups.add(grp)
+        return user
+
+    def _build_run(self, *, status, records_promoted=0):
+        src = SourceSystem.objects.create(
+            code=f"KOBO-DEL-{status}", name="Kobo delete test",
+            kind=SourceSystemKind.KOBO,
+        )
+        DataProvisionAgreement.objects.create(
+            source_system=src, reference=f"DPA-DEL-{status}",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+        )
+        conn = Connector.objects.create(
+            source_system=src, name="kobo-form-x", config={},
+        )
+        run = ConnectorRun.objects.create(
+            connector=conn, status=status,
+            records_promoted=records_promoted,
+        )
+        return run
+
+    def test_anonymous_caller_gets_403(self, django_user_model):
+        run = self._build_run(status=ConnectorRunStatus.SUCCEEDED)
+        client = APIClient()
+        resp = client.post(self._url(run), {}, format="json")
+        assert resp.status_code in (401, 403)
+
+    def test_refuses_running_run(self, django_user_model):
+        run = self._build_run(status=ConnectorRunStatus.RUNNING)
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(self._url(run), {"reason": "x"}, format="json")
+        assert resp.status_code == 400
+        assert "wait for it to finish" in resp.json()["detail"]
+        # Run survives.
+        assert ConnectorRun.objects.filter(id=run.id).exists()
+
+    def test_refuses_run_with_promoted_records(self, django_user_model):
+        run = self._build_run(
+            status=ConnectorRunStatus.SUCCEEDED, records_promoted=3,
+        )
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(self._url(run), {"reason": "x"}, format="json")
+        assert resp.status_code == 400
+        assert "promoted" in resp.json()["detail"].lower()
+        assert ConnectorRun.objects.filter(id=run.id).exists()
+
+    def test_clean_delete_cascades_and_audits(self, django_user_model):
+        run = self._build_run(status=ConnectorRunStatus.SUCCEEDED)
+        # Plant two RawLandings + one quarantined StageRecord (no
+        # PROMOTED state, so the lineage guard passes).
+        from apps.ingestion_hub.models import RawLanding
+        for i in range(2):
+            RawLanding.objects.create(
+                connector_run=run, payload={"q": i},
+                source_reference=str(i),
+            )
+        run_id = run.id
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(
+            self._url(run),
+            {"reason": "wrong form pulled — 100% quarantine"},
+            format="json",
+        )
+        assert resp.status_code == 200, resp.content
+        body = resp.json()
+        assert body["deleted_run_id"] == run_id
+        assert body["raw_landings_deleted"] == 2
+        # Run + landings gone from the DB.
+        assert not ConnectorRun.objects.filter(id=run_id).exists()
+        assert RawLanding.objects.filter(connector_run_id=run_id).count() == 0
+        # AuditEvent recorded with the cascade counts in field_changes.
+        ev = AuditEvent.objects.filter(
+            action="dih.connector.run_deleted", entity_id=run_id,
+        ).first()
+        assert ev is not None
+        assert ev.field_changes["raw_landings_deleted"] == 2
+        assert "wrong form pulled" in ev.reason
+
+    def test_nsr_unit_coordinator_can_delete(self, django_user_model):
+        # The Sys Admin + NSR Unit Coordinator parity for the
+        # trigger surface extends to the delete surface too.
+        run = self._build_run(status=ConnectorRunStatus.SUCCEEDED)
+        user = self._in_group(django_user_model, "nsr_unit_coordinator")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(
+            self._url(run), {"reason": "cleanup"}, format="json",
+        )
+        assert resp.status_code == 200, resp.content

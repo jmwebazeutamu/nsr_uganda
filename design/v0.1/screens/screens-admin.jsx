@@ -93,6 +93,24 @@ const statusToneCR = {
 const isStuck = (r) =>
   r.status === "running" && r.started_h >= STUCK_THRESHOLD_HOURS;
 
+// Format an ISO timestamp as "26 May 2026 · 22:10 EAT". EAT (UTC+3)
+// is the rendering timezone per CLAUDE.md "persist as UTC, render
+// as EAT in UI". Africa/Kampala is the canonical TZ id for Uganda.
+const _formatRunDate = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const date = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Kampala",
+    day: "2-digit", month: "short", year: "numeric",
+  }).format(d);
+  const time = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Kampala",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(d);
+  return `${date} · ${time} EAT`;
+};
+
 // Map a /api/v1/dih/connector-runs/ server row into the row shape the
 // table renders. Duration + started_h are computed client-side from
 // the timestamps so the backend stays lean. Returns null if the input
@@ -127,6 +145,7 @@ const _runApiToRow = (r) => {
     connector: connectorLabel,
     status: r.status,
     started_h: startedH,
+    started_at: r.started_at || null,
     duration,
     landed: r.records_landed || 0,
     staged: r.records_staged || 0,
@@ -504,6 +523,99 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
   );
 };
 
+// ── Delete-runs confirm modal (US-S11-023) ─────────────────────────────
+// Operator confirms the cascade before any row is dropped. The reason
+// field is required because the audit event is the only paper trail
+// after the rows are gone.
+const DeleteRunsConfirmModal = ({ rows, onClose, onConfirm, submitting }) => {
+  const [reason, setReason] = useStateAdmin("");
+  const submit = (e) => {
+    e.preventDefault();
+    if (!reason.trim()) return;
+    onConfirm(reason.trim());
+  };
+  return (
+    <div
+      role="dialog"
+      aria-label="Delete connector runs"
+      style={{
+        position:"fixed", inset:0, background:"rgba(0,0,0,0.4)",
+        display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000,
+      }}
+      onClick={() => !submitting && onClose()}
+    >
+      <form
+        onClick={e => e.stopPropagation()}
+        onSubmit={submit}
+        style={{
+          background:"white", padding:"24px", borderRadius:"8px",
+          minWidth:"460px", maxWidth:"560px",
+          boxShadow:"0 8px 32px rgba(0,0,0,0.2)",
+        }}
+      >
+        <h3 className="t-h3" style={{marginTop:0, color:"var(--accent-danger)"}}>
+          Delete {rows.length} connector run{rows.length === 1 ? "" : "s"}?
+        </h3>
+        <p className="t-bodysm muted" style={{marginTop:4, marginBottom:12}}>
+          Cascades through StageRecord → RawLanding for each run. The
+          backend refuses if any run has promoted records (Household
+          lineage is preserved). This action is irreversible — the
+          audit event is the only paper trail.
+        </p>
+        <ul
+          className="t-mono"
+          style={{
+            fontSize:11, background:"var(--neutral-50)",
+            padding:"8px 12px", borderRadius:"4px",
+            maxHeight:"160px", overflowY:"auto",
+            marginBottom:16,
+          }}
+        >
+          {rows.map(r => (
+            <li key={r.id}>{r.id} — {r.connector} ({r.status})</li>
+          ))}
+        </ul>
+
+        <label className="t-cap" style={{display:"block", marginBottom:4}}>
+          Reason <span style={{color:"var(--accent-danger)"}}>*</span>
+        </label>
+        <textarea
+          value={reason}
+          onChange={e => setReason(e.target.value)}
+          rows={3}
+          disabled={submitting}
+          placeholder="e.g. wrong Kobo form pulled; canonicalize failed on every row"
+          style={{
+            width:"100%", padding:"8px",
+            border:"1px solid var(--neutral-300)", borderRadius:"4px",
+            fontSize:13, fontFamily:"inherit", resize:"vertical",
+            marginBottom:20,
+          }}
+        />
+
+        <div style={{display:"flex", justifyContent:"flex-end", gap:8}}>
+          <button
+            type="button" className="btn"
+            onClick={onClose} disabled={submitting}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit" className="btn"
+            style={{
+              background:"var(--accent-danger)", color:"white",
+              borderColor:"var(--accent-danger)",
+            }}
+            disabled={submitting || !reason.trim()}
+          >
+            {submitting ? "Deleting…" : `Delete ${rows.length}`}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
 // ── Connector runs tab ─────────────────────────────────────────────────
 const ConnectorRunsTab = () => {
   const [selection, setSelection] = useStateAdmin(new Set());
@@ -514,6 +626,11 @@ const ConnectorRunsTab = () => {
   const [sources, setSources] = useStateAdmin(MOCK_SOURCE_SYSTEMS);
   const [modalOpen, setModalOpen] = useStateAdmin(false);
   const [submitting, setSubmitting] = useStateAdmin(false);
+  // Delete-runs confirm modal state (US-S11-023). `deleteTargets`
+  // holds the row objects up for deletion — single-row delete clicks
+  // populate it with one row; bulk-delete passes the selection.
+  const [deleteTargets, setDeleteTargets] = useStateAdmin([]);
+  const [deleteSubmitting, setDeleteSubmitting] = useStateAdmin(false);
 
   // Live-fetch source systems from the DRF endpoint when the harness
   // runs on the same origin as the Django backend; otherwise we keep
@@ -602,6 +719,53 @@ const ConnectorRunsTab = () => {
     setSelection(new Set());
   };
 
+  const deleteRuns = (reason) => {
+    if (deleteTargets.length === 0) return;
+    setDeleteSubmitting(true);
+    const ids = deleteTargets.map(r => r.id);
+    Promise.all(ids.map(id => fetch(
+      `/api/v1/dih/connector-runs/${id}/delete/`,
+      {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-CSRFToken": _adminCsrfToken(),
+        },
+        body: JSON.stringify({ reason }),
+      },
+    ).then(r => r.json().then(body => ({ id, ok: r.ok, body })))
+      .catch(err => ({ id, ok: false, body: { detail: String(err) } }))))
+      .then(results => {
+        setDeleteSubmitting(false);
+        setDeleteTargets([]);
+        const okIds = new Set(
+          results.filter(x => x.ok).map(x => x.id),
+        );
+        // Remove successfully-deleted rows from the table and the
+        // selection set. Failed rows stay so the operator can see
+        // what blocked them via the toast.
+        setRuns(prev => prev.filter(r => !okIds.has(r.id)));
+        setSelection(prev => {
+          const next = new Set(prev);
+          for (const id of okIds) next.delete(id);
+          return next;
+        });
+        const failed = results.filter(x => !x.ok);
+        if (failed.length === 0) {
+          setToast(`Deleted ${okIds.size} run(s).`);
+        } else {
+          const detail = failed
+            .map(f => `${f.id}: ${f.body.detail || "failed"}`)
+            .join(" · ");
+          setToast(
+            `Deleted ${okIds.size}, refused ${failed.length}. ${detail}`,
+          );
+        }
+      });
+  };
+
   const triggerRun = ({ sourceId, dryRun, formUid }) => {
     const source = sources.find(s => s.id === sourceId);
     if (!source) return;
@@ -680,9 +844,20 @@ const ConnectorRunsTab = () => {
           </strong>
           <div style={{flex:1}}/>
           {selection.size > 0 && (
-            <button className="btn" onClick={fireBulk}>
-              <Icon name="alert" size={13}/> Mark stuck runs as FAILED
-            </button>
+            <>
+              <button className="btn" onClick={fireBulk}>
+                <Icon name="alert" size={13}/> Mark stuck runs as FAILED
+              </button>
+              <button
+                className="btn"
+                style={{marginLeft:8, color:"var(--accent-danger)"}}
+                onClick={() => setDeleteTargets(
+                  runs.filter(r => selection.has(r.id)),
+                )}
+              >
+                <Icon name="trash" size={13}/> Delete selected
+              </button>
+            </>
           )}
           {selection.size === 0 && (
             <>
@@ -700,7 +875,7 @@ const ConnectorRunsTab = () => {
           )}
         </div>
 
-        <div style={{display:"grid", gridTemplateColumns:"32px 1fr 130px 100px 90px 90px 90px 90px",
+        <div style={{display:"grid", gridTemplateColumns:"32px 1fr 180px 130px 100px 90px 90px 90px 90px 40px",
                        borderBottom:"1px solid var(--neutral-200)", background:"var(--neutral-50)",
                        fontSize:11, fontWeight:600, letterSpacing:"0.06em",
                        textTransform:"uppercase", color:"var(--neutral-700)"}}>
@@ -713,12 +888,14 @@ const ConnectorRunsTab = () => {
                    )}/>
           </div>
           <div style={{padding:"10px 16px"}}>Connector / Run ID</div>
+          <div style={{padding:"10px 8px"}}>Started</div>
           <div style={{padding:"10px 8px"}}>Status</div>
           <div style={{padding:"10px 8px"}}>Duration</div>
           <div style={{padding:"10px 8px", textAlign:"right"}}>Landed</div>
           <div style={{padding:"10px 8px", textAlign:"right"}}>Promoted</div>
           <div style={{padding:"10px 8px", textAlign:"right"}}>Quarantined</div>
           <div style={{padding:"10px 8px", textAlign:"right"}}>Rejected</div>
+          <div style={{padding:"10px 8px"}}/>
         </div>
 
         {runs.map(r => {
@@ -726,7 +903,7 @@ const ConnectorRunsTab = () => {
           const stuck = isStuck(r);
           return (
             <div key={r.id}
-                 style={{display:"grid", gridTemplateColumns:"32px 1fr 130px 100px 90px 90px 90px 90px",
+                 style={{display:"grid", gridTemplateColumns:"32px 1fr 180px 130px 100px 90px 90px 90px 90px 40px",
                           borderBottom:"1px solid var(--neutral-200)",
                           background: sel ? "var(--accent-data-bg)" : "white",
                           alignItems:"center"}}>
@@ -736,6 +913,9 @@ const ConnectorRunsTab = () => {
               <div style={{padding:"12px 16px"}}>
                 <div style={{fontSize:13, fontWeight:500}}>{r.connector}</div>
                 <div className="t-mono muted" style={{fontSize:11, marginTop:2}}>{r.id}</div>
+              </div>
+              <div style={{padding:"12px 8px", fontSize:12, color:"var(--neutral-700)"}}>
+                {_formatRunDate(r.started_at)}
               </div>
               <div style={{padding:"12px 8px"}}>
                 {stuck
@@ -749,6 +929,23 @@ const ConnectorRunsTab = () => {
               <div style={{padding:"12px 8px", textAlign:"right", fontFamily:"monospace", fontSize:12}}>{r.promoted.toLocaleString()}</div>
               <div style={{padding:"12px 8px", textAlign:"right", fontFamily:"monospace", fontSize:12, color: r.quarantined ? "var(--accent-quality)" : "var(--neutral-500)"}}>{r.quarantined.toLocaleString()}</div>
               <div style={{padding:"12px 8px", textAlign:"right", fontFamily:"monospace", fontSize:12, color: r.rejected ? "var(--accent-danger)" : "var(--neutral-500)"}}>{r.rejected.toLocaleString()}</div>
+              <div style={{padding:"12px 8px", textAlign:"center"}}>
+                <button
+                  type="button"
+                  aria-label={`Delete run ${r.id}`}
+                  title="Delete run"
+                  onClick={() => setDeleteTargets([r])}
+                  style={{
+                    background:"transparent", border:"none", cursor:"pointer",
+                    padding:"4px", color:"var(--neutral-500)",
+                    display:"inline-flex", alignItems:"center",
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.color = "var(--accent-danger)")}
+                  onMouseLeave={e => (e.currentTarget.style.color = "var(--neutral-500)")}
+                >
+                  <Icon name="trash" size={14}/>
+                </button>
+              </div>
             </div>
           );
         })}
@@ -759,6 +956,14 @@ const ConnectorRunsTab = () => {
           submitting={submitting}
           onClose={() => !submitting && setModalOpen(false)}
           onSubmit={triggerRun}
+        />
+      )}
+      {deleteTargets.length > 0 && (
+        <DeleteRunsConfirmModal
+          rows={deleteTargets}
+          submitting={deleteSubmitting}
+          onClose={() => !deleteSubmitting && setDeleteTargets([])}
+          onConfirm={deleteRuns}
         />
       )}
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
@@ -949,7 +1154,10 @@ const AdminScreen = ({ onNavigate }) => {
 if (typeof globalThis !== "undefined") {
   Object.assign(globalThis, {
     RunConnectorModal,
+    DeleteRunsConfirmModal,
     ConnectorRunsTab,
     MOCK_SOURCE_SYSTEMS,
+    _formatRunDate,
+    _runApiToRow,
   });
 }

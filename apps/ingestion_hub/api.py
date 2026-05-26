@@ -15,9 +15,11 @@ from .models import (
 )
 from .permissions import IsDihTrigger
 from .services import (
+    DeleteError,
     DihError,
     StageEditError,
     TriggerError,
+    delete_connector_run,
     edit_stage_record,
     process_stage_record,
     promote_stage_record,
@@ -139,6 +141,27 @@ class FormListItemSerializer(serializers.Serializer):
     name = serializers.CharField(allow_blank=True)
     asset_type = serializers.CharField(allow_blank=True, required=False)
     deployed = serializers.BooleanField()
+
+
+class DeleteRunRequestSerializer(serializers.Serializer):
+    """Operator-supplied reason for deleting a ConnectorRun. Optional
+    field-wise but the audit trail benefits when present — operators
+    are nudged toward filling it via the confirm modal's required
+    field on the client side."""
+    reason = serializers.CharField(
+        required=False, allow_blank=True, max_length=512,
+    )
+
+
+class DeleteRunResponseSerializer(serializers.Serializer):
+    """Cascade counts returned by POST /connector-runs/{id}/delete/."""
+    deleted_run_id = serializers.CharField()
+    source_code = serializers.CharField(allow_blank=True)
+    fast_track_samples_deleted = serializers.IntegerField()
+    promotion_decisions_deleted = serializers.IntegerField()
+    quarantine_rows_deleted = serializers.IntegerField()
+    stage_records_deleted = serializers.IntegerField()
+    raw_landings_deleted = serializers.IntegerField()
 
 
 class TriggerRunResponseSerializer(serializers.Serializer):
@@ -301,6 +324,50 @@ class ConnectorRunViewSet(viewsets.ReadOnlyModelViewSet):
     )
     serializer_class = ConnectorRunSerializer
     filterset_fields = ["status", "connector"]
+
+    @extend_schema(
+        tags=["dih"],
+        summary="Delete a ConnectorRun + all dependents (US-S11-023)",
+        description=(
+            "Hard-delete a ConnectorRun and every dependent row "
+            "(FastTrackAuditSample → PromotionDecision → Quarantine "
+            "→ StageRecord → RawLanding → ConnectorRun). All FKs are "
+            "PROTECT so the order matters; the service walks them in "
+            "a single atomic transaction.\n\n"
+            "Refuses when: the run is PENDING/RUNNING (race the "
+            "worker), records_promoted > 0, or any StageRecord on "
+            "the run is in state=PROMOTED (preserves the Household "
+            "audit-lineage chain documented in AC-DIH-LINEAGE).\n\n"
+            "Permission: IsDihTrigger (Sys Admin + NSR Unit "
+            "Coordinator), matching the trigger surface — if you can "
+            "launch a pull, you can undo a bad one. Emits a "
+            "`dih.connector.run_deleted` AuditEvent with the cascade "
+            "counts."
+        ),
+        request=DeleteRunRequestSerializer,
+        responses={
+            200: DeleteRunResponseSerializer,
+            400: OpenApiResponse(description="run still running / has promoted records"),
+            403: OpenApiResponse(description="caller lacks IsDihTrigger permission"),
+        },
+    )
+    @action(
+        detail=True, methods=["post"], url_path="delete",
+        permission_classes=[IsDihTrigger],
+    )
+    def delete_run(self, request, pk=None):
+        ser = DeleteRunRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        run = self.get_object()
+        actor = (getattr(request.user, "username", "") or "").strip() or "admin"
+        reason = ser.validated_data.get("reason", "") or ""
+        try:
+            counts = delete_connector_run(run, actor=actor, reason=reason)
+        except DeleteError as exc:
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(DeleteRunResponseSerializer(counts).data)
 
 
 class StageRecordViewSet(

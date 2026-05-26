@@ -1436,3 +1436,113 @@ def trigger_connector_pull(
         "batch_cap_hit": landed >= batch_cap,
         "note": note,
     }
+
+
+# ---------------------------------------------------------------------------
+# Delete a ConnectorRun (US-S11-023)
+#
+# Operator-initiated cleanup of bad runs from the System Admin >
+# Connector runs tab. Every FK pointing at ConnectorRun (and its
+# StageRecord children) is `on_delete=PROTECT` per SAD §4.6, so a
+# naked `.delete()` would always raise. This service walks the chain
+# explicitly:
+#
+#   FastTrackAuditSample (OneToOne on StageRecord)
+#   PromotionDecision    (FK to StageRecord)
+#   Quarantine           (FK to ConnectorRun + RawLanding)
+#   StageRecord          (FK to ConnectorRun + RawLanding)
+#   RawLanding           (FK to ConnectorRun)
+#   ConnectorRun
+#
+# It refuses to delete runs that have produced Households — even
+# though Household.id is referenced from StageRecord.promoted_
+# household_id as a plain CharField (no DB-level FK), deleting the
+# StageRecord would orphan the audit-lineage chain documented in
+# AC-DIH-LINEAGE.
+
+
+class DeleteError(DihError):
+    """A ConnectorRun cannot be safely deleted from the current state
+    (still running, or has produced promoted Households)."""
+
+
+@transaction.atomic
+def delete_connector_run(
+    run: ConnectorRun, *, actor: str, reason: str = "",
+) -> dict:
+    """Hard-delete a ConnectorRun + every dependent row, atomically.
+
+    Pre-checks (any failure raises DeleteError):
+      * run.status must not be PENDING or RUNNING — refuse to delete
+        a run that's still in flight, since we'd race the worker.
+      * run.records_promoted must be 0.
+      * No StageRecord on this run may be in state=PROMOTED.
+
+    Returns a counts dict so the audit trail (and the operator toast)
+    can show exactly what was removed.
+    """
+    if run.status in (ConnectorRunStatus.PENDING, ConnectorRunStatus.RUNNING):
+        raise DeleteError(
+            f"run {run.id} is {run.status} — wait for it to finish "
+            "(or mark stuck) before deleting",
+        )
+    if run.records_promoted > 0:
+        raise DeleteError(
+            f"run {run.id} promoted {run.records_promoted} record(s) — "
+            "deleting it would orphan the Household lineage chain "
+            "(AC-DIH-LINEAGE)",
+        )
+    promoted_stages = StageRecord.objects.filter(
+        connector_run=run, state=StageRecordState.PROMOTED,
+    )
+    if promoted_stages.exists():
+        raise DeleteError(
+            f"run {run.id} has {promoted_stages.count()} promoted "
+            "StageRecord(s) — refuse to delete (lineage)",
+        )
+
+    from .models import FastTrackAuditSample, PromotionDecision, Quarantine
+
+    stage_ids = list(
+        StageRecord.objects.filter(connector_run=run)
+        .values_list("id", flat=True),
+    )
+    fast_track_deleted, _ = (
+        FastTrackAuditSample.objects.filter(stage_record_id__in=stage_ids)
+        .delete()
+    )
+    decisions_deleted, _ = (
+        PromotionDecision.objects.filter(stage_record_id__in=stage_ids)
+        .delete()
+    )
+    quarantine_deleted, _ = (
+        Quarantine.objects.filter(connector_run=run).delete()
+    )
+    stages_deleted, _ = (
+        StageRecord.objects.filter(connector_run=run).delete()
+    )
+    landings_deleted, _ = (
+        RawLanding.objects.filter(connector_run=run).delete()
+    )
+    run_id = run.id
+    source_code = (
+        run.connector.source_system.code if run.connector_id else ""
+    )
+    run.delete()
+
+    counts = {
+        "deleted_run_id": run_id,
+        "source_code": source_code,
+        "fast_track_samples_deleted": fast_track_deleted,
+        "promotion_decisions_deleted": decisions_deleted,
+        "quarantine_rows_deleted": quarantine_deleted,
+        "stage_records_deleted": stages_deleted,
+        "raw_landings_deleted": landings_deleted,
+    }
+    emit_audit(
+        "dih.connector.run_deleted", "connector_run", run_id,
+        actor=actor,
+        reason=reason or "no reason provided",
+        field_changes=counts,
+    )
+    return counts

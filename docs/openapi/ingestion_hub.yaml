@@ -275,6 +275,60 @@ paths_appended_2026_05_25:
       responses:
         "200": { description: Updated StageRecord }
         "400": { description: not quality_failed, or reason missing }
+  /api/v1/dih/connector-runs/{id}/delete/:
+    post:
+      tags: [dih]
+      summary: Delete a ConnectorRun + all dependents (US-S11-023)
+      description: |
+        Hard-delete the ConnectorRun, walking the PROTECT FK chain
+        in one atomic transaction:
+        FastTrackAuditSample → PromotionDecision → Quarantine →
+        StageRecord → RawLanding → ConnectorRun.
+
+        Refuses when the run is PENDING/RUNNING, when
+        records_promoted > 0, or when any StageRecord on the run is
+        in state=PROMOTED. The audit-lineage chain documented in
+        AC-DIH-LINEAGE survives because no promoted record is ever
+        removed.
+
+        Guarded by IsDihTrigger (Sys Admin + NSR Unit Coordinator).
+        Emits `dih.connector.run_deleted` with the cascade counts.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  maxLength: 512
+                  description: |
+                    Operator-supplied reason recorded in the
+                    AuditEvent. Optional in the schema, required by
+                    the confirm modal in the UI.
+      responses:
+        "200":
+          description: Cascade counts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted_run_id, source_code]
+                properties:
+                  deleted_run_id:               { type: string }
+                  source_code:                  { type: string }
+                  fast_track_samples_deleted:   { type: integer, minimum: 0 }
+                  promotion_decisions_deleted:  { type: integer, minimum: 0 }
+                  quarantine_rows_deleted:      { type: integer, minimum: 0 }
+                  stage_records_deleted:        { type: integer, minimum: 0 }
+                  raw_landings_deleted:         { type: integer, minimum: 0 }
+        "400": { description: still running / has promoted records }
+        "403": { description: caller lacks IsDihTrigger permission }
   /api/v1/dih/source-systems/{id}/forms/:
     get:
       tags: [dih]
