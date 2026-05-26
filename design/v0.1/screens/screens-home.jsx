@@ -174,6 +174,28 @@ const ROLE_CONTENT = {
       ]},
     ],
   },
+  "sr-manager": {
+    name: "Social Registry Manager",
+    person: "Namutebi Esther",
+    org: "MGLSD · NSR Unit",
+    kpis: [
+      { title: "Items awaiting my sign-off", value: "9", trend: "up", trendValue: "+3 today", foot: "Across reference data, DQA, PMT, DRS", spark: [4,5,6,7,8,8,9] },
+      { title: "Choice lists pending sign-off", value: "3", trend: "flat", trendValue: "—", foot: "No-self-approve enforced (REF-DATA)", spark: [2,3,3,4,3,3,3] },
+      { title: "DQA rules pending approval", value: "2", trend: "flat", trendValue: "—", foot: "Dual-approval workflow (DAT-DQA)", spark: [3,2,2,3,2,2,2] },
+      { title: "PMT model versions pending", value: "1", trend: "flat", trendValue: "—", foot: "Three-step sign-off (PMT)", spark: [1,1,1,1,1,1,1] },
+    ],
+    queues: [
+      { title: "Approvals — awaiting my signature", icon: "shield", count: 9, _target: "admin", items: [
+        { id: "CL-2026-05-22-00007", who: "Choice list · roof_material v3", note: "Draft by Adong F. · 4 codes added", chip: "Pending Approval", age: "2h" },
+        { id: "RULE-2026-05-22-00031", who: "DQA rule · AC-HH-SIZE-RANGE", note: "Draft by Mukasa R. · scope=member", chip: "Pending Approval", age: "5h" },
+        { id: "PMT-v2-2026Q2", who: "PMT model v2 · UNHS 2023/24 reweight", note: "Step 2/3 · awaits Registry Manager sign-off", chip: "Pending Approval", age: "yesterday" },
+      ]},
+      { title: "Bulk DRS batches awaiting dual-approval", icon: "duplicate", count: 4, _target: "drs", items: [
+        { id: "CR-2026-05-13-00112", who: "UBOS-NUSAF-2026-BULK", note: "11,402 records · author cannot self-approve", chip: "Pending Approval", age: "yesterday" },
+        { id: "CR-2026-05-12-00031", who: "OPM-PDM-2026-Q2-BULK",  note: "8,213 records · awaits second approver", chip: "Pending Approval", age: "2d" },
+      ]},
+    ],
+  },
   "parish": {
     name: "Parish Chief",
     person: "Lokwang Peter",

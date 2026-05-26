@@ -18,7 +18,6 @@ const NAV = [
   { id: "home",    label: "Home",          icon: "home" },
   { id: "kit",     label: "Design system", icon: "sliders" },
   { section: "WORKFLOWS" },
-  { id: "capture", label: "Captures",      icon: "users",     count: 14, screen: true },
   { id: "dih",     label: "DIH review",    icon: "inbox",     count: 342 },
   { id: "upd",     label: "Updates",       icon: "edit",      count: 23 },
   { id: "dedup",   label: "Duplicates",    icon: "duplicate", count: 47 },
@@ -324,6 +323,7 @@ function App() {
           <TweakSelect label="Role" value={tweaks.role} onChange={(v) => setTweak('role', v)}
             options={[
               { value: "nsr-unit",        label: "NSR Unit Coordinator" },
+              { value: "sr-manager",      label: "Social Registry Manager" },
               { value: "parish",          label: "Parish Chief" },
               { value: "cdo",             label: "Community Development Officer" },
               { value: "dpo",             label: "Data Protection Officer" },
