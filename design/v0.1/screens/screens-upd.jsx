@@ -260,8 +260,13 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
         Accept: "application/json",
       },
       body: JSON.stringify({
+        // Use the real reviewer username so the server-side
+        // AC-UPD-NO-SELF-APPROVE guard can compare approver against
+        // requester. A hardcoded "console-operator" would let a
+        // submitter bulk-approve their own CRs by side-stepping the
+        // guard. Matches the per-row dispatcher (~line 359).
         ids,
-        actor: "console-operator",
+        actor: me?.username || "console-operator",
         reason: reason || note || "",
       }),
     })
@@ -285,6 +290,16 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
       })
       .finally(() => setBusy(false));
   };
+
+  // `isLive` must be defined BEFORE `effectiveId` reads it (line below)
+  // — Babel-standalone transforms `const` to `var` so a forward
+  // reference doesn't throw, it silently reads `undefined` and the
+  // header always falls back to the mock id even on the live path
+  // (BUG-S23: live screen showed mock UPD-XXXXX in the title bar).
+  // The second isLive declaration further down was removed.
+  const isLive = (dataSource === "live" || dataSource === "live-empty")
+    && current
+    && current._raw;
 
   // Cross-screen handoff (US-S9-004). When the GRM workbench navigates
   // here with a linked_change_request_id, we override the mock id so
@@ -404,10 +419,8 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
   // design preview, but those rows have no `_raw` — falling through
   // to the live branch then dereferences current._raw.* and crashes
   // the screen. Gate `isLive` on the presence of _raw to keep the
-  // render coherent in the live-empty case.
-  const isLive = (dataSource === "live" || dataSource === "live-empty")
-    && current
-    && current._raw;
+  // render coherent in the live-empty case. (isLive itself is declared
+  // earlier in the function — see the comment above effectiveId for why.)
   const headerVM = isLive
     ? {
         change_type: _updTypeLabel[current._raw.change_type] || current._raw.change_type,
