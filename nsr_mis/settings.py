@@ -68,6 +68,16 @@ INSTALLED_APPS = [
 # behind a flag so the rollout can stage. Read endpoints stay open
 # (they're harmless until partner rows exist).
 PARTNERS_MODULE_ENABLED = True
+# Open-CR evidence file storage (CR-modal slice 3). "file" by default
+# (dev convenience), "memory" in tests via conftest, "minio" once the
+# production bucket lands. Dir under repo root keeps dev sessions
+# self-contained.
+UPD_EVIDENCE_STORAGE = env("UPD_EVIDENCE_STORAGE", default="file")
+UPD_EVIDENCE_DIR = env(
+    "UPD_EVIDENCE_DIR",
+    default=str(BASE_DIR / ".upd-evidence"),
+)
+
 # US-CHB — gate the chatbot endpoints + Assistant nav entry behind a
 # flag. Defaults off — flip after DPIA sign-off (ADR-0021 CHB-O-02).
 CHATBOT_ENABLED = env("CHATBOT_ENABLED", default=False)

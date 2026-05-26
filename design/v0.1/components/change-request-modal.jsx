@@ -503,6 +503,12 @@ const ChangeRequestModal = ({
   const [busy, setBusy]             = useCR(false);
   const [error, setError]           = useCR("");
   const [focusFieldKey, setFocusFieldKey] = useCR("");
+  // Supporting documents — base64-encoded so the bundle endpoint can
+  // round-trip them in JSON. Each entry: {filename, content_type,
+  // size, data_base64}. Caps mirror the server side (5 MB per file,
+  // 15 MB total, 3 files, PDF/JPG/PNG/HEIC/WebP).
+  const [documents, setDocuments]   = useCR([]);
+  const [docError, setDocError]     = useCR("");
 
   // Reset every time the modal opens — operators expect a clean
   // sheet, not whatever they typed last time.
@@ -517,6 +523,8 @@ const ChangeRequestModal = ({
     setBusy(false);
     setError("");
     setFocusFieldKey("");
+    setDocuments([]);
+    setDocError("");
   }, [open]);
 
   // Drop pending rows when entity scope flips — a household-scope row
@@ -612,6 +620,78 @@ const ChangeRequestModal = ({
 
   const clearAll = () => setRows([]);
 
+  // ── Supporting documents ──────────────────────────────────────────
+  // Mirrors server caps in apps/update_workflow/evidence_storage.py.
+  const DOC_MAX_FILE = 5 * 1024 * 1024;
+  const DOC_MAX_TOTAL = 15 * 1024 * 1024;
+  const DOC_MAX_COUNT = 3;
+  const DOC_ALLOWED_MIME = new Set([
+    "application/pdf", "image/jpeg", "image/png", "image/heic", "image/webp",
+  ]);
+
+  const readAsBase64 = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      // readAsDataURL prefixes "data:<mime>;base64,..." — strip it.
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error("read failed"));
+    reader.readAsDataURL(file);
+  });
+
+  const addDocuments = async (fileList) => {
+    setDocError("");
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+    // Client-side validation — server re-validates, but failing here
+    // gives instant feedback without a round-trip.
+    if (documents.length + files.length > DOC_MAX_COUNT) {
+      setDocError(`At most ${DOC_MAX_COUNT} documents.`);
+      return;
+    }
+    let total = documents.reduce((s, d) => s + d.size, 0);
+    const next = [];
+    for (const f of files) {
+      if (!DOC_ALLOWED_MIME.has(f.type)) {
+        setDocError(`Unsupported type for ${f.name}. Use PDF, JPG, PNG, HEIC, or WebP.`);
+        return;
+      }
+      if (f.size > DOC_MAX_FILE) {
+        setDocError(`${f.name} is over the 5 MB per-file limit.`);
+        return;
+      }
+      total += f.size;
+      if (total > DOC_MAX_TOTAL) {
+        setDocError(`Total attachment size exceeds 15 MB.`);
+        return;
+      }
+      try {
+        const b64 = await readAsBase64(f);
+        next.push({
+          filename: f.name,
+          content_type: f.type,
+          size: f.size,
+          data_base64: b64,
+        });
+      } catch (e) {
+        setDocError(`Could not read ${f.name}: ${e.message || e}`);
+        return;
+      }
+    }
+    setDocuments([...documents, ...next]);
+  };
+
+  const removeDocument = (idx) =>
+    setDocuments(documents.filter((_, i) => i !== idx));
+
+  const fmtBytes = (n) => {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+    return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  };
+
   // Group rows by category. Order follows CATEGORIES so the rendered
   // layout matches the catalog (Identification first, etc.).
   const grouped = useMCR(() => {
@@ -640,6 +720,13 @@ const ChangeRequestModal = ({
       rows: rows.map(r => ({
         category: r.category, field: r.field, new_value: r.value,
       })),
+      ...(documents.length > 0
+        ? { documents: documents.map(d => ({
+            filename: d.filename,
+            content_type: d.content_type,
+            data_base64: d.data_base64,
+          })) }
+        : {}),
       note,
     };
     try {
@@ -929,6 +1016,62 @@ const ChangeRequestModal = ({
                 : <AddComposer disabled={busy} addedKeys={addedKeys} onAdd={addRow} categories={visibleCategories}/>}
             </div>
           </div>
+        </div>
+
+        {/* 2b) Supporting documents — PDF / image upload. Base64-
+              encoded into the bundle payload. Server enforces the
+              same caps but client-side validation gives instant
+              feedback. */}
+        <div data-testid="documents-strip">
+          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:6}}>
+            <label className="t-cap">Supporting documents (optional)</label>
+            <span className="t-cap" style={{fontSize:11, color:"var(--neutral-500)"}}>
+              {documents.length} of {DOC_MAX_COUNT} · 5 MB each · PDF, JPG, PNG, HEIC, WebP
+            </span>
+          </div>
+          <input type="file"
+                 data-testid="documents-input"
+                 multiple
+                 accept="application/pdf,image/jpeg,image/png,image/heic,image/webp"
+                 disabled={documents.length >= DOC_MAX_COUNT || busy}
+                 onChange={(e) => {
+                   addDocuments(e.target.files);
+                   e.target.value = "";  // allow re-selecting the same file
+                 }}
+                 style={{ fontSize: 12.5 }}/>
+          {docError && (
+            <div className="t-bodysm" style={{color:"var(--accent-danger)", marginTop:6, fontSize:12}}>
+              {docError}
+            </div>
+          )}
+          {documents.length > 0 && (
+            <div data-testid="documents-list" style={{
+              marginTop:8, display:"flex", flexDirection:"column", gap:6,
+            }}>
+              {documents.map((d, i) => (
+                <div key={i} data-testid={`document-row-${i}`}
+                     style={{
+                       display:"grid", gridTemplateColumns:"auto 1fr auto auto",
+                       gap:10, alignItems:"center",
+                       padding:"6px 10px",
+                       background:"var(--neutral-50)",
+                       border:"1px solid var(--neutral-200)", borderRadius:6,
+                       fontSize:12.5,
+                     }}>
+                  <Icon name="file" size={14} color="var(--neutral-500)"/>
+                  <span style={{overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+                    {d.filename}
+                  </span>
+                  <span className="t-cap" style={{fontSize:11}}>{fmtBytes(d.size)}</span>
+                  <button type="button" className="icon-btn"
+                          aria-label={`Remove ${d.filename}`}
+                          onClick={() => removeDocument(i)}>
+                    <Icon name="x" size={12}/>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* 3) Requester note */}

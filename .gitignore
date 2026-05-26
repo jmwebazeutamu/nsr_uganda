@@ -62,5 +62,10 @@ design/v0.1/*-source/
 # endpoint's lazy-regen path.
 .drs-bundles/
 
+# Open-CR evidence files (file-backed default) — operator uploads
+# attached to ChangeRequests. Content-addressable; production uses
+# MinIO once the bucket lands.
+.upd-evidence/
+
 # MkDocs build output for the user manual
 /docs/user-manual/site/

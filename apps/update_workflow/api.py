@@ -94,6 +94,16 @@ class _BundleRow(serializers.Serializer):
     new_value = serializers.CharField(allow_blank=False, max_length=1024)
 
 
+class _BundleDocument(serializers.Serializer):
+    """Supporting document — uploaded as base64-in-JSON to keep the
+    bundle payload uniform. Per-file + total caps enforced in the
+    parent serializer's validate()."""
+
+    filename = serializers.CharField(min_length=1, max_length=255)
+    content_type = serializers.CharField(min_length=1, max_length=128)
+    data_base64 = serializers.CharField(min_length=1, max_length=8 * 1024 * 1024)
+
+
 class _BundleRequest(serializers.Serializer):
     household_id = serializers.CharField(max_length=26, min_length=26)
     entity = serializers.ChoiceField(choices=[t.value for t in EntityType])
@@ -106,6 +116,9 @@ class _BundleRequest(serializers.Serializer):
     change_type = serializers.ChoiceField(choices=[t.value for t in ChangeType])
     pmt_relevant = serializers.BooleanField(required=False, default=False)
     rows = _BundleRow(many=True)
+    # Optional supporting documents (PDF / JPG / PNG / HEIC / WebP).
+    # Caps + MIME whitelist enforced in validate_documents().
+    documents = _BundleDocument(many=True, required=False, default=list)
     note = serializers.CharField(min_length=6, max_length=2048)
 
     def validate_rows(self, value):
@@ -132,6 +145,60 @@ class _BundleRequest(serializers.Serializer):
                     f"new_value is required for ({cat!r}, {fld!r})",
                 )
         return value
+
+    def validate_documents(self, value):
+        # Decode + size-check every uploaded document up-front so a
+        # bad file doesn't leak past the serializer. Caps live in
+        # evidence_storage; importing here keeps the module-level
+        # dependency lazy (serializer is imported on app load).
+        import base64
+
+        from .evidence_storage import (
+            ALLOWED_MIME_TYPES,
+            MAX_FILE_BYTES,
+            MAX_FILES,
+            MAX_TOTAL_BYTES,
+        )
+
+        if not value:
+            return []
+        if len(value) > MAX_FILES:
+            raise serializers.ValidationError(
+                f"at most {MAX_FILES} documents per change request",
+            )
+
+        decoded: list[dict] = []
+        total = 0
+        for doc in value:
+            if doc["content_type"] not in ALLOWED_MIME_TYPES:
+                raise serializers.ValidationError(
+                    f"unsupported content_type {doc['content_type']!r}; "
+                    f"allowed: {sorted(ALLOWED_MIME_TYPES)}",
+                )
+            try:
+                body = base64.b64decode(doc["data_base64"], validate=True)
+            except Exception as e:  # noqa: BLE001 — third-party + invalid input
+                raise serializers.ValidationError(
+                    f"data_base64 for {doc['filename']!r} is not valid base64: {e}",
+                ) from e
+            if len(body) > MAX_FILE_BYTES:
+                raise serializers.ValidationError(
+                    f"document {doc['filename']!r} is "
+                    f"{len(body)} bytes; max per file is {MAX_FILE_BYTES}",
+                )
+            total += len(body)
+            if total > MAX_TOTAL_BYTES:
+                raise serializers.ValidationError(
+                    f"total document size exceeds {MAX_TOTAL_BYTES} bytes",
+                )
+            decoded.append({
+                "filename": doc["filename"],
+                "content_type": doc["content_type"],
+                "body": body,
+            })
+        # Return the decoded list — the handler reads `body` directly
+        # instead of re-decoding.
+        return decoded
 
     def validate(self, attrs):
         # Cross-field rules — entity scope vs. row fields, member_id
@@ -397,13 +464,34 @@ class ChangeRequestViewSet(
 
         actor = getattr(request.user, "username", "") or "console-operator"
 
+        # Store any uploaded documents via the configured backend and
+        # build evidence rows. The serializer already validated MIME,
+        # per-file size, and total size; here we just compute the
+        # content-address hash, persist, and record the row.
+        import hashlib
+
+        from .evidence_storage import get_evidence_storage
+
+        store = get_evidence_storage()
+        evidence_rows: list[dict] = [{"kind": "note", "label": note}]
+        for doc in data.get("documents") or []:
+            sha = hashlib.sha256(doc["body"]).hexdigest()
+            store.put(sha, doc["body"])
+            evidence_rows.append({
+                "kind": "document",
+                "filename": doc["filename"],
+                "content_type": doc["content_type"],
+                "size": len(doc["body"]),
+                "sha256": sha,
+            })
+
         cr = ChangeRequest.objects.create(
             entity_type=entity_type,
             entity_id=entity_id,
             change_type=data["change_type"],
             pmt_relevant=pmt_relevant,
             changes=changes,
-            evidence=[{"kind": "note", "label": note}],
+            evidence=evidence_rows,
             source_channel=SourceChannel.WEB,
             requester=actor,
             requester_note=note,

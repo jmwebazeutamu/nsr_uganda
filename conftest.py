@@ -45,6 +45,26 @@ def _drs_bundle_storage_isolation():
         settings.DRS_BUNDLE_STORAGE = prev
 
 
+@pytest.fixture(autouse=True)
+def _upd_evidence_storage_isolation():
+    """Mirror the DRS pattern for Open-CR evidence files. Tests use the
+    in-memory backend so uploaded documents never touch
+    .upd-evidence/ on disk."""
+    prev = getattr(settings, "UPD_EVIDENCE_STORAGE", None)
+    settings.UPD_EVIDENCE_STORAGE = "memory"
+    try:
+        from apps.update_workflow.evidence_storage import get_evidence_storage
+        get_evidence_storage()._reset_for_tests()
+    except Exception:
+        pass
+    yield
+    if prev is None:
+        if hasattr(settings, "UPD_EVIDENCE_STORAGE"):
+            delattr(settings, "UPD_EVIDENCE_STORAGE")
+    else:
+        settings.UPD_EVIDENCE_STORAGE = prev
+
+
 def pytest_collection_modifyitems(config, items):
     vendor = connection.vendor
     skip_pg = pytest.mark.skip(

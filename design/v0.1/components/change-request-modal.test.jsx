@@ -18,7 +18,7 @@
  */
 
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 let ChangeRequestModal;
@@ -425,6 +425,135 @@ describe("member picker", () => {
     await addRowViaComposer(user, "hd", "chronic");
     const chip = screen.getByTestId("current-hd-chronic");
     expect(chip).toHaveTextContent("current: no");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────
+// 2d. Supporting documents (slice 3)
+// ───────────────────────────────────────────────────────────────
+
+const fileOf = (name, type, sizeBytes) => {
+  // jsdom doesn't preserve File.size from byte arrays the way browsers
+  // do, but the modal reads file.size before encoding so the bytes
+  // must be real here.
+  const bytes = new Uint8Array(sizeBytes);
+  return new File([bytes], name, { type });
+};
+
+describe("supporting documents", () => {
+  it("renders the documents strip and accepts a PDF upload", async () => {
+    render(<ChangeRequestModal {...defaultProps()} />);
+    expect(screen.getByTestId("documents-strip")).toBeInTheDocument();
+    const input = screen.getByTestId("documents-input");
+    const f = fileOf("clinic.pdf", "application/pdf", 1024);
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [f] } });
+      // Flush the readAsBase64 promise chain.
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(screen.getByTestId("documents-list")).toBeInTheDocument();
+    expect(screen.getByTestId("document-row-0")).toHaveTextContent("clinic.pdf");
+  });
+
+  it("rejects unsupported MIME types client-side", async () => {
+    render(<ChangeRequestModal {...defaultProps()} />);
+    const input = screen.getByTestId("documents-input");
+    const f = fileOf("evil.exe", "application/x-msdownload", 100);
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [f] } });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(screen.queryByTestId("documents-list")).not.toBeInTheDocument();
+    expect(screen.getByText(/Unsupported type/i)).toBeInTheDocument();
+  });
+
+  it("rejects files over the 5 MB cap", async () => {
+    render(<ChangeRequestModal {...defaultProps()} />);
+    const input = screen.getByTestId("documents-input");
+    const f = fileOf("huge.pdf", "application/pdf", 5 * 1024 * 1024 + 1);
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [f] } });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(screen.queryByTestId("documents-list")).not.toBeInTheDocument();
+    expect(screen.getByText(/over the 5 MB per-file limit/i)).toBeInTheDocument();
+  });
+
+  it("rejects a fourth document", async () => {
+    render(<ChangeRequestModal {...defaultProps()} />);
+    const input = screen.getByTestId("documents-input");
+    fireEvent.change(input, { target: { files: [
+      fileOf("a.pdf", "application/pdf", 100),
+      fileOf("b.pdf", "application/pdf", 100),
+      fileOf("c.pdf", "application/pdf", 100),
+    ] } });
+    await waitFor(() =>
+      expect(screen.getByTestId("document-row-2")).toBeInTheDocument(),
+    );
+    // Fourth upload — input is disabled, but the change handler
+    // still runs through addDocuments which rejects.
+    fireEvent.change(input, { target: { files: [fileOf("d.pdf", "application/pdf", 100)] } });
+    await waitFor(() =>
+      expect(screen.getByText(/At most 3 documents/i)).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("document-row-3")).not.toBeInTheDocument();
+  });
+
+  it("removes a document via the row's remove button", async () => {
+    render(<ChangeRequestModal {...defaultProps()} />);
+    const input = screen.getByTestId("documents-input");
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [fileOf("x.pdf", "application/pdf", 100)] } });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(screen.getByTestId("document-row-0")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Remove x.pdf"));
+    expect(screen.queryByTestId("document-row-0")).not.toBeInTheDocument();
+  });
+
+  it("payload includes documents[] when submitted", async () => {
+    const onSubmit = vi.fn(async () => ({
+      cr_id: "01CR", audit_id: "A-1", routed_to: "CDO (parish)",
+    }));
+    const user = userEvent.setup();
+    render(<ChangeRequestModal {...defaultProps({ onSubmit })} />);
+    await addRowViaComposer(user, "iden", "phone");
+    const phoneInput = screen.getAllByPlaceholderText("New value")[0];
+    fireEvent.change(phoneInput, { target: { value: "+256 700 111 222" } });
+    fireEvent.change(screen.getByPlaceholderText(/Why this change/i), {
+      target: { value: "Phone updated per field visit." },
+    });
+    const input = screen.getByTestId("documents-input");
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [fileOf("receipt.pdf", "application/pdf", 256)] } });
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await user.click(screen.getByRole("button", { name: /Create & submit/i }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const payload = onSubmit.mock.calls[0][0];
+    expect(payload.documents).toBeDefined();
+    expect(payload.documents).toHaveLength(1);
+    expect(payload.documents[0].filename).toBe("receipt.pdf");
+    expect(payload.documents[0].content_type).toBe("application/pdf");
+    expect(typeof payload.documents[0].data_base64).toBe("string");
+    expect(payload.documents[0].data_base64.length).toBeGreaterThan(0);
+  });
+
+  it("payload omits documents when none uploaded", async () => {
+    const onSubmit = vi.fn(async () => ({
+      cr_id: "01CR", audit_id: "A-1", routed_to: "CDO (parish)",
+    }));
+    const user = userEvent.setup();
+    render(<ChangeRequestModal {...defaultProps({ onSubmit })} />);
+    await addRowViaComposer(user, "iden", "phone");
+    const phoneInput = screen.getAllByPlaceholderText("New value")[0];
+    fireEvent.change(phoneInput, { target: { value: "+256 700 111 222" } });
+    fireEvent.change(screen.getByPlaceholderText(/Why this change/i), {
+      target: { value: "Phone updated per field visit." },
+    });
+    await user.click(screen.getByRole("button", { name: /Create & submit/i }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0].documents).toBeUndefined();
   });
 });
 

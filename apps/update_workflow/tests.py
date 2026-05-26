@@ -1139,6 +1139,95 @@ class TestBundleEndpoint:
         assert cr.entity_id == member.id
         assert cr.status == "pending_approval"
 
+    def test_documents_attach_evidence_rows_and_blob(self, household, api_client):
+        import base64
+        import hashlib
+
+        body = b"%PDF-1.4 fake pdf bytes for the test"
+        b64 = base64.b64encode(body).decode("ascii")
+        payload = self._payload(
+            household,
+            documents=[{
+                "filename": "clinic-card.pdf",
+                "content_type": "application/pdf",
+                "data_base64": b64,
+            }],
+        )
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 201, r.data
+        cr = ChangeRequest.objects.get(pk=r.data["cr_id"])
+        # One note row + one document row.
+        kinds = [e["kind"] for e in cr.evidence]
+        assert "document" in kinds
+        doc_row = next(e for e in cr.evidence if e["kind"] == "document")
+        assert doc_row["filename"] == "clinic-card.pdf"
+        assert doc_row["content_type"] == "application/pdf"
+        assert doc_row["size"] == len(body)
+        assert doc_row["sha256"] == hashlib.sha256(body).hexdigest()
+
+        # And the blob is retrievable from the storage backend.
+        from apps.update_workflow.evidence_storage import get_evidence_storage
+        assert get_evidence_storage().get(doc_row["sha256"]) == body
+
+    def test_documents_reject_unsupported_mime(self, household, api_client):
+        import base64
+
+        payload = self._payload(
+            household,
+            documents=[{
+                "filename": "evil.exe",
+                "content_type": "application/x-msdownload",
+                "data_base64": base64.b64encode(b"MZ\x90").decode("ascii"),
+            }],
+        )
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 400
+        assert "content_type" in str(r.data).lower()
+
+    def test_documents_reject_oversized_file(self, household, api_client):
+        import base64
+
+        body = b"x" * (5 * 1024 * 1024 + 1)
+        payload = self._payload(
+            household,
+            documents=[{
+                "filename": "huge.pdf",
+                "content_type": "application/pdf",
+                "data_base64": base64.b64encode(body).decode("ascii"),
+            }],
+        )
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 400
+        assert "max per file" in str(r.data).lower()
+
+    def test_documents_reject_more_than_three(self, household, api_client):
+        import base64
+
+        body = b"%PDF-1.4 tiny"
+        b64 = base64.b64encode(body).decode("ascii")
+        docs = [
+            {"filename": f"f{i}.pdf", "content_type": "application/pdf",
+             "data_base64": b64}
+            for i in range(4)
+        ]
+        payload = self._payload(household, documents=docs)
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 400
+        assert "at most" in str(r.data).lower()
+
+    def test_documents_optional(self, household, api_client):
+        # Submitting without documents stays the happy path.
+        payload = self._payload(household)
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 201, r.data
+        cr = ChangeRequest.objects.get(pk=r.data["cr_id"])
+        assert all(e["kind"] != "document" for e in cr.evidence)
+
     def test_all_members_entity_records_intent_in_note(self, household, api_client):
         payload = self._payload(household, entity="all_members",
                                  note="Family migrated; update everyone")
