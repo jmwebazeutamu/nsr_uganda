@@ -77,7 +77,12 @@ const _drsItem = (dr) => ({
 // regardless of the operator's region selection.
 const HOME_QUEUE_LIVE_MAP = {
   "Pending DIH promotions": {
-    url: "/api/v1/dih/stage-records/?state=pending_promotion&page_size=4",
+    // Surface every non-final state — operators need to act on
+    // provisional + IDV-pending + pending-promotion + quality-failed,
+    // not just pending_promotion (which is a narrow auto-promote
+    // hand-off window). Endpoint accepts comma-separated values
+    // (apps/ingestion_hub/api.py:161 splits on `,`).
+    url: "/api/v1/dih/stage-records/?state=provisional,idv_pending,pending_promotion,quality_failed&page_size=4",
     projector: _stageItem,
     target: "dih",
     geographic: true,
@@ -353,7 +358,11 @@ const HomeScreen = ({ role, onNavigate }) => {
         .then(data => {
           if (cancelled) return;
           const items = (data.results || data || []).map(cfg.projector);
-          setLiveQueues(prev => ({ ...prev, [title]: items }));
+          // `data.count` is DRF's total across all pages — items
+          // is capped at page_size=4 for the tile preview, but the
+          // count displayed should reflect the full backlog.
+          const total = (typeof data.count === "number") ? data.count : items.length;
+          setLiveQueues(prev => ({ ...prev, [title]: { items, total } }));
         })
         .catch(() => {});
     });
@@ -365,8 +374,8 @@ const HomeScreen = ({ role, onNavigate }) => {
     if (live === undefined) return q;  // not wired or still loading
     return {
       ...q,
-      items: live,
-      count: live.length,
+      items: live.items,
+      count: live.total,
       _live: true,
       _target: HOME_QUEUE_LIVE_MAP[q.title]?.target || "home",
     };
