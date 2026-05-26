@@ -62,7 +62,7 @@ const NAV_GROUPS = [
   {
     label: "Assistant",
     items: [
-      { id: "chatbot-assistant", label: "Chatbot", icon: "message-square" },
+      { id: "chatbot-assistant", label: "Chatbot", icon: "message" },
     ],
   },
   {
@@ -106,7 +106,12 @@ const AdminApp = () => {
           </div>
         </div>
 
-        <nav style={{ padding: "16px 0" }}>
+        {/* paddingBottom reserves space for the absolute-positioned
+            footer below, so the last nav items (Chatbot, Examples)
+            aren't covered by it and remain clickable. Footer is
+            ~46px tall (12px padding × 2 + 11px font); 64px keeps a
+            clear gap. */}
+        <nav style={{ padding: "16px 0 64px" }}>
           {NAV_GROUPS.map(group => (
             <div key={group.label} style={{ marginBottom: 18 }}>
               <div style={{
