@@ -63,9 +63,50 @@ const defaultProps = (over = {}) => ({
   ...over,
 });
 
+// Advance the wizard to the Fields step (step 2). Idempotent —
+// silently no-ops if we're already past step 1.
+const goToFieldsStep = async (user) => {
+  const next = screen.queryByRole("button", { name: /Next →/i });
+  if (next && !next.disabled) await user.click(next);
+};
+
+// Click Next repeatedly until the Submit button is reachable
+// (i.e. we're on the Review step). Used by tests that need to
+// exercise the final submission gate.
+const advanceToReview = async (user) => {
+  for (let i = 0; i < 6; i++) {
+    const next = screen.queryByRole("button", { name: /Next →/i });
+    if (!next || next.disabled) break;
+    await user.click(next);
+  }
+};
+
+// Click Back repeatedly until step 1 is visible — used by tests
+// that need to access controls only rendered on step 1 after
+// having navigated forward.
+const goBackTo1 = async (user) => {
+  for (let i = 0; i < 6; i++) {
+    const back = screen.queryByRole("button", { name: /^← Back/i });
+    if (!back || back.disabled) break;
+    await user.click(back);
+  }
+};
+
+// Seed a valid step-2 (one phone row + value) and advance to the
+// Evidence step so tests that target file upload UI can find it.
+const goToEvidenceStep = async (user) => {
+  await addRowViaComposer(user, "iden", "phone");
+  const phoneInput = screen.getAllByPlaceholderText("New value")[0];
+  fireEvent.change(phoneInput, { target: { value: "+256 700 000 000" } });
+  await user.click(screen.getByRole("button", { name: /Next →/i })); // → step 3
+};
+
 // Append a row via the composer add-UX. Uses category + field
 // VALUES (the catalog keys) so it's robust against label wording.
+// Auto-navigates to the Fields step before opening the composer
+// so test bodies don't have to scaffold the wizard.
 const addRowViaComposer = async (user, categoryKey, fieldKey) => {
+  await goToFieldsStep(user);
   await user.click(screen.getByText("Add a field change"));
   const selects = screen.getAllByRole("combobox");
   // The two newly-rendered selects are appended to the end of the
@@ -147,20 +188,27 @@ describe("derivePmt", () => {
 // ───────────────────────────────────────────────────────────────
 
 describe("submit enable boundary", () => {
-  it("submit is disabled on open (no rows, no note)", () => {
+  it("Next is disabled on step 2 with no rows", async () => {
+    const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps()} />);
-    const submit = screen.getByRole("button", { name: /Create & submit/i });
-    expect(submit).toBeDisabled();
+    // Step 1 → Next to step 2; with zero rows step 2's Next stays off.
+    await goToFieldsStep(user);
+    const next = screen.getByRole("button", { name: /Next →/i });
+    expect(next).toBeDisabled();
   });
 
-  it("submit stays disabled with valid rows but a short note", async () => {
+  it("submit stays disabled at review with a short note", async () => {
     const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps()} />);
     await addRowViaComposer(user, "iden", "phone");
     const valueInputs = screen.getAllByPlaceholderText("New value");
     await user.type(valueInputs[valueInputs.length - 1], "+256 700 000 000");
+    // step 2 → 3
+    await user.click(screen.getByRole("button", { name: /Next →/i }));
     const note = screen.getByPlaceholderText(/Why this change/);
     await user.type(note, "hi");
+    // step 3 → 4
+    await user.click(screen.getByRole("button", { name: /Next →/i }));
     expect(screen.getByRole("button", { name: /Create & submit/i })).toBeDisabled();
   });
 
@@ -170,10 +218,15 @@ describe("submit enable boundary", () => {
     await addRowViaComposer(user, "iden", "phone");
     const valueInputs = screen.getAllByPlaceholderText("New value");
     await user.type(valueInputs[valueInputs.length - 1], "+256 700 000 000");
+    await user.click(screen.getByRole("button", { name: /Next →/i })); // → step 3
     const note = screen.getByPlaceholderText(/Why this change/);
-    await user.type(note, "valid"); // 5 chars — still under
+    await user.type(note, "valid"); // 5 chars
+    await user.click(screen.getByRole("button", { name: /Next →/i })); // → step 4
     expect(screen.getByRole("button", { name: /Create & submit/i })).toBeDisabled();
-    await user.type(note, "X"); // 6th char crosses the boundary
+    // Back to step 3, append a 6th char.
+    await user.click(screen.getByRole("button", { name: /^← Back/i }));
+    await user.type(screen.getByPlaceholderText(/Why this change/), "X");
+    await user.click(screen.getByRole("button", { name: /Next →/i })); // → step 4
     expect(screen.getByRole("button", { name: /Create & submit/i })).toBeEnabled();
   });
 });
@@ -328,6 +381,10 @@ describe("member picker", () => {
     const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps({ members: SAMPLE_MEMBERS })} />);
     fireEvent.change(screen.getByLabelText("Entity"), { target: { value: "member" } });
+    fireEvent.change(screen.getByTestId("member-picker-select"), {
+      target: { value: SAMPLE_MEMBERS[1].id },
+    });
+    await goToFieldsStep(user);
     await user.click(screen.getByText("Add a field change"));
     const selects = screen.getAllByRole("combobox");
     // Last two selects = composer cat + field.
@@ -343,25 +400,15 @@ describe("member picker", () => {
     expect(optionValues).toContain("emp");
   });
 
-  it("submit stays disabled until a member is selected", async () => {
+  it("Next on step 1 stays disabled until a member is selected", async () => {
     const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps({ members: SAMPLE_MEMBERS })} />);
     fireEvent.change(screen.getByLabelText("Entity"), { target: { value: "member" } });
-    await addRowViaComposer(user, "hd", "chronic");
-    // Fill the value + note so only the member gate is left.
-    const valueSelect = screen.getAllByRole("combobox").find(
-      el => Array.from(el.options).some(o => o.value === "yes"),
-    );
-    fireEvent.change(valueSelect, { target: { value: "yes" } });
-    fireEvent.change(screen.getByPlaceholderText(/Why this change/i), {
-      target: { value: "Diagnosed during clinic visit last week." },
-    });
-    const submit = screen.getByRole("button", { name: /Create & submit/i });
-    expect(submit).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Next →/i })).toBeDisabled();
     fireEvent.change(screen.getByTestId("member-picker-select"), {
       target: { value: SAMPLE_MEMBERS[1].id },
     });
-    expect(submit).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /Next →/i })).not.toBeDisabled();
   });
 
   it("payload includes member_id when entity=member", async () => {
@@ -370,18 +417,24 @@ describe("member picker", () => {
     }));
     const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps({ members: SAMPLE_MEMBERS, onSubmit })} />);
+    // Step 1: target = member, pick a member.
     fireEvent.change(screen.getByLabelText("Entity"), { target: { value: "member" } });
     fireEvent.change(screen.getByTestId("member-picker-select"), {
       target: { value: SAMPLE_MEMBERS[2].id },
     });
+    // Step 2: add a member-scope row.
     await addRowViaComposer(user, "hd", "chronic");
     const valueSelect = screen.getAllByRole("combobox").find(
       el => Array.from(el.options).some(o => o.value === "yes"),
     );
     fireEvent.change(valueSelect, { target: { value: "yes" } });
+    // Step 3: note.
+    await user.click(screen.getByRole("button", { name: /Next →/i }));
     fireEvent.change(screen.getByPlaceholderText(/Why this change/i), {
       target: { value: "Diagnosed during clinic visit last week." },
     });
+    // Step 4: review + submit.
+    await user.click(screen.getByRole("button", { name: /Next →/i }));
     await user.click(screen.getByRole("button", { name: /Create & submit/i }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
     const payload = onSubmit.mock.calls[0][0];
@@ -398,9 +451,11 @@ describe("member picker", () => {
     await addRowViaComposer(user, "iden", "phone");
     const phoneInput = screen.getAllByPlaceholderText("New value")[0];
     fireEvent.change(phoneInput, { target: { value: "+256 700 111 222" } });
+    await user.click(screen.getByRole("button", { name: /Next →/i }));
     fireEvent.change(screen.getByPlaceholderText(/Why this change/i), {
       target: { value: "Phone updated per field visit." },
     });
+    await user.click(screen.getByRole("button", { name: /Next →/i }));
     await user.click(screen.getByRole("button", { name: /Create & submit/i }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0].member_id).toBeUndefined();
@@ -442,7 +497,9 @@ const fileOf = (name, type, sizeBytes) => {
 
 describe("supporting documents", () => {
   it("renders the documents strip and accepts a PDF upload", async () => {
+    const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps()} />);
+    await goToEvidenceStep(user);
     expect(screen.getByTestId("documents-strip")).toBeInTheDocument();
     const input = screen.getByTestId("documents-input");
     const f = fileOf("clinic.pdf", "application/pdf", 1024);
@@ -456,7 +513,9 @@ describe("supporting documents", () => {
   });
 
   it("rejects unsupported MIME types client-side", async () => {
+    const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps()} />);
+    await goToEvidenceStep(user);
     const input = screen.getByTestId("documents-input");
     const f = fileOf("evil.exe", "application/x-msdownload", 100);
     await act(async () => {
@@ -468,7 +527,9 @@ describe("supporting documents", () => {
   });
 
   it("rejects files over the 5 MB cap", async () => {
+    const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps()} />);
+    await goToEvidenceStep(user);
     const input = screen.getByTestId("documents-input");
     const f = fileOf("huge.pdf", "application/pdf", 5 * 1024 * 1024 + 1);
     await act(async () => {
@@ -480,7 +541,9 @@ describe("supporting documents", () => {
   });
 
   it("rejects a fourth document", async () => {
+    const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps()} />);
+    await goToEvidenceStep(user);
     const input = screen.getByTestId("documents-input");
     fireEvent.change(input, { target: { files: [
       fileOf("a.pdf", "application/pdf", 100),
@@ -490,8 +553,6 @@ describe("supporting documents", () => {
     await waitFor(() =>
       expect(screen.getByTestId("document-row-2")).toBeInTheDocument(),
     );
-    // Fourth upload — input is disabled, but the change handler
-    // still runs through addDocuments which rejects.
     fireEvent.change(input, { target: { files: [fileOf("d.pdf", "application/pdf", 100)] } });
     await waitFor(() =>
       expect(screen.getByText(/At most 3 documents/i)).toBeInTheDocument(),
@@ -500,7 +561,9 @@ describe("supporting documents", () => {
   });
 
   it("removes a document via the row's remove button", async () => {
+    const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps()} />);
+    await goToEvidenceStep(user);
     const input = screen.getByTestId("documents-input");
     await act(async () => {
       fireEvent.change(input, { target: { files: [fileOf("x.pdf", "application/pdf", 100)] } });
@@ -517,17 +580,16 @@ describe("supporting documents", () => {
     }));
     const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps({ onSubmit })} />);
-    await addRowViaComposer(user, "iden", "phone");
-    const phoneInput = screen.getAllByPlaceholderText("New value")[0];
-    fireEvent.change(phoneInput, { target: { value: "+256 700 111 222" } });
-    fireEvent.change(screen.getByPlaceholderText(/Why this change/i), {
-      target: { value: "Phone updated per field visit." },
-    });
+    await goToEvidenceStep(user);
     const input = screen.getByTestId("documents-input");
     await act(async () => {
       fireEvent.change(input, { target: { files: [fileOf("receipt.pdf", "application/pdf", 256)] } });
       await new Promise((r) => setTimeout(r, 0));
     });
+    fireEvent.change(screen.getByPlaceholderText(/Why this change/i), {
+      target: { value: "Phone updated per field visit." },
+    });
+    await user.click(screen.getByRole("button", { name: /Next →/i })); // → step 4
     await user.click(screen.getByRole("button", { name: /Create & submit/i }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
     const payload = onSubmit.mock.calls[0][0];
@@ -545,12 +607,11 @@ describe("supporting documents", () => {
     }));
     const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps({ onSubmit })} />);
-    await addRowViaComposer(user, "iden", "phone");
-    const phoneInput = screen.getAllByPlaceholderText("New value")[0];
-    fireEvent.change(phoneInput, { target: { value: "+256 700 111 222" } });
+    await goToEvidenceStep(user);
     fireEvent.change(screen.getByPlaceholderText(/Why this change/i), {
       target: { value: "Phone updated per field visit." },
     });
+    await user.click(screen.getByRole("button", { name: /Next →/i })); // → step 4
     await user.click(screen.getByRole("button", { name: /Create & submit/i }));
     expect(onSubmit).toHaveBeenCalledTimes(1);
     expect(onSubmit.mock.calls[0][0].documents).toBeUndefined();
@@ -564,7 +625,9 @@ describe("supporting documents", () => {
 describe("PMT chip + Force PMT", () => {
   it("starts at cosmetic with Force-PMT enabled and unchecked", () => {
     render(<ChangeRequestModal {...defaultProps()} />);
-    expect(screen.getByText("cosmetic")).toBeInTheDocument();
+    // The chip lives in two places on step 1 (target strip + sticky
+    // summary) — target the sticky one explicitly.
+    expect(screen.getByTestId("summary-pmt-chip")).toHaveTextContent("cosmetic");
     const force = screen.getByLabelText(/Force PMT/i);
     expect(force).not.toBeChecked();
     expect(force).not.toBeDisabled();
@@ -574,14 +637,17 @@ describe("PMT chip + Force PMT", () => {
     const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps()} />);
     await user.click(screen.getByLabelText(/Force PMT/i));
-    expect(screen.getByText("pmt_relevant")).toBeInTheDocument();
+    expect(screen.getByTestId("summary-pmt-chip")).toHaveTextContent("pmt_relevant");
   });
 
   it("Adding a PMT field auto-derives pmt_relevant AND disables Force-PMT", async () => {
     const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps()} />);
     await addRowViaComposer(user, "hous", "roof");
-    expect(screen.getByText("pmt_relevant")).toBeInTheDocument();
+    // Chip lives in the sticky summary, visible from every step.
+    expect(screen.getByTestId("summary-pmt-chip")).toHaveTextContent("pmt_relevant");
+    // Force-PMT only renders on step 1 — navigate back.
+    await goBackTo1(user);
     const force = screen.getByLabelText(/Force PMT/i);
     expect(force).toBeChecked();
     expect(force).toBeDisabled();
@@ -591,7 +657,7 @@ describe("PMT chip + Force PMT", () => {
     const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps()} />);
     await addRowViaComposer(user, "iden", "phone");
-    expect(screen.getByText("cosmetic")).toBeInTheDocument();
+    expect(screen.getByTestId("summary-pmt-chip")).toHaveTextContent("cosmetic");
   });
 });
 
@@ -620,6 +686,7 @@ describe("already-added fields disabled", () => {
   it("picker disables the add-button for already-added fields", async () => {
     const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps({ addUx: "picker" })} />);
+    await goToFieldsStep(user);
     // Open the picker and search.
     await user.click(screen.getByText("Search registry fields to add…"));
     const searchInput = screen.getByPlaceholderText(/Search by category/);
@@ -662,12 +729,14 @@ describe("ESC closes", () => {
         })}
       />,
     );
-    // Get into a valid state.
+    // Get into a valid state and step through the wizard to submit.
     await addRowViaComposer(user, "iden", "phone");
     const valueInputs = screen.getAllByPlaceholderText("New value");
     await user.type(valueInputs[valueInputs.length - 1], "+256 700 000 000");
+    await user.click(screen.getByRole("button", { name: /Next →/i })); // → 3
     const note = screen.getByPlaceholderText(/Why this change/);
     await user.type(note, "submitting now");
+    await user.click(screen.getByRole("button", { name: /Next →/i })); // → 4
     await user.click(screen.getByRole("button", { name: /Create & submit/i }));
 
     // Now busy. ESC should be a no-op.

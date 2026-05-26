@@ -525,6 +525,7 @@ const ChangeRequestModal = ({
     setFocusFieldKey("");
     setDocuments([]);
     setDocError("");
+    setStep(1);
   }, [open]);
 
   // Drop pending rows when entity scope flips — a household-scope row
@@ -588,6 +589,29 @@ const ChangeRequestModal = ({
   const pmtRelevant = derivedPmt || forcePmt;
 
   const reviewerLabel = routeFor(changeType, pmtRelevant);
+
+  // ── Wizard ────────────────────────────────────────────────────
+  // 4 steps: 1 Target, 2 Fields, 3 Evidence + note, 4 Review.
+  // Per-step validation gates the Next button; final submit only
+  // fires from step 4. State resets to 1 every open (see effect
+  // below). The existing `valid` derivation stays as the final
+  // submit gate — the per-step checks are subsets of it.
+  const TOTAL_STEPS = 4;
+  const STEP_LABELS = ["Target", "Fields", "Evidence", "Review"];
+  const [step, setStep] = useCR(1);
+
+  const step1Valid = entity !== "member" || !!memberId;
+  const step2Valid =
+    rows.length >= 1
+    && rows.every(r => (r.value || "").trim().length > 0);
+  const step3Valid = true;  // documents are optional; note is gated on step 4
+  const step4Valid = note.trim().length >= 6;
+
+  const canAdvance =
+    step === 1 ? step1Valid
+    : step === 2 ? step2Valid
+    : step === 3 ? step3Valid
+    : false;
 
   const valid =
     rows.length >= 1
@@ -754,17 +778,113 @@ const ChangeRequestModal = ({
       footer={
         <div style={{display:"flex", alignItems:"center", width:"100%", gap:12}}>
           <span className="t-cap" style={{flex:1}}>
-            Routing: <strong>{reviewerLabel}</strong>
+            Step {step}/{TOTAL_STEPS} · {STEP_LABELS[step - 1]}
+            {" · "}Routing: <strong>{reviewerLabel}</strong>
           </span>
           <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
-          <button className="btn btn-success" disabled={busy || !valid}
-            onClick={submit}>
-            <Icon name="check" size={14}/>
-            {busy ? "Submitting…" : `Create & submit · ${rows.length} change${rows.length === 1 ? "" : "s"}`}
-          </button>
+          {step > 1 && (
+            <button className="btn" disabled={busy}
+                    onClick={() => setStep(step - 1)}>
+              ← Back
+            </button>
+          )}
+          {step < TOTAL_STEPS && (
+            <button className="btn btn-primary"
+                    disabled={busy || !canAdvance}
+                    onClick={() => setStep(step + 1)}>
+              Next →
+            </button>
+          )}
+          {step === TOTAL_STEPS && (
+            <button className="btn btn-success" disabled={busy || !valid}
+              onClick={submit}>
+              <Icon name="check" size={14}/>
+              {busy ? "Submitting…" : `Create & submit · ${rows.length} change${rows.length === 1 ? "" : "s"}`}
+            </button>
+          )}
         </div>
       }>
       <div className="col gap-4">
+        {/* Step indicator strip */}
+        <div data-testid="wizard-step-indicator"
+             style={{display:"flex", gap:8, marginBottom:4}}>
+          {STEP_LABELS.map((label, i) => {
+            const n = i + 1;
+            const isActive = n === step;
+            const isDone = n < step;
+            return (
+              <div key={n} style={{
+                flex:1, padding:"6px 10px", borderRadius:6,
+                fontSize:11.5, fontWeight: isActive ? 600 : 500,
+                background: isActive ? "var(--primary-100)"
+                          : isDone ? "var(--neutral-100)"
+                          : "transparent",
+                color: isActive ? "var(--primary-900)"
+                      : isDone ? "var(--neutral-700)"
+                      : "var(--neutral-500)",
+                border: isActive ? "1px solid var(--primary-700)"
+                                  : "1px solid var(--neutral-200)",
+                display:"flex", alignItems:"center", gap:6,
+              }}>
+                <span style={{
+                  display:"inline-flex", alignItems:"center", justifyContent:"center",
+                  width:18, height:18, borderRadius:"50%",
+                  background: isActive ? "var(--primary-900)"
+                            : isDone ? "var(--neutral-300)"
+                            : "var(--neutral-200)",
+                  color:"var(--neutral-0)", fontSize:10.5, fontWeight:700,
+                }}>
+                  {isDone ? "✓" : n}
+                </span>
+                {label}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Live summary strip — visible on every step. Surfaces the
+              PMT-relevance chip, routing label, and pending-state
+              counts so the operator never has to step back to check
+              what's been selected. */}
+        <div data-testid="wizard-live-summary" style={{
+          display:"flex", alignItems:"center", gap:10,
+          padding:"8px 12px",
+          background:"var(--neutral-50)",
+          border:"1px solid var(--neutral-200)", borderRadius:6,
+          fontSize:12.5,
+        }}>
+          <span data-testid="summary-target">
+            <Icon name={entity === "household" ? "home"
+                       : entity === "all_members" ? "users" : "user"} size={12}/>
+            {" "}
+            {entity === "member"
+              ? `${selectedMember?.name || (memberId ? memberId.slice(0, 10) + "…" : "Member (none)")}`
+              : entity === "all_members" ? "All members" : "Household"}
+          </span>
+          <span className="muted">·</span>
+          <span data-testid="summary-changes">
+            <strong>{rows.length}</strong> field{rows.length === 1 ? "" : "s"}
+          </span>
+          {documents.length > 0 && (<>
+            <span className="muted">·</span>
+            <span data-testid="summary-documents">
+              <strong>{documents.length}</strong> doc{documents.length === 1 ? "" : "s"}
+            </span>
+          </>)}
+          <span className="muted">·</span>
+          <span data-testid="summary-route">
+            → <strong>{reviewerLabel}</strong>
+          </span>
+          <span className="muted">·</span>
+          {pmtRelevant
+            ? <Chip tone="eligibility" size="sm" data-testid="summary-pmt-chip">
+                <Icon name="target" size={11}/> pmt_relevant
+              </Chip>
+            : <Chip tone="neutral" size="sm" data-testid="summary-pmt-chip">cosmetic</Chip>}
+        </div>
+
+        {/* Step 1) Target strip */}
+        {step === 1 && (<>
         {/* 1) Target strip */}
         <div style={{
           display:"grid", gridTemplateColumns:"1fr 1fr 1fr",
@@ -878,7 +998,10 @@ const ChangeRequestModal = ({
             )}
           </div>
         )}
+        </>)}
 
+        {/* Step 2) Field changes */}
+        {step === 2 && (<>
         {/* 2) Field changes */}
         <div className="card" style={{padding:0,
           border:"1px solid var(--neutral-200)", borderRadius:6,
@@ -1017,7 +1140,10 @@ const ChangeRequestModal = ({
             </div>
           </div>
         </div>
+        </>)}
 
+        {/* Step 3) Evidence (documents + requester note) */}
+        {step === 3 && (<>
         {/* 2b) Supporting documents — PDF / image upload. Base64-
               encoded into the bundle payload. Server enforces the
               same caps but client-side validation gives instant
@@ -1092,6 +1218,102 @@ const ChangeRequestModal = ({
             )}
           </div>
         </div>
+        </>)}
+
+        {/* Step 4) Review — read-only summary so the operator
+              can confirm before submit. Every field comes from
+              state already gathered in earlier steps. */}
+        {step === 4 && (
+          <div data-testid="wizard-review" style={{
+            display:"flex", flexDirection:"column", gap:12,
+            padding:16, background:"var(--neutral-50)",
+            border:"1px solid var(--neutral-200)", borderRadius:6,
+          }}>
+            <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:12}}>
+              <div>
+                <div className="t-cap">Target</div>
+                <strong>
+                  {entity === "member"
+                    ? `Member · ${selectedMember?.name || memberId.slice(0, 12) + "…"}`
+                    : entity === "all_members" ? "All members" : "Household"}
+                </strong>
+              </div>
+              <div>
+                <div className="t-cap">Routing</div>
+                <strong>{reviewerLabel}</strong>
+                {pmtRelevant && (
+                  <Chip tone="eligibility" size="sm" style={{marginLeft:8}}>
+                    pmt_relevant
+                  </Chip>
+                )}
+              </div>
+              <div>
+                <div className="t-cap">Change type</div>
+                <strong>
+                  {CHANGE_TYPE_OPTIONS.find(o => o.value === changeType)?.label
+                    || changeType}
+                </strong>
+              </div>
+              <div>
+                <div className="t-cap">Fields changing</div>
+                <strong>{rows.length}</strong>
+                {documents.length > 0 && (
+                  <> · <strong>{documents.length}</strong> document{documents.length === 1 ? "" : "s"}</>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <div className="t-cap" style={{marginBottom:4}}>Changes</div>
+              {rows.map(r => {
+                const meta = FIELDS_FLAT[`${r.category}:${r.field}`];
+                const cv = effectiveCurrentValues[`${r.category}.${r.field}`];
+                return (
+                  <div key={`${r.category}:${r.field}`} style={{
+                    display:"grid", gridTemplateColumns:"1.2fr 1fr 1fr",
+                    gap:8, padding:"4px 0", fontSize:13,
+                    borderBottom:"1px solid var(--neutral-100)",
+                  }}>
+                    <strong>{meta.label}</strong>
+                    <span className="t-bodysm muted">
+                      {formatCurrent(cv, meta) || "—"}
+                    </span>
+                    <span><strong>{r.value || "(empty)"}</strong></span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {documents.length > 0 && (
+              <div>
+                <div className="t-cap" style={{marginBottom:4}}>Documents</div>
+                {documents.map((d, i) => (
+                  <div key={i} className="t-bodysm" style={{padding:"2px 0"}}>
+                    <Icon name="file" size={11}/> {d.filename} <span className="muted">· {fmtBytes(d.size)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div>
+              <div className="t-cap" style={{marginBottom:4}}>Requester note</div>
+              <div className="t-bodysm" style={{
+                padding:"8px 10px", background:"white",
+                border:"1px solid var(--neutral-200)", borderRadius:4,
+                whiteSpace:"pre-wrap",
+              }}>
+                {note || <span className="muted">(no note yet — back to step 3)</span>}
+              </div>
+              {noteRemaining > 0 && (
+                <div className="t-bodysm" style={{
+                  color:"var(--accent-danger)", marginTop:4, fontSize:12,
+                }}>
+                  Note must be at least 6 characters — go back to step 3.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Error banner (post-submit failure) */}
         {error && (
