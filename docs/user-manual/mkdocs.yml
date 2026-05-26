@@ -1,0 +1,139 @@
+site_name: NSR MIS User Manual
+site_description: User manual for the Uganda National Social Registry MIS
+site_author: MGLSD NSR Programme
+copyright: Ministry of Gender, Labour and Social Development (MGLSD), Uganda
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  icon:
+    repo: fontawesome/brands/git-alt
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.tilde
+
+plugins:
+  - search
+
+extra:
+  status:
+    built: Built and in use
+    partial: Partial — usable, gaps remain
+    scaffolded: Scaffolded — wiring only
+    planned: Planned — coming in a future sprint
+  generator: false
+
+nav:
+  - Home: index.md
+  - About this manual:
+      - about/index.md
+      - How to read this manual: about/how-to-read.md
+      - Glossary: about/glossary.md
+      - Changelog: about/changelog.md
+      - Contributing: about/contributing.md
+  - System Administrator:
+      - admin/index.md
+      - Install and run: admin/install.md
+      - Environment variables: admin/environment.md
+      - Keycloak and access: admin/keycloak.md
+      - Reference data loaders: admin/reference-data.md
+      - DIH connectors: admin/connectors.md
+      - Observability: admin/observability.md
+      - DPIA and threat model: admin/dpia-and-threat-model.md
+      - Runbooks: admin/runbooks.md
+  - Data Steward / DQA Officer:
+      - steward/index.md
+      - DQA Rule Editor: steward/dqa-rules.md
+      - DQA Violations Dashboard: steward/dqa-violations.md
+      - Dedup workbench: steward/dedup.md
+      - DIH review queue: steward/dih-review-queue.md
+      - Household detail: steward/household-detail.md
+      - UPD reviewer: steward/upd-review.md
+  - Parish Chief / Field officer:
+      - field/index.md
+      - Walk-in household capture: field/walk-in-capture.md
+      - Household lookup: field/household-lookup.md
+      - Grievances (GRM): field/grievances.md
+      - Update requests: field/update-requests.md
+      - CAPI tablet: field/capi-tablet.md
+  - MDA Partner / API consumer:
+      - partner/index.md
+      - Partner onboarding: partner/onboarding.md
+      - Data Sharing Agreement (DSA): partner/dsa.md
+      - DRS Query Builder: partner/query-builder.md
+      - DRS Field Selector: partner/field-selector.md
+      - Partner portal: partner/partner-portal.md
+      - API reference: partner/api-reference.md
+  - Module reference:
+      - modules/index.md
+      - INT — Intake: modules/int.md
+      - DAT — Data Management: modules/dat.md
+      - DAT-DQA — Data Quality: modules/dat-dqa.md
+      - DAT-DDUP — Deduplication: modules/dat-ddup.md
+      - IDV — Identity Verification: modules/idv.md
+      - UPD — Update Workflow: modules/upd.md
+      - PMT — Proxy Means Test: modules/pmt.md
+      - REF — Referral: modules/ref.md
+      - GRM — Grievance: modules/grm.md
+      - API — Gateway: modules/api.md
+      - API-DRS — Data Requests: modules/api-drs.md
+      - DIH — Integration Hub: modules/dih.md
+      - SEC — Security: modules/sec.md
+      - RPT — Reporting: modules/rpt.md
+      - REF-DATA — Reference Data: modules/ref-data.md
+      - Partners and DSA: modules/partners.md
+      - Admin Console: modules/admin-console.md
+  - Appendices:
+      - appendices/index.md
+      - Architecture Decision Records: appendices/adrs.md
+      - Story-to-page map: appendices/story-map.md
+      - Status legend: appendices/status-legend.md
