@@ -86,9 +86,12 @@ class TestSubmit:
                 draft_version, actor="analyst@nsr.go.ug", **emails,
             )
 
-    def test_resubmit_after_reject_clears_old_rows(
+    def test_rejected_version_cannot_be_resubmitted(
         self, draft_version, emails,
     ):
+        """Once rejected, a version is terminally REJECTED — the
+        author must clone a fresh DRAFT to revise (preserves the
+        audit chain). submit_for_approval rejects any non-DRAFT."""
         submit_for_approval(
             draft_version, actor="analyst@nsr.go.ug", **emails,
         )
@@ -98,15 +101,11 @@ class TestSubmit:
             reason="Coefficient drift exceeds threshold.",
         )
         draft_version.refresh_from_db()
-        assert draft_version.status == ModelStatus.DRAFT
-        submit_for_approval(
-            draft_version, actor="analyst@nsr.go.ug", **emails,
-        )
-        pending = PMTModelSignOff.objects.filter(
-            model_version=draft_version,
-            status=PMTModelSignOff.PENDING,
-        )
-        assert pending.count() == 2
+        assert draft_version.status == ModelStatus.REJECTED
+        with pytest.raises(PMTApprovalError):
+            submit_for_approval(
+                draft_version, actor="analyst@nsr.go.ug", **emails,
+            )
 
 
 # ───────────────────────────────────────────────────────────────
@@ -211,7 +210,7 @@ class TestSign:
 @pytest.mark.django_db
 class TestReject:
 
-    def test_rolls_back_to_draft_skips_remaining(
+    def test_terminal_rejected_skips_remaining(
         self, draft_version, emails,
     ):
         submit_for_approval(
@@ -223,7 +222,9 @@ class TestReject:
             reason="Coefficients flagged by validation review.",
         )
         draft_version.refresh_from_db()
-        assert draft_version.status == ModelStatus.DRAFT
+        # Rejection is terminal — version does NOT roll back to DRAFT.
+        # Signoffs + audit row remain so the chain is reconstructable.
+        assert draft_version.status == ModelStatus.REJECTED
         rows = list(
             PMTModelSignOff.objects.filter(model_version=draft_version)
             .order_by("step"),

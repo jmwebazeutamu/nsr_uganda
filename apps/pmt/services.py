@@ -246,7 +246,12 @@ def reject_step(
     actor_email: str,
     reason: str,
 ) -> PMTModelVersion:
-    """Reject the chain at `step`. Rolls the model back to DRAFT.
+    """Reject the chain at `step`. Marks the version as terminally
+    REJECTED — signoffs + audit row stay on record (CLAUDE.md: audit
+    chain intact) but the version is hidden from the default operator
+    list, so the UI behaves as if the version was deleted. Authors
+    must clone a fresh draft to revise.
+
     Reason is mandatory (≥ 20 chars) — same threshold as
     update_workflow.reject_change_request + programme_lifecycle."""
     from apps.pmt.models import PMTModelSignOff
@@ -298,13 +303,13 @@ def reject_step(
         decision_note=f"chain rejected at step {step}",
     )
 
-    version.status = ModelStatus.DRAFT
+    version.status = ModelStatus.REJECTED
     version.save(update_fields=["status", "updated_at"])
     emit_audit(
         "pmt.model.signoff.rejected", "pmt_model_version", version.id,
         actor=actor,
         reason=reason,
-        field_changes={"step": step, "rolled_back_to": "draft"},
+        field_changes={"step": step, "terminal_status": "rejected"},
     )
     return version
 

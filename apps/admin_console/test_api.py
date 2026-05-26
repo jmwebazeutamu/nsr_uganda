@@ -229,7 +229,39 @@ class TestSignoffViaApi:
             format="json",
         )
         assert r.status_code == 200
-        assert r.data["status"] == "draft"
+        # Rejection is terminal — version stays on record but is no
+        # longer eligible for resubmission. Author must clone fresh.
+        assert r.data["status"] == "rejected"
+
+    def test_rejected_versions_hidden_from_default_list(self, admin_client):
+        v1 = PMTModelVersion.objects.get(version=1)
+        clone = admin_client.post(f"/api/v1/admin/pmt/versions/{v1.id}/clone/")
+        clone_id = clone.data["id"]
+        admin_client.post(
+            f"/api/v1/admin/pmt/versions/{clone_id}/submit/",
+            {
+                "author_email": "analyst@nsr.go.ug",
+                "mglsd_steward_email": "steward@mglsd.go.ug",
+                "ubos_dg_email": "dg@ubos.go.ug",
+            }, format="json",
+        )
+        admin_client.post(
+            f"/api/v1/admin/pmt/versions/{clone_id}/reject/2/",
+            {
+                "actor_email": "steward@mglsd.go.ug",
+                "reason": "Validation regression on the held-out sample.",
+            }, format="json",
+        )
+        # Default list — rejected version is hidden.
+        r = admin_client.get("/api/v1/admin/pmt/versions/")
+        ids = {row["id"] for row in r.data["results"]}
+        assert clone_id not in ids
+        # Opt-in surfaces it (for audit / forensics screens).
+        r = admin_client.get(
+            "/api/v1/admin/pmt/versions/?include_rejected=1",
+        )
+        ids = {row["id"] for row in r.data["results"]}
+        assert clone_id in ids
 
 
 # ───────────────────────────────────────────────────────────────

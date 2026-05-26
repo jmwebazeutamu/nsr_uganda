@@ -22,6 +22,11 @@ class ModelStatus(models.TextChoices):
     PENDING_APPROVAL = "pending_approval"
     ACTIVE = "active"
     RETIRED = "retired"
+    # Terminal — rejected versions are preserved on the audit chain
+    # (signoffs + audit row remain) but hidden from default queries
+    # so the operator UI behaves as if they were deleted. Authors
+    # must clone a fresh draft to revise.
+    REJECTED = "rejected"
 
 
 class Band(models.TextChoices):

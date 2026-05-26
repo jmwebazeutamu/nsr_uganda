@@ -348,7 +348,15 @@ class PMTModelVersionAdminViewSet(viewsets.ViewSet):
     permission_classes = [permissions.IsAuthenticated, IsAdminConsoleUser]
 
     def list(self, request):
-        rows = PMTModelVersion.objects.all().order_by("-version")
+        # REJECTED versions are kept on the audit chain but hidden
+        # from the default listing so the operator UI behaves as if
+        # they were deleted. Pass ?include_rejected=1 to surface them
+        # (e.g. for audit / forensics views).
+        qs = PMTModelVersion.objects.all()
+        include_rejected = request.query_params.get("include_rejected")
+        if not include_rejected or include_rejected in ("0", "false", "no"):
+            qs = qs.exclude(status="rejected")
+        rows = qs.order_by("-version")
         return Response({
             "results": [_version_summary(mv) for mv in rows],
             "count": rows.count(),
