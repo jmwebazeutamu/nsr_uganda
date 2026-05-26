@@ -449,3 +449,290 @@ class TestUsersMe:
         assert r.data["role"] == "operator"
         assert r.data["partner"] is None
         assert r.data["is_superuser"] is False
+
+
+# --- US-S11-028 — OperatorScope management API ---------------------------
+
+from datetime import date  # noqa: E402
+
+from rest_framework.test import APIClient  # noqa: E402
+
+from apps.reference_data.models import GeographicUnit  # noqa: E402
+from apps.security.models import OperatorScope, ScopeLevel  # noqa: E402
+
+
+@pytest.fixture
+def geo_ladder(db):
+    """Region → Sub-Region → District seeded so bulk-grant validation
+    has real GeographicUnit rows to match against."""
+    region = GeographicUnit.objects.create(
+        level="region", code="R-CENTRAL", name="Central",
+        parent=None, effective_from=date(2026, 1, 1),
+    )
+    sub_region = GeographicUnit.objects.create(
+        level="sub_region", code="SR-BUGANDA-SOUTH", name="Buganda South",
+        parent=region, effective_from=date(2026, 1, 1),
+    )
+    d_wakiso = GeographicUnit.objects.create(
+        level="district", code="D-WAKISO", name="Wakiso",
+        parent=sub_region, effective_from=date(2026, 1, 1),
+    )
+    d_kampala = GeographicUnit.objects.create(
+        level="district", code="D-KAMPALA", name="Kampala",
+        parent=sub_region, effective_from=date(2026, 1, 1),
+    )
+    return {
+        "region": region, "sub_region": sub_region,
+        "districts": [d_wakiso, d_kampala],
+    }
+
+
+def _nsr_admin(django_user_model):
+    from django.contrib.auth.models import Group
+    user = django_user_model.objects.create_user(
+        username="scope-admin", password="x",
+    )
+    grp, _ = Group.objects.get_or_create(name="nsr_admin")
+    user.groups.add(grp)
+    return user
+
+
+def _plain_user(
+    django_user_model, username="ops-grace",
+    first_name="Grace", last_name="Akello",
+):
+    return django_user_model.objects.create_user(
+        username=username, password="x",
+        first_name=first_name, last_name=last_name,
+    )
+
+
+@pytest.mark.django_db
+class TestOperatorScopeListAndDelete:
+    def test_anonymous_caller_gets_403(self):
+        client = APIClient()
+        resp = client.get("/api/v1/security/operator-scopes/")
+        assert resp.status_code in (401, 403)
+
+    def test_non_admin_authenticated_gets_403(self, django_user_model):
+        u = _plain_user(django_user_model)
+        client = APIClient()
+        client.force_authenticate(u)
+        resp = client.get("/api/v1/security/operator-scopes/")
+        assert resp.status_code == 403
+
+    def test_list_returns_scope_label_and_display_name(
+        self, django_user_model, geo_ladder,
+    ):
+        admin = _nsr_admin(django_user_model)
+        target = _plain_user(django_user_model)
+        OperatorScope.objects.create(
+            user=target, scope_level=ScopeLevel.DISTRICT,
+            scope_code="D-WAKISO", granted_by="seeded",
+        )
+        client = APIClient()
+        client.force_authenticate(admin)
+        resp = client.get("/api/v1/security/operator-scopes/")
+        assert resp.status_code == 200, resp.content
+        results = resp.json().get("results", resp.json())
+        row = results[0]
+        assert row["username"] == "ops-grace"
+        assert row["display_name"] == "Grace Akello"
+        # scope_label resolves "D-WAKISO" against GeographicUnit.
+        assert "Wakiso" in row["scope_label"]
+
+    def test_destroy_emits_audit_and_removes_row(
+        self, django_user_model, geo_ladder,
+    ):
+        admin = _nsr_admin(django_user_model)
+        target = _plain_user(django_user_model)
+        scope = OperatorScope.objects.create(
+            user=target, scope_level=ScopeLevel.DISTRICT,
+            scope_code="D-WAKISO", granted_by="seeded",
+        )
+        client = APIClient()
+        client.force_authenticate(admin)
+        resp = client.delete(f"/api/v1/security/operator-scopes/{scope.id}/")
+        assert resp.status_code == 204
+        assert not OperatorScope.objects.filter(id=scope.id).exists()
+        from apps.security.models import AuditEvent
+        ev = AuditEvent.objects.filter(
+            action="security.operator_scope.revoked",
+        ).first()
+        assert ev is not None
+        assert "D-WAKISO" in ev.reason
+
+
+@pytest.mark.django_db
+class TestOperatorScopeBulkGrant:
+    def _url(self) -> str:
+        return "/api/v1/security/operator-scopes/bulk-grant/"
+
+    def test_grants_multiple_districts_in_one_call(
+        self, django_user_model, geo_ladder,
+    ):
+        admin = _nsr_admin(django_user_model)
+        target = _plain_user(django_user_model)
+        client = APIClient()
+        client.force_authenticate(admin)
+        resp = client.post(
+            self._url(),
+            {
+                "user_id": target.id,
+                "scope_level": "district",
+                "scope_codes": ["D-WAKISO", "D-KAMPALA"],
+                "note": "field ops",
+            },
+            format="json",
+        )
+        assert resp.status_code == 200, resp.content
+        body = resp.json()
+        assert len(body["granted"]) == 2
+        assert body["skipped_existing"] == []
+        codes = {s["scope_code"] for s in body["granted"]}
+        assert codes == {"D-WAKISO", "D-KAMPALA"}
+        # Every grant emits its own audit event.
+        from apps.security.models import AuditEvent
+        events = AuditEvent.objects.filter(
+            action="security.operator_scope.granted",
+        )
+        assert events.count() == 2
+
+    def test_unknown_district_code_rejects_the_whole_call(
+        self, django_user_model, geo_ladder,
+    ):
+        admin = _nsr_admin(django_user_model)
+        target = _plain_user(django_user_model)
+        client = APIClient()
+        client.force_authenticate(admin)
+        resp = client.post(
+            self._url(),
+            {
+                "user_id": target.id,
+                "scope_level": "district",
+                "scope_codes": ["D-WAKISO", "D-OOPS"],
+            },
+            format="json",
+        )
+        assert resp.status_code == 400
+        assert "D-OOPS" in str(resp.json())
+        # No partial grants — atomic-feeling 400 is the contract.
+        assert OperatorScope.objects.filter(user=target).count() == 0
+
+    def test_idempotent_on_duplicate(
+        self, django_user_model, geo_ladder,
+    ):
+        admin = _nsr_admin(django_user_model)
+        target = _plain_user(django_user_model)
+        OperatorScope.objects.create(
+            user=target, scope_level=ScopeLevel.DISTRICT,
+            scope_code="D-WAKISO", granted_by="seeded",
+        )
+        client = APIClient()
+        client.force_authenticate(admin)
+        resp = client.post(
+            self._url(),
+            {
+                "user_id": target.id,
+                "scope_level": "district",
+                "scope_codes": ["D-WAKISO", "D-KAMPALA"],
+            },
+            format="json",
+        )
+        assert resp.status_code == 200, resp.content
+        body = resp.json()
+        assert {s["scope_code"] for s in body["granted"]} == {"D-KAMPALA"}
+        assert body["skipped_existing"] == ["D-WAKISO"]
+
+    def test_national_takes_empty_codes(
+        self, django_user_model, geo_ladder,
+    ):
+        admin = _nsr_admin(django_user_model)
+        target = _plain_user(django_user_model)
+        client = APIClient()
+        client.force_authenticate(admin)
+        resp = client.post(
+            self._url(),
+            {
+                "user_id": target.id,
+                "scope_level": "national",
+                "scope_codes": [],
+                "note": "DPO wildcard",
+            },
+            format="json",
+        )
+        assert resp.status_code == 200, resp.content
+        body = resp.json()
+        assert len(body["granted"]) == 1
+        assert body["granted"][0]["scope_code"] == ""
+
+    def test_national_with_code_is_rejected(
+        self, django_user_model, geo_ladder,
+    ):
+        admin = _nsr_admin(django_user_model)
+        target = _plain_user(django_user_model)
+        client = APIClient()
+        client.force_authenticate(admin)
+        resp = client.post(
+            self._url(),
+            {
+                "user_id": target.id,
+                "scope_level": "national",
+                "scope_codes": ["R-CENTRAL"],
+            },
+            format="json",
+        )
+        assert resp.status_code == 400
+        assert "national" in str(resp.json())
+
+    def test_non_admin_gets_403(self, django_user_model, geo_ladder):
+        u = _plain_user(django_user_model)
+        client = APIClient()
+        client.force_authenticate(u)
+        resp = client.post(
+            self._url(),
+            {
+                "user_id": u.id,
+                "scope_level": "district",
+                "scope_codes": ["D-WAKISO"],
+            },
+            format="json",
+        )
+        assert resp.status_code == 403
+
+
+@pytest.mark.django_db
+class TestUserSearch:
+    def test_returns_matches_by_username_or_name(self, django_user_model):
+        admin = _nsr_admin(django_user_model)
+        _plain_user(django_user_model, username="ops-grace",
+                    first_name="Grace", last_name="Akello")
+        _plain_user(django_user_model, username="ops-pete",
+                    first_name="Pete", last_name="Onyango")
+        client = APIClient()
+        client.force_authenticate(admin)
+        resp = client.get("/api/v1/security/users/?q=grace")
+        assert resp.status_code == 200
+        usernames = {u["username"] for u in resp.json()}
+        assert usernames == {"ops-grace"}
+        # Match by display-name substring too.
+        resp = client.get("/api/v1/security/users/?q=onyango")
+        assert {u["username"] for u in resp.json()} == {"ops-pete"}
+
+    def test_blank_query_returns_first_50(self, django_user_model):
+        admin = _nsr_admin(django_user_model)
+        # Plant 5 — far under the cap.
+        for i in range(5):
+            _plain_user(django_user_model, username=f"u{i}")
+        client = APIClient()
+        client.force_authenticate(admin)
+        resp = client.get("/api/v1/security/users/")
+        assert resp.status_code == 200
+        assert len(resp.json()) >= 5  # admin + 5 = 6 users
+
+    def test_non_admin_gets_403(self, django_user_model):
+        u = _plain_user(django_user_model)
+        client = APIClient()
+        client.force_authenticate(u)
+        resp = client.get("/api/v1/security/users/")
+        assert resp.status_code == 403

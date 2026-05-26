@@ -1116,6 +1116,753 @@ const TABS = [
   { id: "scopes",         label: "Operator scopes",     icon: "shield"    },
 ];
 
+
+// ── Operator scopes tab (US-S11-028) ──────────────────────────────────
+// Console surface that replaces the stub linking to
+// /admin/security/operatorscope/. Lists every OperatorScope row,
+// supports a per-row revoke, and opens a Grant Scope modal with a
+// cascading geographic picker + multi-select. Backend mirrors:
+//   /api/v1/security/operator-scopes/         (list, retrieve, destroy)
+//   /api/v1/security/operator-scopes/bulk-grant/
+//   /api/v1/security/users/?q=                (user picker)
+//   /api/v1/reference-data/geographic-units/  (cascade source)
+//   /api/v1/partners/                         (partner picker)
+
+// Levels in UBOS order — used for the cascading parent picker. The
+// modal walks 0..(targetIdx-1) to pick the parent of the target
+// level, then loads peers at targetIdx for the multi-select.
+const _GEO_LEVELS_ORDER = [
+  "region", "sub_region", "district", "sub_county", "parish", "village",
+];
+
+const _SCOPE_LEVEL_OPTIONS = [
+  { value: "national",   label: "National (wildcard)" },
+  { value: "region",     label: "Region" },
+  { value: "sub_region", label: "Sub-region" },
+  { value: "district",   label: "District" },
+  { value: "sub_county", label: "Sub-county" },
+  { value: "parish",     label: "Parish" },
+  { value: "village",    label: "Village" },
+  { value: "partner",    label: "Partner (data-request scope)" },
+];
+
+const _scopeLevelLabel = (v) => {
+  const opt = _SCOPE_LEVEL_OPTIONS.find(o => o.value === v);
+  return opt ? opt.label : v;
+};
+
+
+// Cascading geographic picker — walks the UBOS ladder one level at
+// a time, fetching peers of the parent each time. The leaf level
+// (the one the operator is granting scope at) gets rendered as a
+// multi-select checkbox list rather than a dropdown so "all parishes
+// in District X" is one submit.
+const GeoCascadePicker = ({ targetLevel, value, onChange, disabled }) => {
+  // Stack of parent picks, e.g. when granting at sub_county:
+  // [{level:"region", code:"R-CENTRAL"}, {level:"sub_region", code:"SR-..."}, {level:"district", code:"D-..."}]
+  // After all parents are picked, peers at targetLevel become the
+  // multi-select source.
+  const targetIdx = _GEO_LEVELS_ORDER.indexOf(targetLevel);
+  const [parents, setParents] = useStateAdmin([]);
+  const [peerOptions, setPeerOptions] = useStateAdmin({});  // level -> [{code, name, parent_code}]
+  const [loadingLevel, setLoadingLevel] = useStateAdmin("");
+
+  // Fetch peers at a given level + parent_code. Falls silently to
+  // an empty list under file:// preview.
+  const _fetchPeers = (level, parentCode) => {
+    setLoadingLevel(level);
+    const qs = new URLSearchParams({ level });
+    qs.set("parent_code", parentCode || "");
+    qs.set("page_size", "500");
+    fetch(`/api/v1/reference-data/geographic-units/?${qs.toString()}`, {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        const items = (data.results || data || [])
+          .map(u => ({ code: u.code, name: u.name, parent_code: u.parent_code || "" }));
+        setPeerOptions(prev => ({ ...prev, [level]: items }));
+        setLoadingLevel("");
+      })
+      .catch(() => { setLoadingLevel(""); });
+  };
+
+  // Reset everything when targetLevel changes.
+  useEffectAdmin(() => {
+    setParents([]);
+    setPeerOptions({});
+    onChange([]);
+    if (targetIdx === 0) {
+      // No parents to pick — load regions directly.
+      _fetchPeers("region", "");
+    } else {
+      _fetchPeers("region", "");
+    }
+  }, [targetLevel]);
+
+  // When a parent is picked at level i, load level i+1 peers under it.
+  const pickParent = (level, code) => {
+    const idx = _GEO_LEVELS_ORDER.indexOf(level);
+    const newParents = [..._GEO_LEVELS_ORDER.slice(0, idx).map(
+      (lvl, j) => parents[j] || { level: lvl, code: "" },
+    ), { level, code }];
+    setParents(newParents);
+    onChange([]);
+    // Load the next level (which may be the target).
+    const nextIdx = idx + 1;
+    if (nextIdx <= targetIdx) {
+      const nextLevel = _GEO_LEVELS_ORDER[nextIdx];
+      _fetchPeers(nextLevel, code);
+    }
+  };
+
+  const toggleLeaf = (code) => {
+    if (value.includes(code)) onChange(value.filter(c => c !== code));
+    else onChange([...value, code]);
+  };
+
+  const selectAllLeaves = () => {
+    const all = (peerOptions[targetLevel] || []).map(o => o.code);
+    onChange(all);
+  };
+
+  const clearLeaves = () => onChange([]);
+
+  // Build the rendered rows: one dropdown per parent level up to
+  // (targetIdx - 1), then a checkbox grid at targetLevel.
+  const parentRows = _GEO_LEVELS_ORDER.slice(0, targetIdx).map((lvl, i) => {
+    const options = peerOptions[lvl] || [];
+    const picked = parents[i]?.code || "";
+    return (
+      <div key={lvl} style={{marginBottom:12}}>
+        <label className="t-cap" style={{display:"block", marginBottom:4, textTransform:"capitalize"}}>
+          {lvl.replace("_", " ")}
+          {loadingLevel === lvl && <span className="muted"> (loading…)</span>}
+        </label>
+        <select
+          value={picked}
+          onChange={e => pickParent(lvl, e.target.value)}
+          disabled={disabled || loadingLevel === lvl || options.length === 0}
+          style={{width:"100%", padding:"8px", border:"1px solid var(--neutral-300)",
+                  borderRadius:"4px", fontSize:13}}
+        >
+          <option value="">— pick a {lvl.replace("_", " ")} —</option>
+          {options.map(o => (
+            <option key={o.code} value={o.code}>{o.name} ({o.code})</option>
+          ))}
+        </select>
+      </div>
+    );
+  });
+
+  const leaves = peerOptions[targetLevel] || [];
+  const parentsReady = targetIdx === 0 || parents.length === targetIdx;
+  return (
+    <div>
+      {parentRows}
+      <label className="t-cap" style={{display:"block", marginBottom:4, textTransform:"capitalize"}}>
+        {targetLevel.replace("_", " ")}{loadingLevel === targetLevel && <span className="muted"> (loading…)</span>}
+      </label>
+      {!parentsReady && (
+        <p className="t-bodysm muted" style={{margin:"4px 0 12px"}}>
+          Pick a {_GEO_LEVELS_ORDER[parents.length].replace("_", " ")} above to see {targetLevel.replace("_", " ")} options.
+        </p>
+      )}
+      {parentsReady && (
+        <>
+          {leaves.length === 0 && !loadingLevel && (
+            <p className="t-bodysm muted" style={{margin:"4px 0 12px"}}>
+              No {targetLevel.replace("_", " ")} units found for this parent.
+            </p>
+          )}
+          {leaves.length > 0 && (
+            <>
+              <div style={{display:"flex", gap:8, marginBottom:4}}>
+                <button type="button" className="btn"
+                  style={{fontSize:11, padding:"4px 8px"}}
+                  onClick={selectAllLeaves} disabled={disabled}
+                >Select all {leaves.length}</button>
+                <button type="button" className="btn"
+                  style={{fontSize:11, padding:"4px 8px"}}
+                  onClick={clearLeaves} disabled={disabled || value.length === 0}
+                >Clear</button>
+                <span className="t-cap" style={{alignSelf:"center", marginLeft:"auto"}}>
+                  {value.length} of {leaves.length} selected
+                </span>
+              </div>
+              <div style={{
+                border:"1px solid var(--neutral-300)", borderRadius:"4px",
+                maxHeight:"180px", overflowY:"auto", padding:"4px 8px",
+                background:"var(--neutral-50)",
+              }}>
+                {leaves.map(o => (
+                  <label key={o.code} style={{
+                    display:"flex", alignItems:"center", gap:8, padding:"4px 0",
+                    fontSize:13, cursor:"pointer",
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={value.includes(o.code)}
+                      onChange={() => toggleLeaf(o.code)}
+                      disabled={disabled}
+                    />
+                    <span>{o.name} <span className="t-mono muted">({o.code})</span></span>
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+};
+
+
+// User-picker — search-as-you-type against /api/v1/security/users/.
+const UserPicker = ({ value, onChange, disabled }) => {
+  const [q, setQ] = useStateAdmin("");
+  const [results, setResults] = useStateAdmin([]);
+  const [loading, setLoading] = useStateAdmin(false);
+
+  useEffectAdmin(() => {
+    let cancelled = false;
+    setLoading(true);
+    const qs = q ? `?q=${encodeURIComponent(q)}` : "";
+    fetch(`/api/v1/security/users/${qs}`, {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (cancelled) return;
+        setResults(Array.isArray(data) ? data : []);
+        setLoading(false);
+      })
+      .catch(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [q]);
+
+  return (
+    <div>
+      <input
+        type="text" value={q} onChange={e => setQ(e.target.value)}
+        placeholder="Search by username or name"
+        disabled={disabled}
+        style={{width:"100%", padding:"8px", border:"1px solid var(--neutral-300)",
+                borderRadius:"4px", fontSize:13, marginBottom:8}}
+      />
+      <div style={{
+        border:"1px solid var(--neutral-300)", borderRadius:"4px",
+        maxHeight:"160px", overflowY:"auto", background:"var(--neutral-50)",
+      }}>
+        {loading && <p className="t-cap muted" style={{padding:"8px"}}>Searching…</p>}
+        {!loading && results.length === 0 && (
+          <p className="t-cap muted" style={{padding:"8px"}}>No users match.</p>
+        )}
+        {results.map(u => {
+          const selected = value?.id === u.id;
+          return (
+            <button
+              key={u.id} type="button"
+              onClick={() => onChange(u)}
+              disabled={disabled}
+              style={{
+                display:"block", width:"100%", textAlign:"left",
+                padding:"6px 8px", fontSize:13,
+                background: selected ? "var(--accent-data-bg)" : "transparent",
+                border:"none", borderBottom:"1px solid var(--neutral-200)",
+                cursor:"pointer",
+              }}
+            >
+              <strong>{u.username}</strong>
+              {u.display_name !== u.username && (
+                <span className="muted"> — {u.display_name}</span>
+              )}
+              {u.groups.length > 0 && (
+                <div className="t-cap muted">{u.groups.join(", ")}</div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+
+// Grant Scope modal — user → level → (parents → leaves) → submit.
+const GrantScopeModal = ({ onClose, onSubmit, submitting }) => {
+  const [user, setUser] = useStateAdmin(null);
+  const [scopeLevel, setScopeLevel] = useStateAdmin("");
+  const [scopeCodes, setScopeCodes] = useStateAdmin([]);
+  const [partnerCode, setPartnerCode] = useStateAdmin("");
+  const [partners, setPartners] = useStateAdmin([]);
+  const [note, setNote] = useStateAdmin("");
+
+  // Partner list for the partner-level picker.
+  useEffectAdmin(() => {
+    if (scopeLevel !== "partner") return;
+    let cancelled = false;
+    fetch("/api/v1/partners/?page_size=200", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (cancelled) return;
+        const items = data.results || data || [];
+        setPartners(items);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [scopeLevel]);
+
+  // Reset downstream state when scope level changes.
+  useEffectAdmin(() => {
+    setScopeCodes([]);
+    setPartnerCode("");
+  }, [scopeLevel]);
+
+  const isGeographic = _GEO_LEVELS_ORDER.includes(scopeLevel);
+  const canSubmit = (
+    !submitting && user && scopeLevel && (
+      scopeLevel === "national"
+      || (isGeographic && scopeCodes.length > 0)
+      || (scopeLevel === "partner" && partnerCode)
+    )
+  );
+
+  const submit = (e) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    const codes = scopeLevel === "national"
+      ? []
+      : (scopeLevel === "partner" ? [partnerCode] : scopeCodes);
+    onSubmit({
+      user_id: user.id,
+      scope_level: scopeLevel,
+      scope_codes: codes,
+      note,
+    });
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-label="Grant operator scope"
+      style={{
+        position:"fixed", inset:0, background:"rgba(0,0,0,0.4)",
+        display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000,
+      }}
+      onClick={() => !submitting && onClose()}
+    >
+      <form
+        onClick={e => e.stopPropagation()}
+        onSubmit={submit}
+        style={{
+          background:"white", padding:"24px", borderRadius:"8px",
+          minWidth:"520px", maxWidth:"600px", maxHeight:"86vh",
+          overflowY:"auto",
+          boxShadow:"0 8px 32px rgba(0,0,0,0.2)",
+        }}
+      >
+        <h3 className="t-h3" style={{marginTop:0}}>Grant operator scope</h3>
+        <p className="t-bodysm muted" style={{marginTop:4, marginBottom:16}}>
+          Assigns one or more ABAC scopes to a user. Geographic scopes pick a
+          UBOS unit; partner scope ties the user to a partner organisation's
+          data requests. National is the wildcard reserved for NSR Unit /
+          DPO roles.
+        </p>
+
+        <div style={{marginBottom:16}}>
+          <label className="t-cap" style={{display:"block", marginBottom:4}}>User</label>
+          <UserPicker value={user} onChange={setUser} disabled={submitting}/>
+          {user && (
+            <p className="t-bodysm" style={{margin:"6px 0 0", color:"var(--accent-data)"}}>
+              ✓ Selected: <strong>{user.username}</strong>
+              {user.display_name !== user.username && ` — ${user.display_name}`}
+            </p>
+          )}
+        </div>
+
+        <div style={{marginBottom:16}}>
+          <label className="t-cap" style={{display:"block", marginBottom:4}}>Scope level</label>
+          <select
+            value={scopeLevel} onChange={e => setScopeLevel(e.target.value)}
+            disabled={submitting}
+            style={{width:"100%", padding:"8px", border:"1px solid var(--neutral-300)",
+                    borderRadius:"4px", fontSize:13}}
+          >
+            <option value="">— pick a level —</option>
+            {_SCOPE_LEVEL_OPTIONS.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </div>
+
+        {isGeographic && (
+          <div style={{marginBottom:16}}>
+            <GeoCascadePicker
+              targetLevel={scopeLevel}
+              value={scopeCodes}
+              onChange={setScopeCodes}
+              disabled={submitting}
+            />
+          </div>
+        )}
+
+        {scopeLevel === "partner" && (
+          <div style={{marginBottom:16}}>
+            <label className="t-cap" style={{display:"block", marginBottom:4}}>Partner</label>
+            <select
+              value={partnerCode} onChange={e => setPartnerCode(e.target.value)}
+              disabled={submitting || partners.length === 0}
+              style={{width:"100%", padding:"8px", border:"1px solid var(--neutral-300)",
+                      borderRadius:"4px", fontSize:13}}
+            >
+              <option value="">— pick a partner —</option>
+              {partners.map(p => (
+                <option key={p.code} value={p.code}>{p.name} ({p.code})</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {scopeLevel === "national" && (
+          <p className="t-bodysm" style={{marginBottom:16, color:"var(--accent-data)"}}>
+            National scope grants visibility to every Household — reserved for NSR Unit Coordinator and DPO roles.
+          </p>
+        )}
+
+        <div style={{marginBottom:20}}>
+          <label className="t-cap" style={{display:"block", marginBottom:4}}>
+            Note <span className="muted">(optional)</span>
+          </label>
+          <textarea
+            value={note} onChange={e => setNote(e.target.value)}
+            rows={2}
+            disabled={submitting}
+            placeholder="e.g. field-ops staff covering Wakiso + Kampala"
+            style={{
+              width:"100%", padding:"8px",
+              border:"1px solid var(--neutral-300)", borderRadius:"4px",
+              fontSize:13, fontFamily:"inherit", resize:"vertical",
+            }}
+          />
+        </div>
+
+        <div style={{display:"flex", justifyContent:"flex-end", gap:8}}>
+          <button type="button" className="btn" onClick={onClose} disabled={submitting}>
+            Cancel
+          </button>
+          <button
+            type="submit" className="btn primary" disabled={!canSubmit}
+            title={!canSubmit ? "Pick a user, a scope level, and at least one target" : ""}
+          >
+            {submitting ? "Granting…" : (
+              isGeographic && scopeCodes.length > 1
+                ? `Grant ${scopeCodes.length} scopes`
+                : "Grant scope"
+            )}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+
+// Revoke confirm modal — used for single-row revoke from the table.
+const RevokeScopeConfirm = ({ row, onClose, onConfirm, submitting }) => (
+  <div
+    role="dialog"
+    aria-label="Revoke operator scope"
+    style={{
+      position:"fixed", inset:0, background:"rgba(0,0,0,0.4)",
+      display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000,
+    }}
+    onClick={() => !submitting && onClose()}
+  >
+    <div
+      onClick={e => e.stopPropagation()}
+      style={{
+        background:"white", padding:"24px", borderRadius:"8px",
+        minWidth:"420px", maxWidth:"520px",
+        boxShadow:"0 8px 32px rgba(0,0,0,0.2)",
+      }}
+    >
+      <h3 className="t-h3" style={{marginTop:0, color:"var(--accent-danger)"}}>
+        Revoke scope?
+      </h3>
+      <p className="t-bodysm" style={{margin:"4px 0 16px"}}>
+        Removes <strong>{_scopeLevelLabel(row.scope_level)}</strong>{" "}
+        <span className="t-mono">{row.scope_label || row.scope_code || "*"}</span>{" "}
+        from <strong>{row.username}</strong>. The audit event survives the
+        deletion.
+      </p>
+      <div style={{display:"flex", justifyContent:"flex-end", gap:8}}>
+        <button type="button" className="btn" onClick={onClose} disabled={submitting}>
+          Cancel
+        </button>
+        <button
+          type="button" className="btn"
+          style={{
+            background:"var(--accent-danger)", color:"white",
+            borderColor:"var(--accent-danger)",
+          }}
+          onClick={onConfirm} disabled={submitting}
+        >
+          {submitting ? "Revoking…" : "Revoke"}
+        </button>
+      </div>
+    </div>
+  </div>
+);
+
+
+const OperatorScopesTab = () => {
+  const [rows, setRows] = useStateAdmin([]);
+  const [loading, setLoading] = useStateAdmin(true);
+  const [error, setError] = useStateAdmin("");
+  const [filterLevel, setFilterLevel] = useStateAdmin("");
+  const [filterQ, setFilterQ] = useStateAdmin("");
+  const [modalOpen, setModalOpen] = useStateAdmin(false);
+  const [submitting, setSubmitting] = useStateAdmin(false);
+  const [revokeTarget, setRevokeTarget] = useStateAdmin(null);
+  const [revokeSubmitting, setRevokeSubmitting] = useStateAdmin(false);
+  const [toast, setToast] = useStateAdmin("");
+
+  const _fetchScopes = () => {
+    setLoading(true); setError("");
+    const qs = filterLevel ? `?scope_level=${encodeURIComponent(filterLevel)}` : "";
+    fetch(`/api/v1/security/operator-scopes/${qs}`, {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.json().then(body => ({ ok: r.ok, body })))
+      .then(({ ok, body }) => {
+        setLoading(false);
+        if (!ok) {
+          setError(body.detail || "Failed to load operator scopes.");
+          return;
+        }
+        const items = body.results || body || [];
+        setRows(items);
+      })
+      .catch(() => {
+        setLoading(false);
+        setError("Network error loading operator scopes.");
+      });
+  };
+
+  useEffectAdmin(() => { _fetchScopes(); }, [filterLevel]);
+
+  const visibleRows = useMemoAdmin(() => {
+    if (!filterQ.trim()) return rows;
+    const q = filterQ.toLowerCase();
+    return rows.filter(r =>
+      (r.username || "").toLowerCase().includes(q)
+      || (r.display_name || "").toLowerCase().includes(q)
+      || (r.scope_code || "").toLowerCase().includes(q)
+      || (r.scope_label || "").toLowerCase().includes(q),
+    );
+  }, [rows, filterQ]);
+
+  const grant = ({ user_id, scope_level, scope_codes, note }) => {
+    setSubmitting(true);
+    fetch("/api/v1/security/operator-scopes/bulk-grant/", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-CSRFToken": _adminCsrfToken(),
+      },
+      body: JSON.stringify({ user_id, scope_level, scope_codes, note }),
+    })
+      .then(r => r.json().then(body => ({ ok: r.ok, body })))
+      .then(({ ok, body }) => {
+        setSubmitting(false);
+        if (!ok) {
+          setToast(`Grant failed: ${typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail)}`);
+          return;
+        }
+        setModalOpen(false);
+        const g = body.granted?.length || 0;
+        const s = body.skipped_existing?.length || 0;
+        setToast(
+          s > 0
+            ? `Granted ${g}, skipped ${s} duplicate(s).`
+            : `Granted ${g} scope(s).`,
+        );
+        _fetchScopes();
+      })
+      .catch(err => {
+        setSubmitting(false);
+        setToast(`Grant failed: ${err}`);
+      });
+  };
+
+  const revoke = () => {
+    if (!revokeTarget) return;
+    setRevokeSubmitting(true);
+    fetch(`/api/v1/security/operator-scopes/${revokeTarget.id}/`, {
+      method: "DELETE",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "X-CSRFToken": _adminCsrfToken(),
+      },
+    })
+      .then(r => {
+        setRevokeSubmitting(false);
+        if (!r.ok && r.status !== 204) {
+          setToast(`Revoke failed: HTTP ${r.status}`);
+          return;
+        }
+        setRows(prev => prev.filter(x => x.id !== revokeTarget.id));
+        setToast(
+          `Revoked ${_scopeLevelLabel(revokeTarget.scope_level)} ${revokeTarget.scope_code || "*"} from ${revokeTarget.username}.`,
+        );
+        setRevokeTarget(null);
+      })
+      .catch(err => {
+        setRevokeSubmitting(false);
+        setToast(`Revoke failed: ${err}`);
+      });
+  };
+
+  return (
+    <>
+      <div className="card">
+        <div className="card-toolbar">
+          <strong className="t-bodysm">
+            {loading
+              ? "Loading…"
+              : <>{visibleRows.length} of {rows.length} scopes</>}
+          </strong>
+          <div style={{flex:1}}/>
+          <input
+            type="text" placeholder="Filter by user or code"
+            value={filterQ}
+            onChange={e => setFilterQ(e.target.value)}
+            style={{padding:"6px 8px", border:"1px solid var(--neutral-300)",
+                    borderRadius:"4px", fontSize:12, marginRight:8, width:"200px"}}
+          />
+          <select
+            value={filterLevel}
+            onChange={e => setFilterLevel(e.target.value)}
+            style={{padding:"6px 8px", border:"1px solid var(--neutral-300)",
+                    borderRadius:"4px", fontSize:12, marginRight:8}}
+          >
+            <option value="">All levels</option>
+            {_SCOPE_LEVEL_OPTIONS.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+          <button className="btn primary" onClick={() => setModalOpen(true)}>
+            <Icon name="plus" size={13}/> Grant scope
+          </button>
+        </div>
+
+        {error && (
+          <p style={{padding:"12px 16px", color:"var(--accent-danger)", margin:0}}>{error}</p>
+        )}
+
+        <div style={{
+          display:"grid",
+          gridTemplateColumns:"1fr 130px 1fr 160px 100px 40px",
+          borderBottom:"1px solid var(--neutral-200)",
+          background:"var(--neutral-50)",
+          fontSize:11, fontWeight:600, letterSpacing:"0.06em",
+          textTransform:"uppercase", color:"var(--neutral-700)",
+        }}>
+          <div style={{padding:"10px 16px"}}>User</div>
+          <div style={{padding:"10px 8px"}}>Level</div>
+          <div style={{padding:"10px 8px"}}>Scope</div>
+          <div style={{padding:"10px 8px"}}>Granted at</div>
+          <div style={{padding:"10px 8px"}}>Active</div>
+          <div style={{padding:"10px 8px"}}/>
+        </div>
+
+        {!loading && visibleRows.length === 0 && (
+          <p style={{padding:"24px 16px", color:"var(--neutral-500)", margin:0}}>
+            No scopes match the current filter. Click <strong>Grant scope</strong> to add one.
+          </p>
+        )}
+        {visibleRows.map(r => (
+          <div key={r.id} style={{
+            display:"grid",
+            gridTemplateColumns:"1fr 130px 1fr 160px 100px 40px",
+            borderBottom:"1px solid var(--neutral-200)",
+            alignItems:"center",
+          }}>
+            <div style={{padding:"12px 16px"}}>
+              <div style={{fontSize:13, fontWeight:500}}>{r.username}</div>
+              {r.display_name && r.display_name !== r.username && (
+                <div className="muted" style={{fontSize:11}}>{r.display_name}</div>
+              )}
+            </div>
+            <div style={{padding:"12px 8px", fontSize:12}}>
+              <Chip size="sm" tone={r.scope_level === "national" ? "data" : (r.scope_level === "partner" ? "programme" : "neutral")}>
+                {_scopeLevelLabel(r.scope_level)}
+              </Chip>
+            </div>
+            <div style={{padding:"12px 8px", fontSize:12}}>
+              {r.scope_label || r.scope_code || "*"}
+            </div>
+            <div style={{padding:"12px 8px", fontSize:12, color:"var(--neutral-700)"}}>
+              {_formatRunDate(r.granted_at)}
+            </div>
+            <div style={{padding:"12px 8px"}}>
+              <Chip size="sm" tone={r.active ? "data" : "neutral"}>
+                {r.active ? "active" : "inactive"}
+              </Chip>
+            </div>
+            <div style={{padding:"12px 8px", textAlign:"center"}}>
+              <button
+                type="button"
+                aria-label={`Revoke scope ${r.id}`}
+                title="Revoke scope"
+                onClick={() => setRevokeTarget(r)}
+                style={{
+                  background:"transparent", border:"none", cursor:"pointer",
+                  padding:"4px", color:"var(--neutral-500)",
+                  display:"inline-flex", alignItems:"center",
+                }}
+                onMouseEnter={e => (e.currentTarget.style.color = "var(--accent-danger)")}
+                onMouseLeave={e => (e.currentTarget.style.color = "var(--neutral-500)")}
+              >
+                <Icon name="trash" size={14}/>
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {modalOpen && (
+        <GrantScopeModal
+          onClose={() => !submitting && setModalOpen(false)}
+          onSubmit={grant}
+          submitting={submitting}
+        />
+      )}
+      {revokeTarget && (
+        <RevokeScopeConfirm
+          row={revokeTarget}
+          submitting={revokeSubmitting}
+          onClose={() => !revokeSubmitting && setRevokeTarget(null)}
+          onConfirm={revoke}
+        />
+      )}
+      {toast && <Toast message={toast} onDone={() => setToast("")}/>}
+    </>
+  );
+};
+
+
 const AdminScreen = ({ onNavigate }) => {
   const [tab, setTab] = useStateAdmin("model-versions");
 
@@ -1169,12 +1916,7 @@ const AdminScreen = ({ onNavigate }) => {
       {tab === "partners" && (
         <PartnersAndDsasTab onNavigate={onNavigate}/>
       )}
-      {tab === "scopes" && (
-        <AdminStubTab title="Operator scopes"
-                       adminPath="/admin/security/operatorscope/"
-                       sprintRef="US-S2-003, US-S4-001"
-                       description="Per-operator geographic OR partner scopes — the source of every ABAC filter on personal-data viewsets. Five mixin patterns cover the read side (geographic, household-id subquery, entity-type union, both-ends-in-scope, partner-org)."/>
-      )}
+      {tab === "scopes" && <OperatorScopesTab/>}
     </div>
   );
 };
@@ -1190,5 +1932,14 @@ if (typeof globalThis !== "undefined") {
     MOCK_SOURCE_SYSTEMS,
     _formatRunDate,
     _runApiToRow,
+    // US-S11-028 OperatorScope pieces
+    OperatorScopesTab,
+    GrantScopeModal,
+    GeoCascadePicker,
+    UserPicker,
+    RevokeScopeConfirm,
+    _SCOPE_LEVEL_OPTIONS,
+    _GEO_LEVELS_ORDER,
+    _scopeLevelLabel,
   });
 }

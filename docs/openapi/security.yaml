@@ -1,0 +1,183 @@
+openapi: 3.1.0
+info:
+  title: NSR MIS — Security API
+  version: 0.1.0
+  description: |
+    OperatorScope management + user search for the System Admin >
+    Operator scopes tab (US-S11-028). Plus the existing AuditEvent
+    read API (US-S12-002) and user-identity endpoint (/users/me/).
+
+    All endpoints require an authenticated session. The OperatorScope
+    + user-search endpoints are further gated by `IsOperatorScopeAdmin`
+    (Django group `nsr_admin` or superuser).
+
+tags:
+  - name: security
+    description: ABAC scopes, audit events, identity.
+
+paths:
+  /api/v1/security/operator-scopes/:
+    get:
+      tags: [security]
+      summary: List operator scopes
+      description: |
+        Honours `?user=`, `?scope_level=`, `?active=true|false` query
+        params (manual filtering — django-filter isn't installed).
+      responses:
+        "200":
+          description: Paginated list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  count:    { type: integer }
+                  next:     { type: string, nullable: true }
+                  previous: { type: string, nullable: true }
+                  results:
+                    type: array
+                    items: { $ref: "#/components/schemas/OperatorScope" }
+        "403": { description: caller lacks IsOperatorScopeAdmin }
+
+  /api/v1/security/operator-scopes/{id}/:
+    get:
+      tags: [security]
+      summary: Retrieve an operator scope
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OperatorScope" }
+    delete:
+      tags: [security]
+      summary: Revoke an operator scope (hard delete + audit)
+      description: |
+        Emits `security.operator_scope.revoked` AuditEvent before
+        deleting the row. The audit chain survives the delete.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "204": { description: revoked }
+        "403": { description: caller lacks IsOperatorScopeAdmin }
+        "404": { description: scope not found }
+
+  /api/v1/security/operator-scopes/bulk-grant/:
+    post:
+      tags: [security]
+      summary: Grant N OperatorScopes to a user at one scope_level (US-S11-028)
+      description: |
+        Validates each scope_code against the relevant authority
+        (GeographicUnit for geographic levels; Partner for partner;
+        empty/wildcard for national). Idempotent — existing
+        `(user, scope_level, scope_code)` triples are reported in
+        `skipped_existing` rather than 4xxing.
+
+        Emits one `security.operator_scope.granted` AuditEvent per
+        new row.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, scope_level, scope_codes]
+              properties:
+                user_id:    { type: integer, description: PK of auth_user }
+                scope_level:
+                  type: string
+                  enum: [national, region, sub_region, district, sub_county, parish, village, partner]
+                scope_codes:
+                  type: array
+                  items: { type: string, maxLength: 64 }
+                  description: |
+                    For geographic levels: GeographicUnit.code at that
+                    level. For partner: Partner.code. For national:
+                    empty list (we coerce to a single wildcard row).
+                note:
+                  type: string
+                  maxLength: 512
+      responses:
+        "200":
+          description: Bulk-grant result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [granted, skipped_existing]
+                properties:
+                  granted:
+                    type: array
+                    items: { $ref: "#/components/schemas/OperatorScope" }
+                  skipped_existing:
+                    type: array
+                    items: { type: string }
+                    description: scope_codes that already existed for this user+level
+        "400": { description: unknown user, scope_code, partner, or invalid national input }
+        "403": { description: caller lacks IsOperatorScopeAdmin }
+
+  /api/v1/security/users/:
+    get:
+      tags: [security]
+      summary: Search auth users for the Grant Scope picker (US-S11-028)
+      description: |
+        Returns up to 50 users matching `q` (case-insensitive
+        substring on username / first_name / last_name).
+      parameters:
+        - in: query
+          name: q
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: Up to 50 user identities
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/UserSearchItem" }
+        "403": { description: caller lacks IsOperatorScopeAdmin }
+
+components:
+  schemas:
+    OperatorScope:
+      type: object
+      required: [id, user, scope_level, scope_code, active]
+      properties:
+        id:           { type: integer }
+        user:         { type: integer, description: PK of auth_user }
+        username:     { type: string }
+        display_name: { type: string }
+        scope_level:
+          type: string
+          enum: [national, region, sub_region, district, sub_county, parish, village, partner]
+        scope_code:   { type: string, maxLength: 64 }
+        scope_label:
+          type: string
+          description: |
+            Human-readable label resolved against GeographicUnit
+            (geographic levels) or Partner (partner level), or
+            "All regions (national)" for the wildcard.
+        active:       { type: boolean }
+        granted_at:   { type: string, format: date-time }
+        granted_by:   { type: string }
+        note:         { type: string }
+
+    UserSearchItem:
+      type: object
+      required: [id, username, display_name, groups]
+      properties:
+        id:           { type: integer }
+        username:     { type: string }
+        display_name: { type: string }
+        groups:
+          type: array
+          items: { type: string }
