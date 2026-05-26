@@ -275,6 +275,64 @@ paths_appended_2026_05_25:
       responses:
         "200": { description: Updated StageRecord }
         "400": { description: not quality_failed, or reason missing }
+  /api/v1/dih/source-systems/{id}/trigger-run/:
+    post:
+      tags: [dih]
+      summary: Trigger an operator-initiated connector pull (US-S11-021)
+      description: |
+        Pulls submissions for this SourceSystem through the same code
+        path as the `pull_kobo_submissions_action` admin action.
+        Kobo-only for v1 — non-Kobo kinds 400. Guarded by IsDihTrigger
+        (Sys Admin or NSR Unit Coordinator). Refuses when another run
+        is pending/running, when no active DPA exists
+        (AC-DIH-DPA-REQUIRED), or when the source has no credential or
+        no deployed form. A `dih.connector.triggered` AuditEvent is
+        emitted regardless of outcome.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dry_run:
+                  type: boolean
+                  default: false
+                  description: |
+                    If true, opens the ConnectorRun as run_type=TEST,
+                    exercises credentials + list_forms, counts but does
+                    NOT land submission rows.
+      responses:
+        "200":
+          description: Pull complete
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [run_id, source_code, form_uid, dry_run,
+                           landed, staged, quarantined, errored, note]
+                properties:
+                  run_id: { type: string, description: ULID of the ConnectorRun }
+                  source_code: { type: string }
+                  form_uid: { type: string }
+                  form_name: { type: string }
+                  dry_run: { type: boolean }
+                  landed: { type: integer, minimum: 0 }
+                  staged: { type: integer, minimum: 0 }
+                  quarantined: { type: integer, minimum: 0 }
+                  errored: { type: integer, minimum: 0 }
+                  stage_states:
+                    type: object
+                    additionalProperties: { type: integer }
+                  geo_backfill_created: { type: integer, minimum: 0 }
+                  batch_cap_hit: { type: boolean }
+                  note: { type: string }
+        "400": { description: precondition unmet (non-Kobo / no DPA / no credentials / concurrent run) }
+        "403": { description: caller lacks IsDihTrigger permission }
   /api/v1/dih/stage-records/{id}/edit/:
     post:
       tags: [dih]

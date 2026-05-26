@@ -70,3 +70,20 @@ def test_source_system_kind_enum_matches_model(spec):
     enum_in_spec = set(spec["components"]["schemas"]["SourceSystemKind"]["enum"])
     enum_in_code = {v.value for v in SourceSystemKind}
     assert enum_in_spec == enum_in_code
+
+
+def test_trigger_run_path_documented(spec):
+    """US-S11-021 — the console "Run connector" button posts to this
+    path. The spec lives under `paths_appended_2026_05_25` (a
+    flat-list extension to the original Sprint 11 surface)."""
+    appended = spec["paths_appended_2026_05_25"]
+    path = "/api/v1/dih/source-systems/{id}/trigger-run/"
+    assert path in appended, sorted(appended.keys())
+    op = appended[path]["post"]
+    assert "dih" in op["tags"]
+    # Response shape covers the operator-visible counts the UI displays.
+    body = op["responses"]["200"]["content"]["application/json"]["schema"]
+    assert {"run_id", "dry_run", "landed", "staged", "note"} <= set(body["properties"])
+    # 4xx documented for IsDihTrigger denial + precondition failures.
+    assert "400" in op["responses"]
+    assert "403" in op["responses"]

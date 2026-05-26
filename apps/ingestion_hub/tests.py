@@ -1127,3 +1127,263 @@ class TestVillageOptional:
         stage = stage_from_landing(landing, canonical_payload=payload)
         with pytest.raises(DihError, match="parish"):
             promote_stage_record(stage, actor="reviewer")
+
+
+# --- US-S11-021 — console "Run connector" trigger endpoint -----------------
+
+import responses  # noqa: E402 — imported here to keep top-of-file lean
+
+from apps.ingestion_hub.models import (  # noqa: E402
+    ConnectorRunStatus,
+    ConnectorRunType,
+    KoboCredential,
+    RawLanding,
+)
+
+_TRIGGER_KOBO_URL = "https://kobo.trigger-test.invalid"
+
+
+@pytest.fixture
+def trigger_kobo_source(db):
+    # SourceSystem.code must match the registered KoboConnector.code
+    # ("KOBO-PILOT") so `get_connector(source.code)` resolves the live
+    # impl. The admin-action tests use the same convention.
+    src = SourceSystem.objects.create(
+        code="KOBO-PILOT", name="Kobo trigger test", kind=SourceSystemKind.KOBO,
+    )
+    KoboCredential.objects.create(
+        source_system=src,
+        server_url=_TRIGGER_KOBO_URL,
+        token_encrypted=b"stored-token",
+        acquired_by_username="placeholder",
+    )
+    DataProvisionAgreement.objects.create(
+        source_system=src, reference="DPA-KOBO-TRIGGER",
+        valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+    )
+    return src
+
+
+@pytest.fixture
+def trigger_kobo_no_dpa(db):
+    src = SourceSystem.objects.create(
+        code="KOBO-PILOT", name="Kobo no-DPA",
+        kind=SourceSystemKind.KOBO,
+    )
+    KoboCredential.objects.create(
+        source_system=src,
+        server_url=_TRIGGER_KOBO_URL,
+        token_encrypted=b"stored-token",
+        acquired_by_username="placeholder",
+    )
+    return src
+
+
+def _stub_kobo_one_form_three_rows():
+    """Standard Kobo upstream stub: one deployed form, three submissions."""
+    responses.add(
+        responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets.json",
+        json={"results": [
+            {"uid": "FORM-X", "name": "Pilot", "asset_type": "survey",
+             "deployment__active": True},
+        ]}, status=200,
+    )
+    responses.add(
+        responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets/FORM-X/data.json",
+        json={"results": [
+            {"_id": 1, "Q1": "a"},
+            {"_id": 2, "Q1": "b"},
+            {"_id": 3, "Q1": "c"},
+        ], "next": None}, status=200,
+    )
+
+
+@pytest.mark.django_db
+class TestTriggerRunEndpoint:
+    """POST /api/dih/source-systems/{id}/trigger-run/ — operator-initiated
+    Kobo pull from the System Admin > Connector runs tab (US-S11-021).
+
+    The view emits `dih.connector.triggered` first (so a downstream
+    failure still leaves a paper trail), then either
+    `trigger_succeeded` or `trigger_rejected` after the body runs.
+    """
+
+    def _url(self, source) -> str:
+        return f"/api/v1/dih/source-systems/{source.id}/trigger-run/"
+
+    def _in_group(self, django_user_model, group_name):
+        from django.contrib.auth.models import Group
+        user = django_user_model.objects.create_user(
+            username=f"u-{group_name}", password="x",
+        )
+        grp, _ = Group.objects.get_or_create(name=group_name)
+        user.groups.add(grp)
+        return user
+
+    # --- permissions --------------------------------------------------
+
+    def test_anonymous_caller_gets_403(self, trigger_kobo_source):
+        client = APIClient()
+        resp = client.post(self._url(trigger_kobo_source), {})
+        # IsDihTrigger short-circuits on unauthenticated — DRF returns
+        # 401 with BasicAuth challenge OR 403; either is "denied".
+        assert resp.status_code in (401, 403)
+
+    def test_authenticated_non_member_gets_403(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        user = django_user_model.objects.create_user(username="random", password="x")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(self._url(trigger_kobo_source), {})
+        assert resp.status_code == 403
+
+    @responses.activate
+    def test_nsr_admin_can_trigger(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        _stub_kobo_one_form_three_rows()
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(self._url(trigger_kobo_source), {}, format="json")
+        assert resp.status_code == 200, resp.content
+        assert resp.json()["landed"] == 3
+
+    @responses.activate
+    def test_nsr_unit_coordinator_can_trigger(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        _stub_kobo_one_form_three_rows()
+        user = self._in_group(django_user_model, "nsr_unit_coordinator")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(self._url(trigger_kobo_source), {}, format="json")
+        assert resp.status_code == 200, resp.content
+
+    # --- happy paths ---------------------------------------------------
+
+    @responses.activate
+    def test_real_run_lands_records_and_emits_audit(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        _stub_kobo_one_form_three_rows()
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(
+            self._url(trigger_kobo_source), {"dry_run": False}, format="json",
+        )
+        assert resp.status_code == 200, resp.content
+        body = resp.json()
+        assert body["dry_run"] is False
+        assert body["landed"] == 3
+
+        run = ConnectorRun.objects.get(id=body["run_id"])
+        assert run.status == ConnectorRunStatus.SUCCEEDED
+        assert run.run_type == ConnectorRunType.IMPORT
+        assert RawLanding.objects.filter(connector_run=run).count() == 3
+
+        # Two audit events: triggered (always) + trigger_succeeded.
+        actions = set(
+            AuditEvent.objects.filter(
+                actor_id=user.username,
+            ).values_list("action", flat=True),
+        )
+        assert "dih.connector.triggered" in actions
+        assert "dih.connector.trigger_succeeded" in actions
+
+    @responses.activate
+    def test_dry_run_does_not_land_records(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        _stub_kobo_one_form_three_rows()
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(
+            self._url(trigger_kobo_source), {"dry_run": True}, format="json",
+        )
+        assert resp.status_code == 200, resp.content
+        body = resp.json()
+        assert body["dry_run"] is True
+        # The pull was iterated for metadata: landed counts the rows
+        # we *would* have written, but no RawLanding exists and no
+        # StageRecord was created.
+        assert body["landed"] == 3
+        assert body["staged"] == 0
+        run = ConnectorRun.objects.get(id=body["run_id"])
+        assert run.run_type == ConnectorRunType.TEST
+        assert RawLanding.objects.filter(connector_run=run).count() == 0
+
+    # --- rejections ----------------------------------------------------
+
+    def test_non_kobo_kind_is_rejected(
+        self, django_user_model,
+    ):
+        ubos = SourceSystem.objects.create(
+            code="UBOS-1", name="UBOS", kind=SourceSystemKind.UBOS,
+        )
+        DataProvisionAgreement.objects.create(
+            source_system=ubos, reference="DPA-UBOS",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+        )
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(self._url(ubos), {}, format="json")
+        assert resp.status_code == 400
+        assert "only Kobo" in resp.json()["detail"]
+        # Rejection still emits both audit events.
+        actions = set(
+            AuditEvent.objects.filter(
+                actor_id=user.username,
+            ).values_list("action", flat=True),
+        )
+        assert "dih.connector.triggered" in actions
+        assert "dih.connector.trigger_rejected" in actions
+
+    def test_missing_dpa_is_rejected(
+        self, trigger_kobo_no_dpa, django_user_model,
+    ):
+        # No upstream HTTP is reached — the connector wiring check happens
+        # before list_forms (which would need a `responses.activate`).
+        # However, with credentials present, `get_connector` will return
+        # the Kobo impl, and list_forms WILL be called before the DPA
+        # check inside start_connector_run. So we have to stub it.
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                rsps.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets.json",
+                json={"results": [
+                    {"uid": "F", "name": "F", "asset_type": "survey",
+                     "deployment__active": True},
+                ]}, status=200,
+            )
+            user = self._in_group(django_user_model, "nsr_admin")
+            client = APIClient()
+            client.force_authenticate(user)
+            resp = client.post(
+                self._url(trigger_kobo_no_dpa), {}, format="json",
+            )
+        assert resp.status_code == 400
+        assert "DPA" in resp.json()["detail"]
+
+    @responses.activate
+    def test_concurrent_run_is_rejected(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        # Plant an in-flight ConnectorRun on the source so the
+        # concurrency guard refuses a second trigger.
+        connector_row = Connector.objects.create(
+            source_system=trigger_kobo_source, name="kobo-existing",
+            config={},
+        )
+        ConnectorRun.objects.create(
+            connector=connector_row, status=ConnectorRunStatus.RUNNING,
+        )
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(self._url(trigger_kobo_source), {}, format="json")
+        assert resp.status_code == 400
+        assert "already in progress" in resp.json()["detail"]

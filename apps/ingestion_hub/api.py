@@ -4,6 +4,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 
 from apps.security.abac import HouseholdIdScopedQuerysetMixin
+from apps.security.audit import emit as emit_audit
 from apps.security.audit_views import AuditReadMixin
 
 from .models import (
@@ -12,15 +13,18 @@ from .models import (
     SourceSystem,
     StageRecord,
 )
+from .permissions import IsDihTrigger
 from .services import (
     DihError,
     StageEditError,
+    TriggerError,
     edit_stage_record,
     process_stage_record,
     promote_stage_record,
     quarantine_stage_record,
     reject_stage_record,
     submit_walk_in_capture,
+    trigger_connector_pull,
 )
 
 # --- Serializers -----------------------------------------------------------
@@ -90,6 +94,36 @@ class EditRequestSerializer(serializers.Serializer):
     )
 
 
+class TriggerRunRequestSerializer(serializers.Serializer):
+    """Operator-initiated Kobo pull from the System Admin console."""
+    dry_run = serializers.BooleanField(
+        default=False,
+        help_text=(
+            "If true, the connector run is opened as run_type=TEST, "
+            "credentials + list_forms are exercised, and submission "
+            "rows are counted but not landed. Useful for verifying "
+            "credentials + mapping before a real pull."
+        ),
+    )
+
+
+class TriggerRunResponseSerializer(serializers.Serializer):
+    """Summary returned by POST /source-systems/{id}/trigger-run/."""
+    run_id = serializers.CharField()
+    source_code = serializers.CharField()
+    form_uid = serializers.CharField()
+    form_name = serializers.CharField()
+    dry_run = serializers.BooleanField()
+    landed = serializers.IntegerField()
+    staged = serializers.IntegerField()
+    quarantined = serializers.IntegerField()
+    errored = serializers.IntegerField()
+    stage_states = serializers.DictField(child=serializers.IntegerField())
+    geo_backfill_created = serializers.IntegerField()
+    batch_cap_hit = serializers.BooleanField()
+    note = serializers.CharField()
+
+
 # --- ViewSets --------------------------------------------------------------
 
 @extend_schema_view(
@@ -99,6 +133,64 @@ class EditRequestSerializer(serializers.Serializer):
 class SourceSystemViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = SourceSystem.objects.all().order_by("code")
     serializer_class = SourceSystemSerializer
+
+    @extend_schema(
+        tags=["dih"],
+        summary="Trigger an operator-initiated connector pull (US-S11-021)",
+        description=(
+            "Pulls submissions for this source system through the same "
+            "code path as the `pull_kobo_submissions_action` admin "
+            "action, so console and admin behave identically. Kobo-only "
+            "for v1. Guarded by IsDihTrigger (Sys Admin or NSR Unit "
+            "Coordinator) and refuses when another run is "
+            "pending/running, when no active DPA exists "
+            "(AC-DIH-DPA-REQUIRED), or when the source has no "
+            "credential or no deployed form. A `dih.connector.triggered` "
+            "AuditEvent is emitted regardless of outcome."
+        ),
+        request=TriggerRunRequestSerializer,
+        responses={
+            200: TriggerRunResponseSerializer,
+            400: OpenApiResponse(description="precondition unmet"),
+            403: OpenApiResponse(description="caller lacks trigger permission"),
+        },
+    )
+    @action(
+        detail=True, methods=["post"], url_path="trigger-run",
+        permission_classes=[IsDihTrigger],
+    )
+    def trigger_run(self, request, pk=None):
+        ser = TriggerRunRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        source = self.get_object()
+        actor = (getattr(request.user, "username", "") or "").strip() or "admin"
+        dry_run = ser.validated_data["dry_run"]
+
+        # Emit the trigger audit first so a downstream failure still
+        # leaves a paper trail of the attempt. The outcome is added in
+        # a follow-up `trigger_failed`/`trigger_succeeded` event below.
+        emit_audit(
+            "dih.connector.triggered", "source_system", source.id,
+            actor=actor,
+            reason=f"console-initiated pull (dry_run={dry_run})",
+        )
+        try:
+            result = trigger_connector_pull(
+                source, actor=actor, dry_run=dry_run,
+            )
+        except TriggerError as exc:
+            emit_audit(
+                "dih.connector.trigger_rejected", "source_system", source.id,
+                actor=actor, reason=str(exc),
+            )
+            return Response(
+                {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST,
+            )
+        emit_audit(
+            "dih.connector.trigger_succeeded", "connector_run", result["run_id"],
+            actor=actor, reason=result["note"],
+        )
+        return Response(TriggerRunResponseSerializer(result).data)
 
 
 @extend_schema_view(

@@ -130,9 +130,47 @@ under author tag `system-migration-referral`. Forward-only.
 
 - **No processing impact**. Documentation + a sealing test.
 
----
+### US-S11-021 — Console "Run connector" button (2026-05-26)
 
-## DPO review checklist
+- **Processing activity**: New REST endpoint `POST
+  /api/v1/dih/source-systems/{id}/trigger-run/` lets the System Admin
+  > Connector runs tab launch a Kobo pull from the console. The
+  endpoint mirrors the existing
+  `pull_kobo_submissions_action` Django admin action — same DPA
+  precheck, same credential decryption, same `RawLanding` →
+  `StageRecord` → DQA/IDV/DDUP pipeline. No new personal data is
+  collected; the pull route is **operator-surface change only**, not
+  data-flow change.
+- **Personal-data categories touched**: Same as the admin action it
+  generalises — names, NIN-hashed identifiers, GPS, members,
+  consent attestation. Already covered by the active DPA on every
+  Kobo SourceSystem (`AC-DIH-DPA-REQUIRED`).
+- **Lawful basis**: Unchanged — the DPA covers operator-initiated
+  imports identically to scheduled imports.
+- **Access control**: New DRF permission `IsDihTrigger` restricts
+  the trigger to Sys Admin (`nsr_admin` group) and NSR Unit
+  Coordinator (`nsr_unit_coordinator`, seeded by
+  `ingestion_hub.0006_seed_nsr_unit_coordinator_group`). Anonymous
+  callers and authenticated members of any other group get 403.
+- **Audit**: Three new actions emitted per call —
+  `dih.connector.triggered` (always, pre-call),
+  `dih.connector.trigger_succeeded` or
+  `dih.connector.trigger_rejected` (one of, post-call). Same
+  AuditEvent table; no schema change.
+- **Concurrency guard**: The endpoint refuses if a `PENDING` or
+  `RUNNING` ConnectorRun exists for the source so two operators
+  clicking the button at the same time can't produce overlapping
+  pulls (the DB-level guarantee is still the `ConnectorRun` PK).
+- **Dry-run option**: A `dry_run=true` request opens the
+  ConnectorRun as `run_type=TEST`, exercises credentials +
+  `list_forms`, iterates `pull_submissions` for metadata only, and
+  writes **no** `RawLanding`. Useful for verifying credentials and
+  the form list without persisting personal data — a deliberate
+  hardening over the previous admin-action-only path.
+- **For DPO note**: the operator-side change widens *who* can
+  trigger a pull (from `is_staff` admins to two named groups) but
+  does not widen *what* the pull touches. The DPA-required gate
+  still fires inside `start_connector_run`.
 
 - [ ] **Beneficiary listing as a new read surface** (US-S26-006)
   — confirm that partner-affiliated users seeing household head

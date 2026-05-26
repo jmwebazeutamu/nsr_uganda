@@ -17,7 +17,7 @@
 // - Partners & DSAs (S3-002, S4-001)
 // - Operator scopes (S2-003, S4-001 PARTNER scope)
 
-const { useState: useStateAdmin, useMemo: useMemoAdmin } = React;
+const { useState: useStateAdmin, useMemo: useMemoAdmin, useEffect: useEffectAdmin } = React;
 
 // Mock data — mirrors the live serializer output from
 // /api/v1/ddup/model-versions/ (S10-002) so the fetch wiring is
@@ -245,10 +245,154 @@ const ModelVersionsTab = () => {
   );
 };
 
+// Mock SourceSystems for the "Run connector" modal — populated live
+// from /api/v1/dih/source-systems/ when the harness is running on
+// the same origin as the Django backend (matches the fetch-or-fall-
+// back-to-mock pattern in screens-dih.jsx).
+const MOCK_SOURCE_SYSTEMS = [
+  { id: "01SS2026010100001", code: "KOBO-PILOT",     name: "Kobo pilot",      kind: "kobo",      is_active: true },
+  { id: "01SS2026010100002", code: "PDM-MIS",        name: "PDM MIS",         kind: "partner_mis", is_active: true },
+  { id: "01SS2026010100003", code: "NUSAF-MIS",      name: "NUSAF MIS",       kind: "partner_mis", is_active: true },
+  { id: "01SS2026010100004", code: "WFP-SCOPE",      name: "WFP SCOPE",       kind: "wfp_scope", is_active: true },
+];
+
+// ── Run-connector modal (US-S11-021) ──────────────────────────────────
+// Operator picks a SourceSystem + dry-run flag, posts to
+// /api/v1/dih/source-systems/{id}/trigger-run/. On success the new
+// ConnectorRun row appears at the top of the runs table. Kobo is the
+// only kind wired today — the rest stay disabled with a "(coming
+// soon)" suffix to keep the UI honest.
+const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
+  const koboSources = useMemoAdmin(
+    () => sources.filter(s => s.kind === "kobo" && s.is_active),
+    [sources],
+  );
+  const [sourceId, setSourceId] = useStateAdmin(koboSources[0]?.id || "");
+  const [dryRun, setDryRun] = useStateAdmin(false);
+
+  useEffectAdmin(() => {
+    if (!sourceId && koboSources.length > 0) setSourceId(koboSources[0].id);
+  }, [koboSources, sourceId]);
+
+  const submit = (e) => {
+    e.preventDefault();
+    if (!sourceId) return;
+    onSubmit({ sourceId, dryRun });
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-label="Run connector"
+      style={{
+        position:"fixed", inset:0, background:"rgba(0,0,0,0.4)",
+        display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000,
+      }}
+      onClick={onClose}
+    >
+      <form
+        onClick={e => e.stopPropagation()}
+        onSubmit={submit}
+        style={{
+          background:"white", padding:"24px", borderRadius:"8px",
+          minWidth:"420px", maxWidth:"480px",
+          boxShadow:"0 8px 32px rgba(0,0,0,0.2)",
+        }}
+      >
+        <h3 className="t-h3" style={{marginTop:0}}>Run connector</h3>
+        <p className="t-bodysm muted" style={{marginTop:4, marginBottom:16}}>
+          Triggers a Kobo pull through the same path the scheduled Celery
+          beat uses. Requires an active DPA and stored credentials.
+        </p>
+
+        <label className="t-cap" style={{display:"block", marginBottom:4}}>
+          Source system
+        </label>
+        <select
+          value={sourceId}
+          onChange={e => setSourceId(e.target.value)}
+          style={{width:"100%", padding:"8px", marginBottom:16,
+                  border:"1px solid var(--neutral-300)", borderRadius:"4px",
+                  fontSize:13}}
+          disabled={submitting}
+        >
+          {sources.map(s => {
+            const kobo = s.kind === "kobo" && s.is_active;
+            return (
+              <option key={s.id} value={s.id} disabled={!kobo}>
+                {s.code} — {s.name}
+                {kobo ? "" : " (coming soon)"}
+              </option>
+            );
+          })}
+        </select>
+
+        <label
+          style={{display:"flex", alignItems:"center", gap:8,
+                  marginBottom:20, fontSize:13, cursor:"pointer"}}
+        >
+          <input
+            type="checkbox"
+            checked={dryRun}
+            onChange={e => setDryRun(e.target.checked)}
+            disabled={submitting}
+          />
+          <span>
+            <strong>Dry run</strong>
+            <span className="muted" style={{display:"block", fontSize:11, marginTop:2}}>
+              Verifies credentials + form list. Counts but does not land submission rows.
+            </span>
+          </span>
+        </label>
+
+        <div style={{display:"flex", justifyContent:"flex-end", gap:8}}>
+          <button
+            type="button" className="btn"
+            onClick={onClose} disabled={submitting}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit" className="btn primary"
+            disabled={submitting || !sourceId}
+          >
+            {submitting ? "Running…" : (dryRun ? "Run dry-run" : "Run pull")}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
 // ── Connector runs tab ─────────────────────────────────────────────────
 const ConnectorRunsTab = () => {
   const [selection, setSelection] = useStateAdmin(new Set());
   const [toast, setToast] = useStateAdmin("");
+  // Local copy so the optimistic prepend after a successful trigger
+  // survives across renders without mutating the module-level mock.
+  const [runs, setRuns] = useStateAdmin(CONNECTOR_RUNS);
+  const [sources, setSources] = useStateAdmin(MOCK_SOURCE_SYSTEMS);
+  const [modalOpen, setModalOpen] = useStateAdmin(false);
+  const [submitting, setSubmitting] = useStateAdmin(false);
+
+  // Live-fetch source systems from the DRF endpoint when the harness
+  // runs on the same origin as the Django backend; otherwise we keep
+  // the mock list so the design preview still works under file://.
+  useEffectAdmin(() => {
+    let cancelled = false;
+    fetch("/api/v1/dih/source-systems/", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (cancelled) return;
+        const items = data.results || data;
+        if (Array.isArray(items) && items.length > 0) setSources(items);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const toggleSel = (id) => {
     const next = new Set(selection);
@@ -257,9 +401,9 @@ const ConnectorRunsTab = () => {
   };
 
   const stuckIds = useMemoAdmin(() => (
-    CONNECTOR_RUNS.filter(r => selection.has(r.id) && isStuck(r))
-                  .map(r => r.id)
-  ), [selection]);
+    runs.filter(r => selection.has(r.id) && isStuck(r))
+        .map(r => r.id)
+  ), [selection, runs]);
 
   const fireBulk = () => {
     if (stuckIds.length === 0) {
@@ -274,14 +418,78 @@ const ConnectorRunsTab = () => {
     setSelection(new Set());
   };
 
+  const triggerRun = ({ sourceId, dryRun }) => {
+    const source = sources.find(s => s.id === sourceId);
+    if (!source) return;
+    setSubmitting(true);
+    fetch(`/api/v1/dih/source-systems/${sourceId}/trigger-run/`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ dry_run: dryRun }),
+    })
+      .then(r => r.json().then(body => ({ ok: r.ok, body })))
+      .then(({ ok, body }) => {
+        setSubmitting(false);
+        setModalOpen(false);
+        if (!ok) {
+          setToast(`Trigger failed: ${body.detail || "unknown error"}`);
+          return;
+        }
+        // Optimistic prepend so the operator sees the new row
+        // immediately. The next live-fetch tick (S10-005's 5-second
+        // poll) will replace it with the server-truth row.
+        const newRow = {
+          id: body.run_id,
+          connector: `${body.source_code}${dryRun ? " (dry-run)" : ""}`,
+          status: "succeeded",
+          started_h: 0,
+          duration: dryRun ? "dry-run" : "just now",
+          landed: body.landed || 0,
+          staged: body.staged || 0,
+          promoted: 0,
+          quarantined: body.quarantined || 0,
+          rejected: body.errored || 0,
+        };
+        setRuns(prev => [newRow, ...prev]);
+        setToast(
+          dryRun
+            ? `Dry-run complete: would have landed ${body.landed} row(s).`
+            : `Pull complete: landed ${body.landed} row(s), staged ${body.staged}.`,
+        );
+      })
+      .catch(err => {
+        setSubmitting(false);
+        setModalOpen(false);
+        // file:// preview or network error — fall back to the mock
+        // path so the UI is still demonstrable.
+        const mockRow = {
+          id: `01CRMOCK${Date.now()}`,
+          connector: `${source.code}${dryRun ? " (dry-run)" : ""}`,
+          status: "succeeded", started_h: 0,
+          duration: dryRun ? "dry-run" : "just now",
+          landed: 3, staged: 3, promoted: 0, quarantined: 0, rejected: 0,
+        };
+        setRuns(prev => [mockRow, ...prev]);
+        setToast(
+          dryRun
+            ? "Dry-run queued (mock — no backend reachable)."
+            : `Pull queued (mock — no backend reachable; ${err}).`,
+        );
+      });
+  };
+
   return (
     <>
       <div className="card">
         <div className="card-toolbar">
           <strong className="t-bodysm">
             {selection.size > 0
-              ? <>{selection.size} selected of {CONNECTOR_RUNS.length}</>
-              : <>{CONNECTOR_RUNS.length} runs</>}
+              ? <>{selection.size} selected of {runs.length}</>
+              : <>{runs.length} runs</>}
           </strong>
           <div style={{flex:1}}/>
           {selection.size > 0 && (
@@ -290,9 +498,18 @@ const ConnectorRunsTab = () => {
             </button>
           )}
           {selection.size === 0 && (
-            <span className="t-cap">
-              STUCK threshold: {STUCK_THRESHOLD_HOURS}h since start (US-S10-005)
-            </span>
+            <>
+              <span className="t-cap">
+                STUCK threshold: {STUCK_THRESHOLD_HOURS}h since start (US-S10-005)
+              </span>
+              <button
+                className="btn primary"
+                style={{marginLeft:12}}
+                onClick={() => setModalOpen(true)}
+              >
+                <Icon name="arrowRight" size={13}/> Run connector
+              </button>
+            </>
           )}
         </div>
 
@@ -302,10 +519,10 @@ const ConnectorRunsTab = () => {
                        textTransform:"uppercase", color:"var(--neutral-700)"}}>
           <div style={{padding:"10px 8px", textAlign:"center"}}>
             <input type="checkbox"
-                   checked={selection.size === CONNECTOR_RUNS.length}
+                   checked={selection.size === runs.length}
                    onChange={() => setSelection(
-                     selection.size === CONNECTOR_RUNS.length
-                       ? new Set() : new Set(CONNECTOR_RUNS.map(r => r.id))
+                     selection.size === runs.length
+                       ? new Set() : new Set(runs.map(r => r.id))
                    )}/>
           </div>
           <div style={{padding:"10px 16px"}}>Connector / Run ID</div>
@@ -317,7 +534,7 @@ const ConnectorRunsTab = () => {
           <div style={{padding:"10px 8px", textAlign:"right"}}>Rejected</div>
         </div>
 
-        {CONNECTOR_RUNS.map(r => {
+        {runs.map(r => {
           const sel = selection.has(r.id);
           const stuck = isStuck(r);
           return (
@@ -349,6 +566,14 @@ const ConnectorRunsTab = () => {
           );
         })}
       </div>
+      {modalOpen && (
+        <RunConnectorModal
+          sources={sources}
+          submitting={submitting}
+          onClose={() => !submitting && setModalOpen(false)}
+          onSubmit={triggerRun}
+        />
+      )}
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </>
   );
@@ -530,3 +755,14 @@ const AdminScreen = ({ onNavigate }) => {
     </div>
   );
 };
+
+// Expose the trigger-run pieces for Vitest. Under Babel-standalone in
+// the browser harness these are already top-level consts; this shim
+// just makes them reachable from a Node-side dynamic import.
+if (typeof globalThis !== "undefined") {
+  Object.assign(globalThis, {
+    RunConnectorModal,
+    ConnectorRunsTab,
+    MOCK_SOURCE_SYSTEMS,
+  });
+}

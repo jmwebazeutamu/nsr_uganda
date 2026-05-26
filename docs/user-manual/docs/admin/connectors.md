@@ -35,8 +35,31 @@ Step-by-step:
 3. **Set credentials.** Use the credentials admin UI at `/admin/ingestion_hub/sourcecredential/`. Secrets are stored encrypted (Fernet).
 4. **Add a Connector class** if the source uses a new protocol. Subclass `connectors.base.BaseConnector`. Implement `pull()` returning an iterable of raw dicts.
 5. **Add MappingRules.** One per source field to canonical model field. Visible in the admin at `/admin/ingestion_hub/mappingrule/`.
-6. **Run a test pull.** `python manage.py shell -c "from apps.ingestion_hub.tasks import run_connector; run_connector('<source_code>', dry_run=True)"`.
-7. **Promote to production.** Schedule the Celery task in the admin (interval or crontab).
+6. **Run a test pull.** From the **System Admin > Connector runs** tab in the console, click **Run connector**, pick the source, tick **Dry run**, hit **Run dry-run**. The endpoint exercises credentials + form discovery without writing `RawLanding` rows. See [Run connector button](#run-connector-button) below.
+7. **Promote to production.** Untick **Dry run** on the same modal for a one-shot manual pull, or schedule the Celery beat task in the admin (interval or crontab) for recurring imports.
+
+## Run connector button {#run-connector-button}
+
+**Path**: `/console/` → System Admin → Connector runs tab → **Run connector** (top-right of the toolbar).
+
+**Permissions**: System Admin (`nsr_admin` group) and NSR Unit Coordinator (`nsr_unit_coordinator` group). Operators in any other group get a 403. Superusers always pass.
+
+The modal:
+
+- **Source system** dropdown — every registered SourceSystem appears. Kobo entries are selectable today; the rest carry a `(coming soon)` suffix and are disabled until their per-kind credential form lands (NIRA, UBOS, etc).
+- **Dry run** checkbox — when ticked, the run opens as `run_type=TEST`, lists forms, iterates submissions for a count, but writes **no** `RawLanding`. Use this for first-time credentials, mapping-rule verification, or after a Kobo token rotation. When unticked, submissions are landed and immediately driven through canonicalize → DQA → IDV → DDUP, exactly as the scheduled Celery beat does.
+
+**Backend wiring**: the button posts to `POST /api/v1/dih/source-systems/{id}/trigger-run/`. The same code path the admin action uses (`pull_kobo_submissions_action`) executes, so console and admin behaviour stay in lock-step.
+
+**Guards** (any of these returns 400 with a `detail` toast):
+
+- Source kind is not Kobo (v1 limitation).
+- Another run is already `pending` or `running` for the source.
+- No active DPA covers the source (`AC-DIH-DPA-REQUIRED`).
+- No `*Credential` row exists for the source.
+- `list_forms` finds zero deployed forms upstream.
+
+**Audit**: every click emits `dih.connector.triggered`. The outcome adds `dih.connector.trigger_succeeded` (with the run note in `reason`) or `dih.connector.trigger_rejected` (with the failure reason). Both are visible in `/admin/security/auditevent/`.
 
 ## Connector run lifecycle
 

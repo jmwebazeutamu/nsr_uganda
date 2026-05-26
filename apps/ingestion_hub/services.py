@@ -1199,3 +1199,199 @@ def edit_stage_record(
             )
 
     return stage
+
+
+# ---------------------------------------------------------------------------
+# Trigger a connector pull (US-S11-021)
+#
+# Operator-initiated Kobo pull from the System Admin > Connector runs tab.
+# Lifted out of `admin_credentials.pull_kobo_submissions_action` so the
+# admin action and the new POST /source-systems/{id}/trigger-run/ endpoint
+# share one implementation. Behaviour parity with the admin action is the
+# acceptance gate — see apps/ingestion_hub/tests.py.
+
+# Submissions landed per click. The admin action used the same cap;
+# moved here so the constant lives next to the implementation. Scheduled
+# pulls (future Celery beat) won't apply it.
+TRIGGER_PULL_BATCH_CAP = 50
+
+
+class TriggerError(DihError):
+    """Caller-facing pre-condition failure for trigger_connector_pull
+    (concurrency, kind, missing connector wiring). Distinct subclass so
+    the API layer can map these to 4xx without catching every DihError."""
+
+
+def trigger_connector_pull(
+    source,
+    *,
+    actor: str,
+    dry_run: bool = False,
+    batch_cap: int = TRIGGER_PULL_BATCH_CAP,
+) -> dict:
+    """Pull submissions for `source` and return a summary dict.
+
+    Kobo-only for v1 — non-Kobo kinds raise TriggerError. The shared
+    pull body is otherwise the same as the admin action (US-S11-014):
+    open a ConnectorRun, list deployed forms, pull the first one, land
+    + process each row, geo-backfill, close the run.
+
+    dry_run=True: the run is opened as run_type=TEST, list_forms is
+    called (so credentials get exercised against the upstream), and
+    pull_submissions is iterated for metadata only — no RawLanding is
+    written and no canonicalize/process runs. The run finishes
+    SUCCEEDED with a note like "dry-run: would have landed N row(s)".
+
+    Concurrency guard: if a PENDING or RUNNING ConnectorRun already
+    exists for the source, raise TriggerError. Two operators clicking
+    "Run" at the same time should not produce two overlapping pulls.
+    """
+    from .connection_test import CredentialMissingError, credentials_for
+    from .connectors.base import get_connector
+    from .geo_backfill import backfill_missing_geo_from_stages
+    from .models import Connector as ConnectorModel
+    from .models import ConnectorRunType, SourceSystemKind
+
+    if source.kind != SourceSystemKind.KOBO:
+        raise TriggerError(
+            f"{source.code}: only Kobo sources can be triggered today "
+            f"(got kind={source.kind})",
+        )
+
+    # Concurrency guard. start_connector_run() already opens the new
+    # run inside a transaction, so this read is a best-effort precheck
+    # — two simultaneous triggers can still race the DPA check. The
+    # DB-level guarantee is the ConnectorRun PK uniqueness; the audit
+    # trail captures both.
+    busy = ConnectorRun.objects.filter(
+        connector__source_system=source,
+        status__in=(ConnectorRunStatus.PENDING, ConnectorRunStatus.RUNNING),
+    ).exists()
+    if busy:
+        raise TriggerError(
+            f"{source.code}: a run is already in progress — wait for it "
+            "to finish before triggering another",
+        )
+
+    connector_impl = get_connector(source.code)
+    if connector_impl is None or connector_impl.pull_submissions is None:
+        raise TriggerError(
+            f"{source.code}: no live connector registered",
+        )
+    try:
+        creds = credentials_for(source)
+    except CredentialMissingError as exc:
+        raise TriggerError(f"{source.code}: {exc}") from exc
+
+    # Resolve the form to pull: first deployed asset wins. Mirrors the
+    # admin action's heuristic — operators who need a specific form
+    # set it via the Connector.config and we'll honour that next slice.
+    try:
+        forms = [f for f in connector_impl.list_forms(creds) if f["deployed"]]
+    except Exception as exc:  # noqa: BLE001 — surface upstream errors
+        raise TriggerError(
+            f"{source.code}: list_forms failed: {exc}",
+        ) from exc
+    if not forms:
+        raise TriggerError(
+            f"{source.code}: no deployed forms — nothing to pull",
+        )
+    form = forms[0]
+
+    connector_row, _ = ConnectorModel.objects.get_or_create(
+        source_system=source, name=f"kobo-{form['uid']}",
+        defaults={"config": {"kobo_form_uid": form["uid"]}},
+    )
+
+    # start_connector_run() enforces AC-DIH-DPA-REQUIRED (raises
+    # DihError). Surface that as TriggerError too so the caller has a
+    # single exception type to handle.
+    try:
+        run = start_connector_run(connector_row, actor=actor)
+    except DihError as exc:
+        raise TriggerError(str(exc)) from exc
+
+    if dry_run:
+        # Mark the run as a TEST so dashboards keep dry-runs out of
+        # promotion-latency aggregates (matches test_connection_action
+        # behaviour).
+        ConnectorRun.objects.filter(pk=run.pk).update(
+            run_type=ConnectorRunType.TEST,
+        )
+
+    landed = 0
+    outcomes: dict[str, int] = {"staged": 0, "quarantined": 0, "error": 0}
+    stage_states: dict[str, int] = {}
+    try:
+        for raw in connector_impl.pull_submissions(creds, form_id=form["uid"]):
+            if landed >= batch_cap:
+                break
+            landed += 1
+            if dry_run:
+                # Don't land or process — we're just verifying creds +
+                # row shape.
+                continue
+            source_ref = str(raw.get("_id") or raw.get("_uuid") or "")
+            landing = land_payload(run, raw, source_reference=source_ref)
+            from .admin_credentials import _process_one_landing
+            outcome, detail = _process_one_landing(
+                landing, connector_impl, actor=actor,
+            )
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+            if outcome == "staged":
+                stage_states[detail] = stage_states.get(detail, 0) + 1
+    except Exception as exc:  # noqa: BLE001 — partial-run cleanup below
+        ConnectorRun.objects.filter(pk=run.pk).update(
+            status=ConnectorRunStatus.FAILED,
+            finished_at=timezone.now(),
+            note=f"pull failed after {landed} row(s): {exc}",
+        )
+        emit_audit(
+            "trigger_failed", "connector_run", run.id, actor=actor,
+            reason=f"{source.code}: {exc}",
+        )
+        raise TriggerError(
+            f"{source.code}: pull failed after {landed} row(s): {exc}",
+        ) from exc
+
+    state_summary = (
+        "; ".join(f"{s}={n}" for s, n in sorted(stage_states.items()))
+        or "(none staged)"
+    )
+
+    geo_total = 0
+    if not dry_run:
+        run_stages = StageRecord.objects.filter(connector_run=run)
+        geo_total = backfill_missing_geo_from_stages(run_stages).total_created
+
+    note = (
+        f"dry-run: would have pulled {landed} row(s) from form "
+        f"{form['uid']} ({form['name']})"
+        if dry_run else
+        f"pulled {landed} row(s) from form {form['uid']} ({form['name']}); "
+        f"staged={outcomes['staged']}, quarantined={outcomes['quarantined']}, "
+        f"errors={outcomes['error']}; {state_summary}; "
+        f"geo backfill: +{geo_total} GeographicUnit row(s)"
+        + (f"; cap {batch_cap} hit" if landed >= batch_cap else "")
+    )
+    ConnectorRun.objects.filter(pk=run.pk).update(
+        status=ConnectorRunStatus.SUCCEEDED,
+        finished_at=timezone.now(),
+        note=note,
+    )
+
+    return {
+        "run_id": run.id,
+        "source_code": source.code,
+        "form_uid": form["uid"],
+        "form_name": form["name"],
+        "dry_run": dry_run,
+        "landed": landed,
+        "staged": outcomes["staged"],
+        "quarantined": outcomes["quarantined"],
+        "errored": outcomes["error"],
+        "stage_states": stage_states,
+        "geo_backfill_created": geo_total,
+        "batch_cap_hit": landed >= batch_cap,
+        "note": note,
+    }

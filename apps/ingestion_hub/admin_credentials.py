@@ -40,6 +40,12 @@ from .connection_test import (
 from .connectors.kobo import acquire_token
 from .models import KoboCredential, SourceSystem, SourceSystemKind
 
+# Source of truth for the per-click cap lives in services so the
+# console "Run connector" button (US-S11-021) and this admin action
+# share one value. Re-exported as PULL_BATCH_CAP for backwards
+# compatibility with the existing action-description f-string + tests.
+from .services import TRIGGER_PULL_BATCH_CAP as PULL_BATCH_CAP
+
 logger = logging.getLogger(__name__)
 
 
@@ -207,11 +213,8 @@ class SourceSystemForm(forms.ModelForm):
         kind_field.choices = labelled
 
 
-# Max submissions to land per "Pull" click — keeps the admin request
-# short enough that an operator doesn't stare at a spinner for a Kobo
-# form with 50,000 historical responses. Background-scheduled pulls
-# (the future Celery beat task) won't apply this cap.
-PULL_BATCH_CAP = 50
+# PULL_BATCH_CAP is imported from .services at the top of the file —
+# see the action-description f-string below.
 
 
 @admin.action(description="List Kobo forms (read-only)")
@@ -303,137 +306,40 @@ def _process_one_landing(landing, connector_impl, *, actor: str) -> tuple[str, s
 
 @admin.action(description=f"Pull Kobo submissions + auto-process (first deployed form, ≤{PULL_BATCH_CAP})")
 def pull_kobo_submissions_action(modeladmin, request, queryset):
-    """End-to-end pull + processing. For each Kobo SourceSystem:
-
-    1. Opens an IMPORT ConnectorRun.
-    2. Picks the first deployed form.
-    3. Pulls up to PULL_BATCH_CAP submissions.
-    4. For each pulled row: lands it as RawLanding, then immediately
-       runs canonicalize → stage_from_landing → process_stage_record.
-       The row ends up in the DIH queue (pending_promotion / ddup_
-       review / quality_failed / idv_pending) or in Quarantine if
-       canonicalize raised KeyError/ValueError.
-
-    Operators eyeball the queue at /console/ (DIH screen) or
-    /admin/ingestion_hub/stagerecord/ — promotion is a separate
-    decision step per AC-DIH-PROMOTE-ATOMIC.
+    """End-to-end pull + processing. Delegates to
+    `services.trigger_connector_pull` so the body stays in lock-step
+    with the console "Run connector" button (US-S11-021). Per-source
+    errors surface as warning/error messages; successes link to the
+    run + staged rows + DIH queue.
     """
-    from django.utils import timezone
-
-    from .connection_test import credentials_for
-    from .connectors.base import get_connector
-    from .models import Connector as ConnectorModel
-    from .models import ConnectorRunStatus
-    from .services import DihError, land_payload, start_connector_run
+    from .services import TriggerError, trigger_connector_pull
 
     actor = request.user.username or "admin"
     for source in queryset:
         if source.kind != SourceSystemKind.KOBO:
             messages.warning(request, f"{source.code}: not a Kobo source — skipped")
             continue
-        connector_impl = get_connector(source.code)
-        if connector_impl is None or connector_impl.pull_submissions is None:
-            messages.warning(request, f"{source.code}: no live connector registered")
-            continue
         try:
-            creds = credentials_for(source)
-        except CredentialMissingError as exc:
-            messages.error(request, f"{source.code}: {exc}")
+            result = trigger_connector_pull(source, actor=actor)
+        except TriggerError as exc:
+            messages.error(request, str(exc))
             continue
-
-        # Resolve the form to pull: first deployed asset wins.
-        try:
-            forms = [f for f in connector_impl.list_forms(creds) if f["deployed"]]
-        except Exception as exc:  # noqa: BLE001
-            messages.error(request, f"{source.code}: list_forms failed: {exc}")
-            continue
-        if not forms:
-            messages.warning(
-                request, f"{source.code}: no deployed forms — nothing to pull",
-            )
-            continue
-        form = forms[0]
-
-        # Resolve a Connector row to anchor the run. The test_connection
-        # action lazily materialised one under name="test-connection" —
-        # reuse it if present, else create a sibling. The
-        # start_connector_run() service enforces AC-DIH-DPA-REQUIRED.
-        connector_row, _ = ConnectorModel.objects.get_or_create(
-            source_system=source, name=f"kobo-{form['uid']}",
-            defaults={"config": {"kobo_form_uid": form["uid"]}},
-        )
-        try:
-            run = start_connector_run(connector_row, actor=actor)
-        except DihError as exc:
-            messages.error(request, f"{source.code}: {exc}")
-            continue
-
-        landed = 0
-        # Per-outcome tallies for the operator message + the run note.
-        outcomes: dict[str, int] = {"staged": 0, "quarantined": 0, "error": 0}
-        stage_states: dict[str, int] = {}
-        try:
-            for raw in connector_impl.pull_submissions(creds, form_id=form["uid"]):
-                if landed >= PULL_BATCH_CAP:
-                    break
-                source_ref = str(raw.get("_id") or raw.get("_uuid") or "")
-                landing = land_payload(run, raw, source_reference=source_ref)
-                landed += 1
-                outcome, detail = _process_one_landing(
-                    landing, connector_impl, actor=actor,
-                )
-                outcomes[outcome] = outcomes.get(outcome, 0) + 1
-                if outcome == "staged":
-                    stage_states[detail] = stage_states.get(detail, 0) + 1
-        except Exception as exc:  # noqa: BLE001
-            run.status = ConnectorRunStatus.FAILED
-            run.finished_at = timezone.now()
-            run.note = f"pull failed after {landed} row(s): {exc}"
-            run.save(update_fields=("status", "finished_at", "note"))
-            messages.error(
-                request, f"{source.code}: pull failed after {landed} row(s): {exc}",
-            )
-            continue
-
-        # Compact summary for the note + the operator message: states
-        # like "pending_promotion=3, ddup_review=1" tell ops where the
-        # batch ended up at a glance.
-        state_summary = (
-            "; ".join(f"{s}={n}" for s, n in sorted(stage_states.items()))
-            or "(none staged)"
-        )
-
-        # US-S11-016: auto-backfill any GeographicUnit rows the freshly
-        # staged records need. Without this, the next promote step
-        # would throw "geographic unit {level}={code} not found" for
-        # every district / parish that hasn't been loaded yet. Scoped
-        # to this run's stages so we don't re-scan the whole DB.
-        from .geo_backfill import backfill_missing_geo_from_stages
-        from .models import StageRecord
-        run_stages = StageRecord.objects.filter(connector_run=run)
-        geo_result = backfill_missing_geo_from_stages(run_stages)
-        geo_note = (
-            f"geo backfill: +{geo_result.total_created} GeographicUnit row(s)"
-            if geo_result.total_created
-            else "geo backfill: 0 new rows"
-        )
-
-        run.status = ConnectorRunStatus.SUCCEEDED
-        run.finished_at = timezone.now()
-        run.note = (
-            f"pulled {landed} row(s) from form {form['uid']} ({form['name']}); "
-            f"staged={outcomes['staged']}, quarantined={outcomes['quarantined']}, "
-            f"errors={outcomes['error']}; {state_summary}; {geo_note}"
-            + (f"; cap {PULL_BATCH_CAP} hit" if landed >= PULL_BATCH_CAP else "")
-        )
-        run.save(update_fields=("status", "finished_at", "note"))
 
         run_url = reverse(
-            "admin:ingestion_hub_connectorrun_change", args=[run.id],
+            "admin:ingestion_hub_connectorrun_change", args=[result["run_id"]],
         )
         stages_url = (
             "/admin/ingestion_hub/stagerecord/"
-            f"?connector_run__id__exact={run.id}"
+            f"?connector_run__id__exact={result['run_id']}"
+        )
+        state_summary = (
+            "; ".join(f"{s}={n}" for s, n in sorted(result["stage_states"].items()))
+            or "(none staged)"
+        )
+        geo_note = (
+            f"geo backfill: +{result['geo_backfill_created']} GeographicUnit row(s)"
+            if result["geo_backfill_created"]
+            else "geo backfill: 0 new rows"
         )
         messages.success(
             request,
@@ -442,8 +348,8 @@ def pull_kobo_submissions_action(modeladmin, request, queryset):
                 "{} &middot; {}. <a href='{}'>view run</a> &middot; "
                 "<a href='{}'>view staged rows</a> &middot; "
                 "<a href='/console/'>open DIH queue</a>",
-                source.code, landed,
-                outcomes["staged"], outcomes["quarantined"], outcomes["error"],
+                source.code, result["landed"],
+                result["staged"], result["quarantined"], result["errored"],
                 state_summary, geo_note, run_url, stages_url,
             ),
         )
