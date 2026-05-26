@@ -364,23 +364,18 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
     if (!sourceId && koboSources.length > 0) setSourceId(koboSources[0].id);
   }, [koboSources, sourceId]);
 
-  // Fetch the form list whenever the picked source changes. Only
-  // fires for Kobo sources because non-Kobo kinds 400 the endpoint.
-  useEffectAdmin(() => {
-    const src = sources.find(s => s.id === sourceId);
-    if (!src || src.kind !== "kobo") {
-      setForms([]); setFormUid(""); setFormsError("");
-      return;
-    }
-    let cancelled = false;
+  // Fetch the form list — extracted so the "Retry" button can call it
+  // again after an upstream 5xx (e.g. Kobo Toolbox 503 outage) without
+  // forcing the operator to Cancel + reopen the modal.
+  const _fetchForms = (signal) => {
     setFormsLoading(true); setFormsError("");
-    fetch(`/api/v1/dih/source-systems/${sourceId}/forms/`, {
+    return fetch(`/api/v1/dih/source-systems/${sourceId}/forms/`, {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
+      signal,
     })
       .then(r => r.json().then(body => ({ ok: r.ok, body })))
       .then(({ ok, body }) => {
-        if (cancelled) return;
         setFormsLoading(false);
         if (!ok) {
           setForms([]); setFormUid("");
@@ -398,12 +393,23 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
         setFormUid(pinned?.uid || deployed[0]?.uid || "");
       })
       .catch(() => {
-        if (cancelled) return;
         setFormsLoading(false);
         setForms([]); setFormUid("");
         setFormsError("");  // silent — fall back to server-side default
       });
-    return () => { cancelled = true; };
+  };
+
+  // Auto-fetch the form list whenever the picked source changes. Only
+  // fires for Kobo sources because non-Kobo kinds 400 the endpoint.
+  useEffectAdmin(() => {
+    const src = sources.find(s => s.id === sourceId);
+    if (!src || src.kind !== "kobo") {
+      setForms([]); setFormUid(""); setFormsError("");
+      return;
+    }
+    const controller = new AbortController();
+    _fetchForms(controller.signal);
+    return () => controller.abort();
   }, [sourceId, sources]);
 
   const submit = (e) => {
@@ -485,9 +491,25 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
           </>
         )}
         {formsError && (
-          <p className="t-bodysm" style={{color:"var(--accent-danger)", marginTop:0, marginBottom:16}}>
-            {formsError}
-          </p>
+          <div
+            style={{
+              display:"flex", alignItems:"flex-start", gap:8,
+              marginTop:0, marginBottom:16,
+            }}
+          >
+            <p className="t-bodysm" style={{color:"var(--accent-danger)", margin:0, flex:1}}>
+              {formsError}
+            </p>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => _fetchForms()}
+              disabled={submitting || formsLoading}
+              style={{flexShrink:0}}
+            >
+              {formsLoading ? "Retrying…" : "Retry"}
+            </button>
+          </div>
         )}
 
         <label
@@ -517,7 +539,12 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
           </button>
           <button
             type="submit" className="btn primary"
-            disabled={submitting || !sourceId}
+            disabled={submitting || !sourceId || !formUid}
+            title={
+              !formUid
+                ? "Pick a form before submitting (or hit Retry if /forms/ failed)"
+                : ""
+            }
           >
             {submitting ? "Running…" : (dryRun ? "Run dry-run" : "Run pull")}
           </button>

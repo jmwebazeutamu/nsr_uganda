@@ -75,16 +75,16 @@ describe("RunConnectorModal — source picker", () => {
     expect(screen.getByRole("button", { name: /Run dry-run/ })).toBeTruthy();
   });
 
-  it("submit fires onSubmit with sourceId + dryRun + formUid", async () => {
-    const user = userEvent.setup();
+  it("submit is disabled when no form is loaded (US-S11-027)", async () => {
+    // Default fetch stub rejects, so formUid stays "". Without the
+    // disabled-when-!formUid guard, clicking submit would post an
+    // empty form_uid and hit the same upstream failure server-side.
     const onSubmit = vi.fn();
     render(<RunConnectorModal {...defaultProps({ onSubmit })} />);
-    await user.click(screen.getByRole("checkbox"));
-    await user.click(screen.getByRole("button", { name: /Run dry-run/ }));
-    expect(onSubmit).toHaveBeenCalledTimes(1);
-    expect(onSubmit).toHaveBeenCalledWith({
-      sourceId: _kobo().id, dryRun: true, formUid: "",
-    });
+    // Wait for the catch branch to settle so formsLoading clears.
+    await new Promise(r => setTimeout(r, 0));
+    const submit = screen.getByRole("button", { name: /Run pull/ });
+    expect(submit.disabled).toBe(true);
   });
 
   it("Cancel calls onClose without firing onSubmit", async () => {
@@ -200,5 +200,35 @@ describe("RunConnectorModal — form picker (US-S11-022)", () => {
     await waitFor(() => {
       expect(screen.getByText(/token rejected/)).toBeTruthy();
     });
+  });
+
+  it("Retry button re-fetches /forms/ after an upstream 5xx (US-S11-027)", async () => {
+    // First call: 503 (Kobo Toolbox down). Second call (Retry): 200
+    // with a form. After Retry, the inline error clears and the
+    // form dropdown shows the form.
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        json: async () => ({ detail: "upstream 503 on GET assets.json" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => [
+          { uid: "form-back", name: "Now back", asset_type: "survey",
+            deployed: true, pinned: true },
+        ],
+      });
+    globalThis.fetch = fetchMock;
+    const user = userEvent.setup();
+    render(<RunConnectorModal {...defaultProps()} />);
+    await waitFor(() => screen.getByText(/upstream 503/));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: /^Retry/ }));
+    await waitFor(() => expect(screen.queryByText(/upstream 503/)).toBeNull());
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Form dropdown now reflects the form returned on retry.
+    const combos = screen.getAllByRole("combobox");
+    expect(combos[1].value).toBe("form-back");
   });
 });
