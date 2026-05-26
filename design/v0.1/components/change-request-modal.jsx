@@ -41,35 +41,35 @@ const CATEGORIES = [
     { key: "hh_size",         label: "Household size",         type: "number", pmt: true },
     { key: "add_member",      label: "Add member (name)",      type: "text",   pmt: false },
     { key: "remove_member",   label: "Remove member (line #)", type: "number", pmt: false },
-    { key: "member_name",     label: "Member name",            type: "text",   pmt: false },
-    { key: "member_dob",      label: "Member date of birth",   type: "date",   pmt: false },
-    { key: "member_sex",      label: "Member sex",             type: "select", pmt: false,
+    { key: "member_name",     label: "Member name",            type: "text",   pmt: false, entity: "member" },
+    { key: "member_dob",      label: "Member date of birth",   type: "date",   pmt: false, entity: "member" },
+    { key: "member_sex",      label: "Member sex",             type: "select", pmt: false, entity: "member",
       // ADR-0010 seed codes (sex: 1=Male, 2=Female).
       options: ["1","2"] },
-    { key: "member_relation", label: "Member relation to head", type: "text",   pmt: false },
+    { key: "member_relation", label: "Member relation to head", type: "text",   pmt: false, entity: "member" },
   ]},
   { key: "hd", label: "Health & Disability",   tone: "danger",       fields: [
-    { key: "disab",     label: "Disability status",          type: "select", pmt: true,
+    { key: "disab",     label: "Disability status",          type: "select", pmt: true, entity: "member",
       options: ["none","mild","moderate","severe"] },
-    { key: "chronic",   label: "Chronic illness",            type: "select", pmt: true,
+    { key: "chronic",   label: "Chronic illness",            type: "select", pmt: true, entity: "member",
       options: ["yes","no"] },
-    { key: "u5_breg",   label: "Under-5 birth registration", type: "select", pmt: false,
+    { key: "u5_breg",   label: "Under-5 birth registration", type: "select", pmt: false, entity: "member",
       options: ["yes","no","partial"] },
-    { key: "preg_lact", label: "Pregnant / lactating",       type: "select", pmt: false,
+    { key: "preg_lact", label: "Pregnant / lactating",       type: "select", pmt: false, entity: "member",
       options: ["yes","no"] },
   ]},
   { key: "ed", label: "Education",             tone: "programme",    fields: [
-    { key: "ever_school", label: "Ever attended school", type: "select", pmt: true,
+    { key: "ever_school", label: "Ever attended school", type: "select", pmt: true, entity: "member",
       options: ["yes","no"] },
-    { key: "grade",       label: "Highest grade",        type: "text",   pmt: true },
-    { key: "attending",   label: "Currently attending",  type: "select", pmt: false,
+    { key: "grade",       label: "Highest grade",        type: "text",   pmt: true, entity: "member" },
+    { key: "attending",   label: "Currently attending",  type: "select", pmt: false, entity: "member",
       options: ["yes","no"] },
   ]},
   { key: "emp", label: "Employment",           tone: "system",       fields: [
-    { key: "occ",        label: "Primary occupation",  type: "text",   pmt: true },
-    { key: "sector",     label: "Sector",              type: "select", pmt: true,
+    { key: "occ",        label: "Primary occupation",  type: "text",   pmt: true, entity: "member" },
+    { key: "sector",     label: "Sector",              type: "select", pmt: true, entity: "member",
       options: ["agriculture","trade","services","manufacturing","public","none"] },
-    { key: "income_src", label: "Main income source",  type: "text",   pmt: true },
+    { key: "income_src", label: "Main income source",  type: "text",   pmt: true, entity: "member" },
   ]},
   { key: "hous", label: "Housing & Assets",    tone: "eligibility",  fields: [
     { key: "roof",        label: "Roof material",     type: "select", pmt: true,
@@ -203,12 +203,18 @@ const RowInput = ({ meta, value, onChange, autoFocus }) => {
 // ────────────────────────────────────────────────────────────────
 
 // Composer: dashed button → cascading category + field selects.
-const AddComposer = ({ disabled, addedKeys, onAdd }) => {
+// `categories` is the visible-by-entity-scope subset (defaults to the
+// full catalog for backward-compat).
+const AddComposer = ({ disabled, addedKeys, onAdd, categories = CATEGORIES }) => {
+  const catByKey = useMCR(
+    () => Object.fromEntries(categories.map(c => [c.key, c])),
+    [categories],
+  );
   const [open, setOpen] = useCR(false);
   const [cat, setCat] = useCR("");
   const [fld, setFld] = useCR("");
   const cancel = () => { setOpen(false); setCat(""); setFld(""); };
-  const fields = cat ? CATEGORY_BY_KEY[cat].fields : [];
+  const fields = cat ? (catByKey[cat]?.fields || []) : [];
   const canAdd = !!cat && !!fld;
   if (!open) {
     return (
@@ -235,7 +241,7 @@ const AddComposer = ({ disabled, addedKeys, onAdd }) => {
       <select className="field-select" value={cat}
         onChange={(e) => { setCat(e.target.value); setFld(""); }}>
         <option value="">Category…</option>
-        {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+        {categories.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
       </select>
       <select className="field-select" value={fld} disabled={!cat}
         onChange={(e) => setFld(e.target.value)}>
@@ -260,11 +266,13 @@ const AddComposer = ({ disabled, addedKeys, onAdd }) => {
 };
 
 // Picker: a "Search registry fields to add…" button → search input +
-// flat list of every (category, field) row.
-const AddPicker = ({ disabled, addedKeys, onAdd }) => {
+// flat list of every (category, field) row. `fieldsFlat` defaults to
+// the global FIELDS_FLAT; the modal passes a filtered subset when the
+// entity scope is restricted (member-only flow).
+const AddPicker = ({ disabled, addedKeys, onAdd, fieldsFlat = FIELDS_FLAT }) => {
   const [open, setOpen] = useCR(false);
   const [q, setQ] = useCR("");
-  const all = useMCR(() => Object.values(FIELDS_FLAT), []);
+  const all = useMCR(() => Object.values(fieldsFlat), [fieldsFlat]);
   const matches = useMCR(() => {
     const needle = q.trim().toLowerCase();
     if (!needle) return all;
@@ -347,7 +355,8 @@ const AddPicker = ({ disabled, addedKeys, onAdd }) => {
 };
 
 // Tree: each category folds out to its fields. Discovery-oriented.
-const AddTree = ({ disabled, addedKeys, onAdd }) => {
+// `categories` honors the entity-scope filter passed by the modal.
+const AddTree = ({ disabled, addedKeys, onAdd, categories = CATEGORIES }) => {
   const [open, setOpen] = useCR(false);
   const [expanded, setExpanded] = useCR(() => new Set());
   const toggle = (key) => {
@@ -376,11 +385,11 @@ const AddTree = ({ disabled, addedKeys, onAdd }) => {
       <div style={{display:"flex", justifyContent:"space-between",
                     padding:"6px 10px", background:"var(--neutral-50)",
                     borderBottom:"1px solid var(--neutral-200)"}}>
-        <span className="t-cap">{CATEGORIES.length} categories</span>
+        <span className="t-cap">{categories.length} categories</span>
         <button type="button" className="btn btn-sm" onClick={() => setOpen(false)}>Done</button>
       </div>
       <div style={{ maxHeight:300, overflowY:"auto" }}>
-        {CATEGORIES.map(c => {
+        {categories.map(c => {
           const isOpen = expanded.has(c.key);
           const hasPmt = c.fields.some(f => f.pmt);
           return (
@@ -469,6 +478,15 @@ const ChangeRequestModal = ({
   // beside each row so operators can verify the before-state without
   // opening another screen.
   currentValues = {},
+  // Roster for the member picker. Items: {id, name, line, relationship,
+  // dob, sex}. The modal needs at least `id` + `name` per row; the
+  // rest decorate the member info card.
+  members = [],
+  // Per-member current values, keyed by member id:
+  //   { "01HMEM…": { "hd.chronic": "no", "ed.grade": "P5", … } }
+  // Merged with `currentValues` for the selected member when entity
+  // = "member". Consumers leave this empty if they don't have it.
+  memberValues = {},
   householdId,
   me,
   addUx = "composer", // "composer" | "picker" | "tree"
@@ -477,6 +495,7 @@ const ChangeRequestModal = ({
   onSuccess,          // (result, payload) => void
 }) => {
   const [entity, setEntity]         = useCR("household");
+  const [memberId, setMemberId]     = useCR("");
   const [changeType, setChangeType] = useCR("correction");
   const [forcePmt, setForcePmt]     = useCR(false);
   const [rows, setRows]             = useCR([]);
@@ -490,6 +509,7 @@ const ChangeRequestModal = ({
   useECR(() => {
     if (!open) return;
     setEntity("household");
+    setMemberId("");
     setChangeType("correction");
     setForcePmt(false);
     setRows([]);
@@ -498,6 +518,56 @@ const ChangeRequestModal = ({
     setError("");
     setFocusFieldKey("");
   }, [open]);
+
+  // Drop pending rows when entity scope flips — a household-scope row
+  // can't survive a switch to entity=member (and vice versa) since the
+  // server rejects mixed-scope payloads. Better to wipe than to let
+  // the operator submit an invalid bundle.
+  useECR(() => {
+    if (!open) return;
+    setRows([]);
+    setMemberId("");
+  }, [entity]);
+
+  // Visible catalog — household scope hides member-only fields and
+  // vice versa. Categories that end up with zero fields after the
+  // filter are dropped so the composer / tree don't show empty
+  // headings.
+  const visibleCategories = useMCR(() => {
+    const wantMember = entity === "member";
+    return CATEGORIES
+      .map(c => ({
+        ...c,
+        fields: c.fields.filter(
+          f => wantMember ? f.entity === "member" : f.entity !== "member",
+        ),
+      }))
+      .filter(c => c.fields.length > 0);
+  }, [entity]);
+
+  const visibleFieldsFlat = useMCR(() => {
+    const out = {};
+    for (const c of visibleCategories) {
+      for (const f of c.fields) {
+        out[`${c.key}:${f.key}`] = FIELDS_FLAT[`${c.key}:${f.key}`];
+      }
+    }
+    return out;
+  }, [visibleCategories]);
+
+  // Effective current values — when a member is selected, merge that
+  // member's snapshot on top of the household-level snapshot.
+  const effectiveCurrentValues = useMCR(() => {
+    if (entity !== "member" || !memberId) return currentValues;
+    return { ...currentValues, ...(memberValues[memberId] || {}) };
+  }, [entity, memberId, currentValues, memberValues]);
+
+  const selectedMember = useMCR(
+    () => (entity === "member" && memberId)
+      ? members.find(m => m.id === memberId) || null
+      : null,
+    [entity, memberId, members],
+  );
 
   const addedKeys = useMCR(
     () => new Set(rows.map(r => `${r.category}:${r.field}`)),
@@ -514,7 +584,11 @@ const ChangeRequestModal = ({
   const valid =
     rows.length >= 1
     && rows.every(r => (r.value || "").trim().length > 0)
-    && note.trim().length >= 6;
+    && note.trim().length >= 6
+    // When the entity is a member, the operator must pick one before
+    // we have a target. The server rejects entity=member without a
+    // member_id anyway; this just keeps the bad path off the wire.
+    && (entity !== "member" || !!memberId);
 
   const addRow = (category, field) => {
     if (addedKeys.has(`${category}:${field}`)) return;
@@ -546,10 +620,10 @@ const ChangeRequestModal = ({
       if (!map.has(r.category)) map.set(r.category, []);
       map.get(r.category).push(r);
     }
-    return CATEGORIES
+    return visibleCategories
       .filter(c => map.has(c.key))
       .map(c => ({ category: c, rows: map.get(c.key) }));
-  }, [rows]);
+  }, [rows, visibleCategories]);
 
   const submit = async () => {
     if (!valid || !onSubmit) return;
@@ -558,6 +632,9 @@ const ChangeRequestModal = ({
     const payload = {
       household_id: householdId,
       entity,
+      // Only sent for entity=member; the bundle serializer ignores it
+      // otherwise but enforces it strictly when entity='member'.
+      ...(entity === "member" && memberId ? { member_id: memberId } : {}),
       change_type: changeType,
       pmt_relevant: pmtRelevant,
       rows: rows.map(r => ({
@@ -650,6 +727,70 @@ const ChangeRequestModal = ({
             </div>
           </div>
         </div>
+
+        {/* 1b) Member picker — only rendered when entity=member.
+              Shows the roster as a select, then renders an info
+              card with name/ID/relationship/DOB once a member is
+              chosen. The card is the operator's confirmation that
+              the right person is being changed. */}
+        {entity === "member" && (
+          <div data-testid="member-picker-strip" style={{
+            padding:16, background:"var(--neutral-50)",
+            border:"1px solid var(--neutral-200)", borderRadius:6,
+            display:"flex", flexDirection:"column", gap:12,
+          }}>
+            <div>
+              <div className="t-cap">Member</div>
+              {members.length === 0 ? (
+                <div className="t-bodysm muted" style={{marginTop:4}}>
+                  No roster passed to the modal — consumer must supply
+                  `members` to enable entity=member submissions.
+                </div>
+              ) : (
+                <select className="field-select"
+                  data-testid="member-picker-select"
+                  value={memberId}
+                  onChange={(e) => setMemberId(e.target.value)}
+                  style={{ width:"100%", maxWidth:480 }}>
+                  <option value="">Select a member…</option>
+                  {members.map(m => (
+                    <option key={m.id} value={m.id}>
+                      {m.line != null ? `${m.line}. ` : ""}{m.name}
+                      {m.relationship ? ` · ${m.relationship}` : ""}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+            {selectedMember && (
+              <div data-testid="member-info-card" style={{
+                padding:"10px 12px", background:"white",
+                border:"1px solid var(--neutral-200)", borderRadius:6,
+                display:"grid", gridTemplateColumns:"repeat(4, 1fr)",
+                gap:12, fontSize:13,
+              }}>
+                <div>
+                  <div className="t-cap">Name</div>
+                  <strong>{selectedMember.name}</strong>
+                </div>
+                <div>
+                  <div className="t-cap">Member ID</div>
+                  <div className="t-mono" style={{fontSize:11.5}}>
+                    {selectedMember.id.slice(0, 12)}…
+                  </div>
+                </div>
+                <div>
+                  <div className="t-cap">Relation</div>
+                  <div>{selectedMember.relationship || "—"}</div>
+                </div>
+                <div>
+                  <div className="t-cap">Date of birth</div>
+                  <div>{selectedMember.dob || "—"}</div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* 2) Field changes */}
         <div className="card" style={{padding:0,
@@ -749,7 +890,7 @@ const ChangeRequestModal = ({
                             </div>
                           </div>
                           {(() => {
-                            const cv = currentValues[`${r.category}.${r.field}`];
+                            const cv = effectiveCurrentValues[`${r.category}.${r.field}`];
                             const formatted = formatCurrent(cv, meta);
                             return formatted
                               ? <Chip size="sm" tone="neutral"
@@ -782,10 +923,10 @@ const ChangeRequestModal = ({
             {/* Add-row affordance */}
             <div data-testid="add-row-zone">
               {addUx === "picker"
-                ? <AddPicker  disabled={busy} addedKeys={addedKeys} onAdd={addRow}/>
+                ? <AddPicker  disabled={busy} addedKeys={addedKeys} onAdd={addRow} fieldsFlat={visibleFieldsFlat}/>
                 : addUx === "tree"
-                ? <AddTree    disabled={busy} addedKeys={addedKeys} onAdd={addRow}/>
-                : <AddComposer disabled={busy} addedKeys={addedKeys} onAdd={addRow}/>}
+                ? <AddTree    disabled={busy} addedKeys={addedKeys} onAdd={addRow} categories={visibleCategories}/>
+                : <AddComposer disabled={busy} addedKeys={addedKeys} onAdd={addRow} categories={visibleCategories}/>}
             </div>
           </div>
         </div>

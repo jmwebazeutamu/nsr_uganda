@@ -200,6 +200,41 @@ const projectCurrentValues = (h) => {
   return cv;
 };
 
+// Project the household's member roster into the modal's `members`
+// prop shape: {id, name, line, relationship, dob, sex}. Only the head
+// is decorated; sibling members carry the relationship label from the
+// projected VM. The id is the Member ULID (used as the CR entity_id
+// when entity=member).
+const projectMembers = (h) => {
+  if (!h || !Array.isArray(h.members)) return [];
+  return h.members.map(m => ({
+    id: m.id,
+    name: m.name || "—",
+    line: m.line ?? null,
+    relationship: m.rel || (m.relationship_to_head_label || ""),
+    dob: m.dob || "",
+    sex: m.sex_label || m.sex || "",
+  }));
+};
+
+// Per-member current values for the modal's "current: X" chip. v1
+// only fills the bits we can pull off the VM without a second fetch
+// (name, DOB, sex, relation). Health / education / employment will
+// fill in once those snapshots land in the household payload.
+const projectMemberValues = (h) => {
+  if (!h || !Array.isArray(h.members)) return {};
+  const out = {};
+  for (const m of h.members) {
+    const cv = {};
+    if (m.name && m.name !== "—") cv["rost.member_name"]     = m.name;
+    if (m.dob)                     cv["rost.member_dob"]      = m.dob;
+    if (m.sex_label || m.sex)      cv["rost.member_sex"]      = m.sex_label || m.sex;
+    if (m.rel && m.rel !== "Head") cv["rost.member_relation"] = m.rel;
+    out[m.id] = cv;
+  }
+  return out;
+};
+
 // CSRF cookie reader for DRF session-auth POSTs (same pattern as
 // screens-grm + screens-upd).
 const _hhCsrf = () => {
@@ -554,11 +589,13 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
         Audit chain available under the Audit tab.
       </div>
 
-      {/* US-S22-004 — rich multi-row Open-CR modal */}
+      {/* US-S22-004 + CR-modal slice 2 — multi-row Open-CR modal */}
       <ChangeRequestModal
         open={modal === "upd"}
         onClose={() => setModal(null)}
         currentValues={projectCurrentValues(h)}
+        members={projectMembers(h)}
+        memberValues={projectMemberValues(h)}
         householdId={h?.rid || ""}
         me={me}
         addUx="composer"

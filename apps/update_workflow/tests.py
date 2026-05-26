@@ -1081,12 +1081,63 @@ class TestBundleEndpoint:
         assert r.status_code == 400
         assert "duplicate" in str(r.data).lower()
 
-    def test_member_entity_returns_400_until_picker_lands(self, household, api_client):
-        payload = self._payload(household, entity="member")
+    def test_member_entity_requires_member_id(self, household, api_client):
+        payload = self._payload(
+            household, entity="member",
+            rows=[{"category": "hd", "field": "chronic", "new_value": "yes"}],
+        )
+        # member_id omitted
         r = api_client.post("/api/v1/upd/change-requests/bundle/",
                              data=payload, format="json")
         assert r.status_code == 400
-        assert "member picker" in r.data["detail"]
+        assert "member_id" in str(r.data).lower()
+
+    def test_member_entity_validates_membership(self, household, member, api_client):
+        # member_id is a real ULID but doesn't belong to the named household.
+        bogus = "01HBOGUS00000000000000000Z"
+        payload = self._payload(
+            household, entity="member", member_id=bogus,
+            rows=[{"category": "hd", "field": "chronic", "new_value": "yes"}],
+        )
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 400
+        assert "does not belong" in str(r.data).lower()
+
+    def test_member_entity_rejects_household_scope_fields(self, household, member, api_client):
+        payload = self._payload(
+            household, entity="member", member_id=member.id,
+            rows=[{"category": "iden", "field": "phone",
+                    "new_value": "+256 700 999 999"}],
+        )
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 400
+        assert "member-scope" in str(r.data).lower() or "household-scope" in str(r.data).lower()
+
+    def test_household_entity_rejects_member_scope_fields(self, household, api_client):
+        payload = self._payload(
+            household, entity="household",
+            rows=[{"category": "hd", "field": "chronic", "new_value": "yes"}],
+        )
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 400
+        assert "member-scope" in str(r.data).lower()
+
+    def test_member_entity_creates_member_cr(self, household, member, api_client):
+        payload = self._payload(
+            household, entity="member", member_id=member.id,
+            rows=[{"category": "hd", "field": "chronic", "new_value": "yes"}],
+            note="Diagnosed during clinic visit last week.",
+        )
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 201, r.data
+        cr = ChangeRequest.objects.get(pk=r.data["cr_id"])
+        assert cr.entity_type == EntityType.MEMBER
+        assert cr.entity_id == member.id
+        assert cr.status == "pending_approval"
 
     def test_all_members_entity_records_intent_in_note(self, household, api_client):
         payload = self._payload(household, entity="all_members",

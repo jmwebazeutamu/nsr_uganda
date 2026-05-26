@@ -97,6 +97,12 @@ class _BundleRow(serializers.Serializer):
 class _BundleRequest(serializers.Serializer):
     household_id = serializers.CharField(max_length=26, min_length=26)
     entity = serializers.ChoiceField(choices=[t.value for t in EntityType])
+    # Required when entity='member'; ignored otherwise. Validated against
+    # the household roster in validate() so a CR can't target a member
+    # that doesn't belong to the named household.
+    member_id = serializers.CharField(
+        max_length=26, min_length=26, required=False, allow_blank=True,
+    )
     change_type = serializers.ChoiceField(choices=[t.value for t in ChangeType])
     pmt_relevant = serializers.BooleanField(required=False, default=False)
     rows = _BundleRow(many=True)
@@ -126,6 +132,52 @@ class _BundleRequest(serializers.Serializer):
                     f"new_value is required for ({cat!r}, {fld!r})",
                 )
         return value
+
+    def validate(self, attrs):
+        # Cross-field rules — entity scope vs. row fields, member_id
+        # presence + ownership.
+        from .field_catalog import field_entity
+
+        entity = attrs["entity"]
+        rows = attrs.get("rows", [])
+
+        if entity == EntityType.MEMBER:
+            if not attrs.get("member_id"):
+                raise serializers.ValidationError(
+                    {"member_id": "required when entity='member'"},
+                )
+            # Every row must be a member-scope field.
+            offenders = [
+                f"{r['category']}.{r['field']}" for r in rows
+                if field_entity(r["category"], r["field"]) != "member"
+            ]
+            if offenders:
+                raise serializers.ValidationError(
+                    {"rows": f"household-scope fields cannot be submitted with "
+                             f"entity='member': {', '.join(offenders)}"},
+                )
+            # Validate the member belongs to the household.
+            from apps.data_management.models import Member
+            hh_id = attrs["household_id"]
+            mem_id = attrs["member_id"]
+            if not Member.objects.filter(id=mem_id, household_id=hh_id).exists():
+                raise serializers.ValidationError(
+                    {"member_id": f"member {mem_id} does not belong to household {hh_id}"},
+                )
+        else:
+            # entity=household or all_members → no member-scope fields
+            # allowed (those need the picker to be honest about which
+            # member they target).
+            offenders = [
+                f"{r['category']}.{r['field']}" for r in rows
+                if field_entity(r["category"], r["field"]) == "member"
+            ]
+            if offenders:
+                raise serializers.ValidationError(
+                    {"rows": f"member-scope fields require entity='member': "
+                             f"{', '.join(offenders)}"},
+                )
+        return attrs
 
 
 @extend_schema_view(
@@ -332,13 +384,12 @@ class ChangeRequestViewSet(
             entity_id = data["household_id"]
             note = f"[entity=all_members] {data['note']}"
         elif data["entity"] == EntityType.MEMBER:
-            # Member roster picker is OOS for this slice — the modal
-            # exposes the option but submission against entity=member
-            # requires a follow-up that adds member_id resolution.
-            return Response(
-                {"detail": "entity=member requires a member picker (follow-up slice)"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            # Member roster picker is now wired (CR-modal slice 2).
+            # The serializer already validated member_id belongs to
+            # household and that every row is a member-scope field.
+            entity_type = EntityType.MEMBER
+            entity_id = data["member_id"]
+            note = data["note"]
         else:
             entity_type = EntityType.HOUSEHOLD
             entity_id = data["household_id"]

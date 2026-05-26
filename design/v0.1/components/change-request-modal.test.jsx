@@ -17,7 +17,7 @@
  * body which destructures React + attaches helpers to window.
  */
 
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -241,12 +241,22 @@ describe("current value display", () => {
   });
 
   it("formats a date current value", async () => {
+    // member_dob is now a member-scope field, so entity must flip
+    // and a member must be selected before the row can be added.
     const user = userEvent.setup();
+    const members = [{ id: "01HMEM0000000000000000ONE0", name: "T", line: 1 }];
     render(
       <ChangeRequestModal
-        {...defaultProps({ currentValues: { "rost.member_dob": "2018-04-08" } })}
+        {...defaultProps({
+          members,
+          memberValues: { "01HMEM0000000000000000ONE0": { "rost.member_dob": "2018-04-08" } },
+        })}
       />,
     );
+    fireEvent.change(screen.getByLabelText("Entity"), { target: { value: "member" } });
+    fireEvent.change(screen.getByTestId("member-picker-select"), {
+      target: { value: "01HMEM0000000000000000ONE0" },
+    });
     await addRowViaComposer(user, "rost", "member_dob");
     const chip = screen.getByTestId("current-rost-member_dob");
     expect(chip).toHaveTextContent("current: 8 Apr 2018");
@@ -275,6 +285,146 @@ describe("current value display", () => {
     await addRowViaComposer(user, "iden", "phone");
     const chip = screen.getByTestId("current-iden-phone");
     expect(chip).toHaveTextContent("current —");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────
+// 2c. Member picker (slice 2)
+// ───────────────────────────────────────────────────────────────
+
+const SAMPLE_MEMBERS = [
+  { id: "01HMEM0000000000000000HEAD", name: "Lokol Naume",  line: 1, relationship: "Head",     dob: "1980-04-15", sex: "Female" },
+  { id: "01HMEM0000000000000000SPOU", name: "Lokol Peter",  line: 2, relationship: "Spouse",   dob: "1978-09-22", sex: "Male" },
+  { id: "01HMEM0000000000000000CHLD", name: "Lokol Sarah",  line: 3, relationship: "Daughter", dob: "2014-02-08", sex: "Female" },
+];
+
+describe("member picker", () => {
+  it("hides the picker strip when entity=household", () => {
+    render(<ChangeRequestModal {...defaultProps({ members: SAMPLE_MEMBERS })} />);
+    expect(screen.queryByTestId("member-picker-strip")).not.toBeInTheDocument();
+  });
+
+  it("shows the picker strip when entity is switched to member", () => {
+    render(<ChangeRequestModal {...defaultProps({ members: SAMPLE_MEMBERS })} />);
+    const entitySelect = screen.getByLabelText("Entity");
+    fireEvent.change(entitySelect, { target: { value: "member" } });
+    expect(screen.getByTestId("member-picker-strip")).toBeInTheDocument();
+    expect(screen.getByTestId("member-picker-select")).toBeInTheDocument();
+  });
+
+  it("renders the member info card after selecting", () => {
+    render(<ChangeRequestModal {...defaultProps({ members: SAMPLE_MEMBERS })} />);
+    fireEvent.change(screen.getByLabelText("Entity"), { target: { value: "member" } });
+    fireEvent.change(screen.getByTestId("member-picker-select"), {
+      target: { value: SAMPLE_MEMBERS[2].id },
+    });
+    const card = screen.getByTestId("member-info-card");
+    expect(card).toHaveTextContent("Lokol Sarah");
+    expect(card).toHaveTextContent("Daughter");
+    expect(card).toHaveTextContent("2014-02-08");
+  });
+
+  it("filters the composer to member-scope categories when entity=member", async () => {
+    const user = userEvent.setup();
+    render(<ChangeRequestModal {...defaultProps({ members: SAMPLE_MEMBERS })} />);
+    fireEvent.change(screen.getByLabelText("Entity"), { target: { value: "member" } });
+    await user.click(screen.getByText("Add a field change"));
+    const selects = screen.getAllByRole("combobox");
+    // Last two selects = composer cat + field.
+    const catSelect = selects[selects.length - 2];
+    // Household-only categories must NOT be options (loc, hous, food).
+    const optionValues = Array.from(catSelect.options).map(o => o.value);
+    expect(optionValues).not.toContain("loc");
+    expect(optionValues).not.toContain("hous");
+    expect(optionValues).not.toContain("food");
+    // Member-scope categories present.
+    expect(optionValues).toContain("hd");
+    expect(optionValues).toContain("ed");
+    expect(optionValues).toContain("emp");
+  });
+
+  it("submit stays disabled until a member is selected", async () => {
+    const user = userEvent.setup();
+    render(<ChangeRequestModal {...defaultProps({ members: SAMPLE_MEMBERS })} />);
+    fireEvent.change(screen.getByLabelText("Entity"), { target: { value: "member" } });
+    await addRowViaComposer(user, "hd", "chronic");
+    // Fill the value + note so only the member gate is left.
+    const valueSelect = screen.getAllByRole("combobox").find(
+      el => Array.from(el.options).some(o => o.value === "yes"),
+    );
+    fireEvent.change(valueSelect, { target: { value: "yes" } });
+    fireEvent.change(screen.getByPlaceholderText(/Why this change/i), {
+      target: { value: "Diagnosed during clinic visit last week." },
+    });
+    const submit = screen.getByRole("button", { name: /Create & submit/i });
+    expect(submit).toBeDisabled();
+    fireEvent.change(screen.getByTestId("member-picker-select"), {
+      target: { value: SAMPLE_MEMBERS[1].id },
+    });
+    expect(submit).not.toBeDisabled();
+  });
+
+  it("payload includes member_id when entity=member", async () => {
+    const onSubmit = vi.fn(async () => ({
+      cr_id: "01CR", audit_id: "A-1", routed_to: "CDO (parish)",
+    }));
+    const user = userEvent.setup();
+    render(<ChangeRequestModal {...defaultProps({ members: SAMPLE_MEMBERS, onSubmit })} />);
+    fireEvent.change(screen.getByLabelText("Entity"), { target: { value: "member" } });
+    fireEvent.change(screen.getByTestId("member-picker-select"), {
+      target: { value: SAMPLE_MEMBERS[2].id },
+    });
+    await addRowViaComposer(user, "hd", "chronic");
+    const valueSelect = screen.getAllByRole("combobox").find(
+      el => Array.from(el.options).some(o => o.value === "yes"),
+    );
+    fireEvent.change(valueSelect, { target: { value: "yes" } });
+    fireEvent.change(screen.getByPlaceholderText(/Why this change/i), {
+      target: { value: "Diagnosed during clinic visit last week." },
+    });
+    await user.click(screen.getByRole("button", { name: /Create & submit/i }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    const payload = onSubmit.mock.calls[0][0];
+    expect(payload.entity).toBe("member");
+    expect(payload.member_id).toBe(SAMPLE_MEMBERS[2].id);
+  });
+
+  it("payload omits member_id when entity=household", async () => {
+    const onSubmit = vi.fn(async () => ({
+      cr_id: "01CR", audit_id: "A-1", routed_to: "CDO (parish)",
+    }));
+    const user = userEvent.setup();
+    render(<ChangeRequestModal {...defaultProps({ members: SAMPLE_MEMBERS, onSubmit })} />);
+    await addRowViaComposer(user, "iden", "phone");
+    const phoneInput = screen.getAllByPlaceholderText("New value")[0];
+    fireEvent.change(phoneInput, { target: { value: "+256 700 111 222" } });
+    fireEvent.change(screen.getByPlaceholderText(/Why this change/i), {
+      target: { value: "Phone updated per field visit." },
+    });
+    await user.click(screen.getByRole("button", { name: /Create & submit/i }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    expect(onSubmit.mock.calls[0][0].member_id).toBeUndefined();
+  });
+
+  it("uses per-member currentValues when a member is selected", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChangeRequestModal
+        {...defaultProps({
+          members: SAMPLE_MEMBERS,
+          memberValues: {
+            [SAMPLE_MEMBERS[2].id]: { "hd.chronic": "no" },
+          },
+        })}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Entity"), { target: { value: "member" } });
+    fireEvent.change(screen.getByTestId("member-picker-select"), {
+      target: { value: SAMPLE_MEMBERS[2].id },
+    });
+    await addRowViaComposer(user, "hd", "chronic");
+    const chip = screen.getByTestId("current-hd-chronic");
+    expect(chip).toHaveTextContent("current: no");
   });
 });
 

@@ -14,6 +14,11 @@ Each category carries:
 `pmt` is the per-field flag: when any selected row carries pmt=True
 the bundle endpoint auto-derives `pmt_relevant=True` (the modal
 mirrors this and disables the Force-PMT checkbox while it's true).
+
+`entity` is the per-field scope flag ("household" or "member").
+Missing = "household" (default). Member-scope fields can only be
+submitted with entity="member" in the bundle payload + a member_id
+that belongs to the household. Enforced in `validate_member_field`.
 """
 
 from __future__ import annotations
@@ -51,46 +56,49 @@ CATEGORIES: list[dict] = [
             {"key": "hh_size",         "label": "Household size",          "type": "number", "pmt": True},
             {"key": "add_member",      "label": "Add member (name)",       "type": "text",   "pmt": False},
             {"key": "remove_member",   "label": "Remove member (line #)",  "type": "number", "pmt": False},
-            {"key": "member_name",     "label": "Member name",             "type": "text",   "pmt": False},
-            {"key": "member_dob",      "label": "Member date of birth",    "type": "date",   "pmt": False},
+            {"key": "member_name",     "label": "Member name",             "type": "text",
+             "pmt": False, "entity": "member"},
+            {"key": "member_dob",      "label": "Member date of birth",    "type": "date",
+             "pmt": False, "entity": "member"},
             # ADR-0010: member_sex is a coded ChoiceList field — options
             # MUST be the seed codes (sex: 1=Male, 2=Female).
-            {"key": "member_sex",      "label": "Member sex",              "type": "select", "pmt": False,
-             "options": ["1", "2"]},
-            {"key": "member_relation", "label": "Member relation to head", "type": "text",   "pmt": False},
+            {"key": "member_sex",      "label": "Member sex",              "type": "select",
+             "pmt": False, "options": ["1", "2"], "entity": "member"},
+            {"key": "member_relation", "label": "Member relation to head", "type": "text",
+             "pmt": False, "entity": "member"},
         ],
     },
     {
         "key": "hd", "label": "Health & Disability", "tone": "danger",
         "fields": [
             {"key": "disab",     "label": "Disability status",          "type": "select", "pmt": True,
-             "options": ["none", "mild", "moderate", "severe"]},
+             "options": ["none", "mild", "moderate", "severe"], "entity": "member"},
             {"key": "chronic",   "label": "Chronic illness",            "type": "select", "pmt": True,
-             "options": ["yes", "no"]},
+             "options": ["yes", "no"], "entity": "member"},
             {"key": "u5_breg",   "label": "Under-5 birth registration", "type": "select", "pmt": False,
-             "options": ["yes", "no", "partial"]},
+             "options": ["yes", "no", "partial"], "entity": "member"},
             {"key": "preg_lact", "label": "Pregnant / lactating",       "type": "select", "pmt": False,
-             "options": ["yes", "no"]},
+             "options": ["yes", "no"], "entity": "member"},
         ],
     },
     {
         "key": "ed", "label": "Education", "tone": "programme",
         "fields": [
             {"key": "ever_school", "label": "Ever attended school", "type": "select", "pmt": True,
-             "options": ["yes", "no"]},
-            {"key": "grade",       "label": "Highest grade",        "type": "text",   "pmt": True},
+             "options": ["yes", "no"], "entity": "member"},
+            {"key": "grade",       "label": "Highest grade",        "type": "text",   "pmt": True, "entity": "member"},
             {"key": "attending",   "label": "Currently attending",  "type": "select", "pmt": False,
-             "options": ["yes", "no"]},
+             "options": ["yes", "no"], "entity": "member"},
         ],
     },
     {
         "key": "emp", "label": "Employment", "tone": "system",
         "fields": [
-            {"key": "occ",        "label": "Primary occupation",  "type": "text",   "pmt": True},
+            {"key": "occ",        "label": "Primary occupation",  "type": "text",   "pmt": True, "entity": "member"},
             {"key": "sector",     "label": "Sector",              "type": "select", "pmt": True,
              "options": ["agriculture", "trade", "services", "manufacturing",
-                         "public", "none"]},
-            {"key": "income_src", "label": "Main income source",  "type": "text",   "pmt": True},
+                         "public", "none"], "entity": "member"},
+            {"key": "income_src", "label": "Main income source",  "type": "text",   "pmt": True, "entity": "member"},
         ],
     },
     {
@@ -165,3 +173,28 @@ def validate_row(category: str, field: str) -> None:
         raise ValueError(f"unknown category {category!r}")
     if field not in pairs[category]:
         raise ValueError(f"unknown field {field!r} for category {category!r}")
+
+
+def field_entity(category: str, field: str) -> str:
+    """Return 'household' or 'member' for the given field.
+
+    Missing `entity` key in the catalog → 'household' (the default —
+    used by every legacy field that pre-dated the member-scope split).
+    """
+    for c in CATEGORIES:
+        if c["key"] != category:
+            continue
+        for f in c["fields"]:
+            if f["key"] == field:
+                return f.get("entity", "household")
+    return "household"
+
+
+def member_field_pairs() -> set[tuple[str, str]]:
+    """All (category, field) pairs whose entity scope is 'member'."""
+    out: set[tuple[str, str]] = set()
+    for c in CATEGORIES:
+        for f in c["fields"]:
+            if f.get("entity") == "member":
+                out.add((c["key"], f["key"]))
+    return out
