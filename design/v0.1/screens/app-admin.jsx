@@ -82,15 +82,20 @@ const AdminApp = () => {
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--neutral-50)", display: "flex" }}>
-      {/* Sidebar */}
+      {/* Sidebar. Flex column so the nav can scroll internally while
+          the footer keeps its own slot at the bottom — earlier this
+          screen used a position:absolute footer over a scrolling
+          nav, and the footer rendered ON TOP of the last items
+          (Chatbot, Examples) when the nav was taller than the
+          viewport. */}
       <aside style={{
         width: 248, flex: "0 0 248px",
         background: "var(--primary-900)",
         color: "var(--neutral-0)",
-        padding: "20px 0",
-        position: "sticky", top: 0, height: "100vh", overflow: "auto",
+        position: "sticky", top: 0, height: "100vh",
+        display: "flex", flexDirection: "column",
       }}>
-        <div style={{ padding: "0 20px 20px", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
+        <div style={{ padding: "20px 20px 20px", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{
               width: 30, height: 30, borderRadius: 6,
@@ -106,12 +111,7 @@ const AdminApp = () => {
           </div>
         </div>
 
-        {/* paddingBottom reserves space for the absolute-positioned
-            footer below, so the last nav items (Chatbot, Examples)
-            aren't covered by it and remain clickable. Footer is
-            ~46px tall (12px padding × 2 + 11px font); 64px keeps a
-            clear gap. */}
-        <nav style={{ padding: "16px 0 64px" }}>
+        <nav style={{ flex: 1, overflow: "auto", padding: "16px 0" }}>
           {NAV_GROUPS.map(group => (
             <div key={group.label} style={{ marginBottom: 18 }}>
               <div style={{
@@ -147,7 +147,7 @@ const AdminApp = () => {
         </nav>
 
         <div style={{
-          position: "absolute", bottom: 0, left: 0, right: 0,
+          flex: "0 0 auto",
           padding: "12px 20px",
           borderTop: "1px solid rgba(255,255,255,0.1)",
           fontSize: 11, opacity: 0.6,
