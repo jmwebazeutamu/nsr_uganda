@@ -216,6 +216,69 @@ describe("row grouping", () => {
 });
 
 // ───────────────────────────────────────────────────────────────
+// 2b. Current-value display (slice 1 — gap from product review)
+// ───────────────────────────────────────────────────────────────
+
+describe("current value display", () => {
+  it("shows 'current —' placeholder when currentValues has no entry", async () => {
+    const user = userEvent.setup();
+    render(<ChangeRequestModal {...defaultProps()} />);
+    await addRowViaComposer(user, "iden", "phone");
+    const chip = screen.getByTestId("current-iden-phone");
+    expect(chip).toHaveTextContent("current —");
+  });
+
+  it("renders the current value when provided in currentValues", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChangeRequestModal
+        {...defaultProps({ currentValues: { "iden.phone": "+256 700 123 456" } })}
+      />,
+    );
+    await addRowViaComposer(user, "iden", "phone");
+    const chip = screen.getByTestId("current-iden-phone");
+    expect(chip).toHaveTextContent("current: +256 700 123 456");
+  });
+
+  it("formats a date current value", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChangeRequestModal
+        {...defaultProps({ currentValues: { "rost.member_dob": "2018-04-08" } })}
+      />,
+    );
+    await addRowViaComposer(user, "rost", "member_dob");
+    const chip = screen.getByTestId("current-rost-member_dob");
+    expect(chip).toHaveTextContent("current: 8 Apr 2018");
+  });
+
+  it("truncates long strings past 28 chars", async () => {
+    const user = userEvent.setup();
+    const long = "A very long current value that should be truncated for display";
+    render(
+      <ChangeRequestModal
+        {...defaultProps({ currentValues: { "iden.head_name": long } })}
+      />,
+    );
+    await addRowViaComposer(user, "iden", "head_name");
+    const chip = screen.getByTestId("current-iden-head_name");
+    expect(chip.textContent).toMatch(/^current: .{1,27}…$/);
+  });
+
+  it("treats empty string the same as missing", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChangeRequestModal
+        {...defaultProps({ currentValues: { "iden.phone": "" } })}
+      />,
+    );
+    await addRowViaComposer(user, "iden", "phone");
+    const chip = screen.getByTestId("current-iden-phone");
+    expect(chip).toHaveTextContent("current —");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────
 // 3. PMT chip + Force-PMT toggle
 // ───────────────────────────────────────────────────────────────
 

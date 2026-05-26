@@ -443,10 +443,32 @@ const AddTree = ({ disabled, addedKeys, onAdd }) => {
 // ────────────────────────────────────────────────────────────────
 // The modal
 // ────────────────────────────────────────────────────────────────
+// Format a current value for the "current: X" chip beside each row.
+// Keys off the field meta so dates render as the EAT day, selects
+// passthrough (codes match labels in the seeded ChoiceLists today),
+// long strings truncate to keep the chip a fixed width.
+const formatCurrent = (value, meta) => {
+  if (value == null || value === "") return null;
+  if (meta?.type === "date") {
+    // YYYY-MM-DD on the wire; render as 14 May 2026 in the chip.
+    const d = new Date(`${value}T00:00:00Z`);
+    if (!Number.isNaN(d.getTime())) {
+      const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+    }
+  }
+  const s = String(value);
+  return s.length > 28 ? s.slice(0, 26) + "…" : s;
+};
+
 const ChangeRequestModal = ({
   open,
   onClose,
-  household,          // optional projected view-model (for the "current" chip)
+  // Map of "category.field" → current value, projected by the consumer
+  // from the household / member snapshot. Used to render "current: X"
+  // beside each row so operators can verify the before-state without
+  // opening another screen.
+  currentValues = {},
   householdId,
   me,
   addUx = "composer", // "composer" | "picker" | "tree"
@@ -726,7 +748,20 @@ const ChangeRequestModal = ({
                               {r.category}.{r.field}
                             </div>
                           </div>
-                          <Chip size="sm" tone="neutral">current —</Chip>
+                          {(() => {
+                            const cv = currentValues[`${r.category}.${r.field}`];
+                            const formatted = formatCurrent(cv, meta);
+                            return formatted
+                              ? <Chip size="sm" tone="neutral"
+                                      title={String(cv)}
+                                      data-testid={`current-${r.category}-${r.field}`}>
+                                  current: {formatted}
+                                </Chip>
+                              : <Chip size="sm" tone="neutral"
+                                      data-testid={`current-${r.category}-${r.field}`}>
+                                  current —
+                                </Chip>;
+                          })()}
                           <Icon name="arrowRight" size={14} color="var(--neutral-500)"/>
                           <RowInput meta={meta} value={r.value}
                             autoFocus={focusFieldKey === rowKey}

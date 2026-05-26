@@ -179,6 +179,27 @@ const _hhApiToView = (h) => {
 // US-S22-002 — Open Update + Open Grievance wiring helpers
 // ────────────────────────────────────────────────────────────────
 
+// Project the household view-model into the modal's `currentValues`
+// map ("category.field" → current value). Only household-level
+// fields that we actually have in `h` are populated; member-level
+// fields (rost.member_*, ed.*, hd.*, emp.*) stay empty until the
+// member picker lands (CHB-modal slice 2). The modal renders the
+// neutral "current —" chip for any field not in this map.
+const projectCurrentValues = (h) => {
+  if (!h) return {};
+  const cv = {};
+  if (h.phone && h.phone !== "—")         cv["iden.phone"]     = h.phone;
+  if (h.head)                              cv["iden.head_name"] = h.head;
+  if (h.village && h.village !== "—")     cv["loc.village"]    = h.village;
+  if (h.parish && h.parish !== "—")       cv["loc.parish"]     = h.parish;
+  if (h.gps && h.gps.lat != null && h.gps.lng != null) {
+    cv["loc.gps"] = `${h.gps.lat.toFixed(5)}, ${h.gps.lng.toFixed(5)}`;
+  }
+  if (h.enumerationArea)                   cv["loc.ea"]         = h.enumerationArea;
+  if (h.hh != null)                        cv["rost.hh_size"]   = String(h.hh);
+  return cv;
+};
+
 // CSRF cookie reader for DRF session-auth POSTs (same pattern as
 // screens-grm + screens-upd).
 const _hhCsrf = () => {
@@ -537,7 +558,7 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
       <ChangeRequestModal
         open={modal === "upd"}
         onClose={() => setModal(null)}
-        household={h}
+        currentValues={projectCurrentValues(h)}
         householdId={h?.rid || ""}
         me={me}
         addUx="composer"
