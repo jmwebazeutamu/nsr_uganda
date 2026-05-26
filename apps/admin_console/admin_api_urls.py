@@ -12,6 +12,7 @@ from apps.admin_console.api import (
     pmt_recompute_run_now,
     pmt_transforms,
 )
+from apps.admin_console.approvals_api import approvals_queue
 from apps.admin_console.refdata_api import (
     choice_list_clone,
     choice_list_option_detail,
@@ -59,6 +60,10 @@ router.register(
 )
 
 urlpatterns = [
+    # Unified Approvals queue — aggregates PENDING_APPROVAL items
+    # across CL, DQA, PMT (one entry per item).
+    path("approvals/", approvals_queue, name="admin-approvals-queue"),
+
     # PMT (sprint 22)
     path("pmt/dashboard/",            pmt_dashboard,        name="admin-pmt-dashboard"),
     path("pmt/recompute/run-now/",    pmt_recompute_run_now, name="admin-pmt-recompute-run-now"),

@@ -6,8 +6,9 @@
    AdminGeoUnitDetailScreen, AdminUpdRoutingRuleEditScreen,
    AdminUserDetailScreen, AdminDdupPairDetailScreen,
    AdminChoiceListOptionEditScreen,
+   AdminApprovalsScreen,
    ChatbotAssistantScreen,
-   ErrorBoundary */
+   ErrorBoundary, Icon */
 // NSR MIS — Admin shell
 // =====================================================
 // Wraps the two new PMT screens (Dashboard, Configuration) plus
@@ -23,6 +24,12 @@ const { useState: useStateAdmin } = React;
 const initialFromHost = (typeof window !== "undefined" && window.__defaultScreen) || "admin-pmt-dashboard";
 
 const NAV_GROUPS = [
+  {
+    label: "Queue",
+    items: [
+      { id: "admin-approvals", label: "Approvals", icon: "checkCircle" },
+    ],
+  },
   {
     label: "Eligibility",
     items: [
@@ -154,6 +161,7 @@ const AdminApp = () => {
           {screen === "admin-pmt-configuration" && (
             <PmtConfigurationScreen onBack={() => setScreen("admin-pmt-dashboard")}/>
           )}
+          {screen === "admin-approvals"            && <AdminApprovalsScreen onNavigate={setScreen}/>}
           {screen === "admin-refdata-choicelists"  && <AdminChoiceListsScreen/>}
           {screen === "admin-refdata-geo"          && <AdminGeographyScreen/>}
           {screen === "admin-workflow-routing"     && <AdminUpdRoutingScreen/>}
