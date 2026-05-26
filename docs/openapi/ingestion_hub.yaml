@@ -275,10 +275,41 @@ paths_appended_2026_05_25:
       responses:
         "200": { description: Updated StageRecord }
         "400": { description: not quality_failed, or reason missing }
+  /api/v1/dih/source-systems/{id}/forms/:
+    get:
+      tags: [dih]
+      summary: List deployed forms for a Kobo SourceSystem (US-S11-022)
+      description: |
+        Feeds the Run-connector modal's form-picker dropdown. Returns
+        every form the upstream Kobo workspace exposes; the client
+        filters to `deployed: true` for the picker. Kobo-only for v1;
+        non-Kobo kinds 400. Guarded by IsDihTrigger.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Form catalogue
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [uid, deployed]
+                  properties:
+                    uid:        { type: string }
+                    name:       { type: string }
+                    asset_type: { type: string }
+                    deployed:   { type: boolean }
+        "400": { description: non-Kobo / missing credentials / list_forms failed }
+        "403": { description: caller lacks IsDihTrigger permission }
   /api/v1/dih/source-systems/{id}/trigger-run/:
     post:
       tags: [dih]
-      summary: Trigger an operator-initiated connector pull (US-S11-021)
+      summary: Trigger an operator-initiated connector pull (US-S11-021, S11-022)
       description: |
         Pulls submissions for this SourceSystem through the same code
         path as the `pull_kobo_submissions_action` admin action.
@@ -288,6 +319,11 @@ paths_appended_2026_05_25:
         (AC-DIH-DPA-REQUIRED), or when the source has no credential or
         no deployed form. A `dih.connector.triggered` AuditEvent is
         emitted regardless of outcome.
+
+        US-S11-022 added `form_uid`: the operator picks which form to
+        pull when a Kobo workspace carries multiple deployed forms.
+        Falls back to the form pinned on Connector.config, then to
+        the first deployed form, when omitted.
       parameters:
         - in: path
           name: id
@@ -306,6 +342,11 @@ paths_appended_2026_05_25:
                     If true, opens the ConnectorRun as run_type=TEST,
                     exercises credentials + list_forms, counts but does
                     NOT land submission rows.
+                form_uid:
+                  type: string
+                  description: |
+                    Optional Kobo form UID. Must appear in the
+                    /forms/ response; otherwise the trigger 400s.
       responses:
         "200":
           description: Pull complete

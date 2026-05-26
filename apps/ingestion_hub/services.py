@@ -1228,13 +1228,27 @@ def trigger_connector_pull(
     actor: str,
     dry_run: bool = False,
     batch_cap: int = TRIGGER_PULL_BATCH_CAP,
+    form_uid: str | None = None,
 ) -> dict:
     """Pull submissions for `source` and return a summary dict.
 
     Kobo-only for v1 — non-Kobo kinds raise TriggerError. The shared
     pull body is otherwise the same as the admin action (US-S11-014):
-    open a ConnectorRun, list deployed forms, pull the first one, land
+    open a ConnectorRun, list deployed forms, pull the chosen one, land
     + process each row, geo-backfill, close the run.
+
+    Form selection precedence (US-S11-022):
+      1. Explicit `form_uid` from the caller — wins if it appears in
+         the upstream's list_forms output. TriggerError if it doesn't.
+      2. The `kobo_form_uid` stored on Connector.config from the last
+         successful pull on this source.
+      3. The first DEPLOYED form returned by list_forms.
+
+    The chosen form_uid is persisted back to Connector.config so the
+    next default tracks operator intent. Earlier slices would default
+    to forms[0] and silently swap between forms when the Kobo workspace
+    re-ordered them; that's how 50 records ended up canonicalising
+    against the legacy v1 form on 2026-05-26.
 
     dry_run=True: the run is opened as run_type=TEST, list_forms is
     called (so credentials get exercised against the upstream), and
@@ -1283,9 +1297,6 @@ def trigger_connector_pull(
     except CredentialMissingError as exc:
         raise TriggerError(f"{source.code}: {exc}") from exc
 
-    # Resolve the form to pull: first deployed asset wins. Mirrors the
-    # admin action's heuristic — operators who need a specific form
-    # set it via the Connector.config and we'll honour that next slice.
     try:
         forms = [f for f in connector_impl.list_forms(creds) if f["deployed"]]
     except Exception as exc:  # noqa: BLE001 — surface upstream errors
@@ -1296,12 +1307,42 @@ def trigger_connector_pull(
         raise TriggerError(
             f"{source.code}: no deployed forms — nothing to pull",
         )
-    form = forms[0]
+
+    # Form selection — see docstring for the precedence chain. The
+    # default-from-Connector.config branch looks for any existing
+    # Connector row on this source, picking the most recently-updated
+    # one so an operator's pin sticks across runs.
+    forms_by_uid = {f["uid"]: f for f in forms}
+    if form_uid:
+        if form_uid not in forms_by_uid:
+            raise TriggerError(
+                f"{source.code}: form_uid {form_uid!r} is not in the "
+                f"deployed-forms list — available: "
+                f"{sorted(forms_by_uid.keys())}",
+            )
+        form = forms_by_uid[form_uid]
+    else:
+        pinned_uid = (
+            ConnectorModel.objects
+            .filter(source_system=source)
+            .order_by("-updated_at")
+            .values_list("config__kobo_form_uid", flat=True)
+            .first()
+        )
+        if pinned_uid and pinned_uid in forms_by_uid:
+            form = forms_by_uid[pinned_uid]
+        else:
+            form = forms[0]
 
     connector_row, _ = ConnectorModel.objects.get_or_create(
         source_system=source, name=f"kobo-{form['uid']}",
         defaults={"config": {"kobo_form_uid": form["uid"]}},
     )
+    # Pin the chosen form back to the Connector so next pull defaults
+    # to it — even an explicit pick should persist as operator intent.
+    if connector_row.config.get("kobo_form_uid") != form["uid"]:
+        connector_row.config["kobo_form_uid"] = form["uid"]
+        connector_row.save(update_fields=("config", "updated_at"))
 
     # start_connector_run() enforces AC-DIH-DPA-REQUIRED (raises
     # DihError). Surface that as TriggerError too so the caller has a

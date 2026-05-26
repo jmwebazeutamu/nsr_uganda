@@ -1387,3 +1387,223 @@ class TestTriggerRunEndpoint:
         resp = client.post(self._url(trigger_kobo_source), {}, format="json")
         assert resp.status_code == 400
         assert "already in progress" in resp.json()["detail"]
+
+
+# --- US-S11-022 — form picker + dashboard live data -----------------------
+
+@pytest.mark.django_db
+class TestFormsEndpoint:
+    """GET /api/v1/dih/source-systems/{id}/forms/ — feeds the
+    Run-connector modal's form-picker dropdown. Kobo-only; gated by
+    IsDihTrigger like the trigger endpoint itself.
+    """
+
+    def _url(self, source) -> str:
+        return f"/api/v1/dih/source-systems/{source.id}/forms/"
+
+    def _in_group(self, django_user_model, group_name):
+        from django.contrib.auth.models import Group
+        user = django_user_model.objects.create_user(
+            username=f"u-{group_name}", password="x",
+        )
+        grp, _ = Group.objects.get_or_create(name=group_name)
+        user.groups.add(grp)
+        return user
+
+    @responses.activate
+    def test_returns_deployed_and_draft_forms_for_kobo(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        responses.add(
+            responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets.json",
+            json={"results": [
+                {"uid": "F1", "name": "Pilot v2", "asset_type": "survey",
+                 "deployment__active": True},
+                {"uid": "F2", "name": "v1 legacy", "asset_type": "survey",
+                 "deployment__active": True},
+                {"uid": "F3", "name": "Draft", "asset_type": "survey",
+                 "deployment__active": False},
+            ]}, status=200,
+        )
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.get(self._url(trigger_kobo_source))
+        assert resp.status_code == 200, resp.content
+        body = resp.json()
+        uids = {f["uid"]: f for f in body}
+        # All 3 returned — the client filters by `deployed` so it
+        # can render "deploy state" if needed; the dropdown only
+        # shows the deployed ones.
+        assert set(uids) == {"F1", "F2", "F3"}
+        assert uids["F1"]["deployed"] is True
+        assert uids["F3"]["deployed"] is False
+
+    def test_non_kobo_returns_400(self, django_user_model):
+        ubos = SourceSystem.objects.create(
+            code="UBOS-2", name="UBOS", kind=SourceSystemKind.UBOS,
+        )
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.get(self._url(ubos))
+        assert resp.status_code == 400
+        assert "only Kobo" in resp.json()["detail"]
+
+    def test_anonymous_caller_gets_403(self, trigger_kobo_source):
+        client = APIClient()
+        resp = client.get(self._url(trigger_kobo_source))
+        assert resp.status_code in (401, 403)
+
+
+@pytest.mark.django_db
+class TestTriggerRunFormSelection:
+    """The form_uid request field (US-S11-022) and its persistence on
+    Connector.config so the next default tracks operator intent."""
+
+    def _url(self, source) -> str:
+        return f"/api/v1/dih/source-systems/{source.id}/trigger-run/"
+
+    def _in_group(self, django_user_model, group_name):
+        from django.contrib.auth.models import Group
+        user = django_user_model.objects.create_user(
+            username=f"u-{group_name}-form", password="x",
+        )
+        grp, _ = Group.objects.get_or_create(name=group_name)
+        user.groups.add(grp)
+        return user
+
+    def _stub_two_forms_three_rows(self):
+        responses.add(
+            responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets.json",
+            json={"results": [
+                {"uid": "FORM-LEGACY", "name": "v1 legacy",
+                 "asset_type": "survey", "deployment__active": True},
+                {"uid": "FORM-NEW", "name": "Pilot v2",
+                 "asset_type": "survey", "deployment__active": True},
+            ]}, status=200,
+        )
+        # The chosen form's data endpoint gets stubbed per-test.
+
+    def _stub_data_for(self, form_uid):
+        responses.add(
+            responses.GET,
+            f"{_TRIGGER_KOBO_URL}/api/v2/assets/{form_uid}/data.json",
+            json={"results": [
+                {"_id": 1, "Q": "a"},
+                {"_id": 2, "Q": "b"},
+            ], "next": None}, status=200,
+        )
+
+    @responses.activate
+    def test_explicit_form_uid_wins(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        self._stub_two_forms_three_rows()
+        self._stub_data_for("FORM-NEW")
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(
+            self._url(trigger_kobo_source),
+            {"form_uid": "FORM-NEW"},
+            format="json",
+        )
+        assert resp.status_code == 200, resp.content
+        assert resp.json()["form_uid"] == "FORM-NEW"
+
+    @responses.activate
+    def test_unknown_form_uid_is_rejected(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        self._stub_two_forms_three_rows()
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(
+            self._url(trigger_kobo_source),
+            {"form_uid": "DOES-NOT-EXIST"},
+            format="json",
+        )
+        assert resp.status_code == 400
+        assert "not in the deployed-forms list" in resp.json()["detail"]
+
+    @responses.activate
+    def test_chosen_form_is_pinned_to_connector_config(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        # First call: operator picks FORM-NEW. We expect Connector.config
+        # to record kobo_form_uid=FORM-NEW even though the get_or_create
+        # default would have written that anyway (the connector row
+        # didn't exist yet).
+        self._stub_two_forms_three_rows()
+        self._stub_data_for("FORM-NEW")
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(
+            self._url(trigger_kobo_source),
+            {"form_uid": "FORM-NEW"},
+            format="json",
+        )
+        assert resp.status_code == 200, resp.content
+
+        connector = Connector.objects.get(
+            source_system=trigger_kobo_source, name="kobo-FORM-NEW",
+        )
+        assert connector.config["kobo_form_uid"] == "FORM-NEW"
+
+    @responses.activate
+    def test_default_falls_back_to_pinned_form(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        # Seed a Connector pinned to FORM-NEW. A trigger with no
+        # form_uid should pick FORM-NEW instead of FORM-LEGACY
+        # (which is forms[0] in the response order).
+        Connector.objects.create(
+            source_system=trigger_kobo_source, name="kobo-FORM-NEW",
+            config={"kobo_form_uid": "FORM-NEW"},
+        )
+        self._stub_two_forms_three_rows()
+        self._stub_data_for("FORM-NEW")
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(self._url(trigger_kobo_source), {}, format="json")
+        assert resp.status_code == 200, resp.content
+        assert resp.json()["form_uid"] == "FORM-NEW"
+
+
+@pytest.mark.django_db
+class TestConnectorRunSerializerEnrichment:
+    """US-S11-022 — source_code + connector_name appear in the JSON so
+    the Connector runs dashboard can label rows without an extra
+    round-trip per FK."""
+
+    def test_run_payload_includes_source_code_and_connector_name(
+        self, django_user_model,
+    ):
+        from django.contrib.auth.models import Group
+        src = SourceSystem.objects.create(
+            code="KOBO-DASH", name="Kobo dash test",
+            kind=SourceSystemKind.KOBO,
+        )
+        conn = Connector.objects.create(
+            source_system=src, name="kobo-form-z", config={},
+        )
+        run = ConnectorRun.objects.create(
+            connector=conn, status=ConnectorRunStatus.SUCCEEDED,
+        )
+        user = django_user_model.objects.create_user(
+            username="u-dash", password="x",
+        )
+        grp, _ = Group.objects.get_or_create(name="nsr_admin")
+        user.groups.add(grp)
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.get(f"/api/v1/dih/connector-runs/{run.id}/")
+        assert resp.status_code == 200, resp.content
+        body = resp.json()
+        assert body["source_code"] == "KOBO-DASH"
+        assert body["connector_name"] == "kobo-form-z"
+        assert body["run_type"] in ("import", "test")

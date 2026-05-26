@@ -42,9 +42,23 @@ class ConnectorSerializer(serializers.ModelSerializer):
 
 
 class ConnectorRunSerializer(serializers.ModelSerializer):
+    # Enriched for the System Admin > Connector runs dashboard
+    # (US-S11-022). The dashboard labels each row with the source code
+    # ("KOBO-PILOT") + connector name ("kobo-aRpVGbQ…"); without these
+    # fields the table only sees an opaque FK and can't render the
+    # operator-visible string. select_related on the viewset queryset
+    # keeps this O(1).
+    source_code = serializers.CharField(
+        source="connector.source_system.code", read_only=True,
+    )
+    connector_name = serializers.CharField(
+        source="connector.name", read_only=True,
+    )
+
     class Meta:
         model = ConnectorRun
-        fields = ("id", "connector", "started_at", "finished_at", "status",
+        fields = ("id", "connector", "connector_name", "source_code",
+                  "run_type", "started_at", "finished_at", "status",
                   "records_received", "records_landed", "records_staged",
                   "records_promoted", "records_quarantined", "records_rejected", "note")
 
@@ -105,6 +119,26 @@ class TriggerRunRequestSerializer(serializers.Serializer):
             "credentials + mapping before a real pull."
         ),
     )
+    form_uid = serializers.CharField(
+        required=False, allow_blank=True, max_length=64,
+        help_text=(
+            "Optional Kobo form UID. When omitted, the connector picks "
+            "the first deployed form (or the previously-pulled form "
+            "stored on Connector.config). US-S11-022 added this so "
+            "operators can disambiguate when a workspace carries "
+            "multiple deployed forms (e.g. the v1 legacy alongside "
+            "the current questionnaire)."
+        ),
+    )
+
+
+class FormListItemSerializer(serializers.Serializer):
+    """One row in the form-picker dropdown. Mirrors the dict shape
+    KoboConnector.list_forms returns."""
+    uid = serializers.CharField()
+    name = serializers.CharField(allow_blank=True)
+    asset_type = serializers.CharField(allow_blank=True, required=False)
+    deployed = serializers.BooleanField()
 
 
 class TriggerRunResponseSerializer(serializers.Serializer):
@@ -165,6 +199,7 @@ class SourceSystemViewSet(viewsets.ReadOnlyModelViewSet):
         source = self.get_object()
         actor = (getattr(request.user, "username", "") or "").strip() or "admin"
         dry_run = ser.validated_data["dry_run"]
+        form_uid = ser.validated_data.get("form_uid", "") or None
 
         # Emit the trigger audit first so a downstream failure still
         # leaves a paper trail of the attempt. The outcome is added in
@@ -172,11 +207,11 @@ class SourceSystemViewSet(viewsets.ReadOnlyModelViewSet):
         emit_audit(
             "dih.connector.triggered", "source_system", source.id,
             actor=actor,
-            reason=f"console-initiated pull (dry_run={dry_run})",
+            reason=f"console-initiated pull (dry_run={dry_run}, form_uid={form_uid or '*default*'})",
         )
         try:
             result = trigger_connector_pull(
-                source, actor=actor, dry_run=dry_run,
+                source, actor=actor, dry_run=dry_run, form_uid=form_uid,
             )
         except TriggerError as exc:
             emit_audit(
@@ -191,6 +226,58 @@ class SourceSystemViewSet(viewsets.ReadOnlyModelViewSet):
             actor=actor, reason=result["note"],
         )
         return Response(TriggerRunResponseSerializer(result).data)
+
+    @extend_schema(
+        tags=["dih"],
+        summary="List deployed forms for a Kobo SourceSystem (US-S11-022)",
+        description=(
+            "Returns the upstream form catalogue that an operator can "
+            "select from in the Run-connector modal. Kobo-only for v1 "
+            "— non-Kobo kinds 400. Guarded by IsDihTrigger so the data "
+            "isn't exposed beyond the operator surface that uses it."
+        ),
+        responses={
+            200: FormListItemSerializer(many=True),
+            400: OpenApiResponse(description="non-Kobo / missing credentials"),
+            403: OpenApiResponse(description="caller lacks trigger permission"),
+        },
+    )
+    @action(
+        detail=True, methods=["get"], url_path="forms",
+        permission_classes=[IsDihTrigger],
+    )
+    def forms(self, request, pk=None):
+        from .connection_test import CredentialMissingError, credentials_for
+        from .connectors.base import get_connector
+        from .models import SourceSystemKind
+
+        source = self.get_object()
+        if source.kind != SourceSystemKind.KOBO:
+            return Response(
+                {"detail": f"{source.code}: only Kobo sources expose a form list"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        connector_impl = get_connector(source.code)
+        if connector_impl is None or connector_impl.list_forms is None:
+            return Response(
+                {"detail": f"{source.code}: no live connector registered"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            creds = credentials_for(source)
+        except CredentialMissingError as exc:
+            return Response(
+                {"detail": f"{source.code}: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            forms = connector_impl.list_forms(creds)
+        except Exception as exc:  # noqa: BLE001
+            return Response(
+                {"detail": f"{source.code}: list_forms failed: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(FormListItemSerializer(forms, many=True).data)
 
 
 @extend_schema_view(
@@ -207,7 +294,11 @@ class ConnectorViewSet(viewsets.ReadOnlyModelViewSet):
     retrieve=extend_schema(tags=["dih"], summary="Retrieve a connector run"),
 )
 class ConnectorRunViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = ConnectorRun.objects.all().order_by("-started_at")
+    queryset = (
+        ConnectorRun.objects
+        .select_related("connector__source_system")
+        .order_by("-started_at")
+    )
     serializer_class = ConnectorRunSerializer
     filterset_fields = ["status", "connector"]
 

@@ -93,6 +93,49 @@ const statusToneCR = {
 const isStuck = (r) =>
   r.status === "running" && r.started_h >= STUCK_THRESHOLD_HOURS;
 
+// Map a /api/v1/dih/connector-runs/ server row into the row shape the
+// table renders. Duration + started_h are computed client-side from
+// the timestamps so the backend stays lean. Returns null if the input
+// is malformed so a single bad row doesn't kill the whole render.
+const _runApiToRow = (r) => {
+  if (!r || !r.id) return null;
+  const started = r.started_at ? new Date(r.started_at) : null;
+  const finished = r.finished_at ? new Date(r.finished_at) : null;
+  const now = new Date();
+  const endMs = (finished || now).getTime();
+  const elapsedMs = started ? endMs - started.getTime() : 0;
+  const startedH = elapsedMs / (1000 * 60 * 60);
+  // Compact duration string mirroring the existing mock vocabulary:
+  // "12m" / "5h 02m" for finished, "running 1.2h" for in-flight.
+  const fmt = (ms) => {
+    const totalMin = Math.max(0, Math.floor(ms / 60000));
+    const h = Math.floor(totalMin / 60);
+    const m = totalMin % 60;
+    if (h === 0) return `${m}m`;
+    return `${h}h ${String(m).padStart(2, "0")}m`;
+  };
+  const duration = finished
+    ? fmt(elapsedMs)
+    : (startedH >= 1
+        ? `running ${startedH.toFixed(1)}h`
+        : `running ${Math.floor(elapsedMs / 60000)}m`);
+  const connectorLabel = r.source_code
+    ? `${r.source_code}${r.run_type === "test" ? " (test)" : ""}`
+    : (r.connector_name || "");
+  return {
+    id: r.id,
+    connector: connectorLabel,
+    status: r.status,
+    started_h: startedH,
+    duration,
+    landed: r.records_landed || 0,
+    staged: r.records_staged || 0,
+    promoted: r.records_promoted || 0,
+    quarantined: r.records_quarantined || 0,
+    rejected: r.records_rejected || 0,
+  };
+};
+
 // ── DDUP model-version tab ─────────────────────────────────────────────
 const ModelVersionsTab = () => {
   const [selectedId, setSelectedId] = useStateAdmin(DDUP_MODEL_VERSIONS[0].id);
@@ -269,12 +312,19 @@ const MOCK_SOURCE_SYSTEMS = [
   { id: "01SS2026010100004", code: "WFP-SCOPE",      name: "WFP SCOPE",       kind: "wfp_scope", is_active: true },
 ];
 
-// ── Run-connector modal (US-S11-021) ──────────────────────────────────
-// Operator picks a SourceSystem + dry-run flag, posts to
+// ── Run-connector modal (US-S11-021, US-S11-022) ──────────────────────
+// Operator picks a SourceSystem + form_uid + dry-run flag, posts to
 // /api/v1/dih/source-systems/{id}/trigger-run/. On success the new
 // ConnectorRun row appears at the top of the runs table. Kobo is the
 // only kind wired today — the rest stay disabled with a "(coming
 // soon)" suffix to keep the UI honest.
+//
+// The form-picker dropdown is the US-S11-022 fix for the
+// 2026-05-26 incident: when a Kobo workspace carries multiple
+// deployed forms (legacy v1 + current v2), forms[0] silently picks
+// whichever Kobo returned first, and a wrong-form pick canonicalises
+// 100% of rows to KeyError → "quarantined" tally with zero
+// StageRecords created. The picker makes the choice explicit.
 const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
   const koboSources = useMemoAdmin(
     () => sources.filter(s => s.kind === "kobo" && s.is_active),
@@ -282,15 +332,61 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
   );
   const [sourceId, setSourceId] = useStateAdmin(koboSources[0]?.id || "");
   const [dryRun, setDryRun] = useStateAdmin(false);
+  // Form-picker state: forms come from /forms/ when the source
+  // changes; if the fetch fails (e.g. file:// preview) we leave it
+  // empty and the picker hides itself — submit falls back to the
+  // server-side default (Connector.config or forms[0]).
+  const [forms, setForms] = useStateAdmin([]);
+  const [formUid, setFormUid] = useStateAdmin("");
+  const [formsLoading, setFormsLoading] = useStateAdmin(false);
+  const [formsError, setFormsError] = useStateAdmin("");
 
   useEffectAdmin(() => {
     if (!sourceId && koboSources.length > 0) setSourceId(koboSources[0].id);
   }, [koboSources, sourceId]);
 
+  // Fetch the form list whenever the picked source changes. Only
+  // fires for Kobo sources because non-Kobo kinds 400 the endpoint.
+  useEffectAdmin(() => {
+    const src = sources.find(s => s.id === sourceId);
+    if (!src || src.kind !== "kobo") {
+      setForms([]); setFormUid(""); setFormsError("");
+      return;
+    }
+    let cancelled = false;
+    setFormsLoading(true); setFormsError("");
+    fetch(`/api/v1/dih/source-systems/${sourceId}/forms/`, {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.json().then(body => ({ ok: r.ok, body })))
+      .then(({ ok, body }) => {
+        if (cancelled) return;
+        setFormsLoading(false);
+        if (!ok) {
+          setForms([]); setFormUid("");
+          setFormsError(body.detail || "form list unavailable");
+          return;
+        }
+        const deployed = (body || []).filter(f => f.deployed);
+        setForms(deployed);
+        // Default to the first deployed form so submit-with-no-pick
+        // is unambiguous; operator can override before submitting.
+        setFormUid(deployed[0]?.uid || "");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setFormsLoading(false);
+        setForms([]); setFormUid("");
+        setFormsError("");  // silent — fall back to server-side default
+      });
+    return () => { cancelled = true; };
+  }, [sourceId, sources]);
+
   const submit = (e) => {
     e.preventDefault();
     if (!sourceId) return;
-    onSubmit({ sourceId, dryRun });
+    onSubmit({ sourceId, dryRun, formUid });
   };
 
   return (
@@ -339,6 +435,37 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
             );
           })}
         </select>
+
+        {/* Form picker — visible only when /forms/ returned a non-empty
+            list. While loading we show a small notice; on error we
+            stay silent and let the server pick (Connector.config →
+            forms[0]). */}
+        {(forms.length > 0 || formsLoading) && (
+          <>
+            <label className="t-cap" style={{display:"block", marginBottom:4}}>
+              Form {formsLoading && <span className="muted">(loading…)</span>}
+            </label>
+            <select
+              value={formUid}
+              onChange={e => setFormUid(e.target.value)}
+              disabled={submitting || formsLoading || forms.length === 0}
+              style={{width:"100%", padding:"8px", marginBottom:16,
+                      border:"1px solid var(--neutral-300)", borderRadius:"4px",
+                      fontSize:13}}
+            >
+              {forms.map(f => (
+                <option key={f.uid} value={f.uid}>
+                  {f.name || "(no name)"} — {f.uid}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+        {formsError && (
+          <p className="t-bodysm" style={{color:"var(--accent-danger)", marginTop:0, marginBottom:16}}>
+            {formsError}
+          </p>
+        )}
 
         <label
           style={{display:"flex", alignItems:"center", gap:8,
@@ -407,6 +534,50 @@ const ConnectorRunsTab = () => {
     return () => { cancelled = true; };
   }, []);
 
+  // Live-fetch ConnectorRuns from the DRF endpoint (US-S11-022).
+  // Replaces the static CONNECTOR_RUNS mock that previously hid every
+  // real run from the dashboard. Auto-refresh while any row is
+  // running (matches the S10-005 spec UI-ADMIN-2 5-second poll); the
+  // interval drops when nothing is in-flight to keep the network
+  // chatter low. Fall back to mock if the fetch fails so file://
+  // previews still render.
+  const fetchRuns = (signal) => fetch("/api/v1/dih/connector-runs/", {
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+    signal,
+  })
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(data => {
+      const items = data.results || data;
+      if (!Array.isArray(items)) return null;
+      return items.map(_runApiToRow).filter(Boolean);
+    });
+
+  useEffectAdmin(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    fetchRuns(controller.signal)
+      .then(rows => { if (rows && !cancelled) setRuns(rows); })
+      .catch(() => {});
+    return () => { cancelled = true; controller.abort(); };
+  }, []);
+
+  // Auto-refresh: 5s tick while any row is running, paused otherwise.
+  const anyRunning = useMemoAdmin(
+    () => runs.some(r => r.status === "running" || r.status === "pending"),
+    [runs],
+  );
+  useEffectAdmin(() => {
+    if (!anyRunning) return undefined;
+    const controller = new AbortController();
+    const id = setInterval(() => {
+      fetchRuns(controller.signal)
+        .then(rows => { if (rows) setRuns(rows); })
+        .catch(() => {});
+    }, 5000);
+    return () => { clearInterval(id); controller.abort(); };
+  }, [anyRunning]);
+
   const toggleSel = (id) => {
     const next = new Set(selection);
     if (next.has(id)) next.delete(id); else next.add(id);
@@ -431,10 +602,12 @@ const ConnectorRunsTab = () => {
     setSelection(new Set());
   };
 
-  const triggerRun = ({ sourceId, dryRun }) => {
+  const triggerRun = ({ sourceId, dryRun, formUid }) => {
     const source = sources.find(s => s.id === sourceId);
     if (!source) return;
     setSubmitting(true);
+    const body = { dry_run: dryRun };
+    if (formUid) body.form_uid = formUid;
     fetch(`/api/v1/dih/source-systems/${sourceId}/trigger-run/`, {
       method: "POST",
       credentials: "same-origin",
@@ -443,7 +616,7 @@ const ConnectorRunsTab = () => {
         "Content-Type": "application/json",
         "X-CSRFToken": _adminCsrfToken(),
       },
-      body: JSON.stringify({ dry_run: dryRun }),
+      body: JSON.stringify(body),
     })
       .then(r => r.json().then(body => ({ ok: r.ok, body })))
       .then(({ ok, body }) => {
