@@ -457,7 +457,12 @@ const DIHScreen = () => {
         <div className="card-toolbar">
           <div className="row gap-3">
             <span className="t-bodysm" style={{fontWeight:600}}>Staged records</span>
-            <span className="t-cap">8 of 342 shown · sort by SLA risk</span>
+            <span className="t-cap">
+              {visibleRows.length === rows.length
+                ? `${rows.length} shown`
+                : `${visibleRows.length} of ${rows.length} shown`}
+              {" · sort by SLA risk"}
+            </span>
           </div>
           <div style={{flex:1}}/>
           <button className="btn btn-sm"
