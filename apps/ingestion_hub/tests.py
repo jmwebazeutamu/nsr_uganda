@@ -1554,15 +1554,20 @@ class TestTriggerRunFormSelection:
         assert connector.config["kobo_form_uid"] == "FORM-NEW"
 
     @responses.activate
-    def test_default_falls_back_to_pinned_form(
+    def test_default_falls_back_to_last_staged_success_run(
         self, trigger_kobo_source, django_user_model,
     ):
-        # Seed a Connector pinned to FORM-NEW. A trigger with no
-        # form_uid should pick FORM-NEW instead of FORM-LEGACY
-        # (which is forms[0] in the response order).
-        Connector.objects.create(
+        # Seed a successful past ConnectorRun against FORM-NEW with
+        # records_staged > 0. A trigger with no form_uid should pick
+        # FORM-NEW instead of FORM-LEGACY (which is forms[0] in
+        # response order).
+        good_connector = Connector.objects.create(
             source_system=trigger_kobo_source, name="kobo-FORM-NEW",
             config={"kobo_form_uid": "FORM-NEW"},
+        )
+        ConnectorRun.objects.create(
+            connector=good_connector, status=ConnectorRunStatus.SUCCEEDED,
+            records_landed=10, records_staged=10,
         )
         self._stub_two_forms_three_rows()
         self._stub_data_for("FORM-NEW")
@@ -1571,6 +1576,49 @@ class TestTriggerRunFormSelection:
         client.force_authenticate(user)
         resp = client.post(self._url(trigger_kobo_source), {}, format="json")
         assert resp.status_code == 200, resp.content
+        assert resp.json()["form_uid"] == "FORM-NEW"
+
+    @responses.activate
+    def test_quarantine_only_run_does_not_re_pin(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        # US-S11-025 — the 2026-05-26 trap. An older successful run
+        # against FORM-NEW pinned it. A newer all-quarantine run
+        # against FORM-LEGACY (records_staged=0) MUST NOT override
+        # the pin. Trigger with no form_uid should still default to
+        # FORM-NEW.
+        good_connector = Connector.objects.create(
+            source_system=trigger_kobo_source, name="kobo-FORM-NEW",
+            config={"kobo_form_uid": "FORM-NEW"},
+        )
+        # Older good run — staged=10.
+        old_good = ConnectorRun.objects.create(
+            connector=good_connector, status=ConnectorRunStatus.SUCCEEDED,
+            records_landed=10, records_staged=10,
+        )
+        # Newer bad run on the legacy form — landed=50, staged=0,
+        # everything quarantined. Without the fix, this would
+        # re-pin FORM-LEGACY because it's the most recent.
+        bad_connector = Connector.objects.create(
+            source_system=trigger_kobo_source, name="kobo-FORM-LEGACY",
+            config={"kobo_form_uid": "FORM-LEGACY"},
+        )
+        bad_run = ConnectorRun.objects.create(
+            connector=bad_connector, status=ConnectorRunStatus.SUCCEEDED,
+            records_landed=50, records_staged=0, records_quarantined=50,
+        )
+        # Ensure ordering by started_at — newer bad run wins on time.
+        assert bad_run.started_at >= old_good.started_at
+
+        self._stub_two_forms_three_rows()
+        self._stub_data_for("FORM-NEW")
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(self._url(trigger_kobo_source), {}, format="json")
+        assert resp.status_code == 200, resp.content
+        # The bad newer run's form does NOT win — the pin tracks
+        # staged-success only.
         assert resp.json()["form_uid"] == "FORM-NEW"
 
 

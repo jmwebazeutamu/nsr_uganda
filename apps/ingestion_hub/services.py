@@ -1237,18 +1237,21 @@ def trigger_connector_pull(
     open a ConnectorRun, list deployed forms, pull the chosen one, land
     + process each row, geo-backfill, close the run.
 
-    Form selection precedence (US-S11-022):
+    Form selection precedence (US-S11-022 + US-S11-025):
       1. Explicit `form_uid` from the caller — wins if it appears in
          the upstream's list_forms output. TriggerError if it doesn't.
-      2. The `kobo_form_uid` stored on Connector.config from the last
-         successful pull on this source.
+      2. The `kobo_form_uid` from the Connector of the most recent
+         ConnectorRun on this source with records_staged > 0. A run
+         where everything quarantined at canonicalize CANNOT pin
+         itself as the default — that was the 2026-05-26 trap where
+         the legacy v1 form kept being re-defaulted after a 100%-
+         quarantine pull.
       3. The first DEPLOYED form returned by list_forms.
 
-    The chosen form_uid is persisted back to Connector.config so the
-    next default tracks operator intent. Earlier slices would default
-    to forms[0] and silently swap between forms when the Kobo workspace
-    re-ordered them; that's how 50 records ended up canonicalising
-    against the legacy v1 form on 2026-05-26.
+    The chosen form_uid is still persisted back to Connector.config so
+    operators reading the admin can see what form a Connector typically
+    pulls; but it's the run-outcome history, not the config field,
+    that drives the default.
 
     dry_run=True: the run is opened as run_type=TEST, list_forms is
     called (so credentials get exercised against the upstream), and
@@ -1309,9 +1312,13 @@ def trigger_connector_pull(
         )
 
     # Form selection — see docstring for the precedence chain. The
-    # default-from-Connector.config branch looks for any existing
-    # Connector row on this source, picking the most recently-updated
-    # one so an operator's pin sticks across runs.
+    # default-from-history branch (US-S11-025) walks ConnectorRuns
+    # filtered to records_staged > 0 so a previous canonicalize-
+    # failure run can't silently re-pin the wrong form. Before this,
+    # any pull (regardless of outcome) updated Connector.config and
+    # became the next default — which is how the legacy v1 form kept
+    # winning after the 2026-05-26 incident even after the form-picker
+    # landed.
     forms_by_uid = {f["uid"]: f for f in forms}
     if form_uid:
         if form_uid not in forms_by_uid:
@@ -1322,12 +1329,19 @@ def trigger_connector_pull(
             )
         form = forms_by_uid[form_uid]
     else:
-        pinned_uid = (
-            ConnectorModel.objects
-            .filter(source_system=source)
-            .order_by("-updated_at")
-            .values_list("config__kobo_form_uid", flat=True)
+        last_good_run = (
+            ConnectorRun.objects
+            .filter(
+                connector__source_system=source,
+                records_staged__gt=0,
+            )
+            .select_related("connector")
+            .order_by("-started_at")
             .first()
+        )
+        pinned_uid = (
+            last_good_run.connector.config.get("kobo_form_uid")
+            if last_good_run else None
         )
         if pinned_uid and pinned_uid in forms_by_uid:
             form = forms_by_uid[pinned_uid]
