@@ -258,13 +258,6 @@ const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
   }, []);
 
   const allRequests = liveRequests || ODRS_REQUESTS_MOCK;
-  // Default selection: first row matching the active filter, else
-  // first row overall. Re-evaluated when the request list changes.
-  useEffectDRS(() => {
-    if (allRequests.length === 0) return;
-    if (selectedRow && allRequests.find(r => r.id === selectedRow)) return;
-    setSelectedRow(allRequests[0].id);
-  }, [allRequests]);
 
   const rows = useMemoDRS(() => (
     statusFilter === "all"
@@ -272,9 +265,25 @@ const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
       : allRequests.filter(r => r.status === statusFilter)
   ), [allRequests, statusFilter]);
 
+  // Default selection: first row in the *filtered* list. Re-evaluated
+  // whenever the filter changes or the data refreshes. When the active
+  // filter has no matching rows, selectedRow is cleared so the
+  // REQUEST DETAIL panel hides (which is gated on `current && …` —
+  // previously it stayed wrongly pointing at the first row of
+  // allRequests, so an empty Pending-decision tab still showed a
+  // Delivered request on the right).
+  useEffectDRS(() => {
+    if (rows.length === 0) {
+      if (selectedRow !== null) setSelectedRow(null);
+      return;
+    }
+    if (selectedRow && rows.find(r => r.id === selectedRow)) return;
+    setSelectedRow(rows[0].id);
+  }, [rows]);
+
   const current = useMemoDRS(
-    () => allRequests.find(r => r.id === selectedRow),
-    [allRequests, selectedRow],
+    () => rows.find(r => r.id === selectedRow),
+    [rows, selectedRow],
   );
 
   const filterCounts = useMemoDRS(
