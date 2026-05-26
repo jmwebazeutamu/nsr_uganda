@@ -275,7 +275,28 @@ class ChangeRequestViewSet(
         # Member id, not a Household id) — same trade-off taken in
         # _count_change_requests (US-S14-004).
         qs = super().get_queryset()
-        sr = self.request.query_params.get("sub_region_code")
+        params = self.request.query_params
+
+        # `filterset_fields` above is documentation-only — django-filter
+        # isn't installed, so DRF doesn't wire it. Apply the same
+        # filters manually so the UPD workbench's status tabs and the
+        # household-detail Updates tab actually narrow the result set.
+        # `status` accepts a comma-separated list so the Decided tab can
+        # request both committed and rejected in one round-trip.
+        status_param = params.get("status")
+        if status_param:
+            statuses = [s for s in (v.strip() for v in status_param.split(",")) if s]
+            if statuses:
+                qs = qs.filter(status__in=statuses)
+        for field in ("change_type", "entity_type", "entity_id"):
+            val = params.get(field)
+            if val:
+                qs = qs.filter(**{field: val})
+        pmt = params.get("pmt_relevant")
+        if pmt is not None and pmt != "":
+            qs = qs.filter(pmt_relevant=str(pmt).lower() in ("1", "true", "yes"))
+
+        sr = params.get("sub_region_code")
         if sr:
             from apps.data_management.models import Household
 

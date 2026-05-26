@@ -1251,3 +1251,89 @@ class TestBundleEndpoint:
         cr = ChangeRequest.objects.get(pk=r.data["cr_id"])
         assert set(cr.changes.keys()) == {"phone", "village", "roof"}
         assert r.data["pmt_relevant"] is True  # roof is PMT-relevant
+
+
+class TestListFilters:
+    """The Decided tab in the UPD workbench depends on the list
+    endpoint narrowing by ?status=. django-filter isn't installed
+    so `filterset_fields` is silently a no-op; the viewset filters
+    manually in get_queryset(). These tests pin that behaviour."""
+
+    @pytest.fixture
+    def staff_user(self, db, django_user_model):
+        return django_user_model.objects.create_user(
+            username="reviewer-list", password="p",
+            is_staff=True, is_superuser=True,
+        )
+
+    @pytest.fixture
+    def api_client(self, staff_user):
+        from rest_framework.test import APIClient
+        c = APIClient()
+        c.force_authenticate(user=staff_user)
+        return c
+
+    @pytest.fixture
+    def fixture_set(self, db, member):
+        """One pending, one committed, one rejected CR — minimal set
+        to verify each filter value narrows the result list."""
+        pending = _draft(member, requester="enum-pending")
+        submit_change_request(pending)
+
+        committed = _draft(member, requester="enum-committed",
+                           changes={"first_name": {"old": "James", "new": "Jane"}})
+        submit_change_request(committed)
+        commit_change_request(committed, approver="reviewer-list")
+
+        rejected = _draft(member, requester="enum-rejected",
+                          changes={"telephone_1": {"old": "+256700000001", "new": "+256700000002"}})
+        submit_change_request(rejected)
+        reject_change_request(rejected, approver="reviewer-list", reason="not enough evidence")
+
+        return {"pending": pending, "committed": committed, "rejected": rejected}
+
+    def test_status_filter_pending(self, api_client, fixture_set):
+        r = api_client.get("/api/v1/upd/change-requests/?status=pending_approval")
+        assert r.status_code == 200
+        ids = {row["id"] for row in r.data["results"]}
+        assert ids == {fixture_set["pending"].id}
+
+    def test_status_filter_committed(self, api_client, fixture_set):
+        r = api_client.get("/api/v1/upd/change-requests/?status=committed")
+        assert r.status_code == 200
+        ids = {row["id"] for row in r.data["results"]}
+        assert ids == {fixture_set["committed"].id}
+
+    def test_status_filter_comma_separated(self, api_client, fixture_set):
+        """Decided tab uses ?status=committed,rejected to get both
+        terminal states in one round-trip."""
+        r = api_client.get("/api/v1/upd/change-requests/?status=committed,rejected")
+        assert r.status_code == 200
+        ids = {row["id"] for row in r.data["results"]}
+        assert ids == {fixture_set["committed"].id, fixture_set["rejected"].id}
+
+    def test_status_filter_missing_returns_all(self, api_client, fixture_set):
+        r = api_client.get("/api/v1/upd/change-requests/")
+        assert r.status_code == 200
+        ids = {row["id"] for row in r.data["results"]}
+        assert ids == {fixture_set["pending"].id, fixture_set["committed"].id, fixture_set["rejected"].id}
+
+    def test_entity_id_filter(self, api_client, fixture_set, member):
+        """Household-detail Updates tab uses ?entity_id= to scope to
+        a single record's CR history."""
+        other = Member.objects.create(
+            household=member.household, line_number=2,
+            surname="Other", first_name="Person", sex="2",
+        )
+        unrelated = _draft(other, requester="enum-other")
+        submit_change_request(unrelated)
+
+        r = api_client.get(f"/api/v1/upd/change-requests/?entity_id={member.id}")
+        assert r.status_code == 200
+        ids = {row["id"] for row in r.data["results"]}
+        assert unrelated.id not in ids
+        assert ids == {
+            fixture_set["pending"].id,
+            fixture_set["committed"].id,
+            fixture_set["rejected"].id,
+        }

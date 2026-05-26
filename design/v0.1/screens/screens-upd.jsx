@@ -189,28 +189,47 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
   const [bulkModal, setBulkModal] = useStateUpd(null);
   const [bulkResult, setBulkResult] = useStateUpd(null);
 
-  // Refresh the pending-approval queue from the API. Used on mount
-  // and after every successful action. On unreachable API (file://
-  // preview) it sets dataSource so the eyebrow + fallbacks reflect
-  // offline mode.
+  // Queue tab. Maps to a server-side ?status= filter on the list
+  // endpoint. The Decided tab requests committed + rejected in one
+  // round-trip (the viewset accepts a comma-separated list). The On
+  // hold tab uses the existing release affordance in the action bar.
+  const [tab, setTab] = useStateUpd("pending");
+  const TAB_STATUS = {
+    pending:  "pending_approval",
+    on_hold:  "on_hold",
+    decided:  "committed,rejected",
+  };
+
+  // Refresh the queue from the API for the current tab. Used on mount,
+  // on tab change, and after every successful action. On unreachable
+  // API (file:// preview) it sets dataSource so the eyebrow +
+  // fallbacks reflect offline mode.
   const refresh = () => fetch(
-    "/api/v1/upd/change-requests/?status=pending_approval&page_size=100", {
+    `/api/v1/upd/change-requests/?status=${TAB_STATUS[tab]}&page_size=100`, {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
     })
     .then(r => r.ok ? r.json() : Promise.reject(r.status))
     .then(data => {
       const list = (data.results || data || []).map(_updApiToView);
-      if (list.length === 0) {
-        setDataSource("live-empty");
-        return;
-      }
+      // Decided is sorted by decision time desc (server defaults to
+      // created_at desc, which is close enough for the test fixture
+      // volumes but slightly off for true decided-recency); a future
+      // ?ordering= pass can refine.
       setQueue(list);
-      setDataSource("live");
+      setDataSource(list.length === 0 ? "live-empty" : "live");
     })
     .catch(() => { setDataSource("offline"); });
 
-  useEffectUpd(() => { refresh(); /* eslint-disable-line */ }, []);
+  // Reset current selection + opened row when switching tabs so a
+  // pending row doesn't linger in the detail rail while the queue
+  // shows committed rows.
+  useEffectUpd(() => {
+    setSelected(new Set());
+    setCurrent(null);
+    refresh();
+    /* eslint-disable-next-line */
+  }, [tab]);
 
   // Probe /me to learn the current user's username, then bind it as
   // `actor` on subsequent action POSTs. 401/403 (file:// preview)
@@ -510,13 +529,36 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
       {/* Queue + bulk actions (US-S11-004) */}
       <div className="card" style={{marginBottom:16}}>
         <div className="card-toolbar">
-          <strong className="t-bodysm">My queue · pending approval</strong>
+          <div style={{display:'flex', gap:4}}>
+            {[
+              { id: "pending", label: "Pending" },
+              { id: "on_hold", label: "On hold" },
+              { id: "decided", label: "Decided" },
+            ].map(t => {
+              const active = tab === t.id;
+              return (
+                <button key={t.id} type="button"
+                  onClick={() => setTab(t.id)}
+                  className="btn btn-sm"
+                  style={{
+                    background: active ? 'var(--accent-update-bg)' : 'transparent',
+                    color: active ? 'var(--accent-update)' : 'var(--neutral-700)',
+                    borderColor: active ? 'var(--accent-update)' : 'var(--neutral-300)',
+                    fontWeight: active ? 600 : 500,
+                  }}>
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
           <Chip tone="data" size="sm">{queue.length} rows</Chip>
           <div style={{flex:1}}/>
           <span className="t-cap">
             {selected.size > 0
               ? <><strong>{selected.size}</strong> selected · cap 200 per batch</>
-              : "Click a row to open · tick to select for bulk"}
+              : tab === "decided"
+                ? "Read-only history — actions disabled"
+                : "Click a row to open · tick to select for bulk"}
           </span>
         </div>
         <div style={{maxHeight:240, overflowY:'auto'}}>
@@ -524,10 +566,12 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
                         position:'sticky', top:0, background:'var(--neutral-50)',
                         borderBottom:'1px solid var(--neutral-200)', zIndex:1}}>
             <div style={{padding:'8px 10px'}}>
-              <input type="checkbox"
-                checked={queue.length > 0 && selected.size === queue.length}
-                ref={el => { if (el) el.indeterminate = selected.size > 0 && selected.size < queue.length; }}
-                onChange={toggleAll}/>
+              {tab === "pending" && (
+                <input type="checkbox"
+                  checked={queue.length > 0 && selected.size === queue.length}
+                  ref={el => { if (el) el.indeterminate = selected.size > 0 && selected.size < queue.length; }}
+                  onChange={toggleAll}/>
+              )}
             </div>
             <div className="t-cap" style={{padding:'10px 12px'}}>ID</div>
             {/* "TARGET" replaces "HEAD · PARISH" — for live CRs we
@@ -538,7 +582,10 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
             <div className="t-cap" style={{padding:'10px 12px'}}>TARGET</div>
             <div className="t-cap" style={{padding:'10px 12px'}}>CHANGE TYPE</div>
             <div className="t-cap" style={{padding:'10px 12px'}}>SUBMITTED</div>
-            <div className="t-cap" style={{padding:'10px 12px'}}>SLA</div>
+            {/* SLA column repurposes as STATUS on the Decided tab —
+                an in-window/out-of-window chip is moot once the row
+                has been committed or rejected. */}
+            <div className="t-cap" style={{padding:'10px 12px'}}>{tab === "decided" ? "STATUS" : "SLA"}</div>
             <div className="t-cap" style={{padding:'10px 12px'}}>SUBMITTER</div>
           </div>
           {queue.map(r => {
@@ -555,8 +602,10 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
                         borderLeft: isCurrent ? '3px solid var(--accent-update)' : '3px solid transparent',
                         cursor:'pointer'}}>
                 <div style={{padding:'10px'}}>
-                  <input type="checkbox" checked={selectedRow}
-                    onChange={() => toggleRow(r.id)} onClick={(e) => e.stopPropagation()}/>
+                  {tab === "pending" && (
+                    <input type="checkbox" checked={selectedRow}
+                      onChange={() => toggleRow(r.id)} onClick={(e) => e.stopPropagation()}/>
+                  )}
                 </div>
                 <div className="t-mono" style={{padding:'10px 12px', fontSize:12, display:'flex', alignItems:'center'}}>
                   {r.id}
@@ -572,9 +621,15 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
                   {_updRowDate(r)}
                 </div>
                 <div style={{padding:'10px 12px', display:'flex', alignItems:'center'}}>
-                  <Chip tone={breach ? "danger" : "data"} size="sm">
-                    {r.slaDays}d / {r.slaCap}d
-                  </Chip>
+                  {tab === "decided" ? (
+                    <Chip tone={r._raw?.status === "committed" ? "data" : "danger"} size="sm">
+                      {r._raw?.status || "—"}
+                    </Chip>
+                  ) : (
+                    <Chip tone={breach ? "danger" : "data"} size="sm">
+                      {r.slaDays}d / {r.slaCap}d
+                    </Chip>
+                  )}
                 </div>
                 <div style={{padding:'10px 12px', fontSize:12,
                               color: r.canSelfApprove ? 'var(--neutral-700)' : 'var(--accent-quality)',
@@ -587,8 +642,11 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
           })}
         </div>
 
-        {/* Bulk-action toolbar — appears whenever rows are selected */}
-        {selected.size > 0 && (
+        {/* Bulk-action toolbar — appears whenever rows are selected.
+            Limited to the Pending tab because the bulk endpoints
+            (approve / reject / escalate) all require PENDING_APPROVAL
+            state, and there's no bulk-release / bulk-decided action. */}
+        {selected.size > 0 && tab === "pending" && (
           <div style={{display:'flex', alignItems:'center', gap:12,
                         padding:'10px 16px', background:'var(--neutral-100)',
                         borderTop:'1px solid var(--neutral-200)'}}>
@@ -848,7 +906,10 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
       {/* Sticky action bar — operates on `current`. Approve is blocked
           when the viewer is the submitter (AC-UPD-NO-SELF-APPROVE).
           ON_HOLD rows hide Approve/Reject/Hold and surface Release;
-          PENDING_APPROVAL rows show the usual quartet. */}
+          PENDING_APPROVAL rows show the usual quartet; COMMITTED /
+          REJECTED rows hide the bar entirely — actions would 400 and
+          the row is in the immutable audit trail. */}
+      {!(isLive && ["committed", "rejected"].includes(current?._raw?.status)) && (
       <div style={{margin:'16px -24px 0', position:'sticky', bottom:0, zIndex:20}}>
         <ActionBar left={
           <>SLA: <strong>{headerVM.slaDays}d</strong> of {headerVM.slaCap}d · Reviewer: {headerVM.reviewer}
@@ -880,6 +941,7 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
           )}
         </ActionBar>
       </div>
+      )}
 
       <AuditDrawer open={auditOpen} onClose={() => setAuditOpen(false)} title={`Audit · ${effectiveId}`}
         events={[
