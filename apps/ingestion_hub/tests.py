@@ -1721,3 +1721,62 @@ class TestDeleteConnectorRun:
             self._url(run), {"reason": "cleanup"}, format="json",
         )
         assert resp.status_code == 200, resp.content
+
+
+@pytest.mark.django_db
+class TestTriggerRunPersistsOutcomeCounters:
+    """US-S11-024 regression: trigger_connector_pull must write its
+    per-outcome counters (quarantined, errored) back to the
+    ConnectorRun so the dashboard's Quarantined / Rejected columns
+    don't lie. Earlier slices only persisted records_landed (via
+    land_payload), so a 100%-canonicalize-failure pull would render
+    landed=50, quarantined=0 — exactly what the operator saw on
+    2026-05-26 22:30 (run 01KSK6K7921G4X3V01TA5WY5DP)."""
+
+    @responses.activate
+    def test_quarantined_count_lands_on_records_quarantined(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        # Stub a form whose canonicalize will fail — the simplest
+        # path is to return rows that don't have the canonical
+        # geographic chain the Kobo connector expects. KoboConnector
+        # canonicalize raises KeyError on missing 'a1_region', so
+        # any payload that lacks it routes to "quarantined".
+        responses.add(
+            responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets.json",
+            json={"results": [
+                {"uid": "BROKEN-FORM", "name": "Will canonicalize-fail",
+                 "asset_type": "survey", "deployment__active": True},
+            ]}, status=200,
+        )
+        responses.add(
+            responses.GET,
+            f"{_TRIGGER_KOBO_URL}/api/v2/assets/BROKEN-FORM/data.json",
+            json={"results": [
+                {"_id": 1, "shape": "missing geographic chain"},
+                {"_id": 2, "shape": "missing geographic chain"},
+                {"_id": 3, "shape": "missing geographic chain"},
+            ], "next": None}, status=200,
+        )
+        from django.contrib.auth.models import Group
+        user = django_user_model.objects.create_user(
+            username="u-counter", password="x",
+        )
+        grp, _ = Group.objects.get_or_create(name="nsr_admin")
+        user.groups.add(grp)
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(
+            f"/api/v1/dih/source-systems/{trigger_kobo_source.id}/trigger-run/",
+            {"form_uid": "BROKEN-FORM"}, format="json",
+        )
+        assert resp.status_code == 200, resp.content
+        run = ConnectorRun.objects.get(id=resp.json()["run_id"])
+        assert run.records_landed == 3
+        # The dashboard's Quarantined column reads from this field,
+        # so the regression we're locking down is "quarantined > 0
+        # when canonicalize failed on every row".
+        assert run.records_quarantined == 3, (
+            f"records_quarantined should reflect the 3 canonicalize-failures, "
+            f"got {run.records_quarantined}"
+        )

@@ -1415,10 +1415,21 @@ def trigger_connector_pull(
         f"geo backfill: +{geo_total} GeographicUnit row(s)"
         + (f"; cap {batch_cap} hit" if landed >= batch_cap else "")
     )
+    # Persist the per-outcome counters so the Connector runs
+    # dashboard columns reflect reality. Before this, only
+    # records_landed got incremented (by land_payload), so a pull
+    # where canonicalize raised on every row would show landed=50
+    # with quarantined=0 — actively misleading. records_staged
+    # already tracks via stage_from_landing inside _process_one_landing
+    # so it doesn't get touched here. F() so a post-run operator
+    # reject (which also does +1 on records_rejected) doesn't get
+    # clobbered — defensive even though the close is synchronous.
     ConnectorRun.objects.filter(pk=run.pk).update(
         status=ConnectorRunStatus.SUCCEEDED,
         finished_at=timezone.now(),
         note=note,
+        records_quarantined=F("records_quarantined") + outcomes["quarantined"],
+        records_rejected=F("records_rejected") + outcomes["error"],
     )
 
     return {
