@@ -130,7 +130,7 @@ describe("RunConnectorModal — form picker (US-S11-022)", () => {
     });
   };
 
-  it("shows the form dropdown with deployed forms only, default = first", async () => {
+  it("shows the form dropdown with deployed forms only, default = first when no pin", async () => {
     _stubFormsFetch(_formsResponse);
     render(<RunConnectorModal {...defaultProps()} />);
     await waitFor(() => {
@@ -145,6 +145,27 @@ describe("RunConnectorModal — form picker (US-S11-022)", () => {
     // Draft form is filtered out client-side.
     const optionUids = Array.from(formSelect.options).map(o => o.value);
     expect(optionUids).toEqual(["form-A", "form-B"]);
+  });
+
+  it("defaults the dropdown to the pinned form, not forms[0] (US-S11-026)", async () => {
+    // Same response shape as _formsResponse but FORM-B is pinned.
+    // The modal should default to FORM-B regardless of position.
+    _stubFormsFetch([
+      { uid: "form-A", name: "Pilot v2", asset_type: "survey", deployed: true,
+        pinned: false },
+      { uid: "form-B", name: "v1 legacy", asset_type: "survey", deployed: true,
+        pinned: true },
+      { uid: "form-C", name: "Draft", asset_type: "survey", deployed: false,
+        pinned: false },
+    ]);
+    render(<RunConnectorModal {...defaultProps()} />);
+    await waitFor(() => screen.getByText(/^Form/));
+    const combos = screen.getAllByRole("combobox");
+    const formSelect = combos[1];
+    expect(formSelect.value).toBe("form-B");
+    // The pinned option carries the ✓ marker in its display text.
+    const pinnedOption = Array.from(formSelect.options).find(o => o.value === "form-B");
+    expect(pinnedOption.textContent).toMatch(/^✓/);
   });
 
   it("passes the chosen form_uid through onSubmit", async () => {

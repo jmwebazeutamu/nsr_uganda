@@ -1222,6 +1222,33 @@ class TriggerError(DihError):
     the API layer can map these to 4xx without catching every DihError."""
 
 
+def resolve_pinned_form_uid(source) -> str | None:
+    """Return the Kobo form_uid that the trigger would default to for
+    this SourceSystem (US-S11-025 pin), or None if no staged-success
+    run exists yet.
+
+    Same query the trigger uses; lifted out so the /forms/ endpoint
+    (US-S11-026) can mark the recommended form on the form-picker
+    response and the modal can default the dropdown to it. Before
+    this, the modal defaulted to forms[0] regardless of history,
+    which meant the operator visually saw the legacy form selected
+    even when the server was ready to pin the correct one.
+    """
+    last_good_run = (
+        ConnectorRun.objects
+        .filter(
+            connector__source_system=source,
+            records_staged__gt=0,
+        )
+        .select_related("connector")
+        .order_by("-started_at")
+        .first()
+    )
+    if last_good_run is None:
+        return None
+    return last_good_run.connector.config.get("kobo_form_uid") or None
+
+
 def trigger_connector_pull(
     source,
     *,
@@ -1329,20 +1356,7 @@ def trigger_connector_pull(
             )
         form = forms_by_uid[form_uid]
     else:
-        last_good_run = (
-            ConnectorRun.objects
-            .filter(
-                connector__source_system=source,
-                records_staged__gt=0,
-            )
-            .select_related("connector")
-            .order_by("-started_at")
-            .first()
-        )
-        pinned_uid = (
-            last_good_run.connector.config.get("kobo_form_uid")
-            if last_good_run else None
-        )
+        pinned_uid = resolve_pinned_form_uid(source)
         if pinned_uid and pinned_uid in forms_by_uid:
             form = forms_by_uid[pinned_uid]
         else:

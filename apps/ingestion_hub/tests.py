@@ -1455,6 +1455,62 @@ class TestFormsEndpoint:
         resp = client.get(self._url(trigger_kobo_source))
         assert resp.status_code in (401, 403)
 
+    @responses.activate
+    def test_pinned_flag_marks_last_staged_success_form(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        # US-S11-026: the modal needs to know which form the server
+        # would default to so the dropdown reflects it. Plant a
+        # successful past run on FORM-PINNED, then assert /forms/
+        # marks it pinned and the other deployed forms unpinned.
+        good_connector = Connector.objects.create(
+            source_system=trigger_kobo_source, name="kobo-FORM-PINNED",
+            config={"kobo_form_uid": "FORM-PINNED"},
+        )
+        ConnectorRun.objects.create(
+            connector=good_connector, status=ConnectorRunStatus.SUCCEEDED,
+            records_landed=5, records_staged=5,
+        )
+        responses.add(
+            responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets.json",
+            json={"results": [
+                {"uid": "FORM-LEGACY", "name": "v1 legacy",
+                 "asset_type": "survey", "deployment__active": True},
+                {"uid": "FORM-PINNED", "name": "current",
+                 "asset_type": "survey", "deployment__active": True},
+            ]}, status=200,
+        )
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.get(self._url(trigger_kobo_source))
+        assert resp.status_code == 200, resp.content
+        by_uid = {f["uid"]: f for f in resp.json()}
+        assert by_uid["FORM-PINNED"]["pinned"] is True
+        assert by_uid["FORM-LEGACY"]["pinned"] is False
+
+    @responses.activate
+    def test_pinned_flag_absent_when_no_history(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        # No staged-success run → no pin. Modal will fall back to
+        # forms[0] in the dropdown default.
+        responses.add(
+            responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets.json",
+            json={"results": [
+                {"uid": "A", "name": "a",
+                 "asset_type": "survey", "deployment__active": True},
+                {"uid": "B", "name": "b",
+                 "asset_type": "survey", "deployment__active": True},
+            ]}, status=200,
+        )
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.get(self._url(trigger_kobo_source))
+        assert resp.status_code == 200, resp.content
+        assert all(f["pinned"] is False for f in resp.json())
+
 
 @pytest.mark.django_db
 class TestTriggerRunFormSelection:

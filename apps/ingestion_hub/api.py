@@ -25,6 +25,7 @@ from .services import (
     promote_stage_record,
     quarantine_stage_record,
     reject_stage_record,
+    resolve_pinned_form_uid,
     submit_walk_in_capture,
     trigger_connector_pull,
 )
@@ -136,11 +137,16 @@ class TriggerRunRequestSerializer(serializers.Serializer):
 
 class FormListItemSerializer(serializers.Serializer):
     """One row in the form-picker dropdown. Mirrors the dict shape
-    KoboConnector.list_forms returns."""
+    KoboConnector.list_forms returns, plus the US-S11-026 `pinned`
+    flag — exactly one form (or zero) in the list will have it set
+    to true, marking which form the trigger would pull if the
+    operator submitted without a form_uid. The modal defaults the
+    dropdown selection to it."""
     uid = serializers.CharField()
     name = serializers.CharField(allow_blank=True)
     asset_type = serializers.CharField(allow_blank=True, required=False)
     deployed = serializers.BooleanField()
+    pinned = serializers.BooleanField(default=False)
 
 
 class DeleteRunRequestSerializer(serializers.Serializer):
@@ -300,6 +306,12 @@ class SourceSystemViewSet(viewsets.ReadOnlyModelViewSet):
                 {"detail": f"{source.code}: list_forms failed: {exc}"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        # Mark the form the trigger would pull if no form_uid is
+        # supplied. Modal uses this to default the dropdown selection
+        # so what the operator sees matches what the server would do.
+        pinned_uid = resolve_pinned_form_uid(source)
+        for f in forms:
+            f["pinned"] = (pinned_uid is not None and f.get("uid") == pinned_uid)
         return Response(FormListItemSerializer(forms, many=True).data)
 
 

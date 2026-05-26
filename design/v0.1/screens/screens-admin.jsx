@@ -389,9 +389,13 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
         }
         const deployed = (body || []).filter(f => f.deployed);
         setForms(deployed);
-        // Default to the first deployed form so submit-with-no-pick
-        // is unambiguous; operator can override before submitting.
-        setFormUid(deployed[0]?.uid || "");
+        // US-S11-026: prefer the server-pinned form so the dropdown
+        // matches what the server would default to. Without this,
+        // the modal silently selected forms[0] (whatever Kobo
+        // returned first) even when the server was ready to pin a
+        // known-good form — the 2026-05-26 trap.
+        const pinned = deployed.find(f => f.pinned);
+        setFormUid(pinned?.uid || deployed[0]?.uid || "");
       })
       .catch(() => {
         if (cancelled) return;
@@ -474,7 +478,7 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
             >
               {forms.map(f => (
                 <option key={f.uid} value={f.uid}>
-                  {f.name || "(no name)"} — {f.uid}
+                  {f.pinned ? "✓ " : ""}{f.name || "(no name)"} — {f.uid}
                 </option>
               ))}
             </select>
