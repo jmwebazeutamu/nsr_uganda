@@ -52,9 +52,36 @@ const _updApiToView = (cr) => {
     pmt: !!cr.pmt_relevant,
     slaDays, slaCap,
     submitter: cr.requester || "—",
+    submitted_at: cr.created_at || null,
     canSelfApprove: true,
     _raw: cr,
   };
+};
+
+// Compact date renderer for the queue's DATE column — "14 May" /
+// "14 May 25" once the year is not the current one. Falls back to
+// "—" when the timestamp is missing so the cell never shows
+// "Invalid Date".
+const _updFmtDate = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return sameYear
+    ? `${d.getDate()} ${months[d.getMonth()]}`
+    : `${d.getDate()} ${months[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`;
+};
+
+// Resolve a queue row to a date for the SUBMITTED column. Live rows
+// carry `submitted_at` from the projector; mock rows encode the date
+// in their id (UPD-YYYY-MM-DD-NNNNN) so we don't have to widen every
+// mock literal.
+const _updRowDate = (r) => {
+  if (r.submitted_at) return _updFmtDate(r.submitted_at);
+  const m = /UPD-(\d{4})-(\d{2})-(\d{2})/.exec(r.id || "");
+  if (m) return _updFmtDate(`${m[1]}-${m[2]}-${m[3]}T00:00:00Z`);
+  return "—";
 };
 
 // Mock queue — what's PENDING_APPROVAL in the reviewer's scope.
@@ -493,7 +520,7 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
           </span>
         </div>
         <div style={{maxHeight:240, overflowY:'auto'}}>
-          <div style={{display:'grid', gridTemplateColumns:'32px 220px 1fr 200px 140px 100px 100px',
+          <div style={{display:'grid', gridTemplateColumns:'32px 220px 1fr 200px 110px 100px 100px',
                         position:'sticky', top:0, background:'var(--neutral-50)',
                         borderBottom:'1px solid var(--neutral-200)', zIndex:1}}>
             <div style={{padding:'8px 10px'}}>
@@ -503,9 +530,14 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
                 onChange={toggleAll}/>
             </div>
             <div className="t-cap" style={{padding:'10px 12px'}}>ID</div>
-            <div className="t-cap" style={{padding:'10px 12px'}}>HEAD &middot; PARISH</div>
+            {/* "TARGET" replaces "HEAD · PARISH" — for live CRs we
+                only have entity_id + entity_type to display (no head
+                name / parish lookup yet), and the old label was a
+                stale mock-era promise that read as duplicated stacked
+                text on the live path. */}
+            <div className="t-cap" style={{padding:'10px 12px'}}>TARGET</div>
             <div className="t-cap" style={{padding:'10px 12px'}}>CHANGE TYPE</div>
-            <div className="t-cap" style={{padding:'10px 12px'}}>PMT</div>
+            <div className="t-cap" style={{padding:'10px 12px'}}>SUBMITTED</div>
             <div className="t-cap" style={{padding:'10px 12px'}}>SLA</div>
             <div className="t-cap" style={{padding:'10px 12px'}}>SUBMITTER</div>
           </div>
@@ -516,7 +548,7 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
             return (
               <div key={r.id}
                 onClick={() => setCurrent(r)}
-                style={{display:'grid', gridTemplateColumns:'32px 220px 1fr 200px 140px 100px 100px',
+                style={{display:'grid', gridTemplateColumns:'32px 220px 1fr 200px 110px 100px 100px',
                         borderBottom:'1px solid var(--neutral-200)',
                         background: isCurrent ? 'var(--accent-update-bg)'
                                   : selectedRow ? 'var(--neutral-100)' : 'white',
@@ -536,9 +568,8 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
                 <div style={{padding:'10px 12px', fontSize:13, display:'flex', alignItems:'center'}}>
                   {r.type}
                 </div>
-                <div style={{padding:'10px 12px', display:'flex', alignItems:'center'}}>
-                  {r.pmt ? <Chip tone="eligibility" size="sm">pmt_relevant</Chip>
-                         : <span className="t-bodysm muted">—</span>}
+                <div style={{padding:'10px 12px', fontSize:12.5, display:'flex', alignItems:'center', color:'var(--neutral-700)'}}>
+                  {_updRowDate(r)}
                 </div>
                 <div style={{padding:'10px 12px', display:'flex', alignItems:'center'}}>
                   <Chip tone={breach ? "danger" : "data"} size="sm">
