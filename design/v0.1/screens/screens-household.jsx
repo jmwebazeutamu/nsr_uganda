@@ -181,22 +181,65 @@ const _hhApiToView = (h) => {
 
 // Project the household view-model into the modal's `currentValues`
 // map ("category.field" → current value). Only household-level
-// fields that we actually have in `h` are populated; member-level
-// fields (rost.member_*, ed.*, hd.*, emp.*) stay empty until the
-// member picker lands (CHB-modal slice 2). The modal renders the
-// neutral "current —" chip for any field not in this map.
+// fields that we have in `h` are populated; member-level fields
+// (rost.member_*, ed.*, hd.*, emp.*) come through `memberValues`
+// for the selected member. Missing keys fall back to "current —"
+// in the modal.
+//
+// Wherever the household stores both a code and a resolved label
+// (h.questionnaireLabels.* + h.questionnaire.*), prefer the label —
+// that's what the operator sees elsewhere on the screen.
 const projectCurrentValues = (h) => {
   if (!h) return {};
   const cv = {};
-  if (h.phone && h.phone !== "—")         cv["iden.phone"]     = h.phone;
+  const hg  = h.questionnaire?.housing      || {};
+  const hgL = h.questionnaireLabels?.housing || {};
+  const fs  = h.questionnaire?.food_security || {};
+  const sc  = h.questionnaire?.shocks_coping || {};
+  const scL = h.questionnaireLabels?.shocks_coping || {};
+
+  // iden
+  if (h.phone && h.phone !== "—")          cv["iden.phone"]     = h.phone;
   if (h.head)                              cv["iden.head_name"] = h.head;
-  if (h.village && h.village !== "—")     cv["loc.village"]    = h.village;
-  if (h.parish && h.parish !== "—")       cv["loc.parish"]     = h.parish;
+
+  // loc
+  if (h.village && h.village !== "—")      cv["loc.village"]    = h.village;
+  if (h.parish && h.parish !== "—")        cv["loc.parish"]     = h.parish;
   if (h.gps && h.gps.lat != null && h.gps.lng != null) {
     cv["loc.gps"] = `${h.gps.lat.toFixed(5)}, ${h.gps.lng.toFixed(5)}`;
   }
   if (h.enumerationArea)                   cv["loc.ea"]         = h.enumerationArea;
+
+  // rost (household-scope only)
   if (h.hh != null)                        cv["rost.hh_size"]   = String(h.hh);
+
+  // hous — prefer resolved label (e.g. "Iron sheets") over the raw code.
+  const pickHg = (key) => hgL[key] || hg[key];
+  const pickIfPresent = (catField, value) => {
+    if (value != null && value !== "") cv[catField] = String(value);
+  };
+  pickIfPresent("hous.roof",   pickHg("roof_material"));
+  pickIfPresent("hous.wall",   pickHg("wall_material"));
+  pickIfPresent("hous.floor",  pickHg("floor_material"));
+  pickIfPresent("hous.water",  pickHg("water_source"));
+  pickIfPresent("hous.toilet", pickHg("toilet_type"));
+  pickIfPresent("hous.fuel",   pickHg("cooking_fuel"));
+  pickIfPresent("hous.light",  pickHg("lighting_source"));
+  pickIfPresent("hous.tenure", pickHg("tenure"));
+
+  // Assets — the catalog's radio / tv / phone_owned are yes/no
+  // selects; the household stores a count. Treat any non-zero
+  // count as "yes" so the before-state matches the catalog options.
+  const counts = hg.asset_counts || {};
+  if (counts.radio != null) cv["hous.radio"]       = counts.radio > 0 ? "yes" : "no";
+  if (counts.tv != null)    cv["hous.tv"]          = counts.tv    > 0 ? "yes" : "no";
+  if (counts.phone != null) cv["hous.phone_owned"] = counts.phone > 0 ? "yes" : "no";
+
+  // food
+  if (fs.meals_per_day != null) cv["food.meals"] = String(fs.meals_per_day);
+  if (fs.fcs_score != null)     cv["food.fcs"]   = String(fs.fcs_score);
+  pickIfPresent("food.shock",  scL.shock_affected  || sc.shock_affected);
+
   return cv;
 };
 
