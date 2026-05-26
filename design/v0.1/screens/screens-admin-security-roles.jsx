@@ -1,123 +1,596 @@
 /* global React, Icon, Chip, PageHeader, KPI */
-// NSR MIS — Admin · Security · Roles & Scopes
+// NSR MIS - Admin - Security - Roles & Scopes
 // =========================================================
-// Manages who can see what. Two complementary axes:
-//   ROLE — auth.Group membership controls *which screens* they can open
-//   SCOPE — apps.security.OperatorScope rows control *which rows*
-//           they can see at any geographic level
-//
-// Maps to:
-//   django.contrib.auth.Group  (roles — set elsewhere; this screen
-//                               surfaces and toggles membership)
-//   apps.security.OperatorScope (one row per scope assignment; user
-//                               may hold many; "national" = wildcard)
-//   apps.reference_data.GeographicUnit (scope_code is a code at the
-//                                       matching level)
+// ROLE controls which screens a user can open.
+// SCOPE controls which records a user can see inside those screens.
 
 const { useState: useStateSEC, useMemo: useMemoSEC } = React;
 
 const SEC_ROLES = [
-  { id: "parish_coordinator",    label: "Parish Coordinator",        category: "operator",   users: 1218, desc: "First-level review of UPDs and intakes within their parish.", screens: ["console.registry","console.upd"], adminConsole: false },
-  { id: "cdo",                   label: "Community Dev't Officer",   category: "operator",   users: 412,  desc: "Sub-county-level review; can approve PMT-relevant changes.", screens: ["console.registry","console.upd","console.programmes"], adminConsole: false },
-  { id: "nsr_unit_coordinator",  label: "NSR Unit Coordinator",      category: "operator",   users: 18,   desc: "National-level review and policy.",                          screens: ["console.*"], adminConsole: false },
-  { id: "dpo",                   label: "Data Protection Officer",   category: "security",   users: 4,    desc: "Audit chain + DSA scope reviews. Sign-off on PMT activation.", screens: ["console.audit","admin.audit","admin.security"], adminConsole: true },
-  { id: "mglsd_statistics",      label: "MGLSD Statistics Unit",     category: "admin",      users: 8,    desc: "PMT model authoring + recalibration.",                       screens: ["admin.pmt","admin.refdata"], adminConsole: true },
-  { id: "nsr_admin",             label: "NSR Admin",                 category: "admin",      users: 6,    desc: "Full admin console access.",                                 screens: ["admin.*"], adminConsole: true },
-  { id: "nsr_dba",               label: "NSR DBA",                   category: "admin",      users: 3,    desc: "Database operations; data fix workflows.",                   screens: ["admin.refdata","admin.audit"], adminConsole: true },
-  { id: "nsr_security",          label: "NSR Security",              category: "security",   users: 2,    desc: "Role + scope management; security incidents.",                screens: ["admin.security","admin.audit"], adminConsole: true },
-  { id: "partner_steward",       label: "Partner Data Steward",      category: "partner",    users: 38,   desc: "Per-partner — sees DRS requests + lifecycle webhook events.", screens: ["console.partners","console.drs"], adminConsole: false },
+  { id: "parish_coordinator", label: "Parish Coordinator", category: "operator", users: 1218, desc: "First-level review of UPDs and intakes within their parish.", screens: ["console.registry", "console.upd"], adminConsole: false },
+  { id: "cdo", label: "Community Dev't Officer", category: "operator", users: 412, desc: "Sub-county-level review; can approve PMT-relevant changes.", screens: ["console.registry", "console.upd", "console.programmes"], adminConsole: false },
+  { id: "nsr_unit_coordinator", label: "NSR Unit Coordinator", category: "operator", users: 18, desc: "National-level review and policy.", screens: ["console.*"], adminConsole: false },
+  { id: "dpo", label: "Data Protection Officer", category: "security", users: 4, desc: "Audit chain and DSA scope reviews. Sign-off on PMT activation.", screens: ["console.audit", "admin.audit", "admin.security"], adminConsole: true },
+  { id: "mglsd_statistics", label: "MGLSD Statistics Unit", category: "admin", users: 8, desc: "PMT model authoring and recalibration.", screens: ["admin.pmt", "admin.refdata"], adminConsole: true },
+  { id: "nsr_admin", label: "NSR Admin", category: "admin", users: 6, desc: "Full admin console access.", screens: ["admin.*"], adminConsole: true },
+  { id: "nsr_dba", label: "NSR DBA", category: "admin", users: 3, desc: "Database operations; data fix workflows.", screens: ["admin.refdata", "admin.audit"], adminConsole: true },
+  { id: "nsr_security", label: "NSR Security", category: "security", users: 2, desc: "Role and scope management; security incidents.", screens: ["admin.security", "admin.audit"], adminConsole: true },
+  { id: "partner_steward", label: "Partner Data Steward", category: "partner", users: 38, desc: "Per-partner - sees DRS requests and lifecycle webhook events.", screens: ["console.partners", "console.drs"], adminConsole: false },
 ];
 
 const SEC_USERS = [
-  { id: "u-akello-p",     name: "Akello P.",        username: "akello.p",     email: "akello.p@mglsd.go.ug",     status: "active",  lastLogin: "22 May · 14:01", mfa: true,  groups: ["nsr_unit_coordinator","dpo"], scopes: [{ level: "national", code: "" }], onboardedAt: "12 Sep 2023" },
-  { id: "u-bahati-e",     name: "Bahati Esther",    username: "bahati.e",     email: "bahati.e@opm.go.ug",       status: "active",  lastLogin: "22 May · 12:48", mfa: true,  groups: ["partner_steward"],          scopes: [{ level: "partner", code: "OPM" }], onboardedAt: "04 Jan 2026" },
-  { id: "u-adong-f",      name: "Adong F.",         username: "adong.f",      username2:"", email: "adong.f@mglsd.go.ug",      status: "active",  lastLogin: "22 May · 11:32", mfa: true,  groups: ["cdo"],                       scopes: [{ level: "sub_county", code: "SC-TAPAC" }, { level: "sub_county", code: "SC-RUPA" }], onboardedAt: "12 Mar 2024" },
-  { id: "u-nakanwagi-d",  name: "Dr. Nakanwagi",    username: "nakanwagi.d",  email: "nakanwagi.d@mglsd.go.ug",  status: "active",  lastLogin: "22 May · 09:18", mfa: true,  groups: ["mglsd_statistics"],          scopes: [{ level: "national", code: "" }], onboardedAt: "01 Dec 2024" },
-  { id: "u-otieno-j",     name: "Otieno J.",        username: "otieno.j",     email: "otieno.j@mglsd.go.ug",     status: "active",  lastLogin: "22 May · 08:42", mfa: true,  groups: ["dpo","nsr_security"],        scopes: [{ level: "national", code: "" }], onboardedAt: "08 Sep 2023" },
-  { id: "u-mukasa-r",     name: "Mutebi R.",        username: "mutebi.r",     email: "mutebi.r@mglsd.go.ug",     status: "active",  lastLogin: "21 May · 16:01", mfa: true,  groups: ["nsr_admin"],                 scopes: [{ level: "national", code: "" }], onboardedAt: "05 Jan 2023" },
-  { id: "u-namutebi-s",   name: "Namutebi S.",      username: "namutebi.s",   email: "namutebi.s@lyantonde.go.ug", status: "active", lastLogin: "20 May · 13:12", mfa: false, groups: ["parish_coordinator"],        scopes: [{ level: "parish", code: "PAR-KIBALINGA" }], onboardedAt: "14 Feb 2025" },
-  { id: "u-okello-j",     name: "Okello James",     username: "okello.j",     email: "okello.j@gulu.go.ug",      status: "active",  lastLogin: "19 May · 09:08", mfa: true,  groups: ["parish_coordinator"],        scopes: [{ level: "parish", code: "PAR-PAGEYA" }], onboardedAt: "08 Apr 2025" },
-  { id: "u-acheng-m",     name: "Acheng M.",        username: "acheng.m",     email: "acheng.m@npm.go.ug",       status: "active",  lastLogin: "18 May · 11:42", mfa: true,  groups: ["cdo"],                       scopes: [{ level: "sub_county", code: "SC-LOKOPO" }], onboardedAt: "12 Jun 2024" },
-  { id: "u-suspended-x",  name: "Test User X",      username: "test.x",       email: "test.x@example.com",       status: "suspended", lastLogin: "18 Mar · 09:00", mfa: false, groups: ["parish_coordinator"],      scopes: [{ level: "parish", code: "PAR-OBSOLETE" }], onboardedAt: "22 Feb 2024", suspendedReason: "Test account — flagged by security review 2026-03-18" },
+  { id: "u-akello-p", name: "Akello P.", username: "akello.p", email: "akello.p@mglsd.go.ug", phone: "+256 772 410 001", status: "active", lastLogin: "22 May - 14:01", mfa: true, mfaMethod: "TOTP", groups: ["nsr_unit_coordinator", "dpo"], scopes: [{ level: "national", code: "", active: true, note: "National oversight" }], onboardedAt: "12 Sep 2023", lastPasswordReset: "08 Mar 2026", sessionCount24h: 2 },
+  { id: "u-bahati-e", name: "Bahati Esther", username: "bahati.e", email: "bahati.e@opm.go.ug", phone: "+256 772 410 002", status: "active", lastLogin: "22 May - 12:48", mfa: true, mfaMethod: "TOTP", groups: ["partner_steward"], scopes: [{ level: "partner", code: "OPM", active: true, note: "OPM DRS workspace" }], onboardedAt: "04 Jan 2026", lastPasswordReset: "18 Feb 2026", sessionCount24h: 1 },
+  { id: "u-adong-f", name: "Adong F.", username: "adong.f", email: "adong.f@mglsd.go.ug", phone: "+256 772 412 089", status: "active", lastLogin: "22 May - 11:32", mfa: true, mfaMethod: "TOTP", groups: ["cdo"], scopes: [{ level: "sub_county", code: "SC-TAPAC", active: true, note: "Tapac workload" }, { level: "sub_county", code: "SC-RUPA", active: true, note: "Rupa workload" }], onboardedAt: "12 Mar 2024", lastPasswordReset: "08 Mar 2026", sessionCount24h: 3 },
+  { id: "u-nakanwagi-d", name: "Dr. Nakanwagi", username: "nakanwagi.d", email: "nakanwagi.d@mglsd.go.ug", phone: "+256 772 410 004", status: "active", lastLogin: "22 May - 09:18", mfa: true, mfaMethod: "WebAuthn", groups: ["mglsd_statistics"], scopes: [{ level: "national", code: "", active: true, note: "PMT calibration" }], onboardedAt: "01 Dec 2024", lastPasswordReset: "02 Apr 2026", sessionCount24h: 2 },
+  { id: "u-otieno-j", name: "Otieno J.", username: "otieno.j", email: "otieno.j@mglsd.go.ug", phone: "+256 772 410 005", status: "active", lastLogin: "22 May - 08:42", mfa: true, mfaMethod: "TOTP", groups: ["dpo", "nsr_security"], scopes: [{ level: "national", code: "", active: true, note: "Security and privacy oversight" }], onboardedAt: "08 Sep 2023", lastPasswordReset: "19 Feb 2026", sessionCount24h: 4 },
+  { id: "u-mukasa-r", name: "Mutebi R.", username: "mutebi.r", email: "mutebi.r@mglsd.go.ug", phone: "+256 772 410 006", status: "active", lastLogin: "21 May - 16:01", mfa: true, mfaMethod: "TOTP", groups: ["nsr_admin"], scopes: [{ level: "national", code: "", active: true, note: "System administration" }], onboardedAt: "05 Jan 2023", lastPasswordReset: "12 Jan 2026", sessionCount24h: 2 },
+  { id: "u-namutebi-s", name: "Namutebi S.", username: "namutebi.s", email: "namutebi.s@lyantonde.go.ug", phone: "+256 772 410 007", status: "active", lastLogin: "20 May - 13:12", mfa: false, mfaMethod: "", groups: ["parish_coordinator"], scopes: [{ level: "parish", code: "PAR-KIBALINGA", active: true, note: "Parish walk-in desk" }], onboardedAt: "14 Feb 2025", lastPasswordReset: "04 Apr 2026", sessionCount24h: 0 },
+  { id: "u-okello-j", name: "Okello James", username: "okello.j", email: "okello.j@gulu.go.ug", phone: "+256 772 410 008", status: "active", lastLogin: "19 May - 09:08", mfa: true, mfaMethod: "SMS fallback", groups: ["parish_coordinator"], scopes: [{ level: "parish", code: "PAR-PAGEYA", active: true, note: "Pageya parish" }], onboardedAt: "08 Apr 2025", lastPasswordReset: "22 Mar 2026", sessionCount24h: 1 },
+  { id: "u-acheng-m", name: "Acheng M.", username: "acheng.m", email: "acheng.m@npm.go.ug", phone: "+256 772 410 009", status: "active", lastLogin: "18 May - 11:42", mfa: true, mfaMethod: "TOTP", groups: ["cdo"], scopes: [{ level: "sub_county", code: "SC-LOKOPO", active: true, note: "Lokopo workload" }], onboardedAt: "12 Jun 2024", lastPasswordReset: "15 Mar 2026", sessionCount24h: 0 },
+  { id: "u-suspended-x", name: "Test User X", username: "test.x", email: "test.x@example.com", phone: "", status: "suspended", lastLogin: "18 Mar - 09:00", mfa: false, mfaMethod: "", groups: ["parish_coordinator"], scopes: [{ level: "parish", code: "PAR-OBSOLETE", active: false, note: "Retired test scope" }], onboardedAt: "22 Feb 2024", lastPasswordReset: "18 Mar 2026", sessionCount24h: 0, suspendedReason: "Test account - flagged by security review 2026-03-18" },
 ];
 
-const SCOPE_LEVELS = ["national","region","sub_region","district","sub_county","parish","village","partner"];
+const SCOPE_LEVELS = ["national", "region", "sub_region", "district", "sub_county", "parish", "village", "partner"];
 const SCOPE_LEVEL_LABEL = {
-  national:"National (wildcard)", region:"Region", sub_region:"Sub-region", district:"District",
-  sub_county:"Sub-county", parish:"Parish", village:"Village", partner:"Partner",
+  national: "National (wildcard)", region: "Region", sub_region: "Sub-region", district: "District",
+  sub_county: "Sub-county", parish: "Parish", village: "Village", partner: "Partner",
 };
-const ROLE_TONE = { operator:"data", security:"danger", admin:"system", partner:"programme" };
+const ROLE_TONE = { operator: "data", security: "danger", admin: "system", partner: "programme" };
+const ROLE_CATEGORIES = ["operator", "security", "admin", "partner"];
+const PERMISSION_SCREENS = [
+  "console.registry", "console.upd", "console.programmes", "console.audit", "console.partners",
+  "console.drs", "admin.pmt", "admin.refdata", "admin.security", "admin.audit", "admin.*", "console.*",
+];
+
+const secInitials = (name) => String(name || "?").split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
+const secClone = (value) => JSON.parse(JSON.stringify(value));
+const secSlug = (value) => String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+const secRoleLabel = (roles, id) => roles.find(r => r.id === id)?.label || id;
+const secScopeLabel = (scope) => scope.level === "national" ? "national" : `${scope.level}:${scope.code || "*"}`;
+const secRoleCounts = (users) => users.reduce((acc, user) => {
+  user.groups.forEach(group => { acc[group] = (acc[group] || 0) + 1; });
+  return acc;
+}, {});
+
+const secBlankUser = (roles) => ({
+  id: `u-${Date.now()}`,
+  name: "",
+  username: "",
+  email: "",
+  phone: "",
+  status: "active",
+  lastLogin: "Never",
+  mfa: false,
+  mfaMethod: "",
+  groups: roles[0] ? [roles[0].id] : [],
+  scopes: [{ level: "parish", code: "", active: true, note: "" }],
+  onboardedAt: "26 May 2026",
+  lastPasswordReset: "Never",
+  sessionCount24h: 0,
+  suspendedReason: "",
+});
+
+const secBlankRole = () => ({
+  id: "",
+  label: "",
+  category: "operator",
+  users: 0,
+  desc: "",
+  screens: ["console.registry"],
+  adminConsole: false,
+});
+
+const SecDetailRow = ({ label, children }) => (
+  <div style={{ display: "grid", gridTemplateColumns: "128px 1fr", gap: 12, padding: "8px 0", borderBottom: "1px solid var(--neutral-100)" }}>
+    <div className="t-cap">{label}</div>
+    <div className="t-bodysm">{children || <span className="muted">-</span>}</div>
+  </div>
+);
+
+const SecField = ({ label, children, hint }) => (
+  <label className="field">
+    <span className="field-label">{label}</span>
+    {children}
+    {hint && <span className="field-help">{hint}</span>}
+  </label>
+);
+
+const SEC_MASTER_DETAIL_STYLE = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
+  gap: 16,
+  alignItems: "start",
+};
+const SEC_DETAIL_CARD_STYLE = {
+  padding: 0,
+  position: "sticky",
+  top: 16,
+  maxHeight: "calc(100vh - 56px)",
+  overflow: "auto",
+};
+const SEC_COMPACT_FIELD_GRID = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+  gap: "12px 14px",
+};
+const SEC_SCOPE_EDITOR_STYLE = {
+  display: "grid",
+  gridTemplateColumns: "minmax(120px, 0.9fr) minmax(130px, 1fr) 86px 34px",
+  gap: 8,
+  alignItems: "center",
+  padding: 10,
+  border: "1px solid var(--neutral-200)",
+  borderRadius: 4,
+  background: "var(--neutral-0)",
+};
 
 const AdminSecurityRolesScreen = () => {
   const [tab, setTab] = useStateSEC("users");
   const [q, setQ] = useStateSEC("");
   const [roleFilter, setRoleFilter] = useStateSEC("");
   const [statusFilter, setStatusFilter] = useStateSEC("");
+  const [usersState, setUsersState] = useStateSEC(() => secClone(SEC_USERS));
+  const [rolesState, setRolesState] = useStateSEC(() => secClone(SEC_ROLES));
+  const [selectedUserId, setSelectedUserId] = useStateSEC(SEC_USERS[0]?.id || "");
+  const [selectedRoleId, setSelectedRoleId] = useStateSEC(SEC_ROLES[0]?.id || "");
+  const [mode, setMode] = useStateSEC("view");
+  const [draft, setDraft] = useStateSEC(null);
+  const [toast, setToast] = useStateSEC("");
 
-  const users = useMemoSEC(() => SEC_USERS.filter(u => {
-    if (q && !(u.name.toLowerCase().includes(q.toLowerCase()) || u.username.includes(q.toLowerCase()) || u.email.includes(q.toLowerCase()))) return false;
+  const roleCounts = useMemoSEC(() => secRoleCounts(usersState), [usersState]);
+  const users = useMemoSEC(() => usersState.filter(u => {
+    const query = q.trim().toLowerCase();
+    if (query && !(`${u.name} ${u.username} ${u.email}`.toLowerCase().includes(query))) return false;
     if (roleFilter && !u.groups.includes(roleFilter)) return false;
     if (statusFilter && u.status !== statusFilter) return false;
     return true;
-  }), [q, roleFilter, statusFilter]);
+  }), [usersState, q, roleFilter, statusFilter]);
 
-  // KPIs
-  const totalUsers = SEC_USERS.length;
-  const adminUsers = SEC_USERS.filter(u => u.groups.some(g => SEC_ROLES.find(r => r.id === g)?.adminConsole)).length;
-  const nationalScope = SEC_USERS.filter(u => u.scopes.some(s => s.level === "national")).length;
-  const noMfa = SEC_USERS.filter(u => !u.mfa).length;
+  const selectedUser = usersState.find(u => u.id === selectedUserId) || usersState[0] || null;
+  const selectedRole = rolesState.find(r => r.id === selectedRoleId) || rolesState[0] || null;
+  const totalUsers = usersState.length;
+  const activeUsers = usersState.filter(u => u.status === "active").length;
+  const adminUsers = usersState.filter(u => u.groups.some(g => rolesState.find(r => r.id === g)?.adminConsole)).length;
+  const nationalScope = usersState.filter(u => u.scopes.some(s => s.level === "national" && s.active !== false)).length;
+  const noMfa = usersState.filter(u => !u.mfa).length;
+
+  const startCreateUser = () => {
+    setTab("users");
+    setMode("createUser");
+    setDraft(secBlankUser(rolesState));
+    setToast("");
+  };
+  const startEditUser = (user = selectedUser) => {
+    if (!user) return;
+    setTab("users");
+    setSelectedUserId(user.id);
+    setMode("editUser");
+    setDraft(secClone(user));
+    setToast("");
+  };
+  const startCreateRole = () => {
+    setTab("roles");
+    setMode("createRole");
+    setDraft(secBlankRole());
+    setToast("");
+  };
+  const startEditRole = (role = selectedRole) => {
+    if (!role) return;
+    setTab("roles");
+    setSelectedRoleId(role.id);
+    setMode("editRole");
+    setDraft(secClone({ ...role, users: roleCounts[role.id] || 0 }));
+    setToast("");
+  };
+  const cancelEdit = () => {
+    setMode("view");
+    setDraft(null);
+    setToast("");
+  };
+
+  const saveUser = () => {
+    const clean = {
+      ...draft,
+      name: draft.name.trim(),
+      username: draft.username.trim(),
+      email: draft.email.trim(),
+      phone: draft.phone.trim(),
+      scopes: draft.scopes.map(s => ({
+        level: s.level,
+        code: s.level === "national" ? "" : String(s.code || "").trim(),
+        active: s.active !== false,
+        note: String(s.note || "").trim(),
+      })),
+    };
+    if (!clean.name || !clean.username || !clean.email) {
+      setToast("Name, username, and email are required.");
+      return;
+    }
+    setUsersState(prev => mode === "createUser" ? [clean, ...prev] : prev.map(u => u.id === clean.id ? clean : u));
+    setSelectedUserId(clean.id);
+    setMode("view");
+    setDraft(null);
+    setToast(`${clean.name} saved.`);
+  };
+
+  const saveRole = () => {
+    const clean = {
+      ...draft,
+      id: secSlug(draft.id || draft.label),
+      label: draft.label.trim(),
+      desc: draft.desc.trim(),
+      screens: draft.screens.filter(Boolean),
+      users: roleCounts[draft.id] || 0,
+    };
+    if (!clean.id || !clean.label || clean.screens.length === 0) {
+      setToast("Role id, label, and at least one screen are required.");
+      return;
+    }
+    if (mode === "createRole" && rolesState.some(r => r.id === clean.id)) {
+      setToast("Role id already exists.");
+      return;
+    }
+    const previousId = mode === "editRole" ? selectedRoleId : clean.id;
+    setRolesState(prev => mode === "createRole" ? [clean, ...prev] : prev.map(r => r.id === previousId ? clean : r));
+    if (previousId !== clean.id) {
+      setUsersState(prev => prev.map(u => ({ ...u, groups: u.groups.map(g => g === previousId ? clean.id : g) })));
+    }
+    setSelectedRoleId(clean.id);
+    setMode("view");
+    setDraft(null);
+    setToast(`${clean.label} saved.`);
+  };
+
+  const deleteUser = (user = selectedUser) => {
+    if (!user) return;
+    const remaining = usersState.filter(u => u.id !== user.id);
+    setUsersState(remaining);
+    setSelectedUserId(remaining[0]?.id || "");
+    setMode("view");
+    setDraft(null);
+    setToast(`${user.name} deleted from this workspace.`);
+  };
+
+  const deleteRole = (role = selectedRole) => {
+    if (!role) return;
+    const remainingRoles = rolesState.filter(r => r.id !== role.id);
+    setRolesState(remainingRoles);
+    setUsersState(prev => prev.map(u => ({ ...u, groups: u.groups.filter(g => g !== role.id) })));
+    setSelectedRoleId(remainingRoles[0]?.id || "");
+    setMode("view");
+    setDraft(null);
+    setToast(`${role.label} deleted; assignments were removed.`);
+  };
+
+  const updateUserScope = (index, patch) => {
+    setDraft({
+      ...draft,
+      scopes: draft.scopes.map((scope, i) => i === index ? { ...scope, ...patch } : scope),
+    });
+  };
+  const addUserScope = () => setDraft({ ...draft, scopes: [...draft.scopes, { level: "parish", code: "", active: true, note: "" }] });
+  const removeUserScope = (index) => setDraft({ ...draft, scopes: draft.scopes.filter((_, i) => i !== index) });
+  const toggleUserRole = (roleId) => {
+    const groups = draft.groups.includes(roleId)
+      ? draft.groups.filter(id => id !== roleId)
+      : [...draft.groups, roleId];
+    setDraft({ ...draft, groups });
+  };
+  const toggleRoleScreen = (screen) => {
+    const screens = draft.screens.includes(screen)
+      ? draft.screens.filter(id => id !== screen)
+      : [...draft.screens, screen];
+    setDraft({ ...draft, screens });
+  };
+
+  const roleTone = (id) => ROLE_TONE[rolesState.find(r => r.id === id)?.category] || "neutral";
+
+  const renderUserDetail = () => {
+    const editing = mode === "editUser" || mode === "createUser";
+    const u = editing ? draft : selectedUser;
+    if (!u) return null;
+    return (
+      <div className="card" style={SEC_DETAIL_CARD_STYLE}>
+        <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--neutral-200)", display: "flex", gap: 12, alignItems: "center" }}>
+          <div style={{ width: 42, height: 42, borderRadius: "50%", background: "var(--primary-100)", color: "var(--primary-900)", display: "grid", placeItems: "center", fontSize: 13, fontWeight: 700 }}>
+            {secInitials(u.name)}
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 700 }}>{editing ? (mode === "createUser" ? "New user" : "Edit user") : u.name}</div>
+            <div className="t-cap t-mono">{u.username || u.id}</div>
+          </div>
+          <div style={{ flex: 1 }}/>
+          {editing ? (
+            <>
+              <button className="btn btn-sm" onClick={cancelEdit}>Cancel</button>
+              <button className="btn btn-sm btn-primary" onClick={saveUser}><Icon name="save" size={12}/> Save</button>
+            </>
+          ) : (
+            <>
+              <button className="btn btn-sm" onClick={() => startEditUser(u)}><Icon name="edit" size={12}/> Edit</button>
+              <button className="btn btn-sm btn-danger" onClick={() => deleteUser(u)}><Icon name="trash" size={12}/> Delete</button>
+            </>
+          )}
+        </div>
+
+        <div style={{ padding: 18 }}>
+          {editing ? (
+            <div style={{ display: "grid", gap: 14 }}>
+              <div style={SEC_COMPACT_FIELD_GRID}>
+                <SecField label="Full name"><input className="field-input" value={u.name} onChange={e => setDraft({ ...u, name: e.target.value })}/></SecField>
+                <SecField label="Username"><input className="field-input t-mono" value={u.username} onChange={e => setDraft({ ...u, username: e.target.value })}/></SecField>
+                <SecField label="Email"><input className="field-input" value={u.email} onChange={e => setDraft({ ...u, email: e.target.value })}/></SecField>
+                <SecField label="Phone"><input className="field-input" value={u.phone} onChange={e => setDraft({ ...u, phone: e.target.value })}/></SecField>
+                <SecField label="Status">
+                  <select className="field-select" value={u.status} onChange={e => setDraft({ ...u, status: e.target.value })}>
+                    <option value="active">active</option>
+                    <option value="suspended">suspended</option>
+                  </select>
+                </SecField>
+                <SecField label="MFA method">
+                  <select className="field-select" value={u.mfaMethod || ""} onChange={e => setDraft({ ...u, mfaMethod: e.target.value, mfa: !!e.target.value })}>
+                    <option value="">off</option>
+                    <option value="TOTP">TOTP</option>
+                    <option value="WebAuthn">WebAuthn</option>
+                    <option value="SMS fallback">SMS fallback</option>
+                  </select>
+                </SecField>
+              </div>
+
+              {u.status === "suspended" && (
+                <SecField label="Suspension reason">
+                  <textarea className="field-textarea" value={u.suspendedReason || ""} onChange={e => setDraft({ ...u, suspendedReason: e.target.value })}/>
+                </SecField>
+              )}
+
+              <div>
+                <div className="row" style={{ marginBottom: 8 }}>
+                  <strong className="t-bodysm">Role assignments</strong>
+                  <div style={{ flex: 1 }}/>
+                  <span className="t-cap">{u.groups.length} selected</span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8 }}>
+                  {rolesState.map(role => {
+                    const checked = u.groups.includes(role.id);
+                    return (
+                      <label key={role.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: "1px solid var(--neutral-200)", borderRadius: 4, background: checked ? "var(--accent-system-bg)" : "var(--neutral-0)", cursor: "pointer" }}>
+                        <input type="checkbox" checked={checked} onChange={() => toggleUserRole(role.id)}/>
+                        <span style={{ flex: 1 }}>
+                          <span className="t-bodysm" style={{ fontWeight: 600 }}>{role.label}</span>
+                          <span className="t-cap t-mono" style={{ display: "block" }}>{role.id}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <div className="row" style={{ marginBottom: 8 }}>
+                  <strong className="t-bodysm">OperatorScope rows</strong>
+                  <div style={{ flex: 1 }}/>
+                  <button className="btn btn-sm" onClick={addUserScope}><Icon name="plus" size={12}/> Add scope</button>
+                </div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  {u.scopes.map((scope, index) => (
+                    <div key={index} style={SEC_SCOPE_EDITOR_STYLE}>
+                      <select className="field-select" value={scope.level} onChange={e => updateUserScope(index, { level: e.target.value, code: e.target.value === "national" ? "" : scope.code })}>
+                        {SCOPE_LEVELS.map(level => <option key={level} value={level}>{level}</option>)}
+                      </select>
+                      <input className="field-input t-mono" value={scope.code} disabled={scope.level === "national"} onChange={e => updateUserScope(index, { code: e.target.value })} placeholder={scope.level === "national" ? "wildcard" : "scope code"}/>
+                      <select className="field-select" value={scope.active === false ? "false" : "true"} onChange={e => updateUserScope(index, { active: e.target.value === "true" })}>
+                        <option value="true">active</option>
+                        <option value="false">inactive</option>
+                      </select>
+                      <button className="icon-btn" title="Remove scope" onClick={() => removeUserScope(index)}><Icon name="trash" size={12}/></button>
+                      <input className="field-input" value={scope.note || ""} onChange={e => updateUserScope(index, { note: e.target.value })} placeholder="note" style={{ gridColumn: "1 / -1" }}/>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <SecDetailRow label="Email">{u.email}</SecDetailRow>
+              <SecDetailRow label="Phone">{u.phone}</SecDetailRow>
+              <SecDetailRow label="Status"><Chip size="sm" tone={u.status === "active" ? "data" : "quality"}>{u.status}</Chip></SecDetailRow>
+              <SecDetailRow label="MFA">{u.mfa ? <Chip size="sm" tone="data"><Icon name="check" size={10}/> {u.mfaMethod}</Chip> : <Chip size="sm" tone="danger">off</Chip>}</SecDetailRow>
+              <SecDetailRow label="Onboarded">{u.onboardedAt}</SecDetailRow>
+              <SecDetailRow label="Last login">{u.lastLogin}</SecDetailRow>
+              <SecDetailRow label="Password reset">{u.lastPasswordReset}</SecDetailRow>
+              <SecDetailRow label="Sessions 24h"><span className="t-num">{u.sessionCount24h}</span></SecDetailRow>
+              {u.suspendedReason && <div className="tint-update mt-3" style={{ padding: 10, borderRadius: 4 }}>{u.suspendedReason}</div>}
+              <div className="mt-4">
+                <strong className="t-bodysm">Roles</strong>
+                <div className="row-wrap mt-2">
+                  {u.groups.length ? u.groups.map(g => <Chip key={g} size="sm" tone={roleTone(g)}>{secRoleLabel(rolesState, g)}</Chip>) : <span className="muted t-cap">No roles assigned</span>}
+                </div>
+              </div>
+              <div className="mt-4">
+                <strong className="t-bodysm">Scopes</strong>
+                <table className="tbl mt-2" style={{ boxShadow: "none" }}>
+                  <thead><tr><th>Level</th><th>Code</th><th>Status</th><th>Note</th></tr></thead>
+                  <tbody>
+                    {u.scopes.map((scope, index) => (
+                      <tr key={index}>
+                        <td><Chip size="sm" tone={scope.level === "national" ? "danger" : scope.level === "partner" ? "programme" : "data"}>{SCOPE_LEVEL_LABEL[scope.level] || scope.level}</Chip></td>
+                        <td className="t-mono">{scope.code || "*"}</td>
+                        <td>{scope.active === false ? <Chip size="sm" tone="quality">inactive</Chip> : <Chip size="sm" tone="data">active</Chip>}</td>
+                        <td className="t-bodysm">{scope.note || <span className="muted">-</span>}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderRoleDetail = () => {
+    const editing = mode === "editRole" || mode === "createRole";
+    const role = editing ? draft : selectedRole;
+    if (!role) return null;
+    const assignedUsers = usersState.filter(user => user.groups.includes(role.id));
+    return (
+      <div className="card" style={SEC_DETAIL_CARD_STYLE}>
+        <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--neutral-200)", display: "flex", gap: 12, alignItems: "center" }}>
+          <div>
+            <div style={{ fontWeight: 700 }}>{editing ? (mode === "createRole" ? "New role" : "Edit role") : role.label}</div>
+            <div className="t-cap t-mono">{role.id || "new_role"}</div>
+          </div>
+          <div style={{ flex: 1 }}/>
+          {editing ? (
+            <>
+              <button className="btn btn-sm" onClick={cancelEdit}>Cancel</button>
+              <button className="btn btn-sm btn-primary" onClick={saveRole}><Icon name="save" size={12}/> Save</button>
+            </>
+          ) : (
+            <>
+              <button className="btn btn-sm" onClick={() => startEditRole(role)}><Icon name="edit" size={12}/> Edit</button>
+              <button className="btn btn-sm btn-danger" onClick={() => deleteRole(role)}><Icon name="trash" size={12}/> Delete</button>
+            </>
+          )}
+        </div>
+        <div style={{ padding: 18 }}>
+          {editing ? (
+            <div style={{ display: "grid", gap: 14 }}>
+              <div style={SEC_COMPACT_FIELD_GRID}>
+                <SecField label="Role label"><input className="field-input" value={role.label} onChange={e => setDraft({ ...role, label: e.target.value, id: role.id || secSlug(e.target.value) })}/></SecField>
+                <SecField label="Role id" hint="Stored as auth.Group name in this console model.">
+                  <input className="field-input t-mono" value={role.id} onChange={e => setDraft({ ...role, id: secSlug(e.target.value) })}/>
+                </SecField>
+                <SecField label="Category">
+                  <select className="field-select" value={role.category} onChange={e => setDraft({ ...role, category: e.target.value })}>
+                    {ROLE_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                  </select>
+                </SecField>
+                <SecField label="Admin console access">
+                  <select className="field-select" value={role.adminConsole ? "true" : "false"} onChange={e => setDraft({ ...role, adminConsole: e.target.value === "true" })}>
+                    <option value="false">no</option>
+                    <option value="true">yes</option>
+                  </select>
+                </SecField>
+              </div>
+              <SecField label="Description">
+                <textarea className="field-textarea" rows={3} value={role.desc} onChange={e => setDraft({ ...role, desc: e.target.value })}/>
+              </SecField>
+              <div>
+                <div className="row" style={{ marginBottom: 8 }}>
+                  <strong className="t-bodysm">Screen permissions</strong>
+                  <div style={{ flex: 1 }}/>
+                  <span className="t-cap">{role.screens.length} selected</span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 8 }}>
+                  {PERMISSION_SCREENS.map(screen => {
+                    const checked = role.screens.includes(screen);
+                    return (
+                      <label key={screen} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", border: "1px solid var(--neutral-200)", borderRadius: 4, background: checked ? "var(--accent-data-bg)" : "var(--neutral-0)", cursor: "pointer" }}>
+                        <input type="checkbox" checked={checked} onChange={() => toggleRoleScreen(screen)}/>
+                        <span className="t-mono t-cap">{screen}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <SecDetailRow label="Category"><Chip size="sm" tone={ROLE_TONE[role.category]}>{role.category}</Chip></SecDetailRow>
+              <SecDetailRow label="Assigned users"><span className="t-num">{assignedUsers.length.toLocaleString()}</span></SecDetailRow>
+              <SecDetailRow label="Description">{role.desc}</SecDetailRow>
+              <SecDetailRow label="Admin console">{role.adminConsole ? <Chip size="sm" tone="data"><Icon name="check" size={10}/> yes</Chip> : <span className="muted">no</span>}</SecDetailRow>
+              <div className="mt-4">
+                <strong className="t-bodysm">Screen scope</strong>
+                <div className="row-wrap mt-2">{role.screens.map(screen => <Chip key={screen} size="sm">{screen}</Chip>)}</div>
+              </div>
+              <div className="mt-4">
+                <strong className="t-bodysm">Assigned users</strong>
+                <table className="tbl mt-2" style={{ boxShadow: "none" }}>
+                  <thead><tr><th>User</th><th>Status</th><th>Scopes</th></tr></thead>
+                  <tbody>
+                    {assignedUsers.slice(0, 8).map(user => (
+                      <tr key={user.id}>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>{user.name}</div>
+                          <div className="t-cap t-mono">{user.username}</div>
+                        </td>
+                        <td><Chip size="sm" tone={user.status === "active" ? "data" : "quality"}>{user.status}</Chip></td>
+                        <td className="t-cap">{user.scopes.map(s => `${s.level}:${s.code || "*"}`).join(", ")}</td>
+                      </tr>
+                    ))}
+                    {assignedUsers.length === 0 && <tr><td colSpan="3" className="muted t-cap">No users assigned.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="page">
       <PageHeader
-        eyebrow="ADMIN · SECURITY · roles & scopes"
+        eyebrow="ADMIN - SECURITY - roles & scopes"
         title="Roles & scopes"
         sub="Who can see what. ROLE controls which screens; SCOPE controls which records within a screen."
         right={<>
           <button className="btn"><Icon name="download" size={14}/> Export users</button>
-          <button className="btn btn-primary"><Icon name="plus" size={14}/> Add user</button>
+          <button className="btn" onClick={startCreateRole}><Icon name="plus" size={14}/> Add role</button>
+          <button className="btn btn-primary" onClick={startCreateUser}><Icon name="plus" size={14}/> Add user</button>
         </>}
       />
 
+      {toast && (
+        <div className="tint-update mb-3" style={{ padding: 10, borderRadius: 4, display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon name={toast.includes("required") || toast.includes("exists") ? "xCircle" : "check"} size={13}/>
+          <span className="t-bodysm">{toast}</span>
+        </div>
+      )}
+
       <div className="grid grid-4">
-        <KPI title="Active users" value={totalUsers - SEC_USERS.filter(u => u.status === "suspended").length} foot={`${SEC_USERS.filter(u => u.status === "suspended").length} suspended`}/>
-        <KPI title="Admin Console access" value={adminUsers} foot="In one of 5 admin groups"/>
-        <KPI title="National wildcard scope" value={nationalScope} foot="See every household — DPO + NSR Coordinator only"/>
-        <KPI title="MFA not enrolled" value={noMfa} foot="Will be force-enrolled at next login"  trend="down" trendValue="-3 this wk"/>
+        <KPI title="Active users" value={activeUsers} foot={`${totalUsers - activeUsers} suspended`}/>
+        <KPI title="Admin Console access" value={adminUsers} foot="Users in admin-enabled roles"/>
+        <KPI title="National wildcard scope" value={nationalScope} foot="See every household"/>
+        <KPI title="MFA not enrolled" value={noMfa} foot="Will be force-enrolled at next login" trend="down" trendValue="-3 this wk"/>
       </div>
 
-      <div role="tablist" style={{ display: 'flex', borderBottom: '1px solid var(--neutral-300)', marginTop: 24, flexWrap: 'wrap' }}>
+      <div role="tablist" style={{ display: "flex", borderBottom: "1px solid var(--neutral-300)", marginTop: 24, flexWrap: "wrap" }}>
         {[
           { id: "users", label: `Users (${totalUsers})` },
-          { id: "roles", label: `Roles (${SEC_ROLES.length})` },
+          { id: "roles", label: `Roles (${rolesState.length})` },
           { id: "matrix", label: "Permission matrix" },
-        ].map(t => {
-          const active = t.id === tab;
+        ].map(item => {
+          const active = item.id === tab;
           return (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{
-              padding: '10px 16px', border: 0, background: 'transparent', cursor: 'pointer',
-              borderBottom: active ? '2px solid var(--primary-900)' : '2px solid transparent',
-              marginBottom: -1,
-              color: active ? 'var(--primary-900)' : 'var(--neutral-700)',
+            <button key={item.id} onClick={() => { setTab(item.id); cancelEdit(); }} style={{
+              padding: "10px 16px", border: 0, background: "transparent", cursor: "pointer",
+              borderBottom: active ? "2px solid var(--primary-900)" : "2px solid transparent",
+              marginBottom: -1, color: active ? "var(--primary-900)" : "var(--neutral-700)",
               fontWeight: active ? 600 : 500, fontSize: 13.5,
-            }}>{t.label}</button>
+            }}>{item.label}</button>
           );
         })}
       </div>
 
       {tab === "users" && (
         <>
-          <div className="card mt-4" style={{ padding: '14px 16px' }}>
-            <div className="row gap-3" style={{ flexWrap: 'wrap' }}>
-              <div className="search" style={{ maxWidth: 320, height: 34, background: 'var(--neutral-0)' }}>
+          <div className="card mt-4" style={{ padding: "14px 16px" }}>
+            <div className="row gap-3" style={{ flexWrap: "wrap" }}>
+              <div className="search" style={{ maxWidth: 320, height: 34, background: "var(--neutral-0)" }}>
                 <Icon name="search" size={16} color="var(--neutral-500)"/>
-                <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name, username, email…"/>
+                <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name, username, email..."/>
               </div>
-              <select className="field-select" style={{ height: 34, width: 'auto', minWidth: 180 }} value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
+              <select className="field-select" style={{ height: 34, width: "auto", minWidth: 180 }} value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
                 <option value="">Any role</option>
-                {SEC_ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                {rolesState.map(role => <option key={role.id} value={role.id}>{role.label}</option>)}
               </select>
-              <select className="field-select" style={{ height: 34, width: 'auto', minWidth: 140 }} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+              <select className="field-select" style={{ height: 34, width: "auto", minWidth: 140 }} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
                 <option value="">Any status</option>
                 <option value="active">Active</option>
                 <option value="suspended">Suspended</option>
@@ -127,156 +600,129 @@ const AdminSecurityRolesScreen = () => {
             </div>
           </div>
 
-          <div className="card mt-4">
-            <table className="tbl">
-              <thead>
-                <tr>
-                  <th>User</th>
-                  <th>Roles</th>
-                  <th>Scopes</th>
-                  <th>MFA</th>
-                  <th>Last login</th>
-                  <th>Status</th>
-                  <th className="col-actions"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map(u => (
-                  <tr key={u.id} style={{ cursor: 'pointer' }}>
-                    <td>
-                      <div className="row gap-3">
-                        <div style={{
-                          width: 30, height: 30, borderRadius: '50%',
-                          background: 'var(--primary-100)', color: 'var(--primary-900)',
-                          display: 'grid', placeItems: 'center', fontSize: 11, fontWeight: 600,
-                        }}>{u.name.split(' ').map(w => w[0]).slice(0, 2).join('')}</div>
-                        <div>
-                          <div style={{ fontWeight: 500 }}>{u.name}</div>
-                          <div className="t-cap t-mono" style={{ fontSize: 11 }}>{u.username}</div>
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <div className="row-wrap" style={{ gap: 4 }}>
-                        {u.groups.map(g => {
-                          const r = SEC_ROLES.find(x => x.id === g);
-                          return r ? <Chip key={g} size="sm" tone={ROLE_TONE[r.category]}>{r.label}</Chip> : <Chip key={g} size="sm">{g}</Chip>;
-                        })}
-                      </div>
-                    </td>
-                    <td>
-                      <div className="row-wrap" style={{ gap: 4 }}>
-                        {u.scopes.map((s, i) => (
-                          <Chip key={i} size="sm" tone={s.level === "national" ? "danger" : s.level === "partner" ? "programme" : "data"}>
-                            {s.level === "national" ? "national" : `${s.level} · ${s.code}`}
-                          </Chip>
-                        ))}
-                      </div>
-                    </td>
-                    <td>
-                      {u.mfa
-                        ? <Chip size="sm" tone="data"><Icon name="check" size={10}/> on</Chip>
-                        : <Chip size="sm" tone="danger">off</Chip>}
-                    </td>
-                    <td className="t-cap" style={{ whiteSpace: 'nowrap' }}>{u.lastLogin}</td>
-                    <td>
-                      {u.status === "active"
-                        ? <Chip size="sm" tone="data">Active</Chip>
-                        : <Chip size="sm" tone="quality">Suspended</Chip>}
-                    </td>
-                    <td className="col-actions"><Icon name="chevronRight" size={16} color="var(--neutral-500)"/></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="mt-4" style={SEC_MASTER_DETAIL_STYLE}>
+            <div className="card" style={{ overflowX: "auto" }}>
+              <table className="tbl">
+                <thead>
+                  <tr><th>User</th><th>Roles</th><th>Primary scope</th><th>Status</th><th className="col-actions"></th></tr>
+                </thead>
+                <tbody>
+                  {users.map(user => {
+                    const active = selectedUserId === user.id && mode !== "createUser";
+                    const firstScope = user.scopes[0];
+                    const extraScopes = Math.max(0, user.scopes.length - 1);
+                    return (
+                      <tr key={user.id} onClick={() => { setSelectedUserId(user.id); setMode("view"); setDraft(null); }} style={{ cursor: "pointer", background: active ? "var(--neutral-50)" : "transparent" }}>
+                        <td>
+                          <div className="row gap-3">
+                            <div style={{ width: 30, height: 30, borderRadius: "50%", background: "var(--primary-100)", color: "var(--primary-900)", display: "grid", placeItems: "center", fontSize: 11, fontWeight: 600 }}>{secInitials(user.name)}</div>
+                            <div>
+                              <div style={{ fontWeight: 500 }}>{user.name}</div>
+                              <div className="t-cap t-mono" style={{ fontSize: 11 }}>{user.username}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td><div className="row-wrap" style={{ gap: 4 }}>{user.groups.map(g => <Chip key={g} size="sm" tone={roleTone(g)}>{secRoleLabel(rolesState, g)}</Chip>)}</div></td>
+                        <td>
+                          {firstScope
+                            ? <div className="row gap-2">
+                                <Chip size="sm" tone={firstScope.level === "national" ? "danger" : firstScope.level === "partner" ? "programme" : "data"}>{secScopeLabel(firstScope)}</Chip>
+                                {extraScopes > 0 && <span className="t-cap">+{extraScopes}</span>}
+                              </div>
+                            : <span className="muted t-cap">No scope</span>}
+                        </td>
+                        <td>{user.status === "active" ? <Chip size="sm" tone="data">Active</Chip> : <Chip size="sm" tone="quality">Suspended</Chip>}</td>
+                        <td className="col-actions"><Icon name="chevronRight" size={16} color="var(--neutral-500)"/></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {renderUserDetail()}
           </div>
         </>
       )}
 
       {tab === "roles" && (
-        <div className="card mt-4">
-          <table className="tbl">
-            <thead><tr><th>Role</th><th>Category</th><th>Users</th><th>Description</th><th>Screen scope</th><th>Admin Console</th></tr></thead>
-            <tbody>
-              {SEC_ROLES.map(r => (
-                <tr key={r.id}>
-                  <td>
-                    <div style={{ fontWeight: 600 }}>{r.label}</div>
-                    <div className="t-cap t-mono">{r.id}</div>
-                  </td>
-                  <td><Chip size="sm" tone={ROLE_TONE[r.category]}>{r.category}</Chip></td>
-                  <td className="t-num">{r.users.toLocaleString()}</td>
-                  <td className="t-bodysm" style={{ maxWidth: 320 }}>{r.desc}</td>
-                  <td>
-                    <div className="row-wrap" style={{ gap: 4 }}>
-                      {r.screens.map(s => <Chip key={s} size="sm">{s}</Chip>)}
-                    </div>
-                  </td>
-                  <td>
-                    {r.adminConsole
-                      ? <Chip size="sm" tone="data"><Icon name="check" size={10}/> yes</Chip>
-                      : <span className="muted t-cap">—</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="mt-4" style={SEC_MASTER_DETAIL_STYLE}>
+          <div className="card" style={{ overflowX: "auto" }}>
+            <table className="tbl">
+              <thead><tr><th>Role</th><th>Category</th><th>Users</th><th>Permissions</th><th>Admin</th><th className="col-actions"></th></tr></thead>
+              <tbody>
+                {rolesState.map(role => {
+                  const active = selectedRoleId === role.id && mode !== "createRole";
+                  const extraScreens = Math.max(0, role.screens.length - 2);
+                  return (
+                    <tr key={role.id} onClick={() => { setSelectedRoleId(role.id); setMode("view"); setDraft(null); }} style={{ cursor: "pointer", background: active ? "var(--neutral-50)" : "transparent" }}>
+                      <td><div style={{ fontWeight: 600 }}>{role.label}</div><div className="t-cap t-mono">{role.id}</div></td>
+                      <td><Chip size="sm" tone={ROLE_TONE[role.category]}>{role.category}</Chip></td>
+                      <td className="t-num">{(roleCounts[role.id] || 0).toLocaleString()}</td>
+                      <td>
+                        <div className="row-wrap" style={{ gap: 4 }}>
+                          {role.screens.slice(0, 2).map(screen => <Chip key={screen} size="sm">{screen}</Chip>)}
+                          {extraScreens > 0 && <span className="t-cap">+{extraScreens}</span>}
+                        </div>
+                      </td>
+                      <td>{role.adminConsole ? <Chip size="sm" tone="data"><Icon name="check" size={10}/> yes</Chip> : <span className="muted t-cap">-</span>}</td>
+                      <td className="col-actions"><Icon name="chevronRight" size={16} color="var(--neutral-500)"/></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {renderRoleDetail()}
         </div>
       )}
 
       {tab === "matrix" && (
         <div className="card mt-4" style={{ padding: 20 }}>
-          <strong className="t-bodysm">Permission matrix — roles × screens</strong>
-          <div className="t-cap mt-1 mb-3">A ✓ means users in that role can open that screen subject to their geographic scope.</div>
-          <table className="tbl" style={{ boxShadow: 'none' }}>
-            <thead>
-              <tr>
-                <th>Screen</th>
-                {SEC_ROLES.filter(r => r.adminConsole || r.id === "nsr_unit_coordinator").slice(0, 5).map(r => (
-                  <th key={r.id} style={{ textAlign: 'center', minWidth: 90 }}>
-                    <div className="t-cap">{r.label.split(' ')[0]}</div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {[
-                ["PMT Dashboard",          [false, true,  true,  false, false]],
-                ["PMT Configuration",      [false, true,  true,  false, false]],
-                ["Choice lists",           [false, true,  true,  false, false]],
-                ["Geography",              [false, false, true,  true,  false]],
-                ["UPD routing",            [true,  false, true,  false, false]],
-                ["DQA rules",              [false, true,  true,  false, false]],
-                ["DDUP model",             [false, false, true,  false, false]],
-                ["Roles & scopes",         [false, false, true,  false, true]],
-                ["Audit chain",            [true,  false, true,  false, true]],
-              ].map(([screen, perms]) => (
-                <tr key={screen}>
-                  <td className="t-bodysm" style={{ fontWeight: 500 }}>{screen}</td>
-                  {perms.map((ok, i) => (
-                    <td key={i} style={{ textAlign: 'center' }}>
-                      {ok
-                        ? <Icon name="check" size={14} color="var(--accent-data)"/>
-                        : <span className="muted">—</span>}
-                    </td>
-                  ))}
+          <div className="row" style={{ marginBottom: 12 }}>
+            <div>
+              <strong className="t-bodysm">Permission matrix - roles x screens</strong>
+              <div className="t-cap mt-1">A check means users in that role can open that screen subject to their data scope.</div>
+            </div>
+            <div style={{ flex: 1 }}/>
+            <button className="btn btn-sm" onClick={startCreateRole}><Icon name="plus" size={12}/> Add role</button>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table className="tbl" style={{ boxShadow: "none", minWidth: 860 }}>
+              <thead>
+                <tr>
+                  <th>Screen</th>
+                  {rolesState.map(role => <th key={role.id} style={{ textAlign: "center", minWidth: 110 }}><div className="t-cap">{role.label}</div></th>)}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {PERMISSION_SCREENS.map(screen => (
+                  <tr key={screen}>
+                    <td className="t-mono t-bodysm" style={{ fontWeight: 500 }}>{screen}</td>
+                    {rolesState.map(role => {
+                      const ok = role.screens.includes(screen) || role.screens.includes("admin.*") && screen.startsWith("admin.") || role.screens.includes("console.*") && screen.startsWith("console.");
+                      return (
+                        <td key={role.id} style={{ textAlign: "center" }}>
+                          {ok ? <Icon name="check" size={14} color="var(--accent-data)"/> : <span className="muted">-</span>}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
-      <div className="tint-update mt-5" style={{ padding: 14, borderRadius: 6, borderLeft: '3px solid var(--accent-update)' }}>
+      <div className="tint-update mt-5" style={{ padding: 14, borderRadius: 6, borderLeft: "3px solid var(--accent-update)" }}>
         <div className="row gap-2" style={{ marginBottom: 4 }}>
           <Icon name="shield" size={13} color="var(--accent-update)"/>
-          <strong className="t-bodysm">ABAC scope (SAD §8.2)</strong>
+          <strong className="t-bodysm">ABAC scope</strong>
         </div>
         <div className="t-bodysm muted">
-          Scope is enforced at every list query — Households are partitioned by sub-region (ADR-0005); a user without
-          national wildcard sees only rows whose <span className="t-mono">sub_region_code</span> matches one of their
-          OperatorScope entries. The PARTNER scope is non-geographic; it gates DataRequests under DSAs that belong to
-          the named Partner.
+          Scope is enforced at list-query time. A user without national wildcard sees only rows whose geographic hierarchy
+          intersects one of their active OperatorScope entries. PARTNER is non-geographic and gates DataRequests under DSAs
+          for the named partner.
         </div>
       </div>
     </div>
