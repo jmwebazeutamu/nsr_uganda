@@ -23,10 +23,16 @@ from .services import (
 
 
 class ChangeRequestSerializer(serializers.ModelSerializer):
+    # household_id is the household the CR ultimately affects — equal to
+    # entity_id when entity_type='household', resolved via Member FK when
+    # entity_type='member'. Exposed so the "Open household" affordance in
+    # the React UPD screen can navigate without a second API round-trip.
+    household_id = serializers.SerializerMethodField()
+
     class Meta:
         model = ChangeRequest
         fields = (
-            "id", "entity_type", "entity_id",
+            "id", "entity_type", "entity_id", "household_id",
             "change_type", "pmt_relevant",
             "changes", "evidence",
             "source_channel", "requester", "requester_note",
@@ -36,10 +42,25 @@ class ChangeRequestSerializer(serializers.ModelSerializer):
             "created_at", "updated_at",
         )
         read_only_fields = (
-            "id", "status", "required_role", "sla_deadline",
+            "id", "household_id", "status", "required_role", "sla_deadline",
             "approver", "decided_at", "decision_reason",
             "pmt_preview", "created_at", "updated_at",
         )
+
+    def get_household_id(self, obj):
+        if obj.entity_type == "household":
+            return obj.entity_id
+        if obj.entity_type == "member":
+            # Local import to keep the module dependency lazy — Member
+            # lives in data_management and the import-order should not
+            # be load-bearing.
+            from apps.data_management.models import Member
+            return (
+                Member.objects.filter(id=obj.entity_id)
+                .values_list("household_id", flat=True)
+                .first()
+            )
+        return None
 
 
 class _ActorReason(serializers.Serializer):

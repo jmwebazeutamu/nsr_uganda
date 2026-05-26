@@ -226,7 +226,7 @@ function App() {
         {screen === "receipt" && <ReceiptScreen/>}
         {screen === "dih"     && <DIHScreen/>}
         {screen === "dedup"   && <DedupScreen/>}
-        {screen === "upd"     && <UPDScreen changeRequestId={screenPayload?.changeRequestId}/>}
+        {screen === "upd"     && <UPDScreen changeRequestId={screenPayload?.changeRequestId} onNavigate={navigate}/>}
         {screen === "drs"     && <DRSScreen onNavigate={navigate}/>}
         {screen === "grm"     && <GRMScreen onNavigate={navigate}/>}
         {screen === "partner-drs" && <PartnerDRSScreen/>}

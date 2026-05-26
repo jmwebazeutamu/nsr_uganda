@@ -134,7 +134,7 @@ const UPD = {
   ],
 };
 
-const UPDScreen = ({ changeRequestId }) => {
+const UPDScreen = ({ changeRequestId, onNavigate }) => {
   const [showAll, setShowAll] = useStateUpd(false);
   const [auditOpen, setAuditOpen] = useStateUpd(false);
   const [modal, setModal] = useStateUpd(null);
@@ -420,6 +420,13 @@ const UPDScreen = ({ changeRequestId }) => {
         reason: current._raw.requester_note || "",
         status: current._raw.status,
         household: current._raw.entity_id || "—",
+        // household_id is the navigation target for "Open household".
+        // For entity_type='household' it equals entity_id; for 'member'
+        // the backend resolves Member.household_id (apps/update_workflow
+        // /api.py ChangeRequestSerializer.get_household_id).
+        household_id: current._raw.household_id || (
+          current._raw.entity_type === "household" ? current._raw.entity_id : null
+        ),
         entity_label: current._raw.entity_type === "household" ? "Household" : "Member",
       }
     : {
@@ -433,6 +440,7 @@ const UPDScreen = ({ changeRequestId }) => {
         reason: UPD.reason,
         status: "pending_approval",
         household: UPD.household,
+        household_id: UPD.household,
         entity_label: "Household",
       };
   const isSelfRequest = isLive && me?.username && me.username === current._raw.requester;
@@ -450,7 +458,12 @@ const UPDScreen = ({ changeRequestId }) => {
         </>}
         right={<>
           <button className="btn" onClick={() => setAuditOpen(true)}><Icon name="history"/> Audit chain</button>
-          <button className="btn"><Icon name="eye"/> Open household</button>
+          <button className="btn"
+                  disabled={!headerVM.household_id}
+                  onClick={() => headerVM.household_id && onNavigate?.("household", { householdId: headerVM.household_id })}
+                  title={headerVM.household_id ? "Open the household this change request affects" : "Household not resolvable for this change request"}>
+            <Icon name="eye"/> Open household
+          </button>
         </>}
       />
 
