@@ -19,6 +19,19 @@
 
 const { useState: useStateAdmin, useMemo: useMemoAdmin, useEffect: useEffectAdmin } = React;
 
+
+// Reads Django's csrftoken cookie — required for session-auth POSTs
+// against the DRF endpoints. Same shape as `_getCsrfToken` in
+// screens-dih / screens-drs / screens-upd / screens-grm. The
+// admin-login flow sets this cookie automatically; preview harnesses
+// running under file:// won't have it and the catch branch of the
+// trigger fetch falls back to the mock path.
+const _adminCsrfToken = () => {
+  if (typeof document === "undefined") return "";
+  const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return m ? m[1] : "";
+};
+
 // Mock data — mirrors the live serializer output from
 // /api/v1/ddup/model-versions/ (S10-002) so the fetch wiring is
 // a one-line swap.
@@ -428,6 +441,7 @@ const ConnectorRunsTab = () => {
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
+        "X-CSRFToken": _adminCsrfToken(),
       },
       body: JSON.stringify({ dry_run: dryRun }),
     })
