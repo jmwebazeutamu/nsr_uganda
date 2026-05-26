@@ -11,7 +11,12 @@
 //   apps.pmt.services.activate_model_version
 //   apps.security.audit (model.create, model.submit, model.activate)
 
-const { useState: useStatePCfg, useMemo: useMemoPCfg } = React;
+const {
+  useState: useStatePCfg,
+  useMemo: useMemoPCfg,
+  useEffect: useEffectPCfg,
+  useRef: useRefPCfg,
+} = React;
 
 /* ============================================================
    Sample data — mirrors PMTModelVersion shape; replace with API
@@ -116,12 +121,77 @@ const STATUS_TONE = {
   pending_approval: "update",
   active: "data",
   retired: "neutral",
+  rejected: "danger",
 };
 const STATUS_LABEL = {
   draft: "Draft",
   pending_approval: "Pending approval",
   active: "Active",
   retired: "Retired",
+  rejected: "Rejected",
+};
+
+const PCFG_API_ROOT = "/api/v1/admin/pmt/versions/";
+
+const pcfgStatus = (value) => String(value || "draft").toLowerCase();
+const pcfgNum = (value, fallback = 0) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+};
+const pcfgVariableName = (v) => v.name || v.variable || v.path || "";
+const pcfgVariableGroup = (v) => v.group || v.category || "DSL";
+const pcfgVariableTransform = (v) => v.transform || (v.feature && v.feature.type) || "direct";
+const pcfgVersionLabelDate = (value) => {
+  if (!value) return "";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString();
+};
+const pcfgNormalizeVersion = (raw) => {
+  const status = pcfgStatus(raw.status);
+  const variables = Array.isArray(raw.variables) ? raw.variables : [];
+  return {
+    id: raw.id,
+    version: raw.version,
+    status,
+    description: raw.description || "",
+    author: raw.author || "",
+    approvedBy: raw.approved_by || raw.approvedBy || "",
+    approvedAt: pcfgVersionLabelDate(raw.approved_at || raw.approvedAt),
+    effectiveFrom: raw.effective_from || raw.effectiveFrom || "",
+    variables,
+    variablesCount: raw.variables_count ?? raw.variablesCount ?? variables.length,
+    intercept: pcfgNum(raw.intercept),
+    validationRSquared: raw.validation_r_squared ?? raw.validationRSquared,
+    bandStrategy: raw.band_strategy || raw.bandStrategy || "threshold",
+    bandCutoffs: raw.band_cutoffs || raw.bandCutoffs || {},
+    calibrationDataset: raw.calibration_dataset || raw.calibrationDataset || "",
+    calibrationYearEnd: raw.calibration_year_end || raw.calibrationYearEnd || "",
+    createdAt: pcfgVersionLabelDate(raw.created_at || raw.createdAt),
+    updatedAt: pcfgVersionLabelDate(raw.updated_at || raw.updatedAt),
+    signoffs: raw.signoffs || [],
+  };
+};
+
+const pcfgParseCsvVariables = (text) => {
+  const lines = String(text || "").split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return [];
+  const header = lines[0].split(",").map(h => h.trim().toLowerCase());
+  const rows = header.includes("name") || header.includes("variable") ? lines.slice(1) : lines;
+  return rows.map(line => {
+    const cols = line.split(",").map(c => c.trim());
+    const get = (name, fallbackIndex) => {
+      const i = header.indexOf(name);
+      return cols[i >= 0 ? i : fallbackIndex] || "";
+    };
+    const name = get("name", 0) || get("variable", 0);
+    return {
+      name,
+      weight: pcfgNum(get("weight", 1), 0),
+      group: get("group", 3) || "Imported",
+      transform: get("transform", 2) || "direct",
+      feature: { type: get("transform", 2) || "direct", path: name },
+    };
+  }).filter(v => v.name);
 };
 
 /* ============================================================
@@ -150,28 +220,329 @@ const PmtConfigurationScreen = ({ onBack }) => {
   const [tab, setTab] = useStatePCfg("variables");
   const [varSearch, setVarSearch] = useStatePCfg("");
   const [varGroupFilter, setVarGroupFilter] = useStatePCfg("All");
+  const [versions, setVersions] = useStatePCfg(PCFG_VERSIONS);
+  const [loading, setLoading] = useStatePCfg(true);
+  const [error, setError] = useStatePCfg("");
+  const [saving, setSaving] = useStatePCfg("");
+  const [notice, setNotice] = useStatePCfg("");
+  const [addModalOpen, setAddModalOpen] = useStatePCfg(false);
+  const [variablePickSearch, setVariablePickSearch] = useStatePCfg("");
+  const fileInputRef = useRefPCfg(null);
+
+  const fetchVersions = async (preferredId = selectedId) => {
+    const api = typeof window !== "undefined" ? window.nsrApi : null;
+    if (!api) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const list = await api.get(PCFG_API_ROOT);
+      const summaries = Array.isArray(list?.results) ? list.results : [];
+      const detailRows = await Promise.all(
+        summaries.map(row => api.get(`${PCFG_API_ROOT}${row.id}/`).catch(() => row))
+      );
+      const next = detailRows.map(pcfgNormalizeVersion);
+      if (next.length) {
+        setVersions(next);
+        const keepId = next.some(v => v.id === preferredId) ? preferredId : next[0].id;
+        setSelectedId(keepId);
+      }
+    } catch (err) {
+      setError(err?.body?.detail || err?.message || "Could not load PMT model versions.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffectPCfg(() => {
+    fetchVersions();
+  }, []);
 
   const selected = useMemoPCfg(
-    () => PCFG_VERSIONS.find(v => v.id === selectedId) || PCFG_VERSIONS[0],
-    [selectedId]
+    () => versions.find(v => v.id === selectedId) || versions[0] || PCFG_VERSIONS[0],
+    [selectedId, versions]
   );
-  const variables = selected.version === 1 ? PCFG_VARIABLES_V1
-    : selected.version === 2 ? PCFG_VARIABLES_V1 // would diff in real data; use same for sample
-    : PCFG_VARIABLES_V1.slice(0, 22);
+  const variables = (selected.variables && selected.variables.length)
+    ? selected.variables
+    : selected.version === 1 ? PCFG_VARIABLES_V1
+      : selected.version === 2 ? PCFG_VARIABLES_V1
+      : PCFG_VARIABLES_V1.slice(0, 22);
 
   const filteredVariables = useMemoPCfg(() => {
     const q = varSearch.trim().toLowerCase();
     return variables.filter(v => {
-      if (varGroupFilter !== "All" && v.group !== varGroupFilter) return false;
-      if (q && !v.name.includes(q)) return false;
+      const name = pcfgVariableName(v);
+      if (varGroupFilter !== "All" && pcfgVariableGroup(v) !== varGroupFilter) return false;
+      if (q && !name.toLowerCase().includes(q)) return false;
       return true;
     });
   }, [variables, varSearch, varGroupFilter]);
 
-  const groups = [...new Set(variables.map(v => v.group))];
+  const groups = [...new Set(variables.map(v => pcfgVariableGroup(v)))];
 
   const isEditable = selected.status === "draft";
-  const totalAbsWeight = variables.reduce((a, v) => a + Math.abs(v.weight), 0);
+  const totalAbsWeight = variables.reduce((a, v) => a + Math.abs(pcfgNum(v.weight)), 0);
+  const existingVariableNames = new Set(variables.map(v => pcfgVariableName(v)));
+  const databaseVariableCatalog = useMemoPCfg(() => {
+    const byName = new Map();
+    versions.forEach(version => {
+      (version.variables || []).forEach(variable => {
+        const name = pcfgVariableName(variable);
+        if (!name || byName.has(name)) return;
+        byName.set(name, {
+          ...variable,
+          name,
+          sourceVersion: version.version,
+          sourceStatus: version.status,
+        });
+      });
+    });
+    return [...byName.values()].sort((a, b) => pcfgVariableName(a).localeCompare(pcfgVariableName(b)));
+  }, [versions]);
+  const filteredDatabaseVariables = useMemoPCfg(() => {
+    const q = variablePickSearch.trim().toLowerCase();
+    if (!q) return databaseVariableCatalog;
+    return databaseVariableCatalog.filter(v => {
+      const haystack = [
+        pcfgVariableName(v),
+        pcfgVariableGroup(v),
+        pcfgVariableTransform(v),
+        v.comment || "",
+      ].join(" ").toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [databaseVariableCatalog, variablePickSearch]);
+
+  const patchSelected = async (body, successMessage) => {
+    const api = typeof window !== "undefined" ? window.nsrApi : null;
+    if (!api || !selected?.id) return;
+    setSaving("patch");
+    setError("");
+    try {
+      const updated = await api.patch(`${PCFG_API_ROOT}${selected.id}/`, body);
+      const normalized = pcfgNormalizeVersion(updated);
+      setVersions(prev => prev.map(v => v.id === normalized.id ? normalized : v));
+      setSelectedId(normalized.id);
+      setNotice(successMessage);
+    } catch (err) {
+      setError(err?.body?.detail || err?.message || "Could not save PMT model version.");
+    } finally {
+      setSaving("");
+    }
+  };
+
+  const createVersion = async () => {
+    const api = typeof window !== "undefined" ? window.nsrApi : null;
+    if (!api) return;
+    const description = window.prompt("Description for the new PMT model version:", "New PMT model draft");
+    if (description === null) return;
+    setSaving("create");
+    setError("");
+    try {
+      const created = await api.post(PCFG_API_ROOT, {
+        description,
+        variables: [],
+        intercept: selected?.intercept || 0,
+        band_cutoffs: selected?.bandCutoffs || {},
+        band_strategy: selected?.bandStrategy || "threshold",
+        calibration_dataset: selected?.calibrationDataset || "",
+        calibration_year_end: selected?.calibrationYearEnd || null,
+      });
+      await fetchVersions(created.id);
+      setNotice(`Created PMT v${created.version} draft.`);
+    } catch (err) {
+      setError(err?.body?.detail || err?.message || "Could not create PMT model version.");
+    } finally {
+      setSaving("");
+    }
+  };
+
+  const cloneVersion = async () => {
+    const api = typeof window !== "undefined" ? window.nsrApi : null;
+    if (!api || !selected?.id) return;
+    setSaving("clone");
+    setError("");
+    try {
+      const created = await api.post(`${PCFG_API_ROOT}${selected.id}/clone/`, {});
+      await fetchVersions(created.id);
+      setNotice(`Cloned PMT v${selected.version} into draft v${created.version}.`);
+    } catch (err) {
+      setError(err?.body?.detail || err?.message || "Could not clone PMT model version.");
+    } finally {
+      setSaving("");
+    }
+  };
+
+  // Resolve which sign-off step is currently awaiting a decision.
+  // PMT uses a three-step chain (author → MGLSD steward → UBOS DG)
+  // tracked in PMTModelSignOff. The actionable step is the lowest
+  // `step` with status === "pending" within the latest revision.
+  const currentPendingStep = (() => {
+    const offs = (selected && selected.signoffs) || [];
+    if (!offs.length) return null;
+    const maxRev = offs.reduce((m, s) => Math.max(m, Number(s.revision) || 1), 1);
+    const pending = offs
+      .filter(s => Number(s.revision || 1) === maxRev && s.status === "pending")
+      .sort((a, b) => Number(a.step) - Number(b.step));
+    return pending.length ? Number(pending[0].step) : null;
+  })();
+
+  const signVersion = async () => {
+    const api = typeof window !== "undefined" ? window.nsrApi : null;
+    if (!api || !selected?.id) return;
+    const step = currentPendingStep;
+    if (!step) {
+      setError("Nothing to sign — no pending step on this version.");
+      return;
+    }
+    const actorEmail = window.prompt(
+      `Sign step ${step} — your email (server enforces no-self-approve):`, "",
+    );
+    if (actorEmail === null) return;
+    if (!actorEmail.trim()) {
+      setError("Approver email is required to sign.");
+      return;
+    }
+    const note = window.prompt("Approval note (optional):", "") || "";
+    setSaving("sign");
+    setError("");
+    try {
+      const updated = await api.post(`${PCFG_API_ROOT}${selected.id}/sign/${step}/`, {
+        actor_email: actorEmail.trim(),
+        note,
+      });
+      const normalized = pcfgNormalizeVersion(updated);
+      setVersions(prev => prev.map(v => v.id === normalized.id ? normalized : v));
+      setNotice(`Signed step ${step} on PMT v${selected.version}.`);
+    } catch (err) {
+      setError(err?.body?.detail || err?.message || `Could not sign step ${step}.`);
+    } finally {
+      setSaving("");
+    }
+  };
+
+  const rejectVersion = async () => {
+    const api = typeof window !== "undefined" ? window.nsrApi : null;
+    if (!api || !selected?.id) return;
+    const step = currentPendingStep;
+    if (!step) {
+      setError("Nothing to reject — no pending step on this version.");
+      return;
+    }
+    const actorEmail = window.prompt(
+      `Reject step ${step} — your email:`, "",
+    );
+    if (actorEmail === null) return;
+    if (!actorEmail.trim()) {
+      setError("Approver email is required to reject.");
+      return;
+    }
+    const reason = window.prompt("Rejection reason (required):", "") || "";
+    if (!reason.trim()) {
+      setError("Rejection reason is required.");
+      return;
+    }
+    setSaving("reject");
+    setError("");
+    try {
+      const updated = await api.post(`${PCFG_API_ROOT}${selected.id}/reject/${step}/`, {
+        actor_email: actorEmail.trim(),
+        reason: reason.trim(),
+      });
+      const normalized = pcfgNormalizeVersion(updated);
+      setVersions(prev => prev.map(v => v.id === normalized.id ? normalized : v));
+      // Rejection is terminal. The version stays on the audit chain
+      // but disappears from the default list — the operator effectively
+      // sees it as deleted. Refresh so the sidebar drops it.
+      await fetchVersions();
+      setNotice(
+        `Rejected step ${step} on PMT v${selected.version}. ` +
+        `Version is terminally REJECTED — clone an active version to start a fresh draft.`,
+      );
+    } catch (err) {
+      setError(err?.body?.detail || err?.message || `Could not reject step ${step}.`);
+    } finally {
+      setSaving("");
+    }
+  };
+
+  const submitVersion = async () => {
+    const api = typeof window !== "undefined" ? window.nsrApi : null;
+    if (!api || !selected?.id) return;
+    const author = window.prompt("Author email:", selected.author || "");
+    if (author === null) return;
+    const steward = window.prompt("MGLSD Data Steward email:", "steward@mglsd.go.ug");
+    if (steward === null) return;
+    const dg = window.prompt("UBOS Director General email:", "dg@ubos.go.ug");
+    if (dg === null) return;
+    setSaving("submit");
+    setError("");
+    try {
+      const updated = await api.post(`${PCFG_API_ROOT}${selected.id}/submit/`, {
+        author_email: author,
+        mglsd_steward_email: steward,
+        ubos_dg_email: dg,
+      });
+      const normalized = pcfgNormalizeVersion(updated);
+      setVersions(prev => prev.map(v => v.id === normalized.id ? normalized : v));
+      setNotice(`Submitted PMT v${selected.version} for approval.`);
+    } catch (err) {
+      setError(err?.body?.detail || err?.message || "Could not submit PMT model version.");
+    } finally {
+      setSaving("");
+    }
+  };
+
+  const addVariableFromCatalog = (catalogVariable) => {
+    const name = pcfgVariableName(catalogVariable);
+    if (!name || existingVariableNames.has(name)) return;
+    const nextVariable = {
+      ...catalogVariable,
+      name,
+      weight: pcfgNum(catalogVariable.weight),
+    };
+    delete nextVariable.sourceVersion;
+    delete nextVariable.sourceStatus;
+    patchSelected({ variables: [...variables, nextVariable] }, `Added variable ${name}.`);
+    setAddModalOpen(false);
+    setVariablePickSearch("");
+  };
+
+  const editVariable = (variable) => {
+    const name = pcfgVariableName(variable);
+    const nextWeight = window.prompt(`Weight for ${name}:`, String(variable.weight ?? 0));
+    if (nextWeight === null) return;
+    const nextGroup = window.prompt(`Group for ${name}:`, pcfgVariableGroup(variable));
+    if (nextGroup === null) return;
+    const nextTransform = window.prompt(`Transform / DSL type for ${name}:`, pcfgVariableTransform(variable));
+    if (nextTransform === null) return;
+    const nextVariables = variables.map(v => {
+      if (pcfgVariableName(v) !== name) return v;
+      return {
+        ...v,
+        weight: pcfgNum(nextWeight),
+        group: nextGroup || pcfgVariableGroup(v),
+        transform: nextTransform || pcfgVariableTransform(v),
+        feature: v.feature || { type: nextTransform || "direct", path: name },
+      };
+    });
+    patchSelected({ variables: nextVariables }, `Updated variable ${name}.`);
+  };
+
+  const importCsv = async (event) => {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = "";
+    if (!file) return;
+    const text = await file.text();
+    const imported = pcfgParseCsvVariables(text);
+    if (!imported.length) {
+      setError("CSV did not contain any variables. Use columns: name,weight,transform,group.");
+      return;
+    }
+    patchSelected({ variables: [...variables, ...imported] }, `Imported ${imported.length} variables from CSV.`);
+  };
 
   return (
     <div className="page">
@@ -181,8 +552,33 @@ const PmtConfigurationScreen = ({ onBack }) => {
         sub="Model registry — draft, calibrate, and activate PMT model versions. Activation requires dual approval (AC-PMT-MODEL-VERSION)."
         right={<>
           <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to dashboard</button>
-          <button className="btn btn-primary"><Icon name="plus" size={14}/> New model version</button>
+          <button className="btn btn-primary" onClick={createVersion} disabled={!!saving}>
+            <Icon name="plus" size={14}/> New model version
+          </button>
         </>}
+      />
+      {(loading || error || notice) && (
+        <div className={error ? "tint-quality" : "tint-update"} style={{
+          padding: "10px 14px",
+          borderRadius: 6,
+          borderLeft: `3px solid ${error ? "var(--accent-quality)" : "var(--accent-update)"}`,
+          marginBottom: 14,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+        }}>
+          <Icon name={error ? "x" : loading ? "clock" : "check"} size={13}/>
+          <span className="t-bodysm">
+            {error || (loading ? "Loading PMT model versions from the live API..." : notice)}
+          </span>
+        </div>
+      )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".csv,text/csv"
+        onChange={importCsv}
+        style={{ display: "none" }}
       />
 
       {/* Two-pane: version list + version editor */}
@@ -191,9 +587,9 @@ const PmtConfigurationScreen = ({ onBack }) => {
         <div className="card" style={{ padding: 0, alignSelf: 'start' }}>
           <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--neutral-200)' }}>
             <strong className="t-bodysm">Model versions</strong>
-            <div className="t-cap">3 in registry · {PCFG_VERSIONS.filter(v => v.status === 'active').length} active</div>
+            <div className="t-cap">{versions.length} in registry · {versions.filter(v => v.status === 'active').length} active</div>
           </div>
-          {PCFG_VERSIONS.map(v => {
+          {versions.map(v => {
             const active = v.id === selectedId;
             return (
               <div key={v.id}
@@ -213,7 +609,7 @@ const PmtConfigurationScreen = ({ onBack }) => {
                 <div className="t-cap mt-1" style={{ color: 'var(--neutral-600)' }}>{v.description.slice(0, 60)}{v.description.length > 60 ? '…' : ''}</div>
                 <div className="t-cap mt-2 row gap-2">
                   <span>{v.variablesCount} vars</span>
-                  {v.validationRSquared && <span>· R² {v.validationRSquared.toFixed(3)}</span>}
+                  {v.validationRSquared !== null && v.validationRSquared !== undefined && <span>· R² {pcfgNum(v.validationRSquared).toFixed(3)}</span>}
                 </div>
               </div>
             );
@@ -245,28 +641,49 @@ const PmtConfigurationScreen = ({ onBack }) => {
               </div>
               <div className="row gap-2">
                 {selected.status === 'draft' && <>
-                  <button className="btn"><Icon name="copy" size={13}/> Clone</button>
-                  <button className="btn btn-primary"><Icon name="upload" size={13}/> Submit for approval</button>
+                  <button className="btn" onClick={cloneVersion} disabled={!!saving}><Icon name="copy" size={13}/> Clone</button>
+                  <button className="btn btn-primary" onClick={submitVersion} disabled={!!saving}><Icon name="upload" size={13}/> Submit for approval</button>
                 </>}
                 {selected.status === 'pending_approval' && <>
-                  <button className="btn"><Icon name="x" size={13}/> Reject</button>
-                  <button className="btn btn-primary"><Icon name="check" size={13}/> Approve & activate</button>
+                  <button className="btn" onClick={rejectVersion}
+                          disabled={!!saving || currentPendingStep === null}
+                          title={currentPendingStep === null
+                            ? "No pending step on this version"
+                            : `Reject sign-off step ${currentPendingStep} — terminal: the version moves to REJECTED and disappears from the default list. Clone an active version to start a fresh draft.`}>
+                    <Icon name="x" size={13}/> {saving === "reject" ? "Rejecting…" : `Reject step ${currentPendingStep || ""}`.trim()}
+                  </button>
+                  <button className="btn btn-primary" onClick={signVersion}
+                          disabled={!!saving || currentPendingStep === null}
+                          title={currentPendingStep === null
+                            ? "No pending step on this version"
+                            : `Sign sign-off step ${currentPendingStep}. The server enforces AC-PMT-NO-SELF-APPROVE.`}>
+                    <Icon name="check" size={13}/> {saving === "sign"
+                      ? "Signing…"
+                      : currentPendingStep === 3
+                        ? "Sign step 3 & activate"
+                        : `Sign step ${currentPendingStep || ""}`.trim()}
+                  </button>
                 </>}
                 {selected.status === 'active' && <>
-                  <button className="btn"><Icon name="copy" size={13}/> Clone as draft</button>
+                  <button className="btn" onClick={cloneVersion} disabled={!!saving}><Icon name="copy" size={13}/> Clone as draft</button>
                 </>}
                 {selected.status === 'retired' && <>
-                  <button className="btn"><Icon name="copy" size={13}/> Clone as draft</button>
+                  <button className="btn" onClick={cloneVersion} disabled={!!saving}><Icon name="copy" size={13}/> Clone as draft</button>
                 </>}
+                {selected.status === 'rejected' && (
+                  <span className="t-cap muted" title="Rejected versions are terminal — preserved on the audit chain but no further actions available. Clone an active version to revise.">
+                    Terminal — no further actions
+                  </span>
+                )}
               </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', borderTop: '1px solid var(--neutral-200)' }}>
               {[
                 ['Variables',          selected.variablesCount],
-                ['Intercept',          selected.intercept.toFixed(4)],
-                ['Validation R²',      selected.validationRSquared.toFixed(3)],
-                ['Calibration year',   selected.calibrationYearEnd],
+                ['Intercept',          pcfgNum(selected.intercept).toFixed(4)],
+                ['Validation R²',      selected.validationRSquared === null || selected.validationRSquared === undefined ? "—" : pcfgNum(selected.validationRSquared).toFixed(3)],
+                ['Calibration year',   selected.calibrationYearEnd || "—"],
               ].map(([k, v], i) => (
                 <div key={k} style={{
                   padding: '10px 16px',
@@ -349,8 +766,12 @@ const PmtConfigurationScreen = ({ onBack }) => {
                 <span className="t-cap">{filteredVariables.length} of {variables.length}</span>
                 <div style={{ flex: 1 }}/>
                 {isEditable && <>
-                  <button className="btn btn-sm"><Icon name="upload" size={12}/> Import CSV</button>
-                  <button className="btn btn-sm"><Icon name="plus" size={12}/> Add variable</button>
+                  <button className="btn btn-sm" onClick={() => fileInputRef.current && fileInputRef.current.click()} disabled={!!saving}>
+                    <Icon name="upload" size={12}/> Import CSV
+                  </button>
+                  <button className="btn btn-sm" onClick={() => setAddModalOpen(true)} disabled={!!saving}>
+                    <Icon name="plus" size={12}/> Add variable
+                  </button>
                 </>}
               </div>
               <table className="tbl" style={{ boxShadow: 'none' }}>
@@ -366,15 +787,19 @@ const PmtConfigurationScreen = ({ onBack }) => {
                 </thead>
                 <tbody>
                   {filteredVariables.map(v => {
-                    const max = Math.max(...variables.map(x => Math.abs(x.weight)));
-                    const isNeg = v.weight < 0;
+                    const name = pcfgVariableName(v);
+                    const group = pcfgVariableGroup(v);
+                    const transform = pcfgVariableTransform(v);
+                    const weight = pcfgNum(v.weight);
+                    const max = Math.max(...variables.map(x => Math.abs(pcfgNum(x.weight))), 0.001);
+                    const isNeg = weight < 0;
                     return (
-                      <tr key={v.name}>
-                        <td className="t-mono" style={{ fontSize: 12.5 }}>{v.name}</td>
-                        <td><Chip size="sm">{v.group}</Chip></td>
-                        <td className="t-mono t-cap">{v.transform}</td>
+                      <tr key={name}>
+                        <td className="t-mono" style={{ fontSize: 12.5 }}>{name}</td>
+                        <td><Chip size="sm">{group}</Chip></td>
+                        <td className="t-mono t-cap">{transform}</td>
                         <td className="t-num t-bodysm" style={{ textAlign: 'right', fontWeight: 600, color: isNeg ? 'var(--accent-quality)' : 'var(--accent-data)' }}>
-                          {v.weight >= 0 ? '+' : ''}{v.weight.toFixed(3)}
+                          {weight >= 0 ? '+' : ''}{weight.toFixed(3)}
                         </td>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -388,15 +813,17 @@ const PmtConfigurationScreen = ({ onBack }) => {
                               }}/>
                               <div style={{
                                 position: 'absolute',
-                                left: isNeg ? `${50 - (Math.abs(v.weight)/max)*50}%` : '50%',
-                                width: `${(Math.abs(v.weight)/max)*50}%`, height: '100%',
+                                left: isNeg ? `${50 - (Math.abs(weight)/max)*50}%` : '50%',
+                                width: `${(Math.abs(weight)/max)*50}%`, height: '100%',
                                 background: isNeg ? 'var(--accent-quality)' : 'var(--accent-data)',
                               }}/>
                             </div>
                           </div>
                         </td>
                         {isEditable && <td className="col-actions">
-                          <button className="icon-btn" title="Edit"><Icon name="edit" size={12}/></button>
+                          <button className="icon-btn" title="Edit" onClick={() => editVariable(v)} disabled={!!saving}>
+                            <Icon name="edit" size={12}/>
+                          </button>
                         </td>}
                       </tr>
                     );
@@ -410,7 +837,7 @@ const PmtConfigurationScreen = ({ onBack }) => {
                 display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
               }}>
                 <span className="t-cap">Intercept</span>
-                <span className="t-mono" style={{ fontWeight: 600 }}>{selected.intercept.toFixed(4)}</span>
+                <span className="t-mono" style={{ fontWeight: 600 }}>{pcfgNum(selected.intercept).toFixed(4)}</span>
                 <span style={{ width: 1, height: 16, background: 'var(--neutral-200)' }}/>
                 <span className="t-cap">Σ |β|</span>
                 <span className="t-num" style={{ fontWeight: 600 }}>{totalAbsWeight.toFixed(3)}</span>
@@ -521,9 +948,9 @@ const PmtConfigurationScreen = ({ onBack }) => {
                 <table className="tbl" style={{ boxShadow: 'none' }}>
                   <tbody>
                     <tr><td className="muted" style={{ width: 200 }}>Calibration dataset</td><td>{selected.calibrationDataset}</td></tr>
-                    <tr><td className="muted">Latest year of dataset</td><td className="t-num">{selected.calibrationYearEnd}</td></tr>
+                    <tr><td className="muted">Latest year of dataset</td><td className="t-num">{selected.calibrationYearEnd || "—"}</td></tr>
                     <tr><td className="muted">Sample size</td><td className="t-num">{(34091).toLocaleString()} households</td></tr>
-                    <tr><td className="muted">Validation R²</td><td className="t-num">{selected.validationRSquared.toFixed(3)}</td></tr>
+                    <tr><td className="muted">Validation R²</td><td className="t-num">{selected.validationRSquared === null || selected.validationRSquared === undefined ? "—" : pcfgNum(selected.validationRSquared).toFixed(3)}</td></tr>
                     <tr><td className="muted">Mean absolute error</td><td className="t-num">0.412</td></tr>
                     <tr><td className="muted">Targeting accuracy (bottom-30%)</td><td className="t-num">82.4%</td></tr>
                     <tr><td className="muted">Calibration method</td><td>OLS · ADR-0025 DSL</td></tr>
@@ -540,9 +967,10 @@ const PmtConfigurationScreen = ({ onBack }) => {
                 </div>
                 <div className="t-bodysm muted" style={{ lineHeight: 1.55 }}>
                   PMT models recalibrate every 3 years after the latest year of the source dataset.
-                  Calibration year-end <strong>{selected.calibrationYearEnd}</strong> means recalibration is due in{' '}
+                  Calibration year-end <strong>{selected.calibrationYearEnd || "not set"}</strong>
+                  {selected.calibrationYearEnd ? <> means recalibration is due in{' '}
                   <strong>{2027 - selected.calibrationYearEnd} year{2027 - selected.calibrationYearEnd === 1 ? '' : 's'}</strong>{' '}
-                  ({selected.calibrationYearEnd + 3}).
+                  ({selected.calibrationYearEnd + 3}).</> : " must be set before approval."}
                 </div>
                 <div style={{
                   marginTop: 12, padding: '8px 12px',
@@ -717,6 +1145,109 @@ const PmtConfigurationScreen = ({ onBack }) => {
         Configuration changes are audit-logged. Activation atomically retires the prior active version
         and queues a population-wide rescore (<span className="t-mono">apps.pmt.tasks</span>).
       </div>
+
+      {addModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Add PMT variable"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 80,
+            background: "rgba(15, 23, 42, 0.35)",
+            display: "grid",
+            placeItems: "center",
+            padding: 24,
+          }}
+        >
+          <div className="card" style={{ width: "min(880px, 100%)", maxHeight: "82vh", padding: 0, overflow: "hidden" }}>
+            <div style={{
+              padding: "14px 18px",
+              borderBottom: "1px solid var(--neutral-200)",
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+            }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <h3 className="t-h3" style={{ margin: 0 }}>Add variable</h3>
+                <div className="t-cap mt-1">
+                  Select from variables already stored on PMT model versions in the database.
+                </div>
+              </div>
+              <button className="icon-btn" title="Close" onClick={() => setAddModalOpen(false)}>
+                <Icon name="x" size={16}/>
+              </button>
+            </div>
+            <div style={{ padding: "12px 18px", borderBottom: "1px solid var(--neutral-200)", display: "flex", gap: 10, alignItems: "center" }}>
+              <div className="search" style={{ maxWidth: 420, height: 34, background: "var(--neutral-0)" }}>
+                <Icon name="search" size={14} color="var(--neutral-500)"/>
+                <input
+                  value={variablePickSearch}
+                  onChange={e => setVariablePickSearch(e.target.value)}
+                  placeholder="Search database variables..."
+                  autoFocus
+                />
+              </div>
+              <span className="t-cap">{filteredDatabaseVariables.length} available</span>
+            </div>
+            <div style={{ maxHeight: "58vh", overflow: "auto" }}>
+              <table className="tbl" style={{ boxShadow: "none" }}>
+                <thead>
+                  <tr>
+                    <th>Variable</th>
+                    <th>Source</th>
+                    <th>Transform</th>
+                    <th style={{ textAlign: "right" }}>Weight (β)</th>
+                    <th className="col-actions"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredDatabaseVariables.map(variable => {
+                    const name = pcfgVariableName(variable);
+                    const alreadySelected = existingVariableNames.has(name);
+                    const weight = pcfgNum(variable.weight);
+                    return (
+                      <tr key={name}>
+                        <td>
+                          <div className="t-mono" style={{ fontSize: 12.5 }}>{name}</div>
+                          {variable.comment && <div className="t-cap mt-1">{variable.comment}</div>}
+                        </td>
+                        <td>
+                          <div className="row gap-2">
+                            <Chip size="sm">v{variable.sourceVersion}</Chip>
+                            <Chip size="sm" tone={STATUS_TONE[variable.sourceStatus]}>{STATUS_LABEL[variable.sourceStatus]}</Chip>
+                          </div>
+                        </td>
+                        <td className="t-mono t-cap">{pcfgVariableTransform(variable)}</td>
+                        <td className="t-num t-bodysm" style={{ textAlign: "right", fontWeight: 600 }}>
+                          {weight >= 0 ? "+" : ""}{weight.toFixed(3)}
+                        </td>
+                        <td className="col-actions">
+                          <button
+                            className="btn btn-sm"
+                            disabled={alreadySelected || !!saving}
+                            onClick={() => addVariableFromCatalog(variable)}
+                          >
+                            {alreadySelected ? "Added" : "Use variable"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filteredDatabaseVariables.length === 0 && (
+                    <tr>
+                      <td colSpan="5" className="muted" style={{ padding: 24, textAlign: "center" }}>
+                        No database variables match this search.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
