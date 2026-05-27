@@ -12,6 +12,7 @@ from .models import (
     ConnectorRun,
     SourceSystem,
     StageRecord,
+    StageRecordState,
 )
 from .permissions import IsDihTrigger
 from .services import (
@@ -104,6 +105,36 @@ class ResolveIdvRequestSerializer(serializers.Serializer):
     actor = serializers.CharField(max_length=64)
     decision = serializers.ChoiceField(choices=["accept", "reject"])
     reason = serializers.CharField()
+
+
+class BulkStageActionRequestSerializer(serializers.Serializer):
+    """Common request shape for the two bulk DIH-queue actions
+    (US-S11-041): bulk-promote + bulk-resolve-idv. stage_ids are
+    the StageRecord ULIDs the operator ticked in the queue; the
+    backend filters to the rows whose state matches the action."""
+
+    stage_ids = serializers.ListField(
+        child=serializers.CharField(max_length=26),
+        allow_empty=False,
+        max_length=500,
+        help_text="Up to 500 StageRecord ULIDs per call.",
+    )
+    actor = serializers.CharField(max_length=64)
+    reason = serializers.CharField(required=False, allow_blank=True)
+
+
+class BulkStageActionResultSerializer(serializers.Serializer):
+    """One per-row outcome returned by a bulk action."""
+    stage_id = serializers.CharField()
+    ok = serializers.BooleanField()
+    state = serializers.CharField(allow_blank=True)
+    detail = serializers.CharField(allow_blank=True)
+
+
+class BulkStageActionResponseSerializer(serializers.Serializer):
+    succeeded = serializers.IntegerField()
+    skipped = serializers.IntegerField()
+    results = BulkStageActionResultSerializer(many=True)
 
 
 class EditRequestSerializer(serializers.Serializer):
@@ -634,6 +665,132 @@ class StageRecordViewSet(
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         stage.refresh_from_db()
         return Response(self.get_serializer(stage).data)
+
+    # ───────────────────────────────────────────────────────────────
+    # US-S11-041 — Bulk operations for the NSR Unit DIH review queue.
+    # Each iterates per row, continues past per-row errors, returns
+    # a uniform results array so the UI can toast a coherent summary.
+    # ───────────────────────────────────────────────────────────────
+
+    def _bulk_iterate(self, ids, action_fn):
+        """Resolve each id through self.get_queryset() (honours ABAC)
+        and invoke action_fn(stage). action_fn returns (ok, detail).
+        Returns the results list + succeeded/skipped counts."""
+        results = []
+        succeeded = 0
+        skipped = 0
+        qs = self.get_queryset().filter(id__in=ids)
+        # Preserve operator-submitted order so the response lines up
+        # with what they ticked.
+        by_id = {s.id: s for s in qs}
+        for sid in ids:
+            stage = by_id.get(sid)
+            if stage is None:
+                results.append({
+                    "stage_id": sid, "ok": False, "state": "",
+                    "detail": "not found in your scope or already removed",
+                })
+                skipped += 1
+                continue
+            ok, detail = action_fn(stage)
+            stage.refresh_from_db()
+            results.append({
+                "stage_id": sid, "ok": ok,
+                "state": stage.state, "detail": detail,
+            })
+            if ok:
+                succeeded += 1
+            else:
+                skipped += 1
+        return results, succeeded, skipped
+
+    @extend_schema(
+        tags=["dih"],
+        summary="Bulk-promote selected stage records (US-S11-041)",
+        description=(
+            "Iterates over `stage_ids`, calling promote_stage_record "
+            "per row. Rows whose state isn't PENDING_PROMOTION are "
+            "skipped + reported; the call doesn't 4xx so the operator "
+            "gets back a coherent results array. Each successful "
+            "promotion writes its own AuditEvent + PromotionDecision."
+        ),
+        request=BulkStageActionRequestSerializer,
+        responses={
+            200: BulkStageActionResponseSerializer,
+            400: OpenApiResponse(description="bad request body"),
+        },
+    )
+    @action(detail=False, methods=["post"], url_path="bulk-promote")
+    def bulk_promote(self, request):
+        ser = BulkStageActionRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        actor = ser.validated_data["actor"]
+        reason = ser.validated_data.get("reason", "") or ""
+
+        def _run(stage):
+            if stage.state != StageRecordState.PENDING_PROMOTION:
+                return False, f"state is '{stage.state}', not pending_promotion"
+            try:
+                promote_stage_record(stage, actor=actor, reason=reason)
+            except DihError as exc:
+                return False, str(exc)
+            return True, "promoted"
+
+        results, succeeded, skipped = self._bulk_iterate(
+            ser.validated_data["stage_ids"], _run,
+        )
+        return Response(BulkStageActionResponseSerializer({
+            "succeeded": succeeded, "skipped": skipped, "results": results,
+        }).data)
+
+    @extend_schema(
+        tags=["dih"],
+        summary="Bulk Clear IDV (accept) on selected stage records (US-S11-041)",
+        description=(
+            "Iterates over `stage_ids`, calling resolve_idv_pending "
+            "with decision='accept' per row. Rows whose state isn't "
+            "IDV_PENDING are skipped + reported. After accept each "
+            "row routes to PENDING_PROMOTION (DDUP-clean) or "
+            "DDUP_REVIEW (strong candidate). Use bulk-promote on a "
+            "follow-up call for the rows that landed in "
+            "PENDING_PROMOTION."
+        ),
+        request=BulkStageActionRequestSerializer,
+        responses={
+            200: BulkStageActionResponseSerializer,
+            400: OpenApiResponse(description="bad request body"),
+        },
+    )
+    @action(detail=False, methods=["post"], url_path="bulk-resolve-idv")
+    def bulk_resolve_idv(self, request):
+        from .services import resolve_idv_pending
+        ser = BulkStageActionRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        actor = ser.validated_data["actor"]
+        reason = (ser.validated_data.get("reason") or "").strip()
+        if not reason:
+            return Response(
+                {"detail": "reason is required for bulk IDV clearance"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        def _run(stage):
+            if stage.state != StageRecordState.IDV_PENDING:
+                return False, f"state is '{stage.state}', not idv_pending"
+            try:
+                resolve_idv_pending(
+                    stage, actor=actor, reason=reason, decision="accept",
+                )
+            except DihError as exc:
+                return False, str(exc)
+            return True, "idv accepted"
+
+        results, succeeded, skipped = self._bulk_iterate(
+            ser.validated_data["stage_ids"], _run,
+        )
+        return Response(BulkStageActionResponseSerializer({
+            "succeeded": succeeded, "skipped": skipped, "results": results,
+        }).data)
 
 
 # ---------------------------------------------------------------------------

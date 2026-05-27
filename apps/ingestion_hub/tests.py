@@ -2239,3 +2239,123 @@ class TestResolveIdvEndpoint:
         )
         assert resp.status_code == 400
         assert "idv_pending" in resp.json()["detail"]
+
+
+# --- US-S11-041 — Bulk Promote + Bulk Clear IDV -----------------------------
+
+@pytest.mark.django_db
+class TestBulkStageActions:
+    """POST /bulk-promote/ and /bulk-resolve-idv/ iterate per row,
+    skip + report rows whose state doesn't match, and return a
+    uniform results array so the DIH queue can toast a coherent
+    summary instead of opening N modals."""
+
+    _BULK_PROMOTE = "/api/v1/dih/stage-records/bulk-promote/"
+    _BULK_RESOLVE = "/api/v1/dih/stage-records/bulk-resolve-idv/"
+
+    def _client(self, django_user_model, username):
+        user = django_user_model.objects.create_user(
+            username=username, password="x", is_superuser=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user)
+        return client
+
+    def test_bulk_promote_succeeds_for_pending_promotion_rows(
+        self, connector, geo_codes, django_user_model,
+    ):
+        stages = []
+        for _ in range(3):
+            s = _make_stage(connector, geo_codes)
+            s.state = StageRecordState.PENDING_PROMOTION
+            s.save(update_fields=("state",))
+            stages.append(s)
+        client = self._client(django_user_model, "bulk-prom-u")
+        resp = client.post(self._BULK_PROMOTE, {
+            "stage_ids": [s.id for s in stages],
+            "actor": "bulk-prom-u",
+            "reason": "operator-bulk promote",
+        }, format="json")
+        assert resp.status_code == 200, resp.content
+        body = resp.json()
+        assert body["succeeded"] == 3
+        assert body["skipped"] == 0
+        for s in stages:
+            s.refresh_from_db()
+            assert s.state == StageRecordState.PROMOTED
+            assert Household.objects.filter(id=s.promoted_household_id).exists()
+
+    def test_bulk_promote_skips_non_matching_rows(
+        self, connector, geo_codes, django_user_model,
+    ):
+        ready = _make_stage(connector, geo_codes)
+        ready.state = StageRecordState.PENDING_PROMOTION
+        ready.save(update_fields=("state",))
+        idv = _make_stage(connector, geo_codes)
+        idv.state = StageRecordState.IDV_PENDING
+        idv.save(update_fields=("state",))
+        client = self._client(django_user_model, "bulk-mix-u")
+        resp = client.post(self._BULK_PROMOTE, {
+            "stage_ids": [ready.id, idv.id],
+            "actor": "bulk-mix-u", "reason": "mixed",
+        }, format="json")
+        body = resp.json()
+        assert body["succeeded"] == 1
+        assert body["skipped"] == 1
+        skipped = next(r for r in body["results"] if r["stage_id"] == idv.id)
+        assert "not pending_promotion" in skipped["detail"]
+
+    def test_bulk_promote_empty_list_is_rejected(self, django_user_model):
+        client = self._client(django_user_model, "bulk-empty-u")
+        resp = client.post(self._BULK_PROMOTE, {
+            "stage_ids": [], "actor": "u", "reason": "x",
+        }, format="json")
+        assert resp.status_code == 400
+
+    def test_bulk_promote_unknown_id_is_reported_not_500(
+        self, django_user_model,
+    ):
+        client = self._client(django_user_model, "bulk-unk-u")
+        resp = client.post(self._BULK_PROMOTE, {
+            "stage_ids": ["01ZZZZZZZZZZZZZZZZZZZZZZZZ"],
+            "actor": "u", "reason": "x",
+        }, format="json")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["succeeded"] == 0
+        assert body["skipped"] == 1
+        assert "not found" in body["results"][0]["detail"]
+
+    def test_bulk_clear_idv_routes_to_pending_promotion(
+        self, connector, geo_codes, django_user_model, dqa_blocking_name_rule,
+    ):
+        stages = []
+        for i in range(2):
+            payload = _payload(geo_codes, head_first_name=f"P{i}")
+            payload["members"][0]["nin"] = "CM1234567890NM"  # mock no_match
+            s = _make_stage(connector, geo_codes, payload=payload)
+            process_stage_record(s, actor="orch")
+            s.refresh_from_db()
+            assert s.state == StageRecordState.IDV_PENDING
+            stages.append(s)
+        client = self._client(django_user_model, "bulk-idv-u")
+        resp = client.post(self._BULK_RESOLVE, {
+            "stage_ids": [s.id for s in stages],
+            "actor": "bulk-idv-u",
+            "reason": "off-system NIN verified for both",
+        }, format="json")
+        assert resp.status_code == 200, resp.content
+        body = resp.json()
+        assert body["succeeded"] == 2
+        for s in stages:
+            s.refresh_from_db()
+            assert s.state == StageRecordState.PENDING_PROMOTION
+            assert s.idv_outcome == "manual_accept"
+
+    def test_bulk_clear_idv_requires_reason(self, django_user_model):
+        client = self._client(django_user_model, "bulk-idv-noreason")
+        resp = client.post(self._BULK_RESOLVE, {
+            "stage_ids": ["01AAA"], "actor": "u", "reason": "",
+        }, format="json")
+        assert resp.status_code == 400
+        assert "reason" in resp.json()["detail"].lower()

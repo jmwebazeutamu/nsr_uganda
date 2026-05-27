@@ -171,6 +171,74 @@ const DIHScreen = () => {
   const [filterChannel, setFilterChannel] = useStateDIH("");
   const [filterDqa, setFilterDqa] = useStateDIH("");
   const [filterIdv, setFilterIdv] = useStateDIH("");
+  // US-S11-041 — Bulk Promote / Bulk Clear IDV modal state. Each
+  // modal lists the actionable subset of the current selection.
+  const [bulkPromoteOpen, setBulkPromoteOpen] = useStateDIH(false);
+  const [bulkIdvOpen, setBulkIdvOpen] = useStateDIH(false);
+  const [bulkSubmitting, setBulkSubmitting] = useStateDIH(false);
+
+  const _runBulk = ({ endpoint, reason, kind, setOpen }) => {
+    // Compute the actionable rows again at submit-time so we don't
+    // race a partial state update from another action. The server
+    // also filters, so this is a UX-friendliness measure.
+    const eligibleRows = rows.filter(r => selection.has(r.id) && (
+      endpoint.endsWith("bulk-promote/")
+        ? r.state === "pending_promotion"
+        : r.state === "idv_pending"
+    ));
+    const stage_ids = eligibleRows.map(r => r.id);
+    if (stage_ids.length === 0) {
+      setToast("No eligible rows in the current selection.");
+      setOpen(false);
+      return;
+    }
+    setBulkSubmitting(true);
+    fetch(endpoint, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-CSRFToken": _getCsrfToken(),
+      },
+      body: JSON.stringify({
+        stage_ids, actor: "nsr-reviewer", reason: reason || "",
+      }),
+    })
+      .then(r => r.json().then(body => ({ ok: r.ok, body })))
+      .then(({ ok, body }) => {
+        setBulkSubmitting(false);
+        setOpen(false);
+        if (!ok) {
+          setToast(`${kind} failed: ${body.detail || "unknown error"}`);
+          return;
+        }
+        // Drop succeeded rows from the visible queue (they've left
+        // the actionable states). Skipped rows stay so the operator
+        // can see what was left behind.
+        const okIds = new Set(
+          (body.results || [])
+            .filter(r => r.ok)
+            .map(r => r.stage_id),
+        );
+        if (okIds.size > 0) {
+          setRows(rows.filter(r => !okIds.has(r.id)));
+          setSelection(prev => {
+            const next = new Set(prev);
+            for (const id of okIds) next.delete(id);
+            return next;
+          });
+        }
+        setToast(
+          `${kind} ${body.succeeded} · skipped ${body.skipped} · audit chain updated.`,
+        );
+      })
+      .catch(err => {
+        setBulkSubmitting(false);
+        setOpen(false);
+        setToast(`${kind} failed: ${err}`);
+      });
+  };
   const resetDropdownFilters = () => {
     setFilterSource(""); setFilterRegion(""); setFilterChannel("");
     setFilterDqa(""); setFilterIdv(""); setQuickFilter(null);
@@ -591,9 +659,37 @@ const DIHScreen = () => {
             }}>
             <Icon name="play" size={14}/> Re-run gates ({selection.size})
           </button>
-          <button className="btn btn-sm" disabled={selection.size === 0}>
-            <Icon name="check" size={14}/> Bulk approve ({selection.size})
-          </button>
+          {/* US-S11-041 — counts of actionable rows in the current
+              selection. The button is enabled when at least one
+              selected row matches the action's state. */}
+          {(() => {
+            const sel = Array.from(selection);
+            const selRows = rows.filter(r => selection.has(r.id));
+            const ppCount = selRows.filter(r => r.state === "pending_promotion").length;
+            const idvCount = selRows.filter(r => r.state === "idv_pending").length;
+            return <>
+              <button className="btn btn-sm"
+                disabled={ppCount === 0 || bulkSubmitting}
+                title={ppCount === 0
+                  ? "No selected rows are in pending_promotion"
+                  : `Promote ${ppCount} pending_promotion row(s) in one call`}
+                onClick={() => setBulkPromoteOpen(true)}>
+                <Icon name="check" size={14}/> Bulk Promote ({ppCount})
+              </button>
+              <button className="btn btn-sm"
+                disabled={idvCount === 0 || bulkSubmitting}
+                style={idvCount > 0 ? {color:"var(--accent-update)"} : undefined}
+                title={idvCount === 0
+                  ? "No selected rows are in idv_pending"
+                  : `Override IDV on ${idvCount} idv_pending row(s); they route to pending_promotion or ddup_review`}
+                onClick={() => setBulkIdvOpen(true)}>
+                <Icon name="shield" size={14}/> Bulk Clear IDV ({idvCount})
+              </button>
+              <span className="t-cap muted" style={{marginLeft:6}}>
+                {sel.length === 0 ? "(no rows selected)" : `${sel.length} selected`}
+              </span>
+            </>;
+          })()}
           <button className="btn btn-sm btn-ghost"><Icon name="sliders" size={14}/> Density</button>
         </div>
         <div style={{maxHeight:280, overflowY:'auto'}}>
@@ -1237,6 +1333,40 @@ const DIHScreen = () => {
           }}
         />
       )}
+      {bulkPromoteOpen && (
+        <BulkStageActionModal
+          title="Bulk Promote"
+          intent="success"
+          buttonLabel="Promote"
+          submitting={bulkSubmitting}
+          rows={rows.filter(r => selection.has(r.id) && r.state === "pending_promotion")}
+          skippedCount={selection.size - rows.filter(r => selection.has(r.id) && r.state === "pending_promotion").length}
+          onClose={() => !bulkSubmitting && setBulkPromoteOpen(false)}
+          onConfirm={(reason) => _runBulk({
+            endpoint: "/api/v1/dih/stage-records/bulk-promote/",
+            reason,
+            kind: "Promoted",
+            setOpen: setBulkPromoteOpen,
+          })}
+        />
+      )}
+      {bulkIdvOpen && (
+        <BulkStageActionModal
+          title="Bulk Clear IDV"
+          intent="primary"
+          buttonLabel="Accept IDV"
+          submitting={bulkSubmitting}
+          rows={rows.filter(r => selection.has(r.id) && r.state === "idv_pending")}
+          skippedCount={selection.size - rows.filter(r => selection.has(r.id) && r.state === "idv_pending").length}
+          onClose={() => !bulkSubmitting && setBulkIdvOpen(false)}
+          onConfirm={(reason) => _runBulk({
+            endpoint: "/api/v1/dih/stage-records/bulk-resolve-idv/",
+            reason,
+            kind: "IDV-cleared",
+            setOpen: setBulkIdvOpen,
+          })}
+        />
+      )}
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>
   );
@@ -1418,6 +1548,115 @@ const ResolveIdvModal = ({ stageId, headName, idvOutcome, onClose, onResolved, o
             {submitting
               ? (decision === "accept" ? "Accepting…" : "Rejecting…")
               : (decision === "accept" ? "Accept IDV" : "Reject as fraud")}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+
+// ── Bulk Promote / Bulk Clear IDV confirm modal (US-S11-041) ────────
+// One component, two callers. Lists the eligible rows so the operator
+// can visually confirm exactly which records will move. Reason is
+// mandatory (the audit chain is the only paper trail after submit).
+const BulkStageActionModal = ({
+  title, intent, buttonLabel,
+  rows, skippedCount, submitting,
+  onClose, onConfirm,
+}) => {
+  const [reason, setReason] = useStateDIH("");
+  useEffectDIH(() => { setReason(""); }, []);
+  const canSubmit = !submitting && reason.trim().length > 0 && rows.length > 0;
+  const buttonStyle = intent === "success"
+    ? { background:"var(--accent-data)", color:"white", borderColor:"var(--accent-data)" }
+    : intent === "primary"
+      ? { background:"var(--accent-update)", color:"white", borderColor:"var(--accent-update)" }
+      : {};
+  return (
+    <div
+      role="dialog" aria-label={title}
+      style={{
+        position:"fixed", inset:0, background:"rgba(0,0,0,0.4)",
+        display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000,
+      }}
+      onClick={() => !submitting && onClose()}
+    >
+      <form
+        onClick={e => e.stopPropagation()}
+        onSubmit={e => { e.preventDefault(); if (canSubmit) onConfirm(reason.trim()); }}
+        style={{
+          background:"white", padding:"24px", borderRadius:"8px",
+          minWidth:"480px", maxWidth:"560px", maxHeight:"86vh",
+          overflowY:"auto",
+          boxShadow:"0 8px 32px rgba(0,0,0,0.2)",
+        }}
+      >
+        <h3 className="t-h3" style={{marginTop:0}}>{title} · {rows.length} row(s)</h3>
+        <p className="t-bodysm muted" style={{marginTop:4, marginBottom:12}}>
+          The audit chain captures the operator, reason, and per-row
+          outcome. Rows that no longer match the expected state at
+          submit time are silently skipped — the response toast will
+          show the breakdown.
+        </p>
+        {skippedCount > 0 && (
+          <p className="t-bodysm" style={{
+            marginTop:0, marginBottom:12,
+            color:"var(--accent-quality)",
+          }}>
+            <strong>{skippedCount}</strong> selected row(s) aren't in the
+            right state for this action and will be skipped.
+          </p>
+        )}
+
+        <div style={{
+          border:"1px solid var(--neutral-300)", borderRadius:"4px",
+          maxHeight:"180px", overflowY:"auto", marginBottom:16,
+          background:"var(--neutral-50)",
+        }}>
+          {rows.length === 0 && (
+            <p className="t-bodysm muted" style={{padding:"10px 12px", margin:0}}>
+              No eligible rows in the current selection.
+            </p>
+          )}
+          {rows.map(r => (
+            <div key={r.id} style={{
+              display:"grid",
+              gridTemplateColumns:"160px 1fr 100px",
+              gap:8, padding:"6px 12px", fontSize:12,
+              borderBottom:"1px solid var(--neutral-200)",
+            }}>
+              <span className="t-mono">{r.id.slice(0, 16)}…</span>
+              <span>{r.head} · <span className="muted">{r.parish}</span></span>
+              <span className="t-cap">{r.state.replace(/_/g, " ")}</span>
+            </div>
+          ))}
+        </div>
+
+        <label className="t-cap" style={{display:"block", marginBottom:4}}>
+          Reason <span style={{color:"var(--accent-danger)"}}>*</span>
+        </label>
+        <textarea
+          value={reason} onChange={e => setReason(e.target.value)}
+          rows={2} disabled={submitting}
+          placeholder="e.g. NSR Unit batch approval — Q1 onboarding cohort"
+          style={{
+            width:"100%", padding:"8px", marginBottom:16,
+            border:"1px solid var(--neutral-300)", borderRadius:"4px",
+            fontSize:13, fontFamily:"inherit", resize:"vertical",
+          }}
+        />
+
+        <div style={{display:"flex", justifyContent:"flex-end", gap:8}}>
+          <button type="button" className="btn"
+                  onClick={onClose} disabled={submitting}>
+            Cancel
+          </button>
+          <button type="submit" className="btn" style={buttonStyle}
+                  disabled={!canSubmit}>
+            {submitting
+              ? `${buttonLabel}…`
+              : `${buttonLabel} ${rows.length}`}
           </button>
         </div>
       </form>
