@@ -388,6 +388,7 @@ const HH_TABS = [
   { id: "grm",   label: "Grievances" },
   { id: "prog",  label: "Programmes" },
   { id: "cons",  label: "Consent" },
+  { id: "dqa",   label: "DQA" },
   { id: "aud",   label: "Audit" },
 ];
 
@@ -693,6 +694,7 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
         {tab === "grm"   && <TabGrievances h={h} live={dataSource === "live"}/>}
         {tab === "prog"  && <TabProgrammes h={h} live={dataSource === "live"}/>}
         {tab === "cons"  && <TabConsent h={h} live={dataSource === "live"}/>}
+        {tab === "dqa"   && <TabDqa h={h} live={dataSource === "live"} onNavigate={onNavigate}/>}
         {tab === "aud"   && <TabAudit h={h} live={dataSource === "live"}/>}
       </div>
 
@@ -1515,6 +1517,172 @@ const TabConsent = ({ h, live }) => {
     </div>
   );
 };
+
+// US-S11-044 — Household detail · DQA tab. Shows the intra-household
+// evaluation history for this household (newest first), grouped by
+// stage. AC-DUPLICATE-MEMBER FAIL renders a "Open Dedup" link that
+// pre-filters the Dedup Dashboard to the offending member ids per
+// the spec (apps.dqa.pipeline emits offending_member_ids into the
+// result row when the duplicates_by op fires).
+const TabDqa = ({ h, live, onNavigate }) => {
+  const [evals, setEvals] = useStateHH(null);
+  const [vocab, setVocab] = useStateHH(null);
+  const [err, setErr] = useStateHH(null);
+
+  useEffectHH(() => {
+    if (!live || !h.rid) return undefined;
+    let cancelled = false;
+    fetch(`/api/v1/dqa/evaluations/${encodeURIComponent(h.rid)}?limit=20`,
+      { credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then(data => { if (!cancelled) setEvals(Array.isArray(data) ? data : (data.results || [])); })
+      .catch(e => !cancelled && setErr(String(e)));
+    fetch("/api/v1/dqa/severity-vocabulary",
+      { credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => { if (!cancelled && data) setVocab(data); })
+      .catch(() => { /* keep defaults */ });
+    return () => { cancelled = true; };
+  }, [live, h.rid]);
+
+  const severityIndex = (() => {
+    const map = {};
+    const list = (vocab && vocab.severities) || [
+      { value: "block", label: "Block", token: "status-danger", blocks_save: true },
+      { value: "reject_with_override", label: "Reject (override)", token: "status-danger-soft", blocks_save: true },
+      { value: "flag", label: "Flag", token: "status-warning", blocks_save: false },
+      { value: "info", label: "Info", token: "status-info", blocks_save: false },
+    ];
+    for (const s of list) map[s.value] = s;
+    return map;
+  })();
+
+  const toneByToken = { "status-danger": "danger", "status-danger-soft": "danger", "status-warning": "quality", "status-info": "data" };
+  const stageLabel = { dih_ingest: "DIH ingest", dih_promote: "DIH promote", registry_post_promote: "Post-promote" };
+  const outcomeTone = { pass: "data", review: "quality", block: "danger" };
+
+  // Mock fallback for design preview — non-live mode.
+  const mockEvals = [
+    { id: "01EVALA", stage: "registry_post_promote", outcome: "pass",
+      evaluator_service_version: "1.0", actor: "system",
+      evaluated_at: "2026-05-26T08:14:00Z",
+      results: [
+        { rule_code: "AC-HOH-EXISTS", rule_version: 1, status: "pass", severity: "block",
+          message: "", offending_member_ids: [] },
+        { rule_code: "AC-DUPLICATE-MEMBER", rule_version: 1, status: "pass", severity: "block",
+          message: "", offending_member_ids: [] },
+      ] },
+    { id: "01EVALB", stage: "dih_promote", outcome: "review",
+      evaluator_service_version: "1.0", actor: "akello.p",
+      evaluated_at: "2026-05-24T11:02:00Z",
+      results: [
+        { rule_code: "AC-MEMBER-COUNT-MATCH", rule_version: 1, status: "fail", severity: "flag",
+          message: "Reported 5, roster has 4", offending_member_ids: [] },
+      ] },
+  ];
+  const rows = live ? (evals || []) : mockEvals;
+
+  // AC-DUPLICATE-MEMBER → Dedup hook. Picks any duplicate-member
+  // failure across the evaluation history and surfaces a banner at
+  // the top of the tab so operators can jump straight to triage.
+  const dupBanner = (() => {
+    for (const ev of rows) {
+      const hit = (ev.results || []).find(
+        r => r.rule_code === "AC-DUPLICATE-MEMBER" && r.status === "fail",
+      );
+      if (hit) return { ev, hit };
+    }
+    return null;
+  })();
+
+  return (
+    <div>
+      <TabHeader title="Data quality evaluations"
+        sub="Intra-household rule history · evaluator emits one row per stage per evaluation."
+        action={<>
+          <button className="btn btn-sm"><Icon name="play" size={13}/> Re-evaluate</button>
+        </>}/>
+
+      {dupBanner && (
+        <div className="tint-danger" style={{ margin: "0 20px 12px", padding: 12, borderLeft: "3px solid var(--accent-danger)" }}>
+          <div className="row gap-2" style={{ alignItems: "center" }}>
+            <Icon name="alert" size={14} color="var(--accent-danger)"/>
+            <strong className="t-bodysm">AC-DUPLICATE-MEMBER failed</strong>
+            <span className="t-bodysm">— {dupBanner.hit.message || "Duplicate member NIN hashes detected"}</span>
+            <div style={{ flex: 1 }}/>
+            <button className="btn btn-sm btn-primary"
+              onClick={() => onNavigate && onNavigate("dedup", {
+                householdId: h.rid,
+                memberIds: dupBanner.hit.offending_member_ids || [],
+                evaluationId: dupBanner.ev.id,
+              })}>
+              <Icon name="search" size={12}/> Open Dedup ({(dupBanner.hit.offending_member_ids || []).length} member{(dupBanner.hit.offending_member_ids || []).length === 1 ? "" : "s"})
+            </button>
+          </div>
+        </div>
+      )}
+
+      {err && <div className="muted t-bodysm" style={{padding:"16px 20px"}}>Couldn't load: {err}</div>}
+      {live && !evals && !err && (
+        <div className="muted t-bodysm" style={{padding:"16px 20px"}}>Loading…</div>
+      )}
+      {live && evals && evals.length === 0 && (
+        <div className="muted t-bodysm" style={{padding:"16px 20px"}}>
+          No DQA evaluations recorded for this household yet.
+        </div>
+      )}
+
+      {rows.map((ev, idx) => {
+        const failures = (ev.results || []).filter(r => r.status !== "pass");
+        return (
+          <div key={ev.id || idx} style={{ padding: "14px 20px", borderTop: idx === 0 ? 0 : "1px solid var(--neutral-200)" }}>
+            <div className="row gap-2" style={{ alignItems: "center", marginBottom: 6 }}>
+              <Chip size="sm">{stageLabel[ev.stage] || ev.stage}</Chip>
+              <Chip size="sm" tone={outcomeTone[ev.outcome] || "neutral"}>{ev.outcome}</Chip>
+              <span className="t-cap">v{ev.evaluator_service_version || "1.0"}</span>
+              <span className="t-cap">· {ev.actor || "—"}</span>
+              <div style={{ flex: 1 }}/>
+              <span className="t-cap">{(ev.evaluated_at || "").slice(0, 19).replace("T", " ") || "—"}</span>
+            </div>
+            {failures.length === 0 ? (
+              <div className="t-bodysm muted">
+                <Icon name="check" size={12} color="var(--accent-data)"/> All {(ev.results || []).length} rule{(ev.results || []).length === 1 ? "" : "s"} passing.
+              </div>
+            ) : (
+              <table className="tbl" style={{ boxShadow: "none", marginTop: 4 }}>
+                <thead><tr><th>Rule</th><th>Severity</th><th>Message</th><th>Members</th></tr></thead>
+                <tbody>
+                  {failures.map((r, i) => {
+                    const sev = severityIndex[r.severity] || { label: r.severity, token: "status-info" };
+                    const tone = toneByToken[sev.token] || "data";
+                    const offenders = r.offending_member_ids || [];
+                    return (
+                      <tr key={`${ev.id}:${r.rule_code}:${i}`}>
+                        <td className="t-mono t-bodysm">{r.rule_code} v{r.rule_version}</td>
+                        <td><Chip size="sm" tone={tone}>{sev.label}</Chip></td>
+                        <td className="t-bodysm">{r.message || "—"}</td>
+                        <td className="t-cap">
+                          {offenders.length === 0 ? "—"
+                            : r.rule_code === "AC-DUPLICATE-MEMBER"
+                              ? <button className="btn btn-link btn-sm"
+                                  onClick={() => onNavigate && onNavigate("dedup", {
+                                    householdId: h.rid, memberIds: offenders, evaluationId: ev.id,
+                                  })}>{offenders.join(", ")}</button>
+                              : offenders.join(", ")}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 
 const TabAudit = ({ h, live }) => {
   const [events, setEvents] = useStateHH(null);
