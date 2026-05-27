@@ -22,6 +22,19 @@ const { useState: useStateReg } = React;
 
 const _HH_API_BASE = "/api/v1/data-management/households/";
 
+// Compact integer formatter for headline pills + tab counts. Matches
+// the visual rhythm of "12.1M" without lying when the registry's
+// actual size is in the dozens (dev DB) — small numbers render as-is.
+const _formatCompact = (n) => {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  const v = Number(n);
+  const abs = Math.abs(v);
+  if (abs >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (abs >= 10_000) return `${Math.round(v / 1_000)}k`;
+  if (abs >= 1_000) return `${(v / 1_000).toFixed(1)}k`;
+  return String(v);
+};
+
 const _registryQS = (params) => {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params || {})) {
@@ -129,6 +142,17 @@ const RegistryScreen = ({ onOpen, onOpenMember, initialView = "households" }) =>
   const [listResp, listMeta] = useApi(listUrl);
   const [aggResp] = useApi(aggUrl);
   const [subregResp] = useApi(subregUrl);
+  // Unfiltered tab counts (US-S11-032) — the hardcoded "12.1M" /
+  // "48.1M" pills lied about the real registry size for any
+  // pre-launch dev DB. Both endpoints respect ABAC scope so a
+  // partner-affiliated operator sees their slice, not the whole
+  // population.
+  const [hhTotalsResp] = useApi(
+    "/api/v1/data-management/households/aggregates/",
+  );
+  const [memTotalsResp] = useApi(
+    "/api/v1/data-management/members/aggregates/",
+  );
 
   const liveRows = ((listResp && listResp.results) || []).map(_projectHousehold);
   const liveCount = (listResp && typeof listResp.count === "number")
@@ -171,8 +195,16 @@ const RegistryScreen = ({ onOpen, onOpenMember, initialView = "households" }) =>
           marginBottom:16,
         }}>
         {[
-          { id:"households", label:"Households", icon:"home",  count:"12.1M", sub:"primary entity"  },
-          { id:"members",    label:"Members",    icon:"users", count:"48.1M", sub:"per-individual" },
+          {
+            id: "households", label: "Households", icon: "home",
+            count: _formatCompact(hhTotalsResp?.total),
+            sub: "primary entity",
+          },
+          {
+            id: "members", label: "Members", icon: "users",
+            count: _formatCompact(memTotalsResp?.total_individuals),
+            sub: "per-individual",
+          },
         ].map(tab => {
           const active = view === tab.id;
           return (
