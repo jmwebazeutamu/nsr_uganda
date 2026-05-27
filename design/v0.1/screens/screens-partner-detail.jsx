@@ -378,6 +378,15 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme, onNavigat
   // when the modal is closed. ADR-0016 §"Decision 2" gates editing
   // to draft + active rows only.
   const [scopeEditDsa, setScopeEditDsa] = useStatePD(null);
+  // US-S11-036 — Edit + Delete CRUD affordances on the Partner detail.
+  // Backend ModelViewSet has supported PATCH + DELETE forever; the
+  // console only just gets the buttons. Delete is FK-PROTECTED at
+  // the model level (PartnerContact / DataSharingAgreement / Programme
+  // all point at Partner with on_delete=PROTECT), so the endpoint
+  // 4xxs cleanly when downstream rows exist. The confirm modal warns
+  // the operator before they discover that the hard way.
+  const [editOpen, setEditOpen] = useStatePD(false);
+  const [deleteOpen, setDeleteOpen] = useStatePD(false);
   const _SCOPE_EDITABLE = new Set(["draft", "active"]);
   const openScopeEditor = (projectedDsa) => {
     if (!projectedDsa || !_SCOPE_EDITABLE.has(projectedDsa.status_code)) return;
@@ -459,6 +468,16 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme, onNavigat
           return <>
             <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to partners</button>
             <button className="btn"><Icon name="download" size={14}/> Export partner record</button>
+            <button className="btn" onClick={() => setEditOpen(true)}
+                    title="Edit name, type, status, contact info (PATCH /api/v1/partners/{id}/)">
+              <Icon name="edit" size={14}/> Edit
+            </button>
+            <button className="btn"
+                    style={{color:"var(--accent-danger)"}}
+                    onClick={() => setDeleteOpen(true)}
+                    title="Refuses if any DSA, Programme, or Contact exists for this partner">
+              <Icon name="trash" size={14}/> Delete
+            </button>
             {noDsas || !hasEditable ? (
               <button className="btn btn-primary"
                       onClick={() => onNavigate && onNavigate("dsa-new", { partnerId: p.id })}
@@ -572,7 +591,245 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme, onNavigat
         dsa={scopeEditDsa}
         onClose={() => setScopeEditDsa(null)}
         onSuccess={onScopeEditSuccess}/>
+
+      <EditPartnerModal
+        open={editOpen}
+        partner={partnerResp}
+        onClose={() => setEditOpen(false)}
+        onSaved={(updated) => {
+          setEditOpen(false);
+          setToast(`Updated ${updated?.code || "partner"} — ${
+            Object.keys(_diffShape(partnerResp, updated)).length || 0
+          } field(s) saved.`);
+          partnerMeta.refresh && partnerMeta.refresh();
+        }}
+        onError={(msg) => setToast(`Edit failed: ${msg}`)}/>
+
+      <DeletePartnerConfirm
+        open={deleteOpen}
+        partner={partnerResp}
+        rollup={p.rollup}
+        onClose={() => setDeleteOpen(false)}
+        onDeleted={() => {
+          setDeleteOpen(false);
+          setToast(`Deleted ${p.code} — audit chain preserved.`);
+          // Pop back to the list since the detail can't render anymore.
+          if (onBack) onBack();
+        }}
+        onError={(msg) => setToast(`Delete failed: ${msg}`)}/>
     </div>
+  );
+};
+
+
+// Shallow shape diff so the Edit toast can report "N field(s) saved".
+// Compares only top-level scalars between the old + new partner so
+// it ignores label-attachments + relations.
+const _diffShape = (before, after) => {
+  const out = {};
+  if (!before || !after) return out;
+  for (const k of Object.keys(after)) {
+    if (k.endsWith("_label") || k === "id") continue;
+    if (before[k] !== after[k]) out[k] = after[k];
+  }
+  return out;
+};
+
+
+// ── EditPartnerModal (US-S11-036) ─────────────────────────────────────
+// PATCHes the editable fields on /api/v1/partners/{id}/. Coded fields
+// (type, sector, status) pull options from useChoiceList so the
+// dropdown stays in sync with the ChoiceList seeds — no hardcoded
+// option arrays.
+const EditPartnerModal = ({ open, partner, onClose, onSaved, onError }) => {
+  const [typeOpts]   = useChoiceList("partner_type");
+  const [sectorOpts] = useChoiceList("partner_sector");
+  const [statusOpts] = useChoiceList("partner_status");
+
+  const [name, setName] = useStatePD("");
+  const [code, setCode] = useStatePD("");
+  const [type, setType] = useStatePD("");
+  const [sector, setSector] = useStatePD("");
+  const [status, setStatus] = useStatePD("");
+  const [registrationNo, setRegistrationNo] = useStatePD("");
+  const [country, setCountry] = useStatePD("");
+  const [website, setWebsite] = useStatePD("");
+  const [primaryEmail, setPrimaryEmail] = useStatePD("");
+  const [note, setNote] = useStatePD("");
+  const [submitting, setSubmitting] = useStatePD(false);
+
+  // Seed the form from the current partner whenever the modal opens.
+  React.useEffect(() => {
+    if (!open || !partner) return;
+    setName(partner.name || "");
+    setCode(partner.code || "");
+    setType(partner.type || "");
+    setSector(partner.sector || "");
+    setStatus(partner.status || "");
+    setRegistrationNo(partner.registration_no || "");
+    setCountry(partner.country || "");
+    setWebsite(partner.website || "");
+    setPrimaryEmail(partner.primary_email || "");
+    setNote(partner.note || "");
+  }, [open, partner]);
+
+  if (!open || !partner) return null;
+
+  const canSave = !submitting && name.trim() && code.trim();
+
+  const save = async () => {
+    if (!canSave) return;
+    setSubmitting(true);
+    try {
+      const updated = await nsrApi.patch(`/api/v1/partners/${partner.id}/`, {
+        name: name.trim(),
+        code: code.trim(),
+        type, sector, status,
+        registration_no: registrationNo.trim(),
+        country: country.trim(),
+        website: website.trim(),
+        primary_email: primaryEmail.trim(),
+        note,
+      });
+      setSubmitting(false);
+      onSaved(updated);
+    } catch (err) {
+      setSubmitting(false);
+      const detail = (err && err.body && (err.body.detail
+        || Object.values(err.body).flat().join(" · "))) || err.message;
+      onError(detail);
+    }
+  };
+
+  return (
+    <Modal open={true} onClose={() => !submitting && onClose()}
+           title={`Edit ${partner.code}`} size="md">
+      <p className="t-bodysm muted" style={{marginTop:0, marginBottom:16}}>
+        Patches the partner record. Coded fields (type, sector, status) are
+        validated against their ChoiceLists server-side.
+      </p>
+
+      <div className="grid grid-2" style={{gap:12, marginBottom:12}}>
+        <Field label="Code"><input value={code} onChange={e => setCode(e.target.value)} disabled={submitting}/></Field>
+        <Field label="Name"><input value={name} onChange={e => setName(e.target.value)} disabled={submitting}/></Field>
+      </div>
+
+      <div className="grid grid-3" style={{gap:12, marginBottom:12}}>
+        <Field label="Type">
+          <select value={type} onChange={e => setType(e.target.value)} disabled={submitting}>
+            {typeOpts.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Sector">
+          <select value={sector} onChange={e => setSector(e.target.value)} disabled={submitting}>
+            <option value="">—</option>
+            {sectorOpts.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Status">
+          <select value={status} onChange={e => setStatus(e.target.value)} disabled={submitting}>
+            {statusOpts.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}
+          </select>
+        </Field>
+      </div>
+
+      <div className="grid grid-2" style={{gap:12, marginBottom:12}}>
+        <Field label="Registration no"><input value={registrationNo} onChange={e => setRegistrationNo(e.target.value)} disabled={submitting}/></Field>
+        <Field label="Country"><input value={country} onChange={e => setCountry(e.target.value)} disabled={submitting}/></Field>
+      </div>
+
+      <div className="grid grid-2" style={{gap:12, marginBottom:12}}>
+        <Field label="Website"><input type="url" value={website} onChange={e => setWebsite(e.target.value)} disabled={submitting} placeholder="https://…"/></Field>
+        <Field label="Primary email"><input type="email" value={primaryEmail} onChange={e => setPrimaryEmail(e.target.value)} disabled={submitting}/></Field>
+      </div>
+
+      <Field label="Note">
+        <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} disabled={submitting}/>
+      </Field>
+
+      <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
+        <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
+        <button className="btn btn-primary" onClick={save} disabled={!canSave}
+                title={!canSave ? "Code and name are required" : ""}>
+          {submitting ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </Modal>
+  );
+};
+
+
+// ── DeletePartnerConfirm (US-S11-036) ─────────────────────────────────
+// Calls DELETE /api/v1/partners/{id}/. Backend FK is PROTECT so any
+// DSA / Programme / Contact pointing at the partner causes a 4xx —
+// the rollup numbers in the confirm pre-empt that hard-stop. Reason
+// is captured client-side for the audit trail (the server doesn't
+// require it but the modal does for forensic clarity).
+const DeletePartnerConfirm = ({ open, partner, rollup, onClose, onDeleted, onError }) => {
+  const [reason, setReason] = useStatePD("");
+  const [submitting, setSubmitting] = useStatePD(false);
+  React.useEffect(() => { if (open) setReason(""); }, [open]);
+  if (!open || !partner) return null;
+
+  // The hard-stop summary: surface the blocking counts the backend
+  // would 4xx on, so operators don't get a vague error after typing
+  // a reason.
+  const blockers = [];
+  if (rollup?.dsasTotal > 0) blockers.push(`${rollup.dsasTotal} DSA(s)`);
+  if (rollup?.programmes > 0) blockers.push(`${rollup.programmes} programme(s)`);
+  if (rollup?.contacts > 0) blockers.push(`${rollup.contacts} contact(s)`);
+
+  const fire = async () => {
+    setSubmitting(true);
+    try {
+      await nsrApi.delete(`/api/v1/partners/${partner.id}/`);
+      setSubmitting(false);
+      onDeleted();
+    } catch (err) {
+      setSubmitting(false);
+      const detail = (err && err.body && (err.body.detail
+        || JSON.stringify(err.body))) || err.message;
+      onError(detail);
+    }
+  };
+
+  return (
+    <Modal open={true} onClose={() => !submitting && onClose()}
+           title={`Delete ${partner.code}?`} size="sm">
+      {blockers.length > 0 && (
+        <div className="callout" style={{
+          background:"var(--accent-danger-bg)", color:"var(--accent-danger)",
+          padding:"10px 12px", borderRadius:4, marginBottom:12, fontSize:13,
+        }}>
+          <strong>Blocked by downstream rows:</strong> {blockers.join(" · ")}.
+          The DELETE will 4xx until these are closed / re-assigned.
+        </div>
+      )}
+      <p className="t-bodysm" style={{margin:"4px 0 12px"}}>
+        Hard-deletes the Partner row. The audit chain survives the deletion;
+        any AuditEvents already written remain queryable by partner code.
+      </p>
+
+      <Field label="Reason (audit only)">
+        <textarea
+          value={reason} onChange={e => setReason(e.target.value)}
+          rows={2} disabled={submitting}
+          placeholder="e.g. Partner withdrew from MGLSD — DSA closed 2026-04, no remaining commitments."
+        />
+      </Field>
+
+      <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
+        <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
+        <button
+          className="btn"
+          style={{background:"var(--accent-danger)", color:"white", borderColor:"var(--accent-danger)"}}
+          onClick={fire}
+          disabled={submitting || !reason.trim()}
+        >
+          {submitting ? "Deleting…" : "Delete partner"}
+        </button>
+      </div>
+    </Modal>
   );
 };
 
