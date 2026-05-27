@@ -1010,6 +1010,15 @@ const DIHScreen = () => {
                 <Icon name="archive" size={14}/> Archive (cannot promote)
               </button>
             )}
+            {current.state === "idv_pending" && (
+              <button
+                className="btn"
+                style={{background:"var(--accent-update)", color:"white", borderColor:"var(--accent-update)"}}
+                onClick={() => setModal('resolve-idv')}
+              >
+                <Icon name="shield" size={14}/> Resolve IDV
+              </button>
+            )}
             <button className="btn btn-warn" onClick={() => setModal('hold')}><Icon name="clock" size={14}/> Hold for info</button>
             <button className="btn" onClick={() => setModal('merge')}><Icon name="duplicate" size={14}/> Promote-as-merge</button>
             <button className="btn btn-success" onClick={() => setModal('promote')}><Icon name="check" size={14}/> Promote</button>
@@ -1117,10 +1126,217 @@ const DIHScreen = () => {
             });
         }}/>
 
+      {modal === 'resolve-idv' && current && (
+        <ResolveIdvModal
+          stageId={current.id}
+          headName={current.head}
+          idvOutcome={current.idv}
+          onClose={() => setModal(null)}
+          onResolved={(stage) => {
+            // Replace the row with the server-truth state so the
+            // chip + filter counts reflect the new routing.
+            const updated = _stageToRow(stage);
+            setRows(rows.map(r => r.id === stage.id ? updated : r));
+            const verb = stage.state === "rejected"
+              ? "Rejected"
+              : `Moved to ${stage.state.replace(/_/g, " ")}`;
+            setToast(`${verb} — IDV resolution written to audit chain.`);
+            setModal(null);
+          }}
+          onError={(err) => {
+            setToast(`Resolve IDV failed: ${err}`);
+            setModal(null);
+          }}
+        />
+      )}
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>
   );
 };
+
+
+// ── Resolve-IDV modal (US-S11-031) ────────────────────────────────────
+// Bespoke two-step: decision radio (accept vs reject) + reason
+// dropdown + free-text note. POSTs to /resolve-idv/ on the stage
+// record. Accept moves the row to pending_promotion or ddup_review
+// depending on DDUP discovery; reject voids the provisional ID.
+const _RESOLVE_IDV_REASONS_ACCEPT = [
+  "NIN verified off-system against physical NID",
+  "Service unavailable — paper evidence reviewed by NSR Unit",
+  "NIRA mismatch reconciled with respondent in person",
+  "Other (specify in note)",
+];
+const _RESOLVE_IDV_REASONS_REJECT = [
+  "NIN belongs to a different person",
+  "Submitted NIN is forged or invalid",
+  "Respondent refused to clarify the discrepancy",
+  "Other (specify in note)",
+];
+
+const ResolveIdvModal = ({ stageId, headName, idvOutcome, onClose, onResolved, onError }) => {
+  const [decision, setDecision] = useStateDIH("accept");
+  const [reason, setReason] = useStateDIH("");
+  const [note, setNote] = useStateDIH("");
+  const [submitting, setSubmitting] = useStateDIH(false);
+
+  const reasonOptions = decision === "accept"
+    ? _RESOLVE_IDV_REASONS_ACCEPT
+    : _RESOLVE_IDV_REASONS_REJECT;
+  const finalReason = [reason, note].filter(Boolean).join(" — ");
+  const canSubmit = !submitting && Boolean(finalReason.trim());
+
+  const submit = (e) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setSubmitting(true);
+    fetch(`/api/v1/dih/stage-records/${stageId}/resolve-idv/`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-CSRFToken": _getCsrfToken(),
+      },
+      body: JSON.stringify({
+        actor: "nsr-unit",
+        decision,
+        reason: finalReason,
+      }),
+    })
+      .then(r => r.json().then(body => ({ ok: r.ok, body })))
+      .then(({ ok, body }) => {
+        setSubmitting(false);
+        if (!ok) {
+          onError(typeof body.detail === "string" ? body.detail : "Resolve IDV failed");
+          return;
+        }
+        onResolved(body);
+      })
+      .catch(err => {
+        setSubmitting(false);
+        onError(String(err));
+      });
+  };
+
+  return (
+    <div
+      role="dialog" aria-label="Resolve IDV"
+      style={{
+        position:"fixed", inset:0, background:"rgba(0,0,0,0.4)",
+        display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000,
+      }}
+      onClick={() => !submitting && onClose()}
+    >
+      <form
+        onClick={e => e.stopPropagation()}
+        onSubmit={submit}
+        style={{
+          background:"white", padding:"24px", borderRadius:"8px",
+          minWidth:"480px", maxWidth:"560px",
+          boxShadow:"0 8px 32px rgba(0,0,0,0.2)",
+        }}
+      >
+        <h3 className="t-h3" style={{marginTop:0}}>Resolve IDV</h3>
+        <p className="t-bodysm muted" style={{marginTop:4, marginBottom:12}}>
+          NIRA returned <strong>{idvOutcome || "no decision"}</strong> for{" "}
+          <strong>{headName || stageId.slice(0, 12) + "…"}</strong>. Accept the
+          identity claim with off-system evidence, or reject as fraud. The audit
+          trail is the only record after submission.
+        </p>
+
+        <div style={{marginBottom:16}}>
+          <label
+            style={{display:"flex", alignItems:"center", gap:8,
+                    padding:"8px 12px", border:"1px solid var(--neutral-300)",
+                    borderRadius:"4px", cursor:"pointer", marginBottom:6,
+                    background: decision === "accept" ? "var(--accent-data-bg)" : "white"}}
+          >
+            <input
+              type="radio" name="decision" value="accept"
+              checked={decision === "accept"}
+              onChange={() => { setDecision("accept"); setReason(""); }}
+              disabled={submitting}
+            />
+            <span>
+              <strong>Accept</strong>
+              <span className="muted" style={{display:"block", fontSize:11, marginTop:2}}>
+                Override IDV with <code>manual_accept</code>; run DDUP and route to pending_promotion or ddup_review.
+              </span>
+            </span>
+          </label>
+          <label
+            style={{display:"flex", alignItems:"center", gap:8,
+                    padding:"8px 12px", border:"1px solid var(--neutral-300)",
+                    borderRadius:"4px", cursor:"pointer",
+                    background: decision === "reject" ? "var(--accent-danger-bg)" : "white"}}
+          >
+            <input
+              type="radio" name="decision" value="reject"
+              checked={decision === "reject"}
+              onChange={() => { setDecision("reject"); setReason(""); }}
+              disabled={submitting}
+            />
+            <span>
+              <strong>Reject as fraud</strong>
+              <span className="muted" style={{display:"block", fontSize:11, marginTop:2}}>
+                Void the provisional Registry ID per AC-DIH-REJECT-VOID.
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <label className="t-cap" style={{display:"block", marginBottom:4}}>
+          Reason <span style={{color:"var(--accent-danger)"}}>*</span>
+        </label>
+        <select
+          value={reason} onChange={e => setReason(e.target.value)}
+          disabled={submitting}
+          style={{width:"100%", padding:"8px", marginBottom:12,
+                  border:"1px solid var(--neutral-300)", borderRadius:"4px",
+                  fontSize:13}}
+        >
+          <option value="">— pick a reason —</option>
+          {reasonOptions.map(r => <option key={r} value={r}>{r}</option>)}
+        </select>
+
+        <label className="t-cap" style={{display:"block", marginBottom:4}}>
+          Note <span className="muted">(optional)</span>
+        </label>
+        <textarea
+          value={note} onChange={e => setNote(e.target.value)}
+          rows={2} disabled={submitting}
+          placeholder="Additional context — visible in the audit chain"
+          style={{
+            width:"100%", padding:"8px", marginBottom:20,
+            border:"1px solid var(--neutral-300)", borderRadius:"4px",
+            fontSize:13, fontFamily:"inherit", resize:"vertical",
+          }}
+        />
+
+        <div style={{display:"flex", justifyContent:"flex-end", gap:8}}>
+          <button type="button" className="btn" onClick={onClose} disabled={submitting}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="btn"
+            style={{
+              background: decision === "accept" ? "var(--accent-data)" : "var(--accent-danger)",
+              color: "white",
+              borderColor: decision === "accept" ? "var(--accent-data)" : "var(--accent-danger)",
+            }}
+            disabled={!canSubmit}
+          >
+            {submitting
+              ? (decision === "accept" ? "Accepting…" : "Rejecting…")
+              : (decision === "accept" ? "Accept IDV" : "Reject as fraud")}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
 
 /* ============================================================
    Inline edit panel — whitelisted field corrections

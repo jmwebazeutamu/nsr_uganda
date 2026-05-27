@@ -1884,3 +1884,199 @@ class TestTriggerRunPersistsOutcomeCounters:
             f"records_quarantined should reflect the 3 canonicalize-failures, "
             f"got {run.records_quarantined}"
         )
+
+
+# --- US-S11-031 — resolve IDV_PENDING ---------------------------------------
+
+from apps.ingestion_hub.services import resolve_idv_pending  # noqa: E402
+
+
+@pytest.mark.django_db
+class TestResolveIdvPending:
+    """Service-level coverage for the operator-driven exit from
+    IDV_PENDING. Accept overrides IDV and runs the DDUP gate that was
+    skipped originally; Reject delegates to reject_stage_record."""
+
+    def _idv_pending_stage(self, connector, geo_codes, *, nin="CM1234567890NM"):
+        """Build a stage record parked at IDV_PENDING by feeding the
+        mock NIRA a NIN it returns no_match for."""
+        payload = _payload(geo_codes)
+        payload["members"][0]["nin"] = nin
+        stage = _make_stage(connector, geo_codes, payload=payload)
+        process_stage_record(stage, actor="orch")
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.IDV_PENDING
+        return stage
+
+    def test_accept_routes_to_pending_promotion_when_ddup_clean(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        stage = self._idv_pending_stage(connector, geo_codes)
+        resolve_idv_pending(
+            stage, actor="reviewer", reason="paper evidence reviewed",
+            decision="accept",
+        )
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.PENDING_PROMOTION
+        assert stage.idv_outcome == "manual_accept"
+        # No DDUP candidates seeded — the candidates list is empty
+        # (no other Member with the same NIN hash exists).
+        assert stage.ddup_candidates == []
+
+    def test_accept_routes_to_ddup_review_when_strong_candidate_exists(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        # Seed a Household + Member with the same NIN so DDUP
+        # discovery finds a tier1 NIN-exact match.
+        seed_stage = _make_stage(connector, geo_codes)
+        seed_hh = promote_stage_record(seed_stage, actor="seed")
+        nin = "CM1234567890NM"
+        Member.objects.create(
+            household=seed_hh, line_number=99,
+            surname="Existing", first_name="One", sex="1",
+            nin_hash=nin_hash(nin),
+        )
+        stage = self._idv_pending_stage(connector, geo_codes, nin=nin)
+        resolve_idv_pending(
+            stage, actor="reviewer",
+            reason="NIN matched off-system but DDUP candidate found",
+            decision="accept",
+        )
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.DDUP_REVIEW
+        assert stage.idv_outcome == "manual_accept"
+        assert len(stage.ddup_candidates) == 1
+        assert stage.ddup_candidates[0]["score"] == 1.0
+
+    def test_reject_delegates_to_reject_stage_record(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        stage = self._idv_pending_stage(connector, geo_codes)
+        resolve_idv_pending(
+            stage, actor="reviewer", reason="forged NIN",
+            decision="reject",
+        )
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.REJECTED
+        # The "idv-reject:" prefix keeps the route explicit in the
+        # audit trail.
+        assert stage.rejected_reason.startswith("idv-reject: ")
+        assert "forged NIN" in stage.rejected_reason
+
+    def test_refuses_when_not_idv_pending(
+        self, connector, geo_codes,
+    ):
+        # A stage in PROVISIONAL can't be resolved as IDV — the
+        # service guards against double-resolves + wrong-state calls.
+        stage = _make_stage(connector, geo_codes)
+        assert stage.state == StageRecordState.PROVISIONAL
+        with pytest.raises(DihError, match="not idv_pending"):
+            resolve_idv_pending(
+                stage, actor="reviewer", reason="x", decision="accept",
+            )
+
+    def test_refuses_blank_reason(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        stage = self._idv_pending_stage(connector, geo_codes)
+        with pytest.raises(DihError, match="reason is required"):
+            resolve_idv_pending(
+                stage, actor="reviewer", reason="   ", decision="accept",
+            )
+
+    def test_refuses_unknown_decision(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        stage = self._idv_pending_stage(connector, geo_codes)
+        with pytest.raises(DihError, match="accept.*reject"):
+            resolve_idv_pending(
+                stage, actor="reviewer", reason="x", decision="maybe",
+            )
+
+    def test_audit_event_emitted_on_accept(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        stage = self._idv_pending_stage(connector, geo_codes)
+        resolve_idv_pending(
+            stage, actor="reviewer", reason="paper evidence reviewed",
+            decision="accept",
+        )
+        ev = AuditEvent.objects.filter(
+            action="resolve_idv", entity_id=stage.id,
+        ).first()
+        assert ev is not None
+        assert ev.actor_id == "reviewer"
+        assert ev.field_changes["idv_outcome"] == "manual_accept"
+        assert ev.field_changes["next_state"] == "pending_promotion"
+
+
+@pytest.mark.django_db
+class TestResolveIdvEndpoint:
+    """API surface for the Resolve IDV modal in the DIH detail rail.
+    POST /api/v1/dih/stage-records/{id}/resolve-idv/."""
+
+    def _idv_pending_stage(self, connector, geo_codes):
+        payload = _payload(geo_codes)
+        payload["members"][0]["nin"] = "CM1234567890NM"
+        stage = _make_stage(connector, geo_codes, payload=payload)
+        process_stage_record(stage, actor="orch")
+        stage.refresh_from_db()
+        return stage
+
+    def test_accept_returns_updated_stage_with_new_state(
+        self, connector, geo_codes, django_user_model, dqa_blocking_name_rule,
+    ):
+        stage = self._idv_pending_stage(connector, geo_codes)
+        user = django_user_model.objects.create_user(
+            username="dih-reviewer", password="x", is_superuser=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(
+            f"/api/v1/dih/stage-records/{stage.id}/resolve-idv/",
+            {"actor": "dih-reviewer", "decision": "accept",
+             "reason": "paper evidence reviewed"},
+            format="json",
+        )
+        assert resp.status_code == 200, resp.content
+        body = resp.json()
+        assert body["state"] == StageRecordState.PENDING_PROMOTION
+        assert body["idv_outcome"] == "manual_accept"
+
+    def test_reject_voids_provisional(
+        self, connector, geo_codes, django_user_model, dqa_blocking_name_rule,
+    ):
+        stage = self._idv_pending_stage(connector, geo_codes)
+        user = django_user_model.objects.create_user(
+            username="dih-reviewer-r", password="x", is_superuser=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(
+            f"/api/v1/dih/stage-records/{stage.id}/resolve-idv/",
+            {"actor": "dih-reviewer-r", "decision": "reject",
+             "reason": "forged NIN"},
+            format="json",
+        )
+        assert resp.status_code == 200, resp.content
+        body = resp.json()
+        assert body["state"] == StageRecordState.REJECTED
+        assert "idv-reject" in body["rejected_reason"]
+
+    def test_400_when_not_idv_pending(
+        self, connector, geo_codes, django_user_model,
+    ):
+        # A provisional stage can't be IDV-resolved.
+        stage = _make_stage(connector, geo_codes)
+        user = django_user_model.objects.create_user(
+            username="dih-reviewer-p", password="x", is_superuser=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(
+            f"/api/v1/dih/stage-records/{stage.id}/resolve-idv/",
+            {"actor": "dih-reviewer-p", "decision": "accept", "reason": "x"},
+            format="json",
+        )
+        assert resp.status_code == 400
+        assert "idv_pending" in resp.json()["detail"]

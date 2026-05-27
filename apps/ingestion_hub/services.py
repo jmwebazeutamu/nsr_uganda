@@ -774,6 +774,80 @@ def _evaluate_dqa(payload: dict, *, stage_id: str = "") -> dict:
     }
 
 
+@transaction.atomic
+def resolve_idv_pending(
+    stage: StageRecord, *, actor: str, reason: str, decision: str,
+) -> StageRecord:
+    """Operator-driven exit from the IDV_PENDING limbo.
+
+    When NIRA returns service_unavailable / no_match / mismatch /
+    bad_format, `process_stage_record` parks the record at
+    IDV_PENDING. An operator with off-system evidence then chooses
+    one of:
+
+      decision='accept' — the NIN is trusted on the basis of paper /
+        in-person verification. We override `idv_outcome` to
+        'manual_accept', run DDUP discovery (which was skipped in the
+        original gate run), and route to either PENDING_PROMOTION
+        (clean) or DDUP_REVIEW (a strong candidate exists). No DQA
+        re-run — DQA already passed before IDV was reached.
+
+      decision='reject' — the identity claim is unsupportable;
+        delegate to reject_stage_record so the provisional ID is
+        voided per AC-DIH-REJECT-VOID. Reason prefixed with
+        'idv-reject:' so the audit trail makes the route explicit.
+
+    Refuses if the stage isn't currently IDV_PENDING (no double-
+    resolve), or if the reason is blank (the audit trail is the
+    only record of the operator's judgment).
+    """
+    if stage.state != StageRecordState.IDV_PENDING:
+        raise DihError(
+            f"resolve_idv_pending: stage is {stage.state}, not idv_pending",
+        )
+    if decision not in ("accept", "reject"):
+        raise DihError(
+            f"resolve_idv_pending: decision must be 'accept' or 'reject', "
+            f"got {decision!r}",
+        )
+    if not actor:
+        raise DihError("resolve_idv_pending: actor is required")
+    if not reason or not reason.strip():
+        raise DihError("resolve_idv_pending: reason is required")
+
+    reason = reason.strip()
+    if decision == "reject":
+        return reject_stage_record(
+            stage, actor=actor, reason=f"idv-reject: {reason}",
+        )
+
+    # Accept path: override IDV, run DDUP discovery, route.
+    payload = stage.canonical_payload
+    candidates = _discover_stage_candidates(payload)
+    has_strong = any(c["score"] >= 0.80 for c in candidates)
+    stage.idv_outcome = "manual_accept"
+    stage.ddup_candidates = candidates
+    if has_strong:
+        stage.state = StageRecordState.DDUP_REVIEW
+        next_state = StageRecordState.DDUP_REVIEW
+    else:
+        stage.state = StageRecordState.PENDING_PROMOTION
+        next_state = StageRecordState.PENDING_PROMOTION
+    stage.save(update_fields=[
+        "state", "idv_outcome", "ddup_candidates", "updated_at",
+    ])
+    _emit_audit(
+        "resolve_idv", "stage_record", stage.id, actor=actor,
+        reason=f"manual-accept: {reason}",
+        field_changes={
+            "idv_outcome": "manual_accept",
+            "next_state": next_state,
+            "ddup_candidate_count": len(candidates),
+        },
+    )
+    return stage
+
+
 def _discover_stage_candidates(payload: dict) -> list[dict]:
     """Tier 1 NIN-exact match against existing registry Members. Returns
     [{member_id, score, reason}, ...]. Empty if no NIN supplied."""

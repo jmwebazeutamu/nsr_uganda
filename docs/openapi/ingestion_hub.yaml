@@ -428,6 +428,37 @@ paths_appended_2026_05_25:
                   note: { type: string }
         "400": { description: precondition unmet (non-Kobo / no DPA / no credentials / concurrent run) }
         "403": { description: caller lacks IsDihTrigger permission }
+  /api/v1/dih/stage-records/{id}/resolve-idv/:
+    post:
+      tags: [dih]
+      summary: Resolve an IDV_PENDING stage record (US-S11-031)
+      description: |
+        Operator-driven exit from the IDV_PENDING limbo created when
+        NIRA returns service_unavailable / no_match / mismatch /
+        bad_format. `decision=accept` overrides IDV with
+        `manual_accept`, runs DDUP discovery (skipped in the original
+        gate run), and routes to PENDING_PROMOTION or DDUP_REVIEW
+        depending on candidates found. `decision=reject` delegates to
+        the reject path so the provisional ID is voided per
+        AC-DIH-REJECT-VOID.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [actor, decision, reason]
+              properties:
+                actor:    { type: string, maxLength: 64 }
+                decision: { type: string, enum: [accept, reject] }
+                reason:   { type: string }
+      responses:
+        "200": { description: Updated StageRecord with new state + idv_outcome }
+        "400": { description: not idv_pending, missing reason, or invalid decision }
   /api/v1/dih/stage-records/{id}/edit/:
     post:
       tags: [dih]

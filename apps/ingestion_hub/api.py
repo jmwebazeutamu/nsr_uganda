@@ -25,6 +25,7 @@ from .services import (
     promote_stage_record,
     quarantine_stage_record,
     reject_stage_record,
+    resolve_idv_pending,
     resolve_pinned_form_uid,
     submit_walk_in_capture,
     trigger_connector_pull,
@@ -94,6 +95,15 @@ class RejectRequestSerializer(serializers.Serializer):
 class ProcessRequestSerializer(serializers.Serializer):
     actor = serializers.CharField(max_length=64, default="system")
     allow_fast_track = serializers.BooleanField(default=True)
+
+
+class ResolveIdvRequestSerializer(serializers.Serializer):
+    """Operator decision on an IDV_PENDING record (US-S11-031). Mirrors
+    the reject/promote shape — actor + reason are mandatory because
+    the audit trail is the only paper record of the override."""
+    actor = serializers.CharField(max_length=64)
+    decision = serializers.ChoiceField(choices=["accept", "reject"])
+    reason = serializers.CharField()
 
 
 class EditRequestSerializer(serializers.Serializer):
@@ -530,6 +540,43 @@ class StageRecordViewSet(
                 stage,
                 actor=ser.validated_data["actor"],
                 reason=ser.validated_data["reason"],
+            )
+        except DihError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        stage.refresh_from_db()
+        return Response(self.get_serializer(stage).data)
+
+    @extend_schema(
+        tags=["dih"],
+        summary="Resolve an IDV_PENDING stage record (US-S11-031)",
+        description=(
+            "Operator decision on a record stuck at IDV_PENDING after "
+            "NIRA returned service_unavailable / no_match / mismatch / "
+            "bad_format. `decision=accept` overrides IDV with "
+            "`manual_accept`, runs DDUP discovery (which was skipped "
+            "in the original gate run), and routes to PENDING_PROMOTION "
+            "or DDUP_REVIEW depending on the candidates. "
+            "`decision=reject` delegates to the reject path so the "
+            "provisional ID is voided per AC-DIH-REJECT-VOID. Refuses "
+            "when state != IDV_PENDING (no double-resolve)."
+        ),
+        request=ResolveIdvRequestSerializer,
+        responses={
+            200: StageRecordSerializer,
+            400: OpenApiResponse(description="not idv_pending / reason missing / bad decision"),
+        },
+    )
+    @action(detail=True, methods=["post"], url_path="resolve-idv")
+    def resolve_idv(self, request, pk=None):
+        ser = ResolveIdvRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        stage = self.get_object()
+        try:
+            resolve_idv_pending(
+                stage,
+                actor=ser.validated_data["actor"],
+                reason=ser.validated_data["reason"],
+                decision=ser.validated_data["decision"],
             )
         except DihError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
