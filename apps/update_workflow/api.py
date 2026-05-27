@@ -1,13 +1,18 @@
+import hashlib
+import json
+
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from apps.security.abac import ChangeRequestScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 from apps.security.models import AuditEvent
 
-from .field_catalog import field_keys_by_category
+from .field_catalog import CATEGORIES, field_keys_by_category
 from .field_catalog import is_pmt_relevant as _catalog_is_pmt_relevant
 from .models import ChangeRequest, ChangeType, EntityType, SourceChannel
 from .routing import route_label
@@ -629,3 +634,112 @@ class ChangeRequestViewSet(
             # auto-escalator identity (operations runbook convention).
             escalate_change_request(req)
         return self._bulk_act(request, _escalate)
+
+
+# --- US-S28-CATALOG — field catalog endpoint --------------------------------
+
+
+def _resolve_field_options(field: dict, *, language: str) -> list[dict]:
+    """Return `[{code, label}]` for a select field.
+
+    Precedence:
+      1. If the field declares `choice_list`, resolve against the
+         active ChoiceList version at today's date (the active version
+         IS the source of truth — no `as_of` knob here; bulk-DRS
+         queries handle historical resolution separately).
+      2. Otherwise fall back to the hardcoded `options` array, treating
+         each entry as both code and label (legacy fields whose labels
+         haven't been promoted into a ChoiceList yet).
+    """
+    cl_name = field.get("choice_list")
+    if cl_name:
+        # Local import — keeps the field_catalog module
+        # import-cycle-free (reference_data depends on nothing inside
+        # update_workflow, but importing services at module top would
+        # mean the catalog module pulls Django models on import).
+        from apps.reference_data.services import resolve_options
+        resolved = resolve_options(cl_name, language=language)
+        if resolved:
+            return resolved
+        # ChoiceList missing or inactive — fall through to the
+        # hardcoded options rather than ship an empty dropdown.
+    return [{"code": o, "label": o} for o in (field.get("options") or [])]
+
+
+def _serialise_field(field: dict, *, language: str) -> dict:
+    """Project one catalog field into its public shape. Adds the
+    resolved options (for select) and strips internal-only keys."""
+    out = {
+        "key": field["key"],
+        "label": field["label"],
+        "type": field["type"],
+        "pmt": bool(field.get("pmt", False)),
+        "entity": field.get("entity", "household"),
+    }
+    if field["type"] == "select":
+        out["choice_list"] = field.get("choice_list")
+        out["options"] = _resolve_field_options(field, language=language)
+    return out
+
+
+def _build_field_catalog_bundle(*, language: str) -> dict:
+    return {
+        "language": language,
+        "categories": [
+            {
+                "key": c["key"],
+                "label": c["label"],
+                "tone": c.get("tone", "neutral"),
+                "fields": [
+                    _serialise_field(f, language=language) for f in c["fields"]
+                ],
+            }
+            for c in CATEGORIES
+        ],
+    }
+
+
+def _field_catalog_etag(bundle: dict) -> str:
+    """Stable digest of the serialised bundle. The ChoiceList resolver
+    cache invalidates on ChoiceList/Option saves, so the etag flips
+    automatically when a list version becomes active."""
+    payload = json.dumps(bundle, sort_keys=True, default=str).encode("utf-8")
+    return f'W/"{hashlib.sha256(payload).hexdigest()[:16]}"'
+
+
+@extend_schema(
+    tags=["upd"],
+    summary="Open-CR wizard field catalog with resolved select options",
+    description=(
+        "Returns the full Open-CR field catalog used by the modal. "
+        "Select fields tagged with `choice_list` get their options "
+        "resolved against the active ChoiceList version at request "
+        "time, so the modal never ships stale codes. Legacy select "
+        "fields (no `choice_list`) ship their hardcoded options as "
+        "{code, label} pairs unchanged. `lang` param selects label "
+        "language (default 'en'). ETag-cached — 304 on repeat reads."
+    ),
+    responses={200: OpenApiResponse(description="Catalog bundle")},
+)
+class FieldCatalogView(APIView):
+    """ADR-0010 — coded fields via ChoiceList. Single round-trip catalog
+    for the Open-CR modal, replacing the duplicated JSX hardcoded
+    field list at design/v0.1/components/change-request-modal.jsx."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        language = (request.query_params.get("lang") or "en").strip() or "en"
+        bundle = _build_field_catalog_bundle(language=language)
+        etag = _field_catalog_etag(bundle)
+
+        if_none_match = request.META.get("HTTP_IF_NONE_MATCH")
+        if if_none_match and if_none_match.strip() == etag:
+            resp = Response(status=status.HTTP_304_NOT_MODIFIED)
+            resp["ETag"] = etag
+            return resp
+
+        resp = Response(bundle)
+        resp["ETag"] = etag
+        resp["Cache-Control"] = "private, max-age=60, must-revalidate"
+        return resp

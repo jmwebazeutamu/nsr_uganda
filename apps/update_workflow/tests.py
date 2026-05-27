@@ -1337,3 +1337,141 @@ class TestListFilters:
             fixture_set["committed"].id,
             fixture_set["rejected"].id,
         }
+
+
+# --- US-S28-CATALOG — field catalog endpoint -------------------------------
+
+
+class TestFieldCatalogEndpoint:
+    """GET /api/v1/upd/field-catalog/ — single round-trip used by the
+    Open-CR modal. Tagged select fields (`choice_list`) get options
+    resolved against the active ChoiceList version at request time."""
+
+    @pytest.fixture
+    def staff_user(self, db, django_user_model):
+        return django_user_model.objects.create_user(
+            username="catalog-reader", password="p",
+            is_staff=True, is_superuser=True,
+        )
+
+    @pytest.fixture
+    def api_client(self, staff_user):
+        from rest_framework.test import APIClient
+        c = APIClient()
+        c.force_authenticate(user=staff_user)
+        return c
+
+    # rural_urban v1 is seeded by migration 0003_seed_choice_lists with
+    # 1=Urban, 2=Rural in English. The tests below exercise the
+    # resolver against that real seed, NOT a fixture — so a future
+    # migration that breaks the seed gets caught here.
+
+    def test_returns_every_catalog_category(self, db, api_client):
+        from apps.update_workflow.field_catalog import CATEGORIES
+        r = api_client.get("/api/v1/upd/field-catalog/")
+        assert r.status_code == 200
+        returned_keys = {c["key"] for c in r.data["categories"]}
+        assert returned_keys == {c["key"] for c in CATEGORIES}
+
+    def test_select_field_with_choice_list_resolves_to_choicelist_labels(
+        self, db, api_client,
+    ):
+        """urban_rural is tagged `choice_list: "rural_urban"`. The
+        active seed ships 1=Urban, 2=Rural — options must come back
+        as {code, label} pairs with those labels, NOT the bare codes."""
+        from apps.reference_data.services import clear_resolver_cache
+        clear_resolver_cache()
+        r = api_client.get("/api/v1/upd/field-catalog/")
+        assert r.status_code == 200
+        loc = next(c for c in r.data["categories"] if c["key"] == "loc")
+        urban_rural = next(f for f in loc["fields"] if f["key"] == "urban_rural")
+        assert urban_rural["type"] == "select"
+        assert urban_rural["choice_list"] == "rural_urban"
+        assert urban_rural["options"] == [
+            {"code": "1", "label": "Urban"},
+            {"code": "2", "label": "Rural"},
+        ]
+
+    def test_select_field_without_choice_list_falls_back_to_hardcoded(
+        self, db, api_client,
+    ):
+        """Legacy select fields whose labels haven't been promoted to
+        a ChoiceList ship their hardcoded `options` array as {code,
+        label} pairs where code == label."""
+        r = api_client.get("/api/v1/upd/field-catalog/")
+        assert r.status_code == 200
+        hous = next(c for c in r.data["categories"] if c["key"] == "hous")
+        roof = next(f for f in hous["fields"] if f["key"] == "roof")
+        assert roof["type"] == "select"
+        assert roof.get("choice_list") is None
+        assert roof["options"][0] == {"code": "Iron sheets", "label": "Iron sheets"}
+
+    def test_choice_list_retired_falls_back_to_hardcoded(self, db, api_client):
+        """If the rural_urban ChoiceList is retired (no active row),
+        the endpoint falls back to the field's hardcoded options.
+        Codes stay correct; labels equal codes — the modal still
+        renders something usable."""
+        from apps.reference_data.models import ChoiceList, ChoiceListStatus
+        from apps.reference_data.services import clear_resolver_cache
+        ChoiceList.objects.filter(list_name="rural_urban").update(
+            status=ChoiceListStatus.RETIRED,
+        )
+        clear_resolver_cache()
+
+        r = api_client.get("/api/v1/upd/field-catalog/")
+        assert r.status_code == 200
+        loc = next(c for c in r.data["categories"] if c["key"] == "loc")
+        urban_rural = next(f for f in loc["fields"] if f["key"] == "urban_rural")
+        assert urban_rural["options"] == [
+            {"code": "1", "label": "1"},
+            {"code": "2", "label": "2"},
+        ]
+
+    def test_member_entity_field_carries_entity_flag(self, db, api_client):
+        r = api_client.get("/api/v1/upd/field-catalog/")
+        rost = next(c for c in r.data["categories"] if c["key"] == "rost")
+        sex = next(f for f in rost["fields"] if f["key"] == "member_sex")
+        assert sex["entity"] == "member"
+
+    def test_household_default_entity(self, db, api_client):
+        r = api_client.get("/api/v1/upd/field-catalog/")
+        iden = next(c for c in r.data["categories"] if c["key"] == "iden")
+        phone = next(f for f in iden["fields"] if f["key"] == "phone")
+        assert phone["entity"] == "household"
+
+    def test_etag_cache_returns_304(self, db, api_client):
+        r1 = api_client.get("/api/v1/upd/field-catalog/")
+        assert r1.status_code == 200
+        etag = r1["ETag"]
+        r2 = api_client.get("/api/v1/upd/field-catalog/", HTTP_IF_NONE_MATCH=etag)
+        assert r2.status_code == 304
+        assert r2["ETag"] == etag
+
+    def test_lang_param_changes_resolved_labels(self, db, api_client):
+        """Add a Luganda label to the existing rural_urban v1 options.
+        ?lang=lg returns the Luganda labels; English remains default."""
+        from apps.reference_data.models import ChoiceList, ChoiceOption
+        from apps.reference_data.services import clear_resolver_cache
+        cl = ChoiceList.objects.get(list_name="rural_urban", version=1)
+        ChoiceOption.objects.create(
+            choice_list=cl, code="1", label="Ekibuga", language="lg",
+            sort_order=1, status=ChoiceOption.Status.ACTIVE,
+        )
+        ChoiceOption.objects.create(
+            choice_list=cl, code="2", label="Bya kyalo", language="lg",
+            sort_order=2, status=ChoiceOption.Status.ACTIVE,
+        )
+        clear_resolver_cache()
+
+        r = api_client.get("/api/v1/upd/field-catalog/?lang=lg")
+        loc = next(c for c in r.data["categories"] if c["key"] == "loc")
+        urban_rural = next(f for f in loc["fields"] if f["key"] == "urban_rural")
+        assert urban_rural["options"] == [
+            {"code": "1", "label": "Ekibuga"},
+            {"code": "2", "label": "Bya kyalo"},
+        ]
+
+    def test_requires_authentication(self, db):
+        from rest_framework.test import APIClient
+        r = APIClient().get("/api/v1/upd/field-catalog/")
+        assert r.status_code in (401, 403)

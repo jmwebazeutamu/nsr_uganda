@@ -19,6 +19,13 @@ mirrors this and disables the Force-PMT checkbox while it's true).
 Missing = "household" (default). Member-scope fields can only be
 submitted with entity="member" in the bundle payload + a member_id
 that belongs to the household. Enforced in `validate_member_field`.
+
+`choice_list` (per ADR-0010) names the reference-data ChoiceList that
+backs a select field's options. When set, the modal's options come
+from the active ChoiceList version at render time — NOT from the
+hardcoded `options` array below (which is kept as a development-time
+fallback only). See `field_catalog_view` in api.py for the resolution
+path.
 """
 
 from __future__ import annotations
@@ -45,7 +52,7 @@ CATEGORIES: list[dict] = [
             # MUST be the seed codes (rural_urban: 1=Urban, 2=Rural). The
             # display label is resolved by the resolver at render time.
             {"key": "urban_rural", "label": "Urban / rural",     "type": "select", "pmt": True,
-             "options": ["1", "2"]},
+             "choice_list": "rural_urban", "options": ["1", "2"]},
             {"key": "village",     "label": "Village",           "type": "text",   "pmt": False},
             {"key": "parish",      "label": "Parish",            "type": "text",   "pmt": False},
         ],
@@ -63,7 +70,7 @@ CATEGORIES: list[dict] = [
             # ADR-0010: member_sex is a coded ChoiceList field — options
             # MUST be the seed codes (sex: 1=Male, 2=Female).
             {"key": "member_sex",      "label": "Member sex",              "type": "select",
-             "pmt": False, "options": ["1", "2"], "entity": "member"},
+             "pmt": False, "choice_list": "sex", "options": ["1", "2"], "entity": "member"},
             {"key": "member_relation", "label": "Member relation to head", "type": "text",
              "pmt": False, "entity": "member"},
         ],
