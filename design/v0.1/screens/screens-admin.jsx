@@ -351,6 +351,10 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
   );
   const [sourceId, setSourceId] = useStateAdmin(koboSources[0]?.id || "");
   const [dryRun, setDryRun] = useStateAdmin(false);
+  // Per-pull row cap (US-S11-033). Bounded 1..500 — must match the
+  // serializer min/max in apps/ingestion_hub/api.py. 50 matches the
+  // server-side default (services.TRIGGER_PULL_BATCH_CAP).
+  const [batchCap, setBatchCap] = useStateAdmin(50);
   // Form-picker state: forms come from /forms/ when the source
   // changes; if the fetch fails (e.g. file:// preview) we leave it
   // empty and the picker hides itself — submit falls back to the
@@ -415,7 +419,7 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
   const submit = (e) => {
     e.preventDefault();
     if (!sourceId) return;
-    onSubmit({ sourceId, dryRun, formUid });
+    onSubmit({ sourceId, dryRun, formUid, batchCap });
   };
 
   return (
@@ -511,6 +515,32 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
             </button>
           </div>
         )}
+
+        <label className="t-cap" style={{display:"block", marginBottom:4}}>
+          Records to pull (cap)
+        </label>
+        <input
+          type="number" min={1} max={500} step={1}
+          value={batchCap}
+          onChange={e => {
+            const v = parseInt(e.target.value, 10);
+            // Clamp client-side to the same bounds the serializer
+            // enforces — saves a 400 round-trip when the operator
+            // types 9999.
+            if (Number.isNaN(v)) setBatchCap(50);
+            else if (v < 1) setBatchCap(1);
+            else if (v > 500) setBatchCap(500);
+            else setBatchCap(v);
+          }}
+          disabled={submitting}
+          style={{width:"100%", padding:"8px", marginBottom:6,
+                  border:"1px solid var(--neutral-300)", borderRadius:"4px",
+                  fontSize:13}}
+        />
+        <p className="t-bodysm muted" style={{margin:"0 0 16px", fontSize:11}}>
+          Per-pull cap to keep the request short. Bounded 1..500;
+          larger backlogs run via the scheduled Celery beat.
+        </p>
 
         <label
           style={{display:"flex", alignItems:"center", gap:8,
@@ -797,12 +827,13 @@ const ConnectorRunsTab = () => {
       });
   };
 
-  const triggerRun = ({ sourceId, dryRun, formUid }) => {
+  const triggerRun = ({ sourceId, dryRun, formUid, batchCap }) => {
     const source = sources.find(s => s.id === sourceId);
     if (!source) return;
     setSubmitting(true);
     const body = { dry_run: dryRun };
     if (formUid) body.form_uid = formUid;
+    if (batchCap && batchCap !== 50) body.batch_cap = batchCap;
     fetch(`/api/v1/dih/source-systems/${sourceId}/trigger-run/`, {
       method: "POST",
       credentials: "same-origin",

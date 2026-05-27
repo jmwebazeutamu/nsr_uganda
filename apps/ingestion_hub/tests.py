@@ -1886,6 +1886,165 @@ class TestTriggerRunPersistsOutcomeCounters:
         )
 
 
+# --- US-S11-034 — watermark + landing dedup --------------------------------
+
+@pytest.mark.django_db
+class TestTriggerRunDedup:
+    """A second pull of the same upstream rows must not re-land them.
+    The watermark cuts bandwidth (Kobo filters by _submission_time)
+    and the landing dedup catches anything that slips through
+    (boundary row at $gte, manual re-pull with no watermark, etc)."""
+
+    def _url(self, source) -> str:
+        return f"/api/v1/dih/source-systems/{source.id}/trigger-run/"
+
+    def _in_group(self, django_user_model, group_name):
+        from django.contrib.auth.models import Group
+        user = django_user_model.objects.create_user(
+            username=f"u-dedup-{group_name}", password="x",
+        )
+        grp, _ = Group.objects.get_or_create(name=group_name)
+        user.groups.add(grp)
+        return user
+
+    @responses.activate
+    def test_second_pull_skips_duplicates_and_lands_nothing(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        # Same form, same three submissions. After the first pull
+        # all three should land; the second pull should detect them
+        # as duplicates and skip every one.
+        responses.add(
+            responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets.json",
+            json={"results": [
+                {"uid": "F1", "name": "Pilot", "asset_type": "survey",
+                 "deployment__active": True},
+            ]}, status=200,
+        )
+        # The data endpoint returns the same 3 rows every time
+        # (responses.add registers it once and matches on URL — the
+        # second call gets the same body).
+        responses.add(
+            responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets/F1/data.json",
+            json={"results": [
+                {"_id": 101, "Q1": "a", "_submission_time": "2026-05-27T08:00:00"},
+                {"_id": 102, "Q1": "b", "_submission_time": "2026-05-27T08:01:00"},
+                {"_id": 103, "Q1": "c", "_submission_time": "2026-05-27T08:02:00"},
+            ], "next": None}, status=200,
+        )
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+
+        # First pull: 3 land, 0 dupes.
+        r1 = client.post(self._url(trigger_kobo_source), {}, format="json")
+        assert r1.status_code == 200, r1.content
+        assert r1.json()["landed"] == 3
+        assert r1.json()["skipped_duplicate"] == 0
+        # Watermark persisted on Connector.config so the next pull
+        # passes since= to Kobo.
+        from apps.ingestion_hub.models import Connector
+        conn = Connector.objects.get(
+            source_system=trigger_kobo_source, name="kobo-F1",
+        )
+        assert conn.config["last_pulled_submission_time"] == "2026-05-27T08:02:00"
+
+        # Second pull: same three rows from Kobo, all already landed
+        # → all skipped, none re-landed.
+        r2 = client.post(self._url(trigger_kobo_source), {}, format="json")
+        assert r2.status_code == 200, r2.content
+        body2 = r2.json()
+        assert body2["landed"] == 0
+        assert body2["skipped_duplicate"] == 3
+        assert body2["staged"] == 0
+        # Only the 3 RawLandings from the first run exist.
+        from apps.ingestion_hub.models import RawLanding
+        assert RawLanding.objects.filter(
+            connector_run__connector__source_system=trigger_kobo_source,
+        ).count() == 3
+
+    @responses.activate
+    def test_dry_run_does_not_persist_watermark(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        responses.add(
+            responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets.json",
+            json={"results": [
+                {"uid": "F-DR", "name": "Pilot DR", "asset_type": "survey",
+                 "deployment__active": True},
+            ]}, status=200,
+        )
+        responses.add(
+            responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets/F-DR/data.json",
+            json={"results": [
+                {"_id": 1, "Q": "a", "_submission_time": "2026-05-27T09:00:00"},
+            ], "next": None}, status=200,
+        )
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        resp = client.post(
+            self._url(trigger_kobo_source),
+            {"dry_run": True}, format="json",
+        )
+        assert resp.status_code == 200, resp.content
+        from apps.ingestion_hub.models import Connector
+        conn = Connector.objects.get(
+            source_system=trigger_kobo_source, name="kobo-F-DR",
+        )
+        # Watermark stays absent because dry-runs don't acknowledge.
+        assert "last_pulled_submission_time" not in conn.config
+
+    @responses.activate
+    def test_partial_dedup_lands_only_new_rows(
+        self, trigger_kobo_source, django_user_model,
+    ):
+        # First pull lands #1, #2. Second pull's stub returns #2
+        # (boundary at $gte) + #3 (new) — dedup catches #2, lands #3.
+        responses.add(
+            responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets.json",
+            json={"results": [
+                {"uid": "F2", "name": "Pilot 2", "asset_type": "survey",
+                 "deployment__active": True},
+            ]}, status=200,
+        )
+        responses.add(
+            responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets/F2/data.json",
+            json={"results": [
+                {"_id": 1, "Q": "a", "_submission_time": "2026-05-27T10:00:00"},
+                {"_id": 2, "Q": "b", "_submission_time": "2026-05-27T10:01:00"},
+            ], "next": None}, status=200,
+        )
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+        r1 = client.post(self._url(trigger_kobo_source), {}, format="json")
+        assert r1.status_code == 200
+        assert r1.json()["landed"] == 2
+
+        # Re-stub with the boundary + new row.
+        responses.reset()
+        responses.add(
+            responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets.json",
+            json={"results": [
+                {"uid": "F2", "name": "Pilot 2", "asset_type": "survey",
+                 "deployment__active": True},
+            ]}, status=200,
+        )
+        responses.add(
+            responses.GET, f"{_TRIGGER_KOBO_URL}/api/v2/assets/F2/data.json",
+            json={"results": [
+                {"_id": 2, "Q": "b", "_submission_time": "2026-05-27T10:01:00"},
+                {"_id": 3, "Q": "c", "_submission_time": "2026-05-27T10:02:00"},
+            ], "next": None}, status=200,
+        )
+        r2 = client.post(self._url(trigger_kobo_source), {}, format="json")
+        assert r2.status_code == 200, r2.content
+        body2 = r2.json()
+        assert body2["landed"] == 1
+        assert body2["skipped_duplicate"] == 1
+
+
 # --- US-S11-031 — resolve IDV_PENDING ---------------------------------------
 
 from apps.ingestion_hub.services import resolve_idv_pending  # noqa: E402

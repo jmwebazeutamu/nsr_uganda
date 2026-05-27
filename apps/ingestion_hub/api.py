@@ -143,6 +143,15 @@ class TriggerRunRequestSerializer(serializers.Serializer):
             "the current questionnaire)."
         ),
     )
+    batch_cap = serializers.IntegerField(
+        required=False, min_value=1, max_value=500,
+        help_text=(
+            "Per-pull row cap (US-S11-033). Defaults to "
+            "services.TRIGGER_PULL_BATCH_CAP (50) when omitted. "
+            "Bounded at 500 to keep the synchronous request short — "
+            "larger backlogs should run via the scheduled Celery beat."
+        ),
+    )
 
 
 class FormListItemSerializer(serializers.Serializer):
@@ -191,6 +200,7 @@ class TriggerRunResponseSerializer(serializers.Serializer):
     staged = serializers.IntegerField()
     quarantined = serializers.IntegerField()
     errored = serializers.IntegerField()
+    skipped_duplicate = serializers.IntegerField()
     stage_states = serializers.DictField(child=serializers.IntegerField())
     geo_backfill_created = serializers.IntegerField()
     batch_cap_hit = serializers.BooleanField()
@@ -239,6 +249,7 @@ class SourceSystemViewSet(viewsets.ReadOnlyModelViewSet):
         actor = (getattr(request.user, "username", "") or "").strip() or "admin"
         dry_run = ser.validated_data["dry_run"]
         form_uid = ser.validated_data.get("form_uid", "") or None
+        batch_cap_arg = ser.validated_data.get("batch_cap")
 
         # Emit the trigger audit first so a downstream failure still
         # leaves a paper trail of the attempt. The outcome is added in
@@ -246,12 +257,19 @@ class SourceSystemViewSet(viewsets.ReadOnlyModelViewSet):
         emit_audit(
             "dih.connector.triggered", "source_system", source.id,
             actor=actor,
-            reason=f"console-initiated pull (dry_run={dry_run}, form_uid={form_uid or '*default*'})",
+            reason=(
+                f"console-initiated pull (dry_run={dry_run}, "
+                f"form_uid={form_uid or '*default*'}, "
+                f"batch_cap={batch_cap_arg if batch_cap_arg is not None else '*default*'})"
+            ),
         )
+        # Only pass batch_cap when the caller specified it — falls
+        # back to the service's TRIGGER_PULL_BATCH_CAP default otherwise.
+        pull_kwargs = {"actor": actor, "dry_run": dry_run, "form_uid": form_uid}
+        if batch_cap_arg is not None:
+            pull_kwargs["batch_cap"] = batch_cap_arg
         try:
-            result = trigger_connector_pull(
-                source, actor=actor, dry_run=dry_run, form_uid=form_uid,
-            )
+            result = trigger_connector_pull(source, **pull_kwargs)
         except TriggerError as exc:
             emit_audit(
                 "dih.connector.trigger_rejected", "source_system", source.id,

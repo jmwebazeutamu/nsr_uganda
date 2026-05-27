@@ -401,6 +401,15 @@ paths_appended_2026_05_25:
                   description: |
                     Optional Kobo form UID. Must appear in the
                     /forms/ response; otherwise the trigger 400s.
+                batch_cap:
+                  type: integer
+                  minimum: 1
+                  maximum: 500
+                  description: |
+                    Per-pull row cap (US-S11-033). Defaults to 50
+                    (services.TRIGGER_PULL_BATCH_CAP) when omitted.
+                    Bounded at 500 to keep the synchronous request
+                    short.
       responses:
         "200":
           description: Pull complete
@@ -420,6 +429,13 @@ paths_appended_2026_05_25:
                   staged: { type: integer, minimum: 0 }
                   quarantined: { type: integer, minimum: 0 }
                   errored: { type: integer, minimum: 0 }
+                  skipped_duplicate:
+                    type: integer
+                    minimum: 0
+                    description: |
+                      US-S11-034 — rows the pull skipped because their
+                      (source_system, source_reference) tuple was
+                      already landed by an earlier run.
                   stage_states:
                     type: object
                     additionalProperties: { type: integer }

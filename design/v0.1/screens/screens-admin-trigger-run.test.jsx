@@ -179,7 +179,38 @@ describe("RunConnectorModal — form picker (US-S11-022)", () => {
     await user.selectOptions(formSelect, "form-B");
     await user.click(screen.getByRole("button", { name: /Run pull/ }));
     expect(onSubmit).toHaveBeenCalledWith({
-      sourceId: _kobo().id, dryRun: false, formUid: "form-B",
+      sourceId: _kobo().id, dryRun: false, formUid: "form-B", batchCap: 50,
+    });
+  });
+
+  it("submits the batchCap value (US-S11-033)", async () => {
+    _stubFormsFetch(_formsResponse);
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<RunConnectorModal {...defaultProps({ onSubmit })} />);
+    await waitFor(() => screen.getByText(/^Form/));
+    const input = screen.getByRole("spinbutton");
+    // Controlled-input value resets from state every render, so use
+    // fireEvent.change to overwrite cleanly (user.clear() + .type()
+    // appends to the existing "50" under controlled bindings).
+    fireEvent.change(input, { target: { value: "120" } });
+    await user.click(screen.getByRole("button", { name: /Run pull/ }));
+    expect(onSubmit).toHaveBeenCalledWith({
+      sourceId: _kobo().id, dryRun: false, formUid: "form-A", batchCap: 120,
+    });
+  });
+
+  it("clamps batchCap to 500 (max bound)", async () => {
+    _stubFormsFetch(_formsResponse);
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<RunConnectorModal {...defaultProps({ onSubmit })} />);
+    await waitFor(() => screen.getByText(/^Form/));
+    const input = screen.getByRole("spinbutton");
+    fireEvent.change(input, { target: { value: "9999" } });
+    await user.click(screen.getByRole("button", { name: /Run pull/ }));
+    expect(onSubmit).toHaveBeenCalledWith({
+      sourceId: _kobo().id, dryRun: false, formUid: "form-A", batchCap: 500,
     });
   });
 

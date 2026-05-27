@@ -1462,20 +1462,46 @@ def trigger_connector_pull(
             run_type=ConnectorRunType.TEST,
         )
 
+    # US-S11-034: watermark + landing dedup. The watermark filters
+    # Kobo to rows >= last_pulled_submission_time so we don't re-page
+    # through everything; the landing-dedup catches the boundary row
+    # (Kobo's filter is $gte, so the equal-timestamp row comes back)
+    # plus any manual re-pull where the watermark didn't help.
+    watermark = connector_row.config.get("last_pulled_submission_time") or None
+    max_submission_time = watermark or ""
+
     landed = 0
-    outcomes: dict[str, int] = {"staged": 0, "quarantined": 0, "error": 0}
+    outcomes: dict[str, int] = {
+        "staged": 0, "quarantined": 0, "error": 0, "skipped_duplicate": 0,
+    }
     stage_states: dict[str, int] = {}
     try:
-        for raw in connector_impl.pull_submissions(creds, form_id=form["uid"]):
+        for raw in connector_impl.pull_submissions(
+            creds, form_id=form["uid"], since=watermark,
+        ):
             if landed >= batch_cap:
                 break
-            landed += 1
+            sub_time = str(raw.get("_submission_time") or "")
+            if sub_time and sub_time > max_submission_time:
+                max_submission_time = sub_time
             if dry_run:
                 # Don't land or process — we're just verifying creds +
-                # row shape.
+                # row shape. Dry-run counts every row Kobo yields so
+                # operators see the upstream backlog, dedup or not.
+                landed += 1
                 continue
             source_ref = str(raw.get("_id") or raw.get("_uuid") or "")
+            if source_ref and RawLanding.objects.filter(
+                connector_run__connector__source_system=source,
+                source_reference=source_ref,
+            ).exists():
+                # Already landed this Kobo submission for this source.
+                # Skip the entire chain — RawLanding through DDUP —
+                # so a re-pull doesn't double up the queue.
+                outcomes["skipped_duplicate"] += 1
+                continue
             landing = land_payload(run, raw, source_reference=source_ref)
+            landed += 1
             from .admin_credentials import _process_one_landing
             outcome, detail = _process_one_landing(
                 landing, connector_impl, actor=actor,
@@ -1506,14 +1532,22 @@ def trigger_connector_pull(
     if not dry_run:
         run_stages = StageRecord.objects.filter(connector_run=run)
         geo_total = backfill_missing_geo_from_stages(run_stages).total_created
+        # Persist the watermark only on a real pull — dry-runs don't
+        # acknowledge the rows. If the upstream returned 0 rows the
+        # watermark stays where it was.
+        if max_submission_time and max_submission_time != watermark:
+            connector_row.config["last_pulled_submission_time"] = max_submission_time
+            connector_row.save(update_fields=("config", "updated_at"))
 
+    skipped = outcomes.get("skipped_duplicate", 0)
+    skipped_clause = f", skipped_duplicate={skipped}" if skipped else ""
     note = (
         f"dry-run: would have pulled {landed} row(s) from form "
         f"{form['uid']} ({form['name']})"
         if dry_run else
-        f"pulled {landed} row(s) from form {form['uid']} ({form['name']}); "
+        f"pulled {landed} new row(s) from form {form['uid']} ({form['name']}); "
         f"staged={outcomes['staged']}, quarantined={outcomes['quarantined']}, "
-        f"errors={outcomes['error']}; {state_summary}; "
+        f"errors={outcomes['error']}{skipped_clause}; {state_summary}; "
         f"geo backfill: +{geo_total} GeographicUnit row(s)"
         + (f"; cap {batch_cap} hit" if landed >= batch_cap else "")
     )
@@ -1544,6 +1578,7 @@ def trigger_connector_pull(
         "staged": outcomes["staged"],
         "quarantined": outcomes["quarantined"],
         "errored": outcomes["error"],
+        "skipped_duplicate": outcomes.get("skipped_duplicate", 0),
         "stage_states": stage_states,
         "geo_backfill_created": geo_total,
         "batch_cap_hit": landed >= batch_cap,
