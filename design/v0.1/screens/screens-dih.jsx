@@ -162,6 +162,19 @@ const DIHScreen = () => {
   const [editError, setEditError] = useStateDIH("");
   const [editSaving, setEditSaving] = useStateDIH(false);
   const [showEditModal, setShowEditModal] = useStateDIH(false);
+  // Toolbar dropdown filters (US-S11-035). Options come from the
+  // actual rows fetched — no more hardcoded "Karamoja / West Nile /
+  // Acholi / Teso" set that lied about a real registry's sub-regions.
+  // "" = no narrowing for that dimension.
+  const [filterSource, setFilterSource] = useStateDIH("");
+  const [filterRegion, setFilterRegion] = useStateDIH("");
+  const [filterChannel, setFilterChannel] = useStateDIH("");
+  const [filterDqa, setFilterDqa] = useStateDIH("");
+  const [filterIdv, setFilterIdv] = useStateDIH("");
+  const resetDropdownFilters = () => {
+    setFilterSource(""); setFilterRegion(""); setFilterChannel("");
+    setFilterDqa(""); setFilterIdv(""); setQuickFilter(null);
+  };
 
   // Fetch live data once on mount. Same-origin so the Django session
   // cookie flows automatically; cross-origin / file:// previews fall
@@ -169,7 +182,11 @@ const DIHScreen = () => {
   // Includes quality_failed in the queue so operators can archive them.
   useEffectDIH(() => {
     let cancelled = false;
-    fetch("/api/v1/dih/stage-records/?state=provisional,pending_promotion,quality_failed,ddup_review,idv_pending", {
+    // page_size=500 = DRF MAX_PAGE_SIZE — pulls every actionable
+    // record in one round-trip so the queue isn't silently capped at
+    // 50 (US-S11-035). Larger queues should land via the report
+    // dashboard, not this triage surface.
+    fetch("/api/v1/dih/stage-records/?state=provisional,pending_promotion,quality_failed,ddup_review,idv_pending&page_size=500", {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
     })
@@ -192,7 +209,7 @@ const DIHScreen = () => {
         // Stays on MOCK_DIH_ROWS; dataSource already 'mock'.
       });
     // Archive tab: quarantined records.
-    fetch("/api/v1/dih/stage-records/?state=quarantined", {
+    fetch("/api/v1/dih/stage-records/?state=quarantined&page_size=500", {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
     })
@@ -205,13 +222,38 @@ const DIHScreen = () => {
     return () => { cancelled = true; };
   }, []);
 
-  // Filtered view of rows for the table. Quick filters narrow by the
-  // predicate defined in QUICK_FILTERS; null = show everything.
+  // Filtered view of rows for the table. The chip and each dropdown
+  // narrow independently — a row must satisfy every active filter.
   const visibleRows = useMemoDIH(() => {
-    if (!quickFilter) return rows;
-    const f = QUICK_FILTERS.find(q => q.id === quickFilter);
-    return f ? rows.filter(f.predicate) : rows;
-  }, [rows, quickFilter]);
+    const chip = quickFilter
+      ? QUICK_FILTERS.find(q => q.id === quickFilter)
+      : null;
+    return rows.filter(r => {
+      if (chip && !chip.predicate(r)) return false;
+      if (filterSource && r.source !== filterSource) return false;
+      if (filterRegion && r.region !== filterRegion) return false;
+      if (filterChannel && r.channel !== filterChannel) return false;
+      if (filterDqa === "blocking" && !(r.dqa?.b > 0)) return false;
+      if (filterDqa === "warnings" && !(r.dqa?.w > 0 && (r.dqa?.b || 0) === 0)) return false;
+      if (filterDqa === "clean" && !((r.dqa?.b || 0) === 0 && (r.dqa?.w || 0) === 0)) return false;
+      if (filterIdv && r.idv !== filterIdv) return false;
+      return true;
+    });
+  }, [rows, quickFilter, filterSource, filterRegion, filterChannel, filterDqa, filterIdv]);
+
+  // Live option lists for the toolbar dropdowns — derived from the
+  // rows actually in the queue. Sorted + deduped. Hidden when the
+  // queue contains zero distinct values (no select for a dimension
+  // that doesn't vary).
+  const filterOptions = useMemoDIH(() => {
+    const _u = (arr) => Array.from(new Set(arr.filter(Boolean))).sort();
+    return {
+      sources: _u(rows.map(r => r.source)),
+      regions: _u(rows.map(r => r.region)),
+      channels: _u(rows.map(r => r.channel)),
+      idvs: _u(rows.map(r => r.idv)),
+    };
+  }, [rows]);
 
   // Counts per quick filter, computed against the FULL row set so the
   // numbers match the chip labels regardless of which one is active.
@@ -446,21 +488,67 @@ const DIHScreen = () => {
 
           <div style={{width:1, height:24, background:'var(--neutral-300)', margin:'0 6px'}}/>
 
-          {[
-            ["Source", ["Walk-in","Bulk","API"]],
-            ["Sub-region", ["Karamoja","West Nile","Acholi","Teso"]],
-            ["Channel", ["CAPI","OPM-PDM","NUSAF","UBOS"]],
-            ["DQA", ["Any","No flags","Warnings only","Blocking"]],
-            ["IDV", ["Any","Matched","Mismatch","Pending"]],
-          ].map(([label, opts]) => (
-            <select key={label} className="field-select" style={{height:30, width:'auto', minWidth:130, fontSize:13}}>
-              <option>{label}</option>
-              {opts.map(o => <option key={o}>{o}</option>)}
-            </select>
-          ))}
+          <select
+            className="field-select"
+            style={{height:30, width:'auto', minWidth:130, fontSize:13}}
+            value={filterSource}
+            onChange={e => setFilterSource(e.target.value)}
+          >
+            <option value="">Source · any</option>
+            {filterOptions.sources.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+          <select
+            className="field-select"
+            style={{height:30, width:'auto', minWidth:140, fontSize:13}}
+            value={filterRegion}
+            onChange={e => setFilterRegion(e.target.value)}
+            title="Region as captured on the form"
+          >
+            <option value="">Region · any</option>
+            {filterOptions.regions.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+          <select
+            className="field-select"
+            style={{height:30, width:'auto', minWidth:130, fontSize:13}}
+            value={filterChannel}
+            onChange={e => setFilterChannel(e.target.value)}
+          >
+            <option value="">Channel · any</option>
+            {filterOptions.channels.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+          <select
+            className="field-select"
+            style={{height:30, width:'auto', minWidth:140, fontSize:13}}
+            value={filterDqa}
+            onChange={e => setFilterDqa(e.target.value)}
+          >
+            <option value="">DQA · any</option>
+            <option value="clean">No flags</option>
+            <option value="warnings">Warnings only</option>
+            <option value="blocking">Blocking</option>
+          </select>
+          <select
+            className="field-select"
+            style={{height:30, width:'auto', minWidth:130, fontSize:13}}
+            value={filterIdv}
+            onChange={e => setFilterIdv(e.target.value)}
+            title="IDV outcome — values are the StageRecord.idv_outcome strings"
+          >
+            <option value="">IDV · any</option>
+            {filterOptions.idvs.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
 
           <div style={{flex:1}}/>
-          <button className="btn btn-sm btn-ghost"><Icon name="filter" size={14}/> Reset</button>
+          <button
+            className="btn btn-sm btn-ghost"
+            onClick={resetDropdownFilters}
+            disabled={
+              !quickFilter && !filterSource && !filterRegion
+              && !filterChannel && !filterDqa && !filterIdv
+            }
+          >
+            <Icon name="filter" size={14}/> Reset
+          </button>
         </div>
       </div>
 
