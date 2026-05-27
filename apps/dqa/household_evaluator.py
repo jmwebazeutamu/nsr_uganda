@@ -248,6 +248,41 @@ def _eval_expr(node: Any, scope: _Scope) -> Any:
                 return m
         return None
 
+    if op == "attr":
+        # Path-walk on the value of an inner expression. Lets rules
+        # chain "lookup_member then read a field" — e.g. AC-PARENT-AGE
+        # needs `attr(lookup_member(by=line_number, …), "age_years")`.
+        args = node.get("args", [])
+        if len(args) != 2 or not isinstance(args[1], str):
+            raise DslError("attr requires args=[<expr>, '<path-string>']")
+        target = _arg(args[0], scope)
+        if target is None:
+            return None
+        return _walk_path(target, args[1])
+
+    if op == "duplicates_by":
+        # Returns int count of members whose `field` value collides
+        # with another member's. Empty values don't count (avoids
+        # flagging "no NIN" as a duplicate). Offenders = every member
+        # in a colliding group.
+        # Used by AC-DUPLICATE-MEMBER (NIN-exact only in v1).
+        field_name = node.get("field")
+        if not field_name:
+            raise DslError("duplicates_by requires `field`")
+        buckets: dict[Any, list[dict]] = {}
+        for m in scope.members:
+            v = _walk_path(m, field_name)
+            if v in (None, ""):
+                continue
+            buckets.setdefault(v, []).append(m)
+        dup_count = 0
+        for _value, group in buckets.items():
+            if len(group) > 1:
+                dup_count += len(group)
+                for m in group:
+                    _capture_offender(scope, m)
+        return dup_count
+
     raise DslError(f"unknown op: {op!r}")
 
 
