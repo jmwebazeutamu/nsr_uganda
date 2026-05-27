@@ -1,6 +1,6 @@
-/* global React, Icon, Chip, PageHeader,
+/* global React, Icon, Chip, PageHeader, Modal, Field, Toast,
    KIND_TONE, KIND_LABEL, UNIT_LABEL, STATUS_TONE, WebhookPip, ugx, num,
-   useApi */
+   useApi, useChoiceList, nsrApi */
 // NSR MIS — Programme detail (US-180 sibling)
 // ============================================
 // 9-tab programme record. Mirrors HouseholdScreen / MemberDetailScreen
@@ -297,6 +297,16 @@ const PD_Stat = ({ label, value, tint = "data", sub }) => (
    ============================================================ */
 const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHousehold }) => {
   const [tab, setTab] = useStatePD("over");
+  // US-S11-037 — CRUD affordances on the Programme detail. Edit is
+  // a PATCH on focused fields (lifecycle status NOT exposed here —
+  // status transitions go through close/suspend lifecycle actions).
+  // Close uses the existing /close/ action because Programme rows
+  // carry audit lineage that hard-delete would orphan; Delete is
+  // allowed only for status=draft (no commitments yet).
+  const [toast, setToast] = useStatePD("");
+  const [editOpen, setEditOpen] = useStatePD(false);
+  const [closeOpen, setCloseOpen] = useStatePD(false);
+  const [deleteOpen, setDeleteOpen] = useStatePD(false);
 
   const [progResp, progMeta] = useApi(
     programmeId ? `/api/v1/programmes/${programmeId}/` : null,
@@ -348,6 +358,26 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
         sub={<>{KIND_LABEL[p.kind]} · {UNIT_LABEL[p.unit]} · {p.cycle} · DSA <span className="t-mono">{p.dsa}</span></>}
         right={<>
           <button className="btn" onClick={() => onOpenPartner?.(p.partner)}><Icon name="users" size={14}/> Open partner</button>
+          <button className="btn" onClick={() => setEditOpen(true)}
+                  title="Edit name, summary, disbursement, webhook (PATCH /api/v1/programmes/{id}/)">
+            <Icon name="edit" size={14}/> Edit
+          </button>
+          {p.status !== "draft" && p.status !== "closed" && (
+            <button className="btn"
+                    style={{color:"var(--accent-quality)"}}
+                    onClick={() => setCloseOpen(true)}
+                    title="Lifecycle close — POST /api/v1/programmes/{id}/close/">
+              <Icon name="archive" size={14}/> Close
+            </button>
+          )}
+          {p.status === "draft" && (
+            <button className="btn"
+                    style={{color:"var(--accent-danger)"}}
+                    onClick={() => setDeleteOpen(true)}
+                    title="Hard-delete the draft (DELETE /api/v1/programmes/{id}/)">
+              <Icon name="trash" size={14}/> Delete draft
+            </button>
+          )}
           <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to Programmes</button>
         </>}
       />
@@ -446,9 +476,269 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
       <div className="t-cap mt-4" style={{textAlign:'center'}}>
         Read-only programme record. All edits open an Amendment ChangeRequest. Sign-off chain visible under the Sign-off & audit tab.
       </div>
+
+      <Toast message={toast} onDone={() => setToast("")}/>
+
+      <EditProgrammeModal
+        open={editOpen}
+        programme={progResp}
+        onClose={() => setEditOpen(false)}
+        onSaved={(updated) => {
+          setEditOpen(false);
+          setToast(`Updated ${updated?.code || "programme"}.`);
+          progMeta.refresh && progMeta.refresh();
+        }}
+        onError={(msg) => setToast(`Edit failed: ${msg}`)}/>
+
+      <CloseProgrammeConfirm
+        open={closeOpen}
+        programme={progResp}
+        onClose={() => setCloseOpen(false)}
+        onClosed={() => {
+          setCloseOpen(false);
+          setToast(`Closed ${p.code} — lifecycle event written to audit chain.`);
+          progMeta.refresh && progMeta.refresh();
+        }}
+        onError={(msg) => setToast(`Close failed: ${msg}`)}/>
+
+      <DeleteProgrammeConfirm
+        open={deleteOpen}
+        programme={progResp}
+        onClose={() => setDeleteOpen(false)}
+        onDeleted={() => {
+          setDeleteOpen(false);
+          setToast(`Deleted ${p.code}.`);
+          if (onBack) onBack();
+        }}
+        onError={(msg) => setToast(`Delete failed: ${msg}`)}/>
     </div>
   );
 };
+
+
+// ── EditProgrammeModal (US-S11-037) ───────────────────────────────────
+// PATCHes the most-commonly-changed fields. Status is intentionally
+// NOT here — lifecycle transitions go through close/suspend actions
+// so the sign-off + audit chain stays intact.
+const EditProgrammeModal = ({ open, programme, onClose, onSaved, onError }) => {
+  const [name, setName] = useStatePD("");
+  const [summary, setSummary] = useStatePD("");
+  const [durationMonths, setDurationMonths] = useStatePD("");
+  const [channel, setChannel] = useStatePD("");
+  const [amountUgx, setAmountUgx] = useStatePD("");
+  const [cohortTarget, setCohortTarget] = useStatePD("");
+  const [webhookUrl, setWebhookUrl] = useStatePD("");
+  const [submitting, setSubmitting] = useStatePD(false);
+
+  React.useEffect(() => {
+    if (!open || !programme) return;
+    setName(programme.name || "");
+    setSummary(programme.summary || "");
+    setDurationMonths(programme.duration_months ?? "");
+    setChannel(programme.channel || "");
+    setAmountUgx(programme.amount_ugx ?? "");
+    setCohortTarget(programme.cohort_target ?? "");
+    setWebhookUrl(programme.webhook_url || "");
+  }, [open, programme]);
+
+  if (!open || !programme) return null;
+  const canSave = !submitting && name.trim();
+
+  const save = async () => {
+    if (!canSave) return;
+    setSubmitting(true);
+    try {
+      const payload = {
+        name: name.trim(),
+        summary: summary.trim(),
+        channel: channel.trim(),
+        webhook_url: webhookUrl.trim(),
+      };
+      // Numeric fields — only include when non-empty, and coerce. The
+      // serializer rejects "" for these IntegerFields.
+      if (durationMonths !== "") payload.duration_months = parseInt(durationMonths, 10);
+      if (amountUgx !== "")      payload.amount_ugx = parseInt(amountUgx, 10);
+      if (cohortTarget !== "")   payload.cohort_target = parseInt(cohortTarget, 10);
+      const updated = await nsrApi.patch(
+        `/api/v1/programmes/${programme.id}/`, payload,
+      );
+      setSubmitting(false);
+      onSaved(updated);
+    } catch (err) {
+      setSubmitting(false);
+      const detail = (err && err.body && (err.body.detail
+        || Object.values(err.body).flat().join(" · "))) || err.message;
+      onError(detail);
+    }
+  };
+
+  return (
+    <Modal open={true} onClose={() => !submitting && onClose()}
+           title={`Edit ${programme.code || "programme"}`} size="md">
+      <p className="t-bodysm muted" style={{marginTop:0, marginBottom:16}}>
+        Patches descriptive + disbursement fields. Status transitions go
+        through the Close button (lifecycle service); scope amendments
+        through the Amendment ChangeRequest path.
+      </p>
+
+      <Field label="Name">
+        <input value={name} onChange={e => setName(e.target.value)} disabled={submitting}/>
+      </Field>
+      <Field label="Summary">
+        <textarea value={summary} onChange={e => setSummary(e.target.value)} rows={2} disabled={submitting}/>
+      </Field>
+
+      <div className="grid grid-3" style={{gap:12}}>
+        <Field label="Duration (months)">
+          <input type="number" min={0} value={durationMonths}
+                 onChange={e => setDurationMonths(e.target.value)} disabled={submitting}/>
+        </Field>
+        <Field label="Amount (UGX)">
+          <input type="number" min={0} value={amountUgx}
+                 onChange={e => setAmountUgx(e.target.value)} disabled={submitting}/>
+        </Field>
+        <Field label="Cohort target">
+          <input type="number" min={0} value={cohortTarget}
+                 onChange={e => setCohortTarget(e.target.value)} disabled={submitting}/>
+        </Field>
+      </div>
+
+      <Field label="Channel">
+        <input value={channel} onChange={e => setChannel(e.target.value)} disabled={submitting}
+               placeholder="e.g. mobile-money, bank-transfer"/>
+      </Field>
+      <Field label="Webhook URL">
+        <input type="url" value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)}
+               disabled={submitting} placeholder="https://…/nsr-webhook"/>
+      </Field>
+
+      <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
+        <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
+        <button className="btn btn-primary" onClick={save} disabled={!canSave}>
+          {submitting ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </Modal>
+  );
+};
+
+
+// ── CloseProgrammeConfirm (US-S11-037) ────────────────────────────────
+// Posts to the existing /close/ lifecycle action. Preserves the
+// programme row + audit chain — the only state change is status →
+// closed and a lifecycle event row written server-side.
+const CloseProgrammeConfirm = ({ open, programme, onClose, onClosed, onError }) => {
+  const [reason, setReason] = useStatePD("");
+  const [submitting, setSubmitting] = useStatePD(false);
+  React.useEffect(() => { if (open) setReason(""); }, [open]);
+  if (!open || !programme) return null;
+
+  const fire = async () => {
+    setSubmitting(true);
+    try {
+      await nsrApi.post(`/api/v1/programmes/${programme.id}/close/`, {
+        reason: reason.trim(),
+      });
+      setSubmitting(false);
+      onClosed();
+    } catch (err) {
+      setSubmitting(false);
+      const detail = (err && err.body && (err.body.detail
+        || JSON.stringify(err.body))) || err.message;
+      onError(detail);
+    }
+  };
+
+  return (
+    <Modal open={true} onClose={() => !submitting && onClose()}
+           title={`Close ${programme.code}?`} size="sm">
+      <p className="t-bodysm" style={{margin:"4px 0 12px"}}>
+        Marks the programme as closed and writes a ProgrammeLifecycleEvent
+        row. Existing enrolments + sign-offs are preserved. The programme
+        cannot be re-opened — use a new Programme draft if the partner
+        wants to resume.
+      </p>
+      <Field label="Reason (recorded on the lifecycle event)">
+        <textarea value={reason} onChange={e => setReason(e.target.value)}
+                  rows={2} disabled={submitting}
+                  placeholder="e.g. cohort complete, partner withdrawing scope"/>
+      </Field>
+      <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
+        <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
+        <button
+          className="btn"
+          style={{background:"var(--accent-quality)", color:"white", borderColor:"var(--accent-quality)"}}
+          onClick={fire} disabled={submitting || !reason.trim()}
+        >
+          {submitting ? "Closing…" : "Close programme"}
+        </button>
+      </div>
+    </Modal>
+  );
+};
+
+
+// ── DeleteProgrammeConfirm (US-S11-037) ───────────────────────────────
+// Hard-delete — only offered when status=draft. The Edit modal won't
+// show a Delete button for any other state, but we still surface the
+// status here so a stale prop doesn't slip a destructive call through.
+const DeleteProgrammeConfirm = ({ open, programme, onClose, onDeleted, onError }) => {
+  const [reason, setReason] = useStatePD("");
+  const [submitting, setSubmitting] = useStatePD(false);
+  React.useEffect(() => { if (open) setReason(""); }, [open]);
+  if (!open || !programme) return null;
+  const isDraft = programme.status === "draft";
+
+  const fire = async () => {
+    setSubmitting(true);
+    try {
+      await nsrApi.delete(`/api/v1/programmes/${programme.id}/`);
+      setSubmitting(false);
+      onDeleted();
+    } catch (err) {
+      setSubmitting(false);
+      const detail = (err && err.body && (err.body.detail
+        || JSON.stringify(err.body))) || err.message;
+      onError(detail);
+    }
+  };
+
+  return (
+    <Modal open={true} onClose={() => !submitting && onClose()}
+           title={`Delete draft ${programme.code}?`} size="sm">
+      {!isDraft && (
+        <div className="callout" style={{
+          background:"var(--accent-danger-bg)", color:"var(--accent-danger)",
+          padding:"10px 12px", borderRadius:4, marginBottom:12, fontSize:13,
+        }}>
+          <strong>Programme is not in draft.</strong> Hard-delete is
+          disabled — use Close instead so the lifecycle + audit chain
+          survives.
+        </div>
+      )}
+      <p className="t-bodysm" style={{margin:"4px 0 12px"}}>
+        Hard-deletes the draft. No enrolments or sign-offs exist for a
+        draft, so the cascade is clean.
+      </p>
+      <Field label="Reason (audit only)">
+        <textarea value={reason} onChange={e => setReason(e.target.value)}
+                  rows={2} disabled={submitting}
+                  placeholder="e.g. draft created in error, replaced by US-180 partner."/>
+      </Field>
+      <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
+        <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
+        <button
+          className="btn"
+          style={{background:"var(--accent-danger)", color:"white", borderColor:"var(--accent-danger)"}}
+          onClick={fire} disabled={!isDraft || submitting || !reason.trim()}
+        >
+          {submitting ? "Deleting…" : "Delete draft"}
+        </button>
+      </div>
+    </Modal>
+  );
+};
+
 
 /* ============================================================
    Tab bodies
