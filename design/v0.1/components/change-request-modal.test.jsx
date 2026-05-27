@@ -197,7 +197,10 @@ describe("submit enable boundary", () => {
     expect(next).toBeDisabled();
   });
 
-  it("submit stays disabled at review with a short note", async () => {
+  it("Next on step 3 stays disabled with a short note", async () => {
+    // US-S28-WIZARD-VALIDATION moved the note gate from step 4 to
+    // step 3 — operator can't advance past Evidence without the
+    // mandatory 6-char audit-trail reason.
     const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps()} />);
     await addRowViaComposer(user, "iden", "phone");
@@ -207,9 +210,8 @@ describe("submit enable boundary", () => {
     await user.click(screen.getByRole("button", { name: /Next →/i }));
     const note = screen.getByPlaceholderText(/Why this change/);
     await user.type(note, "hi");
-    // step 3 → 4
-    await user.click(screen.getByRole("button", { name: /Next →/i }));
-    expect(screen.getByRole("button", { name: /Create & submit/i })).toBeDisabled();
+    // Next on step 3 stays disabled because note < 6 chars.
+    expect(screen.getByRole("button", { name: /Next →/i })).toBeDisabled();
   });
 
   it("submit enables exactly at the boundary (1 row with value + note ≥ 6 chars)", async () => {
@@ -220,14 +222,80 @@ describe("submit enable boundary", () => {
     await user.type(valueInputs[valueInputs.length - 1], "+256 700 000 000");
     await user.click(screen.getByRole("button", { name: /Next →/i })); // → step 3
     const note = screen.getByPlaceholderText(/Why this change/);
-    await user.type(note, "valid"); // 5 chars
-    await user.click(screen.getByRole("button", { name: /Next →/i })); // → step 4
-    expect(screen.getByRole("button", { name: /Create & submit/i })).toBeDisabled();
-    // Back to step 3, append a 6th char.
-    await user.click(screen.getByRole("button", { name: /^← Back/i }));
-    await user.type(screen.getByPlaceholderText(/Why this change/), "X");
+    await user.type(note, "valid"); // 5 chars — step 3 Next stays disabled
+    expect(screen.getByRole("button", { name: /Next →/i })).toBeDisabled();
+    // Append a 6th char → Next enables → advance to review.
+    await user.type(note, "X");
+    expect(screen.getByRole("button", { name: /Next →/i })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: /Next →/i })); // → step 4
     expect(screen.getByRole("button", { name: /Create & submit/i })).toBeEnabled();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────
+// 1b. No-op detection — submitting a CR whose new value matches
+//     the current value is meaningless and is blocked at step 2.
+// ───────────────────────────────────────────────────────────────
+
+describe("no-op detection", () => {
+  it("Next on step 2 stays disabled when the row's new value matches the current value", async () => {
+    // US-S28-WIZARD-VALIDATION — earlier this case was permitted,
+    // so operators could (accidentally) submit a CR that changes
+    // nothing. The audit chain would then carry a phantom event.
+    const user = userEvent.setup();
+    render(<ChangeRequestModal {...{
+      ...defaultProps(),
+      currentValues: { "iden.phone": "+256 700 123 456" },
+    }} />);
+    await addRowViaComposer(user, "iden", "phone");
+    const valueInputs = screen.getAllByPlaceholderText("New value");
+    await user.type(valueInputs[valueInputs.length - 1], "+256 700 123 456");
+    expect(screen.getByRole("button", { name: /Next →/i })).toBeDisabled();
+    // Change one digit → Next enables.
+    await user.clear(valueInputs[valueInputs.length - 1]);
+    await user.type(valueInputs[valueInputs.length - 1], "+256 700 123 457");
+    expect(screen.getByRole("button", { name: /Next →/i })).toBeEnabled();
+  });
+
+  it("Empty current value treats any new input as a change", async () => {
+    // Field with no current value on record — operator filling in
+    // for the first time. Any non-blank input is a change.
+    const user = userEvent.setup();
+    render(<ChangeRequestModal {...defaultProps()} />);
+    await addRowViaComposer(user, "iden", "phone");
+    const valueInputs = screen.getAllByPlaceholderText("New value");
+    await user.type(valueInputs[valueInputs.length - 1], "+256 700 000 000");
+    expect(screen.getByRole("button", { name: /Next →/i })).toBeEnabled();
+  });
+});
+
+// ───────────────────────────────────────────────────────────────
+// 1c. Submit error banner is dismissible + retry-able
+// ───────────────────────────────────────────────────────────────
+
+describe("submit error UX", () => {
+  it("shows a dismissible error banner with a retry button on failure", async () => {
+    const user = userEvent.setup();
+    let attempts = 0;
+    const onSubmit = vi.fn(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("backend exploded");
+      return { cr_id: "01CR", audit_id: "A-1", routed_to: "CDO" };
+    });
+    render(<ChangeRequestModal {...defaultProps()} onSubmit={onSubmit} />);
+    await addRowViaComposer(user, "iden", "phone");
+    const valueInputs = screen.getAllByPlaceholderText("New value");
+    await user.type(valueInputs[valueInputs.length - 1], "+256 700 000 000");
+    await user.click(screen.getByRole("button", { name: /Next →/i })); // → 3
+    await user.type(screen.getByPlaceholderText(/Why this change/), "valid reason");
+    await user.click(screen.getByRole("button", { name: /Next →/i })); // → 4
+    await user.click(screen.getByRole("button", { name: /Create & submit/i }));
+    // First submit failed — banner shows with backend message.
+    const banner = await screen.findByTestId("submit-error");
+    expect(banner).toHaveTextContent(/backend exploded/);
+    // Dismiss button clears the banner without changing form state.
+    await user.click(screen.getByTestId("submit-error-dismiss"));
+    expect(screen.queryByTestId("submit-error")).toBeNull();
   });
 });
 
@@ -622,35 +690,49 @@ describe("supporting documents", () => {
 // 3. PMT chip + Force-PMT toggle
 // ───────────────────────────────────────────────────────────────
 
-describe("PMT chip + Force PMT", () => {
-  it("starts at cosmetic with Force-PMT enabled and unchecked", () => {
+describe("PMT chip + Mark PMT-relevant toggle", () => {
+  it("starts at cosmetic with the checkbox unchecked + enabled", () => {
     render(<ChangeRequestModal {...defaultProps()} />);
     // The chip lives in two places on step 1 (target strip + sticky
     // summary) — target the sticky one explicitly.
     expect(screen.getByTestId("summary-pmt-chip")).toHaveTextContent("cosmetic");
-    const force = screen.getByLabelText(/Force PMT/i);
-    expect(force).not.toBeChecked();
-    expect(force).not.toBeDisabled();
+    const cb = screen.getByLabelText(/Mark PMT-relevant/i);
+    expect(cb).not.toBeChecked();
+    expect(cb).not.toBeDisabled();
   });
 
-  it("Force-PMT toggled alone flips the chip to pmt_relevant", async () => {
+  it("checkbox toggled alone flips the chip to pmt_relevant", async () => {
     const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps()} />);
-    await user.click(screen.getByLabelText(/Force PMT/i));
+    await user.click(screen.getByLabelText(/Mark PMT-relevant/i));
     expect(screen.getByTestId("summary-pmt-chip")).toHaveTextContent("pmt_relevant");
   });
 
-  it("Adding a PMT field auto-derives pmt_relevant AND disables Force-PMT", async () => {
+  it("Adding a PMT field auto-derives pmt_relevant AND keeps the checkbox interactive", async () => {
+    // US-S28-WIZARD-VALIDATION — the toggle is no longer disabled
+    // when derived=true; the operator can override either way.
     const user = userEvent.setup();
     render(<ChangeRequestModal {...defaultProps()} />);
     await addRowViaComposer(user, "hous", "roof");
-    // Chip lives in the sticky summary, visible from every step.
     expect(screen.getByTestId("summary-pmt-chip")).toHaveTextContent("pmt_relevant");
-    // Force-PMT only renders on step 1 — navigate back.
     await goBackTo1(user);
-    const force = screen.getByLabelText(/Force PMT/i);
-    expect(force).toBeChecked();
-    expect(force).toBeDisabled();
+    const cb = screen.getByLabelText(/Mark PMT-relevant/i);
+    expect(cb).toBeChecked();
+    expect(cb).not.toBeDisabled();
+  });
+
+  it("operator override DOWN flips the chip to cosmetic even when derived=true", async () => {
+    // The fix that motivated this slice — earlier the checkbox was
+    // hard-disabled at this point, so the operator could not undo a
+    // PMT designation they disagreed with.
+    const user = userEvent.setup();
+    render(<ChangeRequestModal {...defaultProps()} />);
+    await addRowViaComposer(user, "hous", "roof");
+    await goBackTo1(user);
+    const cb = screen.getByLabelText(/Mark PMT-relevant/i);
+    await user.click(cb);  // override off
+    expect(cb).not.toBeChecked();
+    expect(screen.getByTestId("summary-pmt-chip")).toHaveTextContent("cosmetic");
   });
 
   it("Adding a non-PMT field leaves the chip as cosmetic", async () => {

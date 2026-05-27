@@ -201,7 +201,10 @@ const CHANGE_TYPE_OPTIONS = [
 const ENTITY_OPTIONS = [
   { value: "household",   label: "This household" },
   { value: "member",      label: "A specific member…" },
-  { value: "all_members", label: "All members" },
+  // "all_members" was removed in US-S28-WIZARD-VALIDATION — the
+  // server has no all-members payload contract and the option was
+  // confusing operators. Re-introduce only after the routing /
+  // payload semantics are agreed in product review.
 ];
 
 // Derive pmt_relevant from the picked rows. Any row whose catalog
@@ -561,6 +564,12 @@ const ChangeRequestModal = ({
   const [memberId, setMemberId]     = useCR("");
   const [changeType, setChangeType] = useCR("correction");
   const [forcePmt, setForcePmt]     = useCR(false);
+  // `pmtTouched` flips true the first time the operator clicks the
+  // PMT checkbox. Until then, pmtRelevant follows derivedPmt; once
+  // touched, the operator's manual choice wins (in either direction).
+  // This is what unsticks the toggle when a PMT field is added —
+  // earlier the checkbox was hard-disabled while derivedPmt=true.
+  const [pmtTouched, setPmtTouched] = useCR(false);
   const [rows, setRows]             = useCR([]);
   const [note, setNote]             = useCR("");
   const [busy, setBusy]             = useCR(false);
@@ -581,6 +590,7 @@ const ChangeRequestModal = ({
     setMemberId("");
     setChangeType("correction");
     setForcePmt(false);
+    setPmtTouched(false);
     setRows([]);
     setNote("");
     setBusy(false);
@@ -660,7 +670,12 @@ const ChangeRequestModal = ({
     () => derivePmt(rows, liveCatalog.fieldsFlat),
     [rows, liveCatalog.fieldsFlat],
   );
-  const pmtRelevant = derivedPmt || forcePmt;
+  // Operator override beats auto-derivation in either direction; if
+  // the operator hasn't touched the checkbox we follow the derived
+  // value. `pmtOverridden` is the chip-driver showing the operator
+  // has bent away from the auto-derivation.
+  const pmtRelevant = pmtTouched ? forcePmt : derivedPmt;
+  const pmtOverridden = pmtTouched && forcePmt !== derivedPmt;
 
   const reviewerLabel = routeFor(changeType, pmtRelevant);
 
@@ -674,11 +689,32 @@ const ChangeRequestModal = ({
   const STEP_LABELS = ["Target", "Fields", "Evidence", "Review"];
   const [step, setStep] = useCR(1);
 
+  // Per-row no-op detection — true when the row's new value is a
+  // non-trivial change from the field's current value. Empty / blank
+  // current values count as "any input is a change" since there was
+  // nothing on record before. Trimmed string comparison only; the
+  // server does richer coercion downstream.
+  const isRowChanged = (r) => {
+    const v = (r.value || "").trim();
+    if (v.length === 0) return false;
+    const cv = effectiveCurrentValues[`${r.category}.${r.field}`];
+    if (cv == null || cv === "") return true;
+    return v !== String(cv).trim();
+  };
+  const hasAnyChange = rows.some(isRowChanged);
+
   const step1Valid = entity !== "member" || !!memberId;
   const step2Valid =
     rows.length >= 1
-    && rows.every(r => (r.value || "").trim().length > 0);
-  const step3Valid = true;  // documents are optional; note is gated on step 4
+    && rows.every(r => (r.value || "").trim().length > 0)
+    // No-op guard — at least one row must actually differ from the
+    // current value. Prevents submitting a CR whose every "new" value
+    // matches the existing record.
+    && hasAnyChange;
+  // Step 3 used to be a no-op gate; now it requires the operator
+  // note up front so the disabled Submit button on step 4 isn't a
+  // surprise. Documents stay optional.
+  const step3Valid = note.trim().length >= 6;
   const step4Valid = note.trim().length >= 6;
 
   const canAdvance =
@@ -690,6 +726,7 @@ const ChangeRequestModal = ({
   const valid =
     rows.length >= 1
     && rows.every(r => (r.value || "").trim().length > 0)
+    && hasAnyChange
     && note.trim().length >= 6
     // When the entity is a member, the operator must pick one before
     // we have a target. The server rejects entity=member without a
@@ -928,12 +965,11 @@ const ChangeRequestModal = ({
           fontSize:12.5,
         }}>
           <span data-testid="summary-target">
-            <Icon name={entity === "household" ? "home"
-                       : entity === "all_members" ? "users" : "user"} size={12}/>
+            <Icon name={entity === "household" ? "home" : "user"} size={12}/>
             {" "}
             {entity === "member"
               ? `${selectedMember?.name || (memberId ? memberId.slice(0, 10) + "…" : "Member (none)")}`
-              : entity === "all_members" ? "All members" : "Household"}
+              : "Household"}
           </span>
           <span className="muted">·</span>
           <span data-testid="summary-changes">
@@ -995,16 +1031,22 @@ const ChangeRequestModal = ({
             </div>
             <label style={{display:"flex", alignItems:"center", gap:6, marginTop:6}}>
               <input type="checkbox" checked={pmtRelevant}
-                disabled={derivedPmt}
-                onChange={(e) => setForcePmt(e.target.checked)}/>
+                onChange={(e) => {
+                  setPmtTouched(true);
+                  setForcePmt(e.target.checked);
+                }}/>
               <span className="t-bodysm" style={{fontSize:12}}>
-                Force PMT
+                Mark PMT-relevant
               </span>
             </label>
             <div className="t-cap" style={{marginTop:2, fontSize:11}}>
-              {derivedPmt
-                ? "Auto-derived from a PMT field (locked)."
-                : "Tick to force a PMT review."}
+              {pmtOverridden
+                ? (forcePmt
+                    ? "Override — manually forced on (auto-derive said cosmetic)."
+                    : "Override — manually forced off (auto-derive said PMT).")
+                : derivedPmt
+                  ? "Auto-derived from a PMT field. Untick to override."
+                  : "Auto-derived: cosmetic. Tick to force a PMT review."}
             </div>
           </div>
         </div>
@@ -1360,7 +1402,7 @@ const ChangeRequestModal = ({
                 <strong>
                   {entity === "member"
                     ? `Member · ${selectedMember?.name || memberId.slice(0, 12) + "…"}`
-                    : entity === "all_members" ? "All members" : "Household"}
+                    : "Household"}
                 </strong>
               </div>
               <div>
@@ -1440,12 +1482,31 @@ const ChangeRequestModal = ({
           </div>
         )}
 
-        {/* Error banner (post-submit failure) */}
+        {/* Error banner (post-submit failure). Dismissible — earlier
+            this stuck open with no way to retry without re-typing
+            everything. Now operator can dismiss or retry-submit
+            inline; the form state is preserved either way. */}
         {error && (
-          <div className="t-bodysm" style={{color:"var(--accent-danger)",
+          <div data-testid="submit-error" className="t-bodysm" style={{
+            color:"var(--accent-danger)",
             padding:"8px 12px", background:"var(--neutral-50)",
-            border:"1px solid var(--accent-danger)", borderRadius:6}}>
-            {error}
+            border:"1px solid var(--accent-danger)", borderRadius:6,
+            display:"flex", alignItems:"center", gap:8,
+          }}>
+            <Icon name="xCircle" size={14} color="var(--accent-danger)"/>
+            <span style={{flex:1}}>{error}</span>
+            <button type="button"
+              className="btn btn-sm"
+              disabled={busy || !valid}
+              onClick={submit}>
+              Retry
+            </button>
+            <button type="button"
+              className="btn btn-sm btn-ghost"
+              data-testid="submit-error-dismiss"
+              onClick={() => setError("")}>
+              Dismiss
+            </button>
           </div>
         )}
 
