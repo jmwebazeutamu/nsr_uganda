@@ -23,9 +23,65 @@ from nsr_mis.common.fields import ULIDField
 
 
 class Severity(models.TextChoices):
-    BLOCKING = "blocking", "Blocking"
-    WARNING = "warning", "Warning"
+    # US-S11-044 — four-value vocabulary aligned with the
+    # intra-household DQA spec. Migration 0004 rewrites existing
+    # rows from the legacy three-value vocabulary
+    # (`blocking`, `warning`, `info`) into this one. The legacy
+    # constants stay on this enum during the transition window so
+    # ~40 existing call-sites in tests + services compile unchanged;
+    # the P2 cleanup commit strips them once every caller has moved
+    # to the new vocabulary.
+    BLOCK = "block", "Block"
+    REJECT_WITH_OVERRIDE = "reject_with_override", "Reject with override"
+    FLAG = "flag", "Flag"
     INFO = "info", "Info"
+    # --- legacy aliases (deprecated; remove in P2 cleanup) -------------
+    BLOCKING = "blocking", "Blocking (deprecated → block)"
+    WARNING = "warning", "Warning (deprecated → flag)"
+
+
+class RuleCategory(models.TextChoices):
+    """High-level grouping; the Rule Editor filter chip + the
+    intra-household evaluator both key off this. New categories add
+    here without a schema change as long as the string fits in 32 chars."""
+    INTRA_HOUSEHOLD = "intra_household", "Intra-household"
+    FIELD_LEVEL = "field_level", "Field-level"
+    GEOGRAPHIC = "geographic", "Geographic"
+    IDENTITY = "identity", "Identity"
+    DUPLICATE = "duplicate", "Duplicate"
+
+
+class RuleScope(models.TextChoices):
+    """Selects which evaluator runs the rule. HOUSEHOLD is new in
+    US-S11-044; CROSS_HOUSEHOLD is reserved for the next slice."""
+    FIELD = "field", "Field"
+    RECORD = "record", "Record"
+    HOUSEHOLD = "household", "Household"
+    CROSS_HOUSEHOLD = "cross_household", "Cross-household"
+
+
+class ExpressionType(models.TextChoices):
+    """Language the `expression` JSON is interpreted as. v1 honours
+    only DSL — Python and SQL are schema-ready for future ADRs (see
+    ADR-0022)."""
+    DSL = "dsl", "JSON DSL"
+    PYTHON_CALLABLE = "python_callable", "Python callable"
+    SQL = "sql", "SQL"
+
+
+class RuleStage(models.TextChoices):
+    """Pipeline stages a rule applies to. A rule can carry any subset.
+    Persisted as a JSON array on DqaRule.stages."""
+    DIH_INGEST = "dih_ingest", "DIH ingest (pre-promotion)"
+    DIH_PROMOTE = "dih_promote", "DIH promote"
+    REGISTRY_POST_PROMOTE = "registry_post_promote", "Registry post-promote"
+
+
+class EvaluationOutcome(models.TextChoices):
+    """Aggregate outcome across all rules in one household evaluation."""
+    PASS = "pass", "Pass"
+    REVIEW = "review", "Review (any FLAG)"
+    BLOCK = "block", "Block (any BLOCK / REJECT_WITH_OVERRIDE)"
 
 
 class RuleStatus(models.TextChoices):
@@ -45,7 +101,38 @@ class DqaRule(models.Model):
     version = models.PositiveIntegerField(default=1)
 
     description = models.TextField()
-    severity = models.CharField(max_length=16, choices=Severity.choices)
+    severity = models.CharField(max_length=24, choices=Severity.choices)
+
+    # US-S11-044 — category groups rules in the Rule Editor + drives
+    # which evaluator picks them up. The intra-household evaluator
+    # filters on `category=intra_household`. Empty string for legacy
+    # rules; the data migration backfills the sprint-0 record-scope
+    # ones to `field_level`.
+    category = models.CharField(
+        max_length=32, choices=RuleCategory.choices,
+        default="", blank=True, db_index=True,
+    )
+
+    # US-S11-044 — what the rule operates on. RECORD is the sprint-0
+    # default (mandatory / format / GPS); HOUSEHOLD enables the
+    # intra-household evaluator.
+    scope = models.CharField(
+        max_length=24, choices=RuleScope.choices,
+        default=RuleScope.RECORD,
+    )
+
+    # US-S11-044 — expression language the JSON tree is interpreted as.
+    # v1 honours only DSL (ADR-0022).
+    expression_type = models.CharField(
+        max_length=24, choices=ExpressionType.choices,
+        default=ExpressionType.DSL,
+    )
+
+    # US-S11-044 — pipeline stages this rule applies to. A rule with
+    # `stages=["dih_ingest"]` runs at landing but not at promote.
+    # JSON array so the Rule Editor can edit it as a multi-select
+    # without a join table.
+    stages = models.JSONField(default=list, blank=True)
 
     # Filter that decides whether a rule applies to a given record. Keys
     # the engine understands today: entity (household|member), channel,
@@ -53,9 +140,44 @@ class DqaRule(models.Model):
     # means "applies to everything that matches the entity type".
     applicability_filter = models.JSONField(default=dict, blank=True)
 
-    # The DSL tree; see apps.dqa.engine for grammar.
+    # US-S11-044 — `applies_to` enumerates the canonical-payload paths
+    # the rule reads (e.g. `members.*.age_years`,
+    # `members.*.relationship_to_head`). The wizard reads this list
+    # to decide which field edits should trigger a live re-evaluation.
+    # `applicability_filter` is for SELECTION (does this rule run?);
+    # `applies_to` is for WATCHED FIELDS (does the wizard re-run me?).
+    applies_to = models.JSONField(default=dict, blank=True)
+
+    # The DSL tree; see apps.dqa.engine + apps.dqa.household_evaluator.
     expression = models.JSONField()
+
+    # US-S11-044 — every threshold / numeric constant the rule reads
+    # lives here (no magic numbers in the DSL). The evaluator refuses
+    # to run a rule whose expression references a parameter not
+    # declared in this dict.
+    parameters = models.JSONField(default=dict, blank=True)
+
+    # US-S11-044 — array of {input, expected_outcome} the Rule Editor
+    # runs against the live evaluator on every save. Catches author
+    # typos before the dual-approval submit.
+    test_fixtures = models.JSONField(default=list, blank=True)
+
+    # US-S11-044 — i18n key + default English string. The wizard pulls
+    # the i18n key for Django's translation framework and falls back
+    # to the EN string for un-translated locales. Parameter
+    # interpolation uses `{key}` syntax filled from `parameters`.
     error_message_template = models.CharField(max_length=256)
+    message_template_i18n_key = models.CharField(
+        max_length=128, blank=True, default="",
+    )
+
+    # US-S11-044 — self-FK so version history is a real chain. v1 of
+    # a rule has parent_rule=None; v2 points at v1; v3 at v2. The
+    # Rule Editor's diff viewer walks this chain.
+    parent_rule = models.ForeignKey(
+        "self", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="child_versions",
+    )
 
     effective_from = models.DateField(null=True, blank=True)
     effective_to = models.DateField(null=True, blank=True)
@@ -137,7 +259,7 @@ class DqaResult(models.Model):
     record_id = models.CharField(max_length=64)
 
     passed = models.BooleanField()
-    severity = models.CharField(max_length=16, choices=Severity.choices)
+    severity = models.CharField(max_length=24, choices=Severity.choices)
     reason = models.TextField(blank=True)
 
     executed_at = models.DateTimeField(auto_now_add=True)
@@ -154,3 +276,62 @@ class DqaResult(models.Model):
     def __str__(self) -> str:
         verdict = "PASS" if self.passed else "FAIL"
         return f"{verdict} {self.rule.rule_id} on {self.record_type}:{self.record_id}"
+
+
+class DqaEvaluation(models.Model):
+    """Per-household aggregate evaluation (US-S11-044).
+
+    One row per (household_id, stage, evaluator_service_version) run.
+    `results` is the per-rule outcome array; offending member ids are
+    captured INSIDE that JSON, NOT in a side table — DQA persistence
+    is audit-by-id-only and never stores rule input payloads.
+
+    Distinct from `DqaResult` which is per-rule per-record; this is
+    the aggregate the household-detail "DQA" section + the wizard
+    panel render off, and what `GET /dqa/evaluations/{household_id}`
+    returns.
+
+    `household_id` is a CharField (not FK) because the evaluator runs
+    at the DIH_INGEST stage when no Household row exists yet — only
+    a provisional_registry_id. Resolving FKs lazily lets one model
+    serve both pre- and post-promotion stages.
+    """
+
+    id = ULIDField(primary_key=True)
+    household_id = models.CharField(max_length=26, db_index=True)
+    household_version = models.PositiveIntegerField(null=True, blank=True)
+
+    stage = models.CharField(
+        max_length=32, choices=RuleStage.choices,
+    )
+    outcome = models.CharField(
+        max_length=16, choices=EvaluationOutcome.choices,
+    )
+    # Array of per-rule result dicts. Shape mirrors the API contract
+    # in /docs/openapi/dqa.yaml:
+    #   { rule_code, rule_version, status, severity, message,
+    #     offending_member_ids[], parameters_used }
+    results = models.JSONField(default=list, blank=True)
+
+    # Identifies the evaluator code that ran the rules — bumped on
+    # any breaking change to the DSL interpreter. Lets a historical
+    # evaluation be reproduced against the same evaluator + rule
+    # version.
+    evaluator_service_version = models.CharField(max_length=32, default="1.0")
+    actor = models.CharField(max_length=64, blank=True)
+    evaluated_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "DQA evaluation"
+        verbose_name_plural = "DQA evaluations"
+        indexes = [
+            models.Index(fields=["household_id", "-evaluated_at"]),
+            models.Index(fields=["stage", "-evaluated_at"]),
+            models.Index(fields=["outcome", "-evaluated_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"DqaEvaluation {self.household_id} @ {self.stage} "
+            f"-> {self.outcome} ({self.evaluated_at:%Y-%m-%d %H:%M})"
+        )

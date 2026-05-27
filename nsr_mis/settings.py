@@ -91,6 +91,14 @@ CHATBOT_EMBEDDER = env("CHATBOT_EMBEDDER", default="sentence")
 # default per ADR-0012. CI keeps this false.
 PARTNERS_DOCUSIGN_ENABLED = False
 
+# US-S11-044 — gate the intra-household DQA evaluator + the pipeline
+# wiring that calls it. Default ON in dev/staging via env, OFF in
+# production until the 8 seeded rules pass dual-approval. CI runs
+# tests with it ON.
+DQA_INTRA_HOUSEHOLD_ENABLED = env(
+    "DQA_INTRA_HOUSEHOLD_ENABLED", default=DEBUG,
+)
+
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

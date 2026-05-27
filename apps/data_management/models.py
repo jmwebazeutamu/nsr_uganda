@@ -85,6 +85,13 @@ class Household(models.Model):
     enumeration_area = models.CharField(max_length=32, blank=True)
     household_number = models.CharField(max_length=32, blank=True)
 
+    # US-S11-044 — operator-reported household size, captured at intake
+    # via canonical_payload.interview.hh_size. Promotion copies it
+    # across; AC-MEMBER-COUNT-MATCH reads this and compares against
+    # the actual member roster length. Nullable for historical rows
+    # captured before this field existed.
+    reported_household_size = models.PositiveIntegerField(null=True, blank=True)
+
     address_narrative = models.TextField(blank=True)
 
     # GPS — decimal placeholders; upgrades to PostGIS PointField in a follow-up.
@@ -195,6 +202,13 @@ class Member(models.Model):
     father_alive_flag = models.BooleanField(null=True, blank=True)
     mother_line_number = models.PositiveSmallIntegerField(null=True, blank=True)
     father_line_number = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    # US-S11-044 — AC-ORPHAN-FLAG reads this. Captured by CAPI when
+    # both parents are marked deceased and the member is under 18.
+    # Nullable for backwards compatibility with historical rows;
+    # the DQA rule fires only when both parent flags are explicitly
+    # False (i.e. data was captured for both axes).
+    orphan_flag = models.BooleanField(null=True, blank=True)
 
     identification_documents = models.JSONField(default=list, blank=True)
 
