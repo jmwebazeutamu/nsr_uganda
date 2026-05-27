@@ -243,11 +243,14 @@ class TestNoPlusOne:
 
         with CaptureQueriesContext(connection) as ctx:
             recompute_for_household(hh, triggered_by="test", actor="t")
-        # Allow up to 20 to account for transaction overhead, the
-        # PMTResult insert, and the Household column write — the
-        # detail-table count (12) is the floor.
-        assert len(ctx.captured_queries) <= 20, (
-            f"got {len(ctx.captured_queries)} queries (expected ≤ 20):\n" +
+        # Allow up to 24 to account for transaction overhead, the
+        # PMTResult insert, the Household column write, and the
+        # US-S11-044 intra-household DQA gate (load rules + persist
+        # DqaEvaluation + AuditEvent ≈ 3 queries when the flag is on,
+        # which is the prod posture). The detail-table count (12)
+        # remains the N+1 floor.
+        assert len(ctx.captured_queries) <= 24, (
+            f"got {len(ctx.captured_queries)} queries (expected ≤ 24):\n" +
             "\n".join(q["sql"][:120] for q in ctx.captured_queries)
         )
 

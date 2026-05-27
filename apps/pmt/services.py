@@ -457,6 +457,23 @@ def recompute_for_household(
         )
         .get(pk=household.pk)
     )
+    # US-S11-044 — intra-household DQA at REGISTRY_POST_PROMOTE.
+    # Persist-only by stage policy (promotion already happened, so
+    # the gate cannot abort). The evaluation row + AuditEvent give
+    # UPD / triage a signal to chase if FLAG / BLOCK violations
+    # appeared after the fact (e.g. through a DIH replay).
+    from apps.dqa.pipeline import (
+        household_to_dqa_payload,
+        run_household_gate,
+    )
+
+    run_household_gate(
+        household_to_dqa_payload(household),
+        stage="registry_post_promote",
+        household_id=str(household.id),
+        actor=actor,
+    )
+
     score, band, snapshot = compute_pmt(household, model)
     result = PMTResult.objects.create(
         household=household, model_version=model,

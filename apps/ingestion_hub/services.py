@@ -156,6 +156,17 @@ def stage_from_landing(
     ConnectorRun.objects.filter(pk=landing.connector_run_id).update(
         records_staged=F("records_staged") + 1,
     )
+    # US-S11-044 — intra-household DQA at DIH_INGEST. Persist-only;
+    # never aborts (the queue is the triage surface). Skipped when
+    # DQA_INTRA_HOUSEHOLD_ENABLED is off.
+    from apps.dqa.pipeline import run_household_gate
+
+    run_household_gate(
+        canonical_payload,
+        stage="dih_ingest",
+        household_id=stage.provisional_registry_id,
+        actor="connector",
+    )
     return stage
 
 
@@ -462,6 +473,7 @@ def promote_stage_record(
     actor: str,
     action: str = PromotionAction.PROMOTE,
     reason: str = "",
+    override_reason: str = "",
 ) -> Household:
     """AC-DIH-PROMOTE-ATOMIC. Creates registry rows, transfers the
     provisional ID to confirmed status, writes lineage to landing +
@@ -486,6 +498,22 @@ def promote_stage_record(
         )
 
     payload = stage.canonical_payload or {}
+
+    # US-S11-044 — intra-household DQA gate at DIH_PROMOTE. BLOCK
+    # severity refuses promotion (DqaBlockError bubbles to caller).
+    # REJECT_WITH_OVERRIDE refuses unless override_reason was supplied
+    # (DqaRejectWithOverrideError otherwise). Skipped when the
+    # DQA_INTRA_HOUSEHOLD_ENABLED flag is off — the gate is a no-op.
+    from apps.dqa.pipeline import run_household_gate
+
+    run_household_gate(
+        payload,
+        stage="dih_promote",
+        household_id=stage.provisional_registry_id,
+        actor=actor,
+        override_reason=override_reason or None,
+    )
+
     geo_payload = payload.get("geographic", {})
 
     # Resolve the geographic ladder. The caller is expected to supply

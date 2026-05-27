@@ -86,6 +86,10 @@ class StageRecordSerializer(serializers.ModelSerializer):
 class PromoteRequestSerializer(serializers.Serializer):
     actor = serializers.CharField(max_length=64)
     reason = serializers.CharField(required=False, allow_blank=True)
+    # US-S11-044 — documented justification for clearing
+    # REJECT_WITH_OVERRIDE intra-household DQA violations during
+    # promotion. Recorded via dqa.household.override AuditEvent.
+    override_reason = serializers.CharField(required=False, allow_blank=True)
 
 
 class RejectRequestSerializer(serializers.Serializer):
@@ -508,9 +512,36 @@ class StageRecordViewSet(
         ser = PromoteRequestSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
         stage = self.get_object()
+        # US-S11-044 — pass override_reason through so the operator
+        # can clear REJECT_WITH_OVERRIDE violations with documented
+        # justification (audited via dqa.household.override).
+        from apps.dqa.pipeline import (
+            DqaBlockError,
+            DqaRejectWithOverrideError,
+        )
         try:
-            promote_stage_record(stage, actor=ser.validated_data["actor"],
-                                 reason=ser.validated_data.get("reason", ""))
+            promote_stage_record(
+                stage,
+                actor=ser.validated_data["actor"],
+                reason=ser.validated_data.get("reason", ""),
+                override_reason=ser.validated_data.get("override_reason", ""),
+            )
+        except DqaBlockError as e:
+            return Response(
+                {
+                    "detail": str(e), "kind": "dqa_block",
+                    "codes": e.codes, "evaluation_id": e.evaluation_id,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        except DqaRejectWithOverrideError as e:
+            return Response(
+                {
+                    "detail": str(e), "kind": "dqa_reject_with_override",
+                    "codes": e.codes, "evaluation_id": e.evaluation_id,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
         except DihError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         stage.refresh_from_db()
