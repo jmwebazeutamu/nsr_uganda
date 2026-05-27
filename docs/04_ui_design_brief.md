@@ -271,7 +271,23 @@ Use these exact labels. Do not invent variants.
 
 ### DQA severity
 
-`Blocking` (danger red), `Warning` (quality amber), `Info` (system grey).
+US-S11-044 expanded the vocabulary to four values. The legacy
+`Blocking` / `Warning` strings remain mapped for back-compat during
+the transition window (rewritten to `Block` / `Flag` by migration
+`dqa/0004_us_s11_044_intra_household_schema.py`).
+
+| Severity | Label | Token | Blocks Save | Use |
+|---|---|---|---|---|
+| `block` | Block | `status-danger` (red) | yes | Hard stop. Save / promotion refused. |
+| `reject_with_override` | Reject (override) | `status-danger-soft` (red, softer) | yes (overridable) | Refused by default; supervisor override with documented reason; override is audited via `dqa.household.override`. |
+| `flag` | Flag | `status-warning` (amber) | no | Saves; opens an UPD review case via `dqa.household.flag`. |
+| `info` | Info | `status-info` (system grey) | no | Logged for analytics; not surfaced unless the rule flags it. |
+
+The wizard reads `GET /api/v1/dqa/severity-vocabulary` once on mount
+and gates Save / Next on the `blocks_save` flag returned for the
+worst-severity failure. The household detail and Rule Editor use the
+same vocabulary so a chip means the same thing across all three
+surfaces.
 
 ### Sensitivity (DRS Field Selector)
 

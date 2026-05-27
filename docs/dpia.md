@@ -158,4 +158,56 @@ Signatories:
 
 ---
 
-End of DPIA initial draft v0.1.
+## 13. Addendum — US-S11-044 intra-household DQA (2026-05-27)
+
+### 13.1 Processing change
+
+US-S11-044 introduces an intra-household data-quality evaluator (DAT-DQA `apps.dqa.household_evaluator` + `apps.dqa.pipeline`) that runs at three points in the lifecycle of a household record:
+
+1. **DIH ingest** — when a connector mapping produces a `StageRecord`.
+2. **DIH promote** — when a `StageRecord` becomes a `Household` in the registry.
+3. **Registry post-promote** — invoked by `apps.pmt.services.recompute_for_household` immediately after promotion.
+
+Each evaluation produces a `DqaEvaluation` row (`apps.dqa.models.DqaEvaluation`) and emits a `dqa.household.evaluated` `AuditEvent` per SAD §8.4.
+
+### 13.2 New categories of personal data processed
+
+None. The evaluator operates on the same household + member payload the SAD has already authorised under §3. The new schema fields `Household.reported_household_size` and `Member.orphan_flag` are non-PII flags / counts; `Member.mother_line_number` and `Member.father_line_number` are intra-household integer pointers, not external identifiers.
+
+### 13.3 New persisted records
+
+| Table | Personal data referenced | Retention |
+|---|---|---|
+| `dqa_dqaevaluation` | `household_id` (FK by ID, no PII duplication); `results.offending_member_ids` may carry member ids/line-numbers | Same retention as the linked Household per §7 |
+| `security_auditevent` (existing) | One row per evaluation; refers to household by id only | Permanent (audit chain) |
+
+The `results` JSON column on `DqaEvaluation` records interpolated error messages. Templates are author-controlled (Rule Editor, dual-approval) and **must not** include free-form PII — only rule code, severity, and `offending_member_ids`. Compliance is the rule author's responsibility, with the DPO empowered to retire any rule whose template breaches this constraint.
+
+### 13.4 Data minimisation
+
+- The evaluator reads from the canonical household payload that has already been processed under existing lawful basis (SAD §4.6 fast-track + connector flow).
+- Override reasons captured under `dqa.household.override` are required to be operationally specific and may contain officer-supplied context — these are audited as supervisor decisions, not personal data about the data subject.
+- Vocabulary, rules, and evaluator outputs are queryable by household_id, rule_code, actor, and date window — supporting subject-access requests under §10 without surfacing payload contents to unauthorised actors (ABAC + audit).
+
+### 13.5 Security measures (delta from §8)
+
+- **Audit-on-everything**: every evaluation emits `dqa.household.evaluated`; every override emits `dqa.household.override`; every FLAG opens an `dqa.household.flag` for UPD triage. Audit fields reference personal data by id, not value.
+- **Feature flag**: the entire intra-household surface is gated on `DQA_INTRA_HOUSEHOLD_ENABLED`. Production deploy is staged behind the flag pending DPO sign-off on rule activation.
+- **Dual-approval**: every rule activation requires author ≠ approver (`apps.dqa.services.approve` returns 400 on self-approval) — already covered by §8 controls.
+- **No payload caching in the UI**: the wizard validation panel pulls live from `POST /api/v1/dqa/evaluate/household` on every field-edit batch; no localStorage / sessionStorage caching. The registry stays reconstructable from the audit chain.
+
+### 13.6 New residual risks
+
+| ID | Risk | Likelihood | Impact | Residual | Mitigation |
+|---|---|---|---|---|---|
+| R11 | Rule author writes a message template that interpolates raw PII (e.g. NIN literal) | M | M | L | Rule Editor enforces dual-approval; DPO retires offending rules; CI lint future-work to block `{nin}` / `{phone}` interpolations |
+| R12 | Override reasons accumulate sensitive operator context in the audit chain | L | M | L | Operator training; supervisor sees the audit on review |
+| R13 | `/dqa/evaluations/{household_id}` exposes results to operators outside the household's geographic scope | L | M | L | ABAC-scope the endpoint before flag-on in prod (P5 follow-up: route through `HouseholdIdScopedQuerysetMixin`) |
+
+### 13.7 Sign-off impact
+
+No new lawful-basis claim or subject-rights process is needed. The DPO MUST approve the initial rule catalog (the 8 INTRA_HOUSEHOLD rules seeded as DRAFT by `scripts/seed_dqa_intra_household_rules.py`) before any rule is moved to ACTIVE and the feature flag is enabled in production.
+
+---
+
+End of DPIA initial draft v0.1 + US-S11-044 addendum.
