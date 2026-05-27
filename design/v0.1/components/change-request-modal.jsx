@@ -122,6 +122,59 @@ const FIELDS_FLAT = (() => {
 const CATEGORY_BY_KEY = Object.fromEntries(CATEGORIES.map(c => [c.key, c]));
 
 // ────────────────────────────────────────────────────────────────
+// Live catalog fetch (US-S28-CATALOG)
+// ────────────────────────────────────────────────────────────────
+// The modal fetches /api/v1/upd/field-catalog/ on mount and uses the
+// response as the source of truth for category list, field metadata,
+// and SELECT options (resolved against the active ChoiceList version
+// for any field tagged `choice_list` in the backend catalog).
+//
+// On unreachable API (file:// preview, 401, network error) the hook
+// silently returns the hardcoded CATEGORIES so the design preview
+// keeps working. Same fall-through pattern as every other live-wired
+// screen in this codebase.
+const _liveCatalogToFlat = (categories) => {
+  const out = {};
+  for (const c of categories) {
+    for (const f of c.fields) {
+      out[`${c.key}:${f.key}`] = {
+        category: c.key, ...f, _categoryLabel: c.label, _tone: c.tone,
+      };
+    }
+  }
+  return out;
+};
+
+const useFieldCatalog = () => {
+  const [state, setState] = useCR({
+    categories: CATEGORIES,
+    fieldsFlat: FIELDS_FLAT,
+    source: "fallback",  // "fallback" | "live"
+  });
+  useECR(() => {
+    let cancelled = false;
+    fetch("/api/v1/upd/field-catalog/", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (cancelled) return;
+        const cats = Array.isArray(data?.categories) ? data.categories : null;
+        if (!cats || cats.length === 0) return;
+        setState({
+          categories: cats,
+          fieldsFlat: _liveCatalogToFlat(cats),
+          source: "live",
+        });
+      })
+      .catch(() => { /* keep fallback */ });
+    return () => { cancelled = true; };
+  }, []);
+  return state;
+};
+
+// ────────────────────────────────────────────────────────────────
 // Routing matrix — mirrors apps/update_workflow/routing.ROUTE_LABEL
 // ────────────────────────────────────────────────────────────────
 const ROUTING = {
@@ -154,8 +207,11 @@ const ENTITY_OPTIONS = [
 // Derive pmt_relevant from the picked rows. Any row whose catalog
 // entry is PMT-relevant → derived true. The operator's manual
 // Force-PMT checkbox can only raise (never lower) this.
-const derivePmt = (rows) => rows.some(r => {
-  const meta = FIELDS_FLAT[`${r.category}:${r.field}`];
+// `fieldsFlat` defaults to the module-level constant so the existing
+// unit tests can call derivePmt(rows) without passing the live
+// catalog; the component overrides it with the fetched catalog.
+const derivePmt = (rows, fieldsFlat = FIELDS_FLAT) => rows.some(r => {
+  const meta = fieldsFlat[`${r.category}:${r.field}`];
   return !!meta?.pmt;
 });
 
@@ -179,12 +235,19 @@ const RowInput = ({ meta, value, onChange, autoFocus }) => {
     if (autoFocus) inputRef.current?.focus();
   }, [autoFocus]);
   if (meta.type === "select") {
+    // Normalise options so the renderer works for both the legacy
+    // fallback shape (["Iron sheets", "Tiles", …]) and the live API
+    // shape ([{code: "01", label: "Iron sheets"}, …]). Wire value is
+    // always the `code`.
+    const options = (meta.options || []).map(o =>
+      typeof o === "string" ? { code: o, label: o } : o
+    );
     return (
       <select ref={inputRef} className="field-select"
         value={value} onChange={(e) => onChange(e.target.value)}
         style={{ width:"100%" }}>
         <option value="">Select…</option>
-        {meta.options.map(o => <option key={o} value={o}>{o}</option>)}
+        {options.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}
       </select>
     );
   }
@@ -538,13 +601,19 @@ const ChangeRequestModal = ({
     setMemberId("");
   }, [entity]);
 
+  // Live catalog from /api/v1/upd/field-catalog/ — falls back to the
+  // hardcoded CATEGORIES when the API is unreachable (file:// preview,
+  // 401, network error). Each render past mount uses whichever is in
+  // state; the fetch happens once per modal mount.
+  const liveCatalog = useFieldCatalog();
+
   // Visible catalog — household scope hides member-only fields and
   // vice versa. Categories that end up with zero fields after the
   // filter are dropped so the composer / tree don't show empty
   // headings.
   const visibleCategories = useMCR(() => {
     const wantMember = entity === "member";
-    return CATEGORIES
+    return liveCatalog.categories
       .map(c => ({
         ...c,
         fields: c.fields.filter(
@@ -552,17 +621,17 @@ const ChangeRequestModal = ({
         ),
       }))
       .filter(c => c.fields.length > 0);
-  }, [entity]);
+  }, [entity, liveCatalog.categories]);
 
   const visibleFieldsFlat = useMCR(() => {
     const out = {};
     for (const c of visibleCategories) {
       for (const f of c.fields) {
-        out[`${c.key}:${f.key}`] = FIELDS_FLAT[`${c.key}:${f.key}`];
+        out[`${c.key}:${f.key}`] = liveCatalog.fieldsFlat[`${c.key}:${f.key}`];
       }
     }
     return out;
-  }, [visibleCategories]);
+  }, [visibleCategories, liveCatalog.fieldsFlat]);
 
   // Effective current values — when a member is selected, merge that
   // member's snapshot on top of the household-level snapshot.
@@ -585,7 +654,12 @@ const ChangeRequestModal = ({
 
   // Auto-derived PMT-relevance. Force-PMT can raise but not lower:
   // when derivedPmt is true the checkbox is disabled and stays on.
-  const derivedPmt = useMCR(() => derivePmt(rows), [rows]);
+  // Reads the live fieldsFlat so a backend-tagged PMT change picks up
+  // without a redeploy.
+  const derivedPmt = useMCR(
+    () => derivePmt(rows, liveCatalog.fieldsFlat),
+    [rows, liveCatalog.fieldsFlat],
+  );
   const pmtRelevant = derivedPmt || forcePmt;
 
   const reviewerLabel = routeFor(changeType, pmtRelevant);
@@ -1033,7 +1107,7 @@ const ChangeRequestModal = ({
                 <div style={{display:"flex", flexWrap:"wrap", gap:8,
                               justifyContent:"center"}}>
                   {QUICK_ADDS.map(({ category, field }) => {
-                    const meta = FIELDS_FLAT[`${category}:${field}`];
+                    const meta = liveCatalog.fieldsFlat[`${category}:${field}`];
                     if (!meta) return null;
                     return (
                       <button key={`${category}:${field}`} type="button"
@@ -1056,7 +1130,7 @@ const ChangeRequestModal = ({
 
             {grouped.map(({ category, rows: groupRows }) => {
               const groupPmt = groupRows.some(r => {
-                const meta = FIELDS_FLAT[`${r.category}:${r.field}`];
+                const meta = liveCatalog.fieldsFlat[`${r.category}:${r.field}`];
                 return !!meta?.pmt;
               });
               return (
@@ -1083,7 +1157,7 @@ const ChangeRequestModal = ({
                   </div>
                   <div>
                     {groupRows.map(r => {
-                      const meta = FIELDS_FLAT[`${r.category}:${r.field}`];
+                      const meta = liveCatalog.fieldsFlat[`${r.category}:${r.field}`];
                       const rowKey = `${r.category}:${r.field}`;
                       const cv = effectiveCurrentValues[`${r.category}.${r.field}`];
                       const cvFormatted = formatCurrent(cv, meta);
@@ -1317,7 +1391,7 @@ const ChangeRequestModal = ({
             <div>
               <div className="t-cap" style={{marginBottom:4}}>Changes</div>
               {rows.map(r => {
-                const meta = FIELDS_FLAT[`${r.category}:${r.field}`];
+                const meta = liveCatalog.fieldsFlat[`${r.category}:${r.field}`];
                 const cv = effectiveCurrentValues[`${r.category}.${r.field}`];
                 return (
                   <div key={`${r.category}:${r.field}`} style={{
