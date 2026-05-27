@@ -113,6 +113,18 @@ const MOCK_DIH_ROWS = [
 // hardcoded numbers from the original mock were misleading once we
 // wired live data in S11-013).
 const QUICK_FILTERS = [
+  // State-based filters (US-S11-030) — every chip narrows to a single
+  // StageRecord.state. "Pending promotion" is the actionable bucket
+  // most operators want; the others surface what's blocked + why.
+  { id: "state_pending_promotion", label: "Pending promotion", icon: "checkCircle", tone: "eligibility",
+    predicate: r => r.state === "pending_promotion" },
+  { id: "state_idv_pending",       label: "IDV pending",       icon: "shield",      tone: "update",
+    predicate: r => r.state === "idv_pending" },
+  { id: "state_quality_failed",    label: "Quality failed",    icon: "alert",       tone: "quality",
+    predicate: r => r.state === "quality_failed" },
+  { id: "state_ddup_review",       label: "DDUP review",       icon: "duplicate",   tone: "danger",
+    predicate: r => r.state === "ddup_review" },
+  // Cross-cutting filters — SLA / DDUP score / DQA severity / "clean".
   { id: "sla24",  label: "SLA at risk (warn or breached)",   icon: "clock",     tone: "quality",
     predicate: r => r.sla === "warn" || r.sla === "crit" },
   { id: "ddup",   label: "Has DDUP match ≥ 0.90",            icon: "duplicate", tone: "danger",
