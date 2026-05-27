@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, PageHeader, KPI, useApi */
+/* global React, Icon, Chip, PageHeader, KPI, Modal, Field, Toast, useApi, nsrApi */
 // NSR MIS — Admin · Workflow · UPD routing rules
 // =========================================================
 // Operations-managed routing for ChangeRequest types. Replaces the
@@ -100,14 +100,44 @@ const _projectRoutingRules = (results) => {
 };
 
 const AdminUpdRoutingScreen = () => {
-  const [respRules] = (typeof useApi === "function")
+  const [respRules, respMeta] = (typeof useApi === "function")
     ? useApi("/api/v1/admin/workflow/upd-routing/")
-    : [null];
+    : [null, { refresh: () => {} }];
   // eslint-disable-next-line no-shadow
   const RR_RULES_LIVE = _projectRoutingRules(respRules && respRules.results) || RR_RULES;
 
   const [search, setSearch] = useStateRR("");
   const [roleFilter, setRoleFilter] = useStateRR("");
+  // US-S11-043 — Edit modal target + History drawer target. Both
+  // are nullable so the screen renders nothing when neither is open.
+  const [editTarget, setEditTarget] = useStateRR(null);
+  const [historyTarget, setHistoryTarget] = useStateRR(null);
+  const [toast, setToast] = useStateRR("");
+
+  // Export matrix as CSV — flat shape, one row per active rule.
+  const exportMatrix = () => {
+    const header = [
+      "change_type", "pmt_relevant", "required_role",
+      "sla_hours", "note",
+    ];
+    const rows = [header];
+    for (const r of RR_RULES_LIVE) {
+      rows.push([
+        r.changeType, r.pmtRelevant ? "true" : "false",
+        r.requiredRole, r.slaHours, r.note || "",
+      ]);
+    }
+    const csv = rows.map(row =>
+      row.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")
+    ).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `nsr-upd-routing-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   // Build the matrix: rows = change types, columns = (PMT-relevant, non-PMT).
   //
@@ -155,8 +185,14 @@ const AdminUpdRoutingScreen = () => {
         title="Change request routing"
         sub="Maps each (change_type × pmt_relevant) tuple to a required role and SLA. The constraint is unique-active per tuple — edits write a new active row and archive the previous one."
         right={<>
-          <button className="btn"><Icon name="download" size={14}/> Export matrix</button>
-          <button className="btn"><Icon name="history" size={14}/> History</button>
+          <button className="btn" onClick={exportMatrix}>
+            <Icon name="download" size={14}/> Export matrix
+          </button>
+          <button className="btn"
+                  onClick={() => setHistoryTarget({ changeType: null, pmtRelevant: null })}
+                  title="Browse every prior version of every routing rule">
+            <Icon name="history" size={14}/> History
+          </button>
         </>}
       />
 
@@ -217,10 +253,22 @@ const AdminUpdRoutingScreen = () => {
                     ? <span className="muted t-cap">n/a (auto)</span>
                     : <Chip size="sm" tone={vol.breachRate > 5 ? 'danger' : vol.breachRate > 3 ? 'quality' : 'data'}>{Number(vol.breachRate).toFixed(1)}%</Chip>}
                 </td>
-                <RuleCell rule={ruleFalse}/>
-                <RuleCell rule={ruleTrue} tint/>
+                <RuleCell rule={ruleFalse}
+                  onEdit={() => setEditTarget({
+                    changeType: ct.id, pmtRelevant: false, current: ruleFalse,
+                  })}/>
+                <RuleCell rule={ruleTrue} tint
+                  onEdit={() => setEditTarget({
+                    changeType: ct.id, pmtRelevant: true, current: ruleTrue,
+                  })}/>
                 <td className="col-actions">
-                  <button className="icon-btn" title="Edit routing"><Icon name="edit" size={13}/></button>
+                  <button className="icon-btn"
+                    title={`History for ${ct.id} (both PMT variants)`}
+                    onClick={() => setHistoryTarget({
+                      changeType: ct.id, pmtRelevant: null,
+                    })}>
+                    <Icon name="history" size={13}/>
+                  </button>
                 </td>
               </tr>
             ))}
@@ -242,23 +290,250 @@ const AdminUpdRoutingScreen = () => {
           If all rows are deleted, the system falls back to the <span className="t-mono">DEFAULT_MATRIX</span> constants in code.
         </div>
       </div>
+
+      {editTarget && (
+        <EditRoutingRuleModal
+          target={editTarget}
+          onClose={() => setEditTarget(null)}
+          onSaved={(newRow) => {
+            setEditTarget(null);
+            setToast(
+              `Updated ${newRow.changeType}/pmt=${newRow.pmtRelevant} `
+              + `→ ${RR_ROLE_LABEL[newRow.requiredRole]} · ${newRow.slaHours}h SLA. `
+              + `Previous version archived.`,
+            );
+            respMeta?.refresh && respMeta.refresh();
+          }}
+          onError={(msg) => setToast(`Save failed: ${msg}`)}
+        />
+      )}
+
+      {historyTarget && (
+        <RoutingHistoryDrawer
+          target={historyTarget}
+          onClose={() => setHistoryTarget(null)}
+        />
+      )}
+
+      <Toast message={toast} onDone={() => setToast("")}/>
     </div>
   );
 };
 
-const RuleCell = ({ rule, tint }) => {
-  if (!rule) return <td><span className="muted t-cap">— no rule</span></td>;
+const RuleCell = ({ rule, tint, onEdit }) => {
+  if (!rule) {
+    return (
+      <td style={tint ? { background: 'var(--accent-eligibility-bg, var(--neutral-50))' } : null}>
+        <div className="row gap-2">
+          <span className="muted t-cap">— no rule (falls back to DEFAULT_MATRIX)</span>
+          {onEdit && (
+            <button className="icon-btn" title="Create a rule for this tuple" onClick={onEdit}>
+              <Icon name="plus" size={12}/>
+            </button>
+          )}
+        </div>
+      </td>
+    );
+  }
   const isAuto = rule.requiredRole === "auto_committed";
   return (
     <td style={tint ? { background: 'var(--accent-eligibility-bg, var(--neutral-50))' } : null}>
-      <div className="row gap-2">
+      <div className="row gap-2" style={{alignItems:"center"}}>
         <Chip size="sm" tone={RR_ROLE_TONE[rule.requiredRole]}>{RR_ROLE_LABEL[rule.requiredRole]}</Chip>
         {isAuto
           ? <span className="t-cap" style={{ color: 'var(--accent-quality)' }}>auto-commit · 1% sample</span>
           : <span className="t-cap"><strong>{rule.slaHours}h SLA</strong></span>}
+        {onEdit && (
+          <button className="icon-btn"
+            style={{marginLeft:"auto", padding:"2px 4px"}}
+            title="Edit this routing rule (versioned — previous row is archived)"
+            onClick={onEdit}>
+            <Icon name="edit" size={12}/>
+          </button>
+        )}
       </div>
       {rule.note && <div className="t-cap mt-1" style={{ color: 'var(--neutral-600)' }}>{rule.note}</div>}
     </td>
+  );
+};
+
+
+// ── EditRoutingRuleModal (US-S11-043) ─────────────────────────────────
+// PATCHes the (change_type, pmt_relevant) tuple. Per the model's
+// versioned-write contract, the existing active row is archived and
+// a new one becomes active — operators can't accidentally destroy
+// version history.
+const EditRoutingRuleModal = ({ target, onClose, onSaved, onError }) => {
+  const { changeType, pmtRelevant, current } = target;
+  const [requiredRole, setRequiredRole] = useStateRR(current?.requiredRole || "cdo");
+  const [slaHours, setSlaHours] = useStateRR(String(current?.slaHours ?? 48));
+  const [note, setNote] = useStateRR(current?.note || "");
+  const [submitting, setSubmitting] = useStateRR(false);
+
+  const ctMeta = RR_CHANGE_TYPES.find(c => c.id === changeType) || {};
+  const isAuto = requiredRole === "auto_committed";
+  const slaNum = parseInt(slaHours, 10);
+  const canSave = !submitting && requiredRole
+    && (isAuto || (Number.isFinite(slaNum) && slaNum >= 0));
+
+  const save = async () => {
+    if (!canSave) return;
+    setSubmitting(true);
+    try {
+      const url = `/api/v1/admin/workflow/upd-routing/${changeType}/${pmtRelevant ? "true" : "false"}/`;
+      const payload = {
+        required_role: requiredRole,
+        sla_hours: isAuto ? 0 : slaNum,
+        note,
+      };
+      const r = await nsrApi.patch(url, payload);
+      setSubmitting(false);
+      onSaved({
+        changeType: r.change_type,
+        pmtRelevant: r.pmt_relevant,
+        requiredRole: r.required_role,
+        slaHours: r.sla_hours,
+        note: r.note,
+      });
+    } catch (err) {
+      setSubmitting(false);
+      const detail = (err && err.body && (err.body.detail
+        || JSON.stringify(err.body))) || err.message;
+      onError(detail);
+    }
+  };
+
+  return (
+    <Modal open={true} onClose={() => !submitting && onClose()}
+           title={`Edit routing · ${changeType} · PMT=${pmtRelevant}`} size="md">
+      <p className="t-bodysm muted" style={{marginTop:0, marginBottom:12}}>
+        {ctMeta.desc || ""}
+      </p>
+      <p className="t-bodysm" style={{
+        background:"var(--accent-update-bg)", padding:"8px 12px",
+        borderRadius:4, marginBottom:16, fontSize:12,
+      }}>
+        Versioned write — the current active row stays in the
+        history; this submit creates a new active row.
+      </p>
+
+      <Field label="Required role">
+        <select value={requiredRole} onChange={e => setRequiredRole(e.target.value)}
+                disabled={submitting}>
+          {RR_ROLES.map(r => (
+            <option key={r} value={r}>{RR_ROLE_LABEL[r]}</option>
+          ))}
+        </select>
+      </Field>
+
+      <Field label={isAuto
+        ? "SLA hours (auto-committed has SLA=0)"
+        : "SLA hours"}>
+        <input
+          type="number" min={0} max={720}
+          value={isAuto ? "0" : slaHours}
+          onChange={e => setSlaHours(e.target.value)}
+          disabled={submitting || isAuto}
+          placeholder="hours (e.g. 24, 48, 72)"
+        />
+      </Field>
+
+      <Field label="Note (operator visible — captured on the new active row)">
+        <textarea
+          value={note} onChange={e => setNote(e.target.value)}
+          rows={2} disabled={submitting}
+          placeholder="e.g. raised from 48h to 72h during Q1 onboarding backlog"
+        />
+      </Field>
+
+      <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
+        <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
+        <button className="btn btn-primary" onClick={save} disabled={!canSave}>
+          {submitting ? "Saving…" : "Save (versioned)"}
+        </button>
+      </div>
+    </Modal>
+  );
+};
+
+
+// ── RoutingHistoryDrawer (US-S11-043) ─────────────────────────────────
+// Read-only timeline of UpdRoutingRule versions. When `target.changeType`
+// is set the history is scoped to that tuple; null = all history.
+const RoutingHistoryDrawer = ({ target, onClose }) => {
+  const [rows, setRows] = useStateRR(null);
+  const [error, setError] = useStateRR("");
+
+  React.useEffect(() => {
+    const qs = new URLSearchParams();
+    if (target.changeType) qs.set("change_type", target.changeType);
+    if (target.pmtRelevant !== null && target.pmtRelevant !== undefined) {
+      qs.set("pmt_relevant", target.pmtRelevant ? "true" : "false");
+    }
+    const url = `/api/v1/admin/workflow/upd-routing/history/?${qs.toString()}`;
+    nsrApi.get(url)
+      .then(body => setRows(body.results || []))
+      .catch(err => setError(err.message || String(err)));
+  }, [target]);
+
+  const title = target.changeType
+    ? `History · ${target.changeType}${target.pmtRelevant !== null ? ` · PMT=${target.pmtRelevant}` : ""}`
+    : "Routing matrix · history";
+
+  return (
+    <Modal open={true} onClose={onClose} title={title} size="lg">
+      {error && (
+        <p className="t-bodysm" style={{color:"var(--accent-danger)"}}>{error}</p>
+      )}
+      {rows === null && !error && (
+        <p className="t-bodysm muted">Loading…</p>
+      )}
+      {rows !== null && rows.length === 0 && (
+        <p className="t-bodysm muted">No history rows for this scope.</p>
+      )}
+      {rows && rows.length > 0 && (
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>Change type</th>
+              <th>PMT</th>
+              <th>Required role</th>
+              <th>SLA</th>
+              <th>Active</th>
+              <th>Updated</th>
+              <th>Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i}>
+                <td className="t-mono" style={{fontSize:12}}>{r.change_type}</td>
+                <td>
+                  <Chip size="sm" tone={r.pmt_relevant ? "eligibility" : "neutral"}>
+                    {r.pmt_relevant ? "true" : "false"}
+                  </Chip>
+                </td>
+                <td>
+                  <Chip size="sm" tone={RR_ROLE_TONE[r.required_role]}>
+                    {RR_ROLE_LABEL[r.required_role] || r.required_role}
+                  </Chip>
+                </td>
+                <td className="t-num">{r.sla_hours}h</td>
+                <td>
+                  {r.is_active
+                    ? <Chip size="sm" tone="data">active</Chip>
+                    : <Chip size="sm" tone="neutral">archived</Chip>}
+                </td>
+                <td className="t-cap">
+                  {(r.updated_at || "").slice(0, 16).replace("T", " ")}
+                </td>
+                <td className="t-cap">{r.note || ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Modal>
   );
 };
 
