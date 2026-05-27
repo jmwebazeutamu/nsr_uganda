@@ -362,7 +362,7 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
                   title="Edit name, summary, disbursement, webhook (PATCH /api/v1/programmes/{id}/)">
             <Icon name="edit" size={14}/> Edit
           </button>
-          {p.status !== "draft" && p.status !== "closed" && (
+          {p.statusCode !== "draft" && p.statusCode !== "closed" && (
             <button className="btn"
                     style={{color:"var(--accent-quality)"}}
                     onClick={() => setCloseOpen(true)}
@@ -370,7 +370,7 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
               <Icon name="archive" size={14}/> Close
             </button>
           )}
-          {p.status === "draft" && (
+          {p.statusCode === "draft" && (
             <button className="btn"
                     style={{color:"var(--accent-danger)"}}
                     onClick={() => setDeleteOpen(true)}
