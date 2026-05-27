@@ -32,10 +32,57 @@ const _projectDqaRules = (results) => {
     approvedBy: r.approved_by || null,
     approvedAt: r.approved_at ? String(r.approved_at).slice(0, 10) : null,
     submittedAt: r.submitted_at ? String(r.submitted_at).slice(0, 10) : null,
+    // US-S11-044 — intra-household fields. Default to undefined for
+    // legacy rules so the screen still renders cleanly without them.
+    category: r.category || null,
+    scope: r.scope || null,
+    expressionType: r.expression_type || null,
+    stages: Array.isArray(r.stages) ? r.stages : [],
+    parameters: r.parameters || {},
+    appliesTo: r.applies_to || {},
+    testFixtures: Array.isArray(r.test_fixtures) ? r.test_fixtures : [],
+    messageTemplateI18nKey: r.message_template_i18n_key || "",
+    expression: r.expression || null,
+    errorMessageTemplate: r.error_message_template || "",
   }));
 };
 
-const DQA_SEVERITY_TONE = { blocking: "danger", warning: "quality", info: "data" };
+// US-S11-044 severity vocabulary (block / reject_with_override / flag /
+// info). Legacy values (blocking / warning) remain mapped for back-
+// compat until the P2 cleanup commit ships and seeded rows are
+// rewritten.
+const DQA_SEVERITY_TONE = {
+  block: "danger",
+  reject_with_override: "danger",
+  flag: "quality",
+  info: "data",
+  // Legacy aliases.
+  blocking: "danger",
+  warning: "quality",
+};
+
+const DQA_SEVERITY_LABEL = {
+  block: "Block",
+  reject_with_override: "Reject (override)",
+  flag: "Flag",
+  info: "Info",
+  blocking: "Blocking (legacy)",
+  warning: "Warning (legacy)",
+};
+
+const DQA_STAGE_LABEL = {
+  dih_ingest: "DIH ingest",
+  dih_promote: "DIH promote",
+  registry_post_promote: "Post-promote",
+};
+
+const DQA_CATEGORY_LABEL = {
+  intra_household: "Intra-household",
+  field_level: "Field-level",
+  geographic: "Geographic",
+  identity: "Identity",
+  duplicate: "Duplicate",
+};
 const DQA_STATUS_TONE = {
   draft: "quality", pending_approval: "update", active: "data",
   retired: "neutral", rejected: "danger",
@@ -162,7 +209,7 @@ const AdminDqaRulesScreen = () => {
                   <div className="t-mono" style={{ fontWeight: 600, fontSize: 12.5 }}>{r.ruleId}</div>
                   <div className="t-cap">v{r.latestVersion}</div>
                 </td>
-                <td><Chip size="sm" tone={DQA_SEVERITY_TONE[r.severity]}>{r.severity}</Chip></td>
+                <td><Chip size="sm" tone={DQA_SEVERITY_TONE[r.severity]}>{DQA_SEVERITY_LABEL[r.severity] || r.severity}</Chip></td>
                 <td><Chip size="sm" tone={DQA_STATUS_TONE[r.status]}>{r.status.replace("_", " ")}</Chip></td>
                 <td className="t-bodysm" style={{ maxWidth: 360 }}>{r.description}</td>
                 <td>
@@ -226,7 +273,7 @@ const DqaRuleDetail = ({ rule, onBack }) => {
         <div style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 16 }}>
           <div>
             <div className="t-cap">Severity</div>
-            <Chip tone={DQA_SEVERITY_TONE[rule.severity]} style={{ marginTop: 4 }}>{rule.severity}</Chip>
+            <Chip tone={DQA_SEVERITY_TONE[rule.severity]} style={{ marginTop: 4 }}>{DQA_SEVERITY_LABEL[rule.severity] || rule.severity}</Chip>
           </div>
           <div>
             <div className="t-cap">Status</div>
@@ -246,7 +293,13 @@ const DqaRuleDetail = ({ rule, onBack }) => {
 
       <div role="tablist" style={{ display: 'flex', borderBottom: '1px solid var(--neutral-300)', marginTop: 16, flexWrap: 'wrap' }}>
         {[
-          { id: "expression", label: "Expression (DSL)" },
+          { id: "expression",      label: "Expression (DSL)" },
+          // US-S11-044 — only show the intra-household tab when the
+          // rule actually carries the category. Legacy rules without
+          // category data hide it cleanly.
+          ...(rule.category === "intra_household"
+            ? [{ id: "intra_household", label: "Intra-household details" }]
+            : []),
           { id: "preview",    label: "Preview & sample failures" },
           { id: "lifecycle",  label: "Lifecycle & approval" },
           { id: "history",    label: "Version history" },
@@ -279,7 +332,91 @@ const DqaRuleDetail = ({ rule, onBack }) => {
             overflow: 'auto', whiteSpace: 'pre-wrap',
             fontFamily: 'var(--font-mono)', lineHeight: 1.55,
             borderBottomLeftRadius: 4, borderBottomRightRadius: 4,
-          }}>{JSON.stringify(sampleExpression, null, 2)}</pre>
+          }}>{JSON.stringify(rule.expression || sampleExpression, null, 2)}</pre>
+        </div>
+      )}
+
+      {tab === "intra_household" && (
+        <div className="card" style={{ borderTopLeftRadius: 0, borderTopRightRadius: 0, padding: 20 }}>
+          <div className="grid grid-2" style={{ gap: 16, marginBottom: 18 }}>
+            <div>
+              <div className="t-cap">Category</div>
+              <Chip style={{ marginTop: 4 }}>{DQA_CATEGORY_LABEL[rule.category] || rule.category || '—'}</Chip>
+            </div>
+            <div>
+              <div className="t-cap">Scope</div>
+              <Chip style={{ marginTop: 4 }}>{rule.scope || '—'}</Chip>
+            </div>
+            <div>
+              <div className="t-cap">Expression type</div>
+              <Chip style={{ marginTop: 4 }}>{rule.expressionType || '—'}</Chip>
+            </div>
+            <div>
+              <div className="t-cap">Stages</div>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                {(rule.stages || []).length === 0 && <span className="t-bodysm muted">—</span>}
+                {(rule.stages || []).map(s => (
+                  <Chip key={s} size="sm">{DQA_STAGE_LABEL[s] || s}</Chip>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <h4 className="t-h3" style={{ margin: '0 0 8px' }}>Parameters</h4>
+          <pre style={{
+            margin: '0 0 18px', padding: 12, fontSize: 12,
+            background: 'var(--neutral-50)', color: 'var(--neutral-900)',
+            border: '1px solid var(--neutral-200)', borderRadius: 4,
+            fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap',
+          }}>{Object.keys(rule.parameters || {}).length === 0 ? '— none —' : JSON.stringify(rule.parameters, null, 2)}</pre>
+
+          <h4 className="t-h3" style={{ margin: '0 0 8px' }}>Applies to (watched fields)</h4>
+          <div className="t-bodysm muted" style={{ marginBottom: 6 }}>
+            Wizard subscribes only to rules whose watched fields overlap the edited field.
+          </div>
+          <pre style={{
+            margin: '0 0 18px', padding: 12, fontSize: 12,
+            background: 'var(--neutral-50)', color: 'var(--neutral-900)',
+            border: '1px solid var(--neutral-200)', borderRadius: 4,
+            fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap',
+          }}>{Object.keys(rule.appliesTo || {}).length === 0 ? '— none —' : JSON.stringify(rule.appliesTo, null, 2)}</pre>
+
+          <h4 className="t-h3" style={{ margin: '0 0 8px' }}>Test fixtures</h4>
+          <div className="t-bodysm muted" style={{ marginBottom: 8 }}>
+            Pass/fail fixtures run on every save. CI mirrors these against the seed to catch DSL typos.
+          </div>
+          {(rule.testFixtures || []).length === 0
+            ? <div className="t-bodysm muted">— none defined —</div>
+            : <table className="tbl" style={{ boxShadow: 'none' }}>
+                <thead><tr><th>#</th><th>Expected</th><th>Input (preview)</th></tr></thead>
+                <tbody>
+                  {rule.testFixtures.map((f, i) => (
+                    <tr key={i}>
+                      <td className="t-num">{i + 1}</td>
+                      <td>
+                        <Chip size="sm" tone={f.expected_outcome === 'pass' ? 'data' : f.expected_outcome === 'fail' ? 'danger' : 'quality'}>
+                          {f.expected_outcome}
+                        </Chip>
+                      </td>
+                      <td className="t-mono t-bodysm" style={{ maxWidth: 480, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {JSON.stringify(f.input).slice(0, 120)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>}
+          {(rule.testFixtures || []).length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <button className="btn btn-sm btn-primary"><Icon name="play" size={12}/> Run fixtures against current expression</button>
+            </div>
+          )}
+
+          {rule.messageTemplateI18nKey && (
+            <>
+              <h4 className="t-h3" style={{ margin: '18px 0 6px' }}>i18n key</h4>
+              <code className="t-mono">{rule.messageTemplateI18nKey}</code>
+            </>
+          )}
         </div>
       )}
 
