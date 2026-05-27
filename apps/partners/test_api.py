@@ -263,7 +263,9 @@ class TestPartnerDelete:
         )
         r = api.delete(f"{URL}{p.id}/")
         assert r.status_code == 400
-        assert "1 DSA(s)" in r.json()["detail"]
+        # US-S11-040 — draft DSAs are non-terminal and still block.
+        # Message changed to "active DSA(s)" wording.
+        assert "1 active DSA(s)" in r.json()["detail"]
         assert Partner.objects.filter(id=p.id).exists()
 
     def test_delete_partner_with_programme_is_rejected(self, api, settings):
@@ -278,7 +280,7 @@ class TestPartnerDelete:
         )
         r = api.delete(f"{URL}{p.id}/")
         assert r.status_code == 400
-        assert "1 programme(s)" in r.json()["detail"]
+        assert "1 active programme(s)" in r.json()["detail"]
 
     def test_delete_gated_by_write_flag(self, api, settings):
         settings.PARTNERS_MODULE_ENABLED = False
@@ -331,3 +333,150 @@ class TestDsaDelete:
         assert r.status_code == 400
         assert "status is 'active'" in r.json()["detail"]
         assert DataSharingAgreement.objects.filter(id=dsa.id).exists()
+
+
+# --- US-S11-040 — DSA suspend + cascade Partner delete --------------------
+
+@pytest.mark.django_db
+class TestDsaSuspend:
+    """POST /api/v1/dsas/{id}/suspend/ — lifecycle close for active /
+    expired agreements. Audit-bearing. Refused on draft (use Delete)
+    and on already-terminal states."""
+
+    def test_suspend_active_succeeds(self, api, settings):
+        settings.PARTNERS_MODULE_ENABLED = True
+        p = Partner.objects.create(
+            code="SUS1", name="A", type="ministry",
+            sector="social_protection", status="active", tone="primary",
+        )
+        dsa = DataSharingAgreement.objects.create(
+            partner=p, reference="DSA-SUS-001", status="active", version=1,
+            effective_from=_delete_date(2026, 1, 1),
+            effective_to=_delete_date(2027, 1, 1),
+        )
+        r = api.post(
+            f"/api/v1/dsas/{dsa.id}/suspend/",
+            {"reason": "partner withdrew"}, format="json",
+        )
+        assert r.status_code == 200, r.content
+        assert r.json()["status"] == "suspended"
+        dsa.refresh_from_db()
+        assert dsa.status == "suspended"
+        ev = AuditEvent.objects.filter(
+            action="partners.dsa.suspended", entity_id=str(dsa.id),
+        ).first()
+        assert ev is not None
+        assert ev.field_changes["from_status"] == "active"
+        assert ev.field_changes["to_status"] == "suspended"
+        assert "withdrew" in ev.reason
+
+    def test_suspend_expired_succeeds(self, api, settings):
+        settings.PARTNERS_MODULE_ENABLED = True
+        p = Partner.objects.create(
+            code="SUS2", name="B", type="ministry",
+            sector="social_protection", status="active", tone="primary",
+        )
+        dsa = DataSharingAgreement.objects.create(
+            partner=p, reference="DSA-SUS-002", status="expired", version=1,
+            effective_from=_delete_date(2024, 1, 1),
+            effective_to=_delete_date(2025, 1, 1),
+        )
+        r = api.post(f"/api/v1/dsas/{dsa.id}/suspend/", {"reason": "x"}, format="json")
+        assert r.status_code == 200
+
+    def test_suspend_draft_is_rejected(self, api, settings):
+        settings.PARTNERS_MODULE_ENABLED = True
+        p = Partner.objects.create(
+            code="SUS3", name="C", type="ministry",
+            sector="social_protection", status="active", tone="primary",
+        )
+        dsa = DataSharingAgreement.objects.create(
+            partner=p, reference="DSA-SUS-003", status="draft", version=1,
+            effective_from=_delete_date(2026, 1, 1),
+            effective_to=_delete_date(2027, 1, 1),
+        )
+        r = api.post(f"/api/v1/dsas/{dsa.id}/suspend/", {"reason": "x"}, format="json")
+        assert r.status_code == 400
+        assert "status is 'draft'" in r.json()["detail"]
+
+
+@pytest.mark.django_db
+class TestPartnerDeleteCascade:
+    """US-S11-040 — Partner delete cascades through terminal DSAs +
+    closed Programmes + all Contacts; only ACTIVE downstream rows
+    still block. Lets operators wind down a partnership end-to-end."""
+
+    def test_cascade_through_suspended_dsa(self, api, settings):
+        settings.PARTNERS_MODULE_ENABLED = True
+        p = Partner.objects.create(
+            code="WIND1", name="Wind down", type="ministry",
+            sector="social_protection", status="active", tone="primary",
+        )
+        dsa = DataSharingAgreement.objects.create(
+            partner=p, reference="DSA-WIND-001", status="suspended", version=1,
+            effective_from=_delete_date(2026, 1, 1),
+            effective_to=_delete_date(2027, 1, 1),
+        )
+        r = api.delete(f"{URL}{p.id}/")
+        assert r.status_code == 204, r.content
+        assert not Partner.objects.filter(id=p.id).exists()
+        assert not DataSharingAgreement.objects.filter(id=dsa.id).exists()
+        ev = AuditEvent.objects.filter(
+            action="partners.partner.deleted", entity_id=str(p.id),
+        ).first()
+        assert ev is not None
+        assert "DSA-WIND-001" in ev.field_changes["cascaded_dsa_refs"]
+
+    def test_cascade_through_closed_programme(self, api, settings):
+        settings.PARTNERS_MODULE_ENABLED = True
+        p = Partner.objects.create(
+            code="WIND2", name="Wind down 2", type="ministry",
+            sector="social_protection", status="active", tone="primary",
+        )
+        prog = Programme.objects.create(
+            partner=p, code="WIND-PG-01", name="Closed cohort",
+            kind="cash_transfer", status="closed",
+        )
+        r = api.delete(f"{URL}{p.id}/")
+        assert r.status_code == 204
+        assert not Programme.objects.filter(id=prog.id).exists()
+
+    def test_active_dsa_still_blocks(self, api, settings):
+        settings.PARTNERS_MODULE_ENABLED = True
+        p = Partner.objects.create(
+            code="STILL", name="Still live", type="ministry",
+            sector="social_protection", status="active", tone="primary",
+        )
+        DataSharingAgreement.objects.create(
+            partner=p, reference="DSA-STILL-001", status="active", version=1,
+            effective_from=_delete_date(2026, 1, 1),
+            effective_to=_delete_date(2027, 1, 1),
+        )
+        r = api.delete(f"{URL}{p.id}/")
+        assert r.status_code == 400
+        assert "1 active DSA(s)" in r.json()["detail"]
+        assert Partner.objects.filter(id=p.id).exists()
+
+    def test_mixed_terminal_and_active_blocks_only_on_active(self, api, settings):
+        # Operator wound down DSA-A (suspended) but DSA-B is still
+        # active — delete must still refuse, only naming the active.
+        settings.PARTNERS_MODULE_ENABLED = True
+        p = Partner.objects.create(
+            code="MIX", name="Mixed", type="ministry",
+            sector="social_protection", status="active", tone="primary",
+        )
+        DataSharingAgreement.objects.create(
+            partner=p, reference="DSA-MIX-A", status="suspended", version=1,
+            effective_from=_delete_date(2026, 1, 1),
+            effective_to=_delete_date(2027, 1, 1),
+        )
+        DataSharingAgreement.objects.create(
+            partner=p, reference="DSA-MIX-B", status="active", version=1,
+            effective_from=_delete_date(2026, 1, 1),
+            effective_to=_delete_date(2027, 1, 1),
+        )
+        r = api.delete(f"{URL}{p.id}/")
+        assert r.status_code == 400
+        assert "1 active DSA(s)" in r.json()["detail"]
+        # Both DSAs survive — no partial cleanup.
+        assert DataSharingAgreement.objects.filter(partner=p).count() == 2

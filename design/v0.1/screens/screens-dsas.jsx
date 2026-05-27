@@ -39,6 +39,10 @@ const DSA_STATUS_BY_ID = Object.fromEntries(DSA_STATUSES.map(s => [s.id, s]));
 const _DSA_EDITABLE = new Set(["draft", "active"]);
 const _DSA_SUBMITTABLE = new Set(["draft"]);
 const _DSA_RENEWABLE = new Set(["active", "expiring", "expired"]);
+// US-S11-040 — Suspend is available when the DSA is operationally
+// live (active) or naturally aged out (expired). Drafts use Delete,
+// renewed DSAs are already terminal (superseded by v+1).
+const _DSA_SUSPENDABLE = new Set(["active", "expired"]);
 
 // Days-until-expiry helper. Returns null when effective_to is
 // missing or unparseable. Negative numbers mean "already expired".
@@ -316,6 +320,7 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
   // draft (effective_to, monthly_row_budget, breach_sla_hours, etc).
   const [editOpen, setEditOpen] = useSDsa(false);
   const [deleteOpen, setDeleteOpen] = useSDsa(false);
+  const [suspendOpen, setSuspendOpen] = useSDsa(false);
   const [toast, setToast] = useSDsa("");
 
   if (!dsaId) {
@@ -373,6 +378,14 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
           {_DSA_RENEWABLE.has(d.status) && (
             <button className="btn" onClick={() => setRenewOpen(true)}>
               <Icon name="refresh" size={13}/> Renew
+            </button>
+          )}
+          {_DSA_SUSPENDABLE.has(d.status) && (
+            <button className="btn"
+                    style={{color:"var(--accent-quality)"}}
+                    onClick={() => setSuspendOpen(true)}
+                    title="Suspend the DSA so the partner can be wound down (POST /api/v1/dsas/{id}/suspend/)">
+              <Icon name="pause" size={13}/> Suspend
             </button>
           )}
           {d.status === "draft" && (
@@ -586,6 +599,18 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
             dsaMeta.refresh();
           }
         }}
+      />
+
+      <DsaSuspendConfirm
+        open={suspendOpen}
+        dsa={d}
+        onClose={() => setSuspendOpen(false)}
+        onSuspended={() => {
+          setSuspendOpen(false);
+          setToast(`Suspended ${d.reference} — audit chain updated.`);
+          dsaMeta.refresh();
+        }}
+        onError={(msg) => setToast(`Suspend failed: ${msg}`)}
       />
 
       <DsaEditDetailsModal
@@ -809,6 +834,64 @@ const DsaDeleteDraftConfirm = ({ open, dsa, onClose, onDeleted, onError }) => {
           onClick={fire} disabled={!isDraft || submitting || !reason.trim()}
         >
           {submitting ? "Deleting…" : "Delete draft"}
+        </button>
+      </div>
+    </Modal>
+  );
+};
+
+
+// ════════════════════════════════════════════════════════════════
+// 2d. Suspend modal — wraps POST /api/v1/dsas/{id}/suspend/ (US-S11-040)
+//
+// Lifecycle close — moves active/expired DSAs to status='suspended'
+// so the Partner can be wound down. Audit-bearing on the server side.
+// ════════════════════════════════════════════════════════════════
+
+const DsaSuspendConfirm = ({ open, dsa, onClose, onSuspended, onError }) => {
+  const [reason, setReason] = useSDsa("");
+  const [submitting, setSubmitting] = useSDsa(false);
+  React.useEffect(() => { if (open) setReason(""); }, [open]);
+  if (!open || !dsa) return null;
+
+  const fire = async () => {
+    setSubmitting(true);
+    try {
+      await nsrApi.post(`/api/v1/dsas/${dsa.id}/suspend/`, {
+        reason: reason.trim(),
+      });
+      setSubmitting(false);
+      onSuspended();
+    } catch (err) {
+      setSubmitting(false);
+      const detail = (err && err.body && (err.body.detail
+        || JSON.stringify(err.body))) || err.message;
+      onError(detail);
+    }
+  };
+
+  return (
+    <Modal open={true} onClose={() => !submitting && onClose()}
+           title={`Suspend ${dsa.reference}?`} size="sm">
+      <p className="t-bodysm" style={{margin:"4px 0 12px"}}>
+        Marks the DSA as <strong>suspended</strong>. Programmes that
+        reference this DSA stop accepting new enrolments. The audit
+        chain captures the operator + reason; the row stays queryable
+        but won't block a Partner delete once all DSAs are terminal.
+      </p>
+      <Field label="Reason (audit-bearing)">
+        <textarea value={reason} onChange={e => setReason(e.target.value)}
+                  rows={2} disabled={submitting}
+                  placeholder="e.g. Partner withdrew from MGLSD framework; winding down."/>
+      </Field>
+      <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
+        <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
+        <button
+          className="btn"
+          style={{background:"var(--accent-quality)", color:"white", borderColor:"var(--accent-quality)"}}
+          onClick={fire} disabled={submitting || !reason.trim()}
+        >
+          {submitting ? "Suspending…" : "Suspend DSA"}
         </button>
       </div>
     </Modal>

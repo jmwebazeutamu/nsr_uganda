@@ -22,6 +22,7 @@ from django.conf import settings
 from django.db.models import Count, Sum
 from drf_spectacular.utils import (
     OpenApiParameter,
+    OpenApiResponse,
     OpenApiTypes,
     extend_schema,
     extend_schema_view,
@@ -111,44 +112,98 @@ class PartnerViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
     # DSA/Programme/Contact still references the partner (US-S11-039).
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
+    # US-S11-040 — DSA statuses that count as terminal (no longer
+    # operationally live). Active drafts, pending signatures, and
+    # active agreements block partner-delete; suspended/expired/renewed
+    # don't — they cascade with the partner so the operator can wind
+    # down a partnership without forever-orphaned rows.
+    _DSA_TERMINAL_STATUSES = ("suspended", "expired", "renewed")
+    _PROGRAMME_TERMINAL_STATUSES = ("closed",)
+
     def destroy(self, request, *args, **kwargs):
-        """Hard-delete only when no DSAs, Programmes, or PartnerContacts
-        still reference the partner — those FKs are PROTECT at the
-        model level, so a naive .delete() raises IntegrityError. We
-        pre-empt that with a count check so the operator sees a clean
-        4xx instead of a 500."""
+        """Cascade-aware hard-delete. Only ACTIVE downstream rows
+        block (DSAs not in suspended/expired/renewed, Programmes
+        not in closed). Terminal rows + all Contacts are cascaded
+        inside an atomic transaction so the partner record can
+        actually be removed once the operator has wound it down."""
+        from django.db import transaction
         from django.db.models import ProtectedError
+
         partner = self.get_object()
+        active_dsas = partner.dsas.exclude(
+            status__in=self._DSA_TERMINAL_STATUSES,
+        )
+        active_progs = Programme.objects.filter(partner=partner).exclude(
+            status__in=self._PROGRAMME_TERMINAL_STATUSES,
+        )
         blockers = []
-        dsa_count = partner.dsas.count()
-        prog_count = Programme.objects.filter(partner=partner).count()
-        contact_count = partner.contacts.count()
-        if dsa_count:
-            blockers.append(f"{dsa_count} DSA(s)")
-        if prog_count:
-            blockers.append(f"{prog_count} programme(s)")
-        if contact_count:
-            blockers.append(f"{contact_count} contact(s)")
+        n_dsa = active_dsas.count()
+        n_prog = active_progs.count()
+        if n_dsa:
+            blockers.append(f"{n_dsa} active DSA(s)")
+        if n_prog:
+            blockers.append(f"{n_prog} active programme(s)")
         if blockers:
             return Response(
                 {"detail": (
                     f"Cannot delete partner {partner.code} — referenced by "
-                    + ", ".join(blockers) + ". Close / reassign the dependent "
-                    "rows first."
+                    + ", ".join(blockers) + ". Suspend the DSAs (Suspend "
+                    "button) and close the Programmes (Close button) "
+                    "first; terminal rows then cascade with the partner."
                 )},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
         actor = (getattr(request.user, "username", "") or "").strip() or "admin"
+        reason = (
+            (request.data.get("reason") or "")
+            if hasattr(request, "data") else ""
+        )
+
+        # Snapshot the cascade footprint for the audit event so the
+        # row counts survive the deletion.
+        terminal_dsa_refs = list(
+            partner.dsas.filter(status__in=self._DSA_TERMINAL_STATUSES)
+            .values_list("reference", flat=True),
+        )
+        terminal_prog_codes = list(
+            Programme.objects.filter(
+                partner=partner, status__in=self._PROGRAMME_TERMINAL_STATUSES,
+            ).values_list("code", flat=True),
+        )
+        contact_count = partner.contacts.count()
+
         emit_audit(
             "partners.partner.deleted", "partner", str(partner.id),
-            actor=actor,
-            reason=request.data.get("reason", "") if hasattr(request, "data") else "",
+            actor=actor, reason=reason,
+            field_changes={
+                "code": partner.code, "name": partner.name,
+                "cascaded_dsa_refs": terminal_dsa_refs,
+                "cascaded_programme_codes": terminal_prog_codes,
+                "cascaded_contact_count": contact_count,
+            },
         )
         try:
-            partner.delete()
-        except ProtectedError as exc:  # defensive — count check should have caught it
+            with transaction.atomic():
+                # Cascade through terminal DSAs + their dependents,
+                # terminal Programmes, and all Contacts. Each model's
+                # own dependents (e.g. DsaSignature, ProgrammeSignOff)
+                # cascade or get deleted by their own on_delete rules.
+                partner.dsas.filter(
+                    status__in=self._DSA_TERMINAL_STATUSES,
+                ).delete()
+                Programme.objects.filter(
+                    partner=partner,
+                    status__in=self._PROGRAMME_TERMINAL_STATUSES,
+                ).delete()
+                partner.contacts.all().delete()
+                partner.delete()
+        except ProtectedError as exc:
             return Response(
-                {"detail": f"Cannot delete: {exc}"},
+                {"detail": (
+                    f"Cannot delete: {exc}. Other rows still reference "
+                    "this partner that the cascade can't unblock."
+                )},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
@@ -695,6 +750,56 @@ class DsaViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return Response(self.get_serializer(result).data)
+
+    @extend_schema(
+        tags=["partners"],
+        summary="Suspend a DSA (US-S11-040)",
+        description=(
+            "Lifecycle close — moves an active or expired DSA to "
+            "status='suspended'. Used when an operator needs to wind "
+            "down a partnership (e.g. before deleting the Partner). "
+            "Audit-bearing: emits partners.dsa.suspended with the "
+            "operator-supplied reason. Refuses when status is draft "
+            "(use Delete) or already terminal (suspended / renewed)."
+        ),
+        request=None,
+        responses={
+            200: DsaSerializer,
+            400: OpenApiResponse(description="status precondition unmet"),
+        },
+    )
+    @action(detail=True, methods=["post"], url_path="suspend")
+    def suspend(self, request, pk=None):
+        from django.utils import timezone
+
+        dsa = self.get_object()
+        if dsa.status not in ("active", "expired"):
+            return Response(
+                {"detail": (
+                    f"Cannot suspend DSA {dsa.reference} — status is "
+                    f"'{dsa.status}'. Suspend is only available for "
+                    "active or expired agreements; drafts use Delete, "
+                    "and renewed agreements are already terminal."
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        reason = (request.data.get("reason") or "").strip()
+        actor = str(request.user.username or request.user.id)
+        prior_status = dsa.status
+        dsa.status = "suspended"
+        dsa.save(update_fields=("status", "updated_at"))
+        emit_audit(
+            "partners.dsa.suspended", "dsa", str(dsa.id),
+            actor=actor,
+            reason=reason or "operator-initiated lifecycle suspend",
+            field_changes={
+                "reference": dsa.reference,
+                "from_status": prior_status,
+                "to_status": "suspended",
+                "suspended_at": timezone.now().isoformat(),
+            },
+        )
+        return Response(self.get_serializer(dsa).data)
 
 
 # --- Programme CRUD viewset (US-S25-003) ------------------------------------
