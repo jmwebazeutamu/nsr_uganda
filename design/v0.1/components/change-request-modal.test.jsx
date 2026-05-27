@@ -300,6 +300,66 @@ describe("submit error UX", () => {
 });
 
 // ───────────────────────────────────────────────────────────────
+// 1d. Input constraints — number / date fields advertise their
+//     catalog-defined bounds as HTML5 attrs (US-S28-INPUT-CONSTRAINTS).
+// ───────────────────────────────────────────────────────────────
+
+describe("input constraints", () => {
+  it("number field forwards min/max/step from catalog constraints", async () => {
+    // hh_size is declared {min: 1, max: 30, step: 1} in
+    // apps/update_workflow/field_catalog.py. The hardcoded
+    // fallback catalog inside the modal mirrors that.
+    const user = userEvent.setup();
+    render(<ChangeRequestModal {...defaultProps()} />);
+    await addRowViaComposer(user, "rost", "hh_size");
+    // The "New value" placeholder doesn't apply to date inputs,
+    // only number/text. Find the number input.
+    const inputs = screen.getAllByPlaceholderText("New value");
+    const numericInput = inputs.find(i => i.type === "number");
+    expect(numericInput).toBeTruthy();
+    expect(numericInput).toHaveAttribute("min", "1");
+    expect(numericInput).toHaveAttribute("max", "30");
+    expect(numericInput).toHaveAttribute("step", "1");
+  });
+
+  it("date field with max_today resolves max to today's ISO date", async () => {
+    // member_dob declares max_today=true. The modal resolves that
+    // to the current YYYY-MM-DD at render so birthdays can't be in
+    // the future. Min is "1900-01-01" (sanity floor).
+    const user = userEvent.setup();
+    render(<ChangeRequestModal {...{
+      ...defaultProps(),
+      // Need entity=member to expose member-scoped fields.
+      members: [{ id: "01HMEM", name: "Test Member", line: 1 }],
+    }} />);
+    // Switch to member scope.
+    const entitySelect = screen.getAllByRole("combobox")[0];
+    await user.selectOptions(entitySelect, "member");
+    // Pick the only member to satisfy step 1.
+    const picker = await screen.findByTestId("member-picker-select");
+    await user.selectOptions(picker, "01HMEM");
+    await user.click(screen.getByRole("button", { name: /Next →/i })); // → step 2
+    await addRowViaComposer(user, "rost", "member_dob");
+    const dateInput = document.querySelector('input[type="date"]');
+    expect(dateInput).toBeTruthy();
+    expect(dateInput).toHaveAttribute("min", "1900-01-01");
+    expect(dateInput).toHaveAttribute("max", new Date().toISOString().slice(0, 10));
+  });
+
+  it("unconstrained text field has no min/max/step attrs", async () => {
+    const user = userEvent.setup();
+    render(<ChangeRequestModal {...defaultProps()} />);
+    await addRowViaComposer(user, "iden", "phone");
+    const inputs = screen.getAllByPlaceholderText("New value");
+    const textInput = inputs.find(i => i.type === "text");
+    expect(textInput).toBeTruthy();
+    expect(textInput).not.toHaveAttribute("min");
+    expect(textInput).not.toHaveAttribute("max");
+    expect(textInput).not.toHaveAttribute("step");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────
 // 2. Grouping: second row in same category joins the existing group
 // ───────────────────────────────────────────────────────────────
 

@@ -26,6 +26,19 @@ from the active ChoiceList version at render time — NOT from the
 hardcoded `options` array below (which is kept as a development-time
 fallback only). See `field_catalog_view` in api.py for the resolution
 path.
+
+`constraints` (US-S28-INPUT-CONSTRAINTS) carries the bounds the
+modal's HTML5 number / date input should advertise:
+
+  - {"min": N, "max": N, "step": N}   for numbers
+  - {"min": "YYYY-MM-DD"}              for dates
+  - {"max_today": True}                for dates whose upper bound is
+                                       "today" (computed at render
+                                       time — birthdays can't be in
+                                       the future).
+
+Constraints are advisory at the HTML5 layer; the server still
+validates the row payload against the field schema before commit.
 """
 
 from __future__ import annotations
@@ -60,13 +73,16 @@ CATEGORIES: list[dict] = [
     {
         "key": "rost", "label": "Roster", "tone": "update",
         "fields": [
-            {"key": "hh_size",         "label": "Household size",          "type": "number", "pmt": True},
+            {"key": "hh_size",         "label": "Household size",          "type": "number", "pmt": True,
+             "constraints": {"min": 1, "max": 30, "step": 1}},
             {"key": "add_member",      "label": "Add member (name)",       "type": "text",   "pmt": False},
-            {"key": "remove_member",   "label": "Remove member (line #)",  "type": "number", "pmt": False},
+            {"key": "remove_member",   "label": "Remove member (line #)",  "type": "number", "pmt": False,
+             "constraints": {"min": 1, "step": 1}},
             {"key": "member_name",     "label": "Member name",             "type": "text",
              "pmt": False, "entity": "member"},
             {"key": "member_dob",      "label": "Member date of birth",    "type": "date",
-             "pmt": False, "entity": "member"},
+             "pmt": False, "entity": "member",
+             "constraints": {"min": "1900-01-01", "max_today": True}},
             # ADR-0010: member_sex is a coded ChoiceList field — options
             # MUST be the seed codes (sex: 1=Male, 2=Female).
             {"key": "member_sex",      "label": "Member sex",              "type": "select",
@@ -127,9 +143,12 @@ CATEGORIES: list[dict] = [
              "options": ["Electricity", "Solar", "Kerosene", "Candle", "Other"]},
             {"key": "tenure",      "label": "Dwelling tenure",   "type": "select", "pmt": True,
              "options": ["Owned", "Rented", "Free", "Other"]},
-            {"key": "land_acres",  "label": "Land owned (acres)", "type": "number", "pmt": True},
-            {"key": "cattle",      "label": "Cattle owned",       "type": "number", "pmt": True},
-            {"key": "goats",       "label": "Goats owned",        "type": "number", "pmt": True},
+            {"key": "land_acres",  "label": "Land owned (acres)", "type": "number", "pmt": True,
+             "constraints": {"min": 0, "step": 0.1}},
+            {"key": "cattle",      "label": "Cattle owned",       "type": "number", "pmt": True,
+             "constraints": {"min": 0, "step": 1}},
+            {"key": "goats",       "label": "Goats owned",        "type": "number", "pmt": True,
+             "constraints": {"min": 0, "step": 1}},
             {"key": "radio",       "label": "Owns radio",         "type": "select", "pmt": True,
              "options": ["yes", "no"]},
             {"key": "tv",          "label": "Owns TV",            "type": "select", "pmt": True,
@@ -141,8 +160,10 @@ CATEGORIES: list[dict] = [
     {
         "key": "food", "label": "Food & Shocks", "tone": "quality",
         "fields": [
-            {"key": "meals",  "label": "Meals per day",            "type": "number", "pmt": True},
-            {"key": "fcs",    "label": "Food consumption score",   "type": "number", "pmt": True},
+            {"key": "meals",  "label": "Meals per day",            "type": "number", "pmt": True,
+             "constraints": {"min": 0, "max": 10, "step": 1}},
+            {"key": "fcs",    "label": "Food consumption score",   "type": "number", "pmt": True,
+             "constraints": {"min": 0, "max": 112, "step": 1}},
             {"key": "shock",  "label": "Recent shock",             "type": "select", "pmt": True,
              "options": ["drought", "flood", "death_head", "theft", "illness",
                          "none", "other"]},

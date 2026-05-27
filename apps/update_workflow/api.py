@@ -668,7 +668,8 @@ def _resolve_field_options(field: dict, *, language: str) -> list[dict]:
 
 def _serialise_field(field: dict, *, language: str) -> dict:
     """Project one catalog field into its public shape. Adds the
-    resolved options (for select) and strips internal-only keys."""
+    resolved options (for select) and constraints (for number/date),
+    strips internal-only keys."""
     out = {
         "key": field["key"],
         "label": field["label"],
@@ -679,6 +680,12 @@ def _serialise_field(field: dict, *, language: str) -> dict:
     if field["type"] == "select":
         out["choice_list"] = field.get("choice_list")
         out["options"] = _resolve_field_options(field, language=language)
+    # US-S28-INPUT-CONSTRAINTS: pass through min/max/step (numbers)
+    # and min/max_today (dates) so the modal's HTML5 input can
+    # advertise them. Backend doesn't enforce these — they're an
+    # advisory layer over the row validator.
+    if field.get("constraints"):
+        out["constraints"] = field["constraints"]
     return out
 
 

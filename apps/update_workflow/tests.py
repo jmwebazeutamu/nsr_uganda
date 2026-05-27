@@ -1475,3 +1475,38 @@ class TestFieldCatalogEndpoint:
         from rest_framework.test import APIClient
         r = APIClient().get("/api/v1/upd/field-catalog/")
         assert r.status_code in (401, 403)
+
+    def test_numeric_field_carries_constraints(self, db, api_client):
+        """hh_size is constrained {min:1, max:30, step:1} per the
+        questionnaire. The endpoint must pass this through unchanged
+        so the modal's HTML5 number input can advertise them."""
+        r = api_client.get("/api/v1/upd/field-catalog/")
+        rost = next(c for c in r.data["categories"] if c["key"] == "rost")
+        hh_size = next(f for f in rost["fields"] if f["key"] == "hh_size")
+        assert hh_size["constraints"] == {"min": 1, "max": 30, "step": 1}
+
+    def test_decimal_step_passes_through(self, db, api_client):
+        """land_acres allows fractional acres — step=0.1 must come
+        through as a number, not coerced to an int."""
+        r = api_client.get("/api/v1/upd/field-catalog/")
+        hous = next(c for c in r.data["categories"] if c["key"] == "hous")
+        land = next(f for f in hous["fields"] if f["key"] == "land_acres")
+        assert land["constraints"] == {"min": 0, "step": 0.1}
+
+    def test_date_field_max_today_sentinel(self, db, api_client):
+        """member_dob declares max_today=True so the modal computes
+        today's date dynamically — birthdays can't be in the future.
+        The wire shape preserves the sentinel; the modal resolves it."""
+        r = api_client.get("/api/v1/upd/field-catalog/")
+        rost = next(c for c in r.data["categories"] if c["key"] == "rost")
+        dob = next(f for f in rost["fields"] if f["key"] == "member_dob")
+        assert dob["constraints"] == {"min": "1900-01-01", "max_today": True}
+
+    def test_unconstrained_field_has_no_constraints_key(self, db, api_client):
+        """Fields that don't define constraints (most text / select)
+        ship without the key — modal RowInput treats missing
+        constraints as unconstrained."""
+        r = api_client.get("/api/v1/upd/field-catalog/")
+        iden = next(c for c in r.data["categories"] if c["key"] == "iden")
+        phone = next(f for f in iden["fields"] if f["key"] == "phone")
+        assert "constraints" not in phone

@@ -38,11 +38,14 @@ const CATEGORIES = [
     { key: "parish",      label: "Parish",            type: "text",   pmt: false },
   ]},
   { key: "rost", label: "Roster",              tone: "update",       fields: [
-    { key: "hh_size",         label: "Household size",         type: "number", pmt: true },
+    { key: "hh_size",         label: "Household size",         type: "number", pmt: true,
+      constraints: { min: 1, max: 30, step: 1 } },
     { key: "add_member",      label: "Add member (name)",      type: "text",   pmt: false },
-    { key: "remove_member",   label: "Remove member (line #)", type: "number", pmt: false },
+    { key: "remove_member",   label: "Remove member (line #)", type: "number", pmt: false,
+      constraints: { min: 1, step: 1 } },
     { key: "member_name",     label: "Member name",            type: "text",   pmt: false, entity: "member" },
-    { key: "member_dob",      label: "Member date of birth",   type: "date",   pmt: false, entity: "member" },
+    { key: "member_dob",      label: "Member date of birth",   type: "date",   pmt: false, entity: "member",
+      constraints: { min: "1900-01-01", max_today: true } },
     { key: "member_sex",      label: "Member sex",             type: "select", pmt: false, entity: "member",
       // ADR-0010 seed codes (sex: 1=Male, 2=Female).
       options: ["1","2"] },
@@ -88,9 +91,12 @@ const CATEGORIES = [
       options: ["Electricity","Solar","Kerosene","Candle","Other"] },
     { key: "tenure",      label: "Dwelling tenure",   type: "select", pmt: true,
       options: ["Owned","Rented","Free","Other"] },
-    { key: "land_acres",  label: "Land owned (acres)", type: "number", pmt: true },
-    { key: "cattle",      label: "Cattle owned",       type: "number", pmt: true },
-    { key: "goats",       label: "Goats owned",        type: "number", pmt: true },
+    { key: "land_acres",  label: "Land owned (acres)", type: "number", pmt: true,
+      constraints: { min: 0, step: 0.1 } },
+    { key: "cattle",      label: "Cattle owned",       type: "number", pmt: true,
+      constraints: { min: 0, step: 1 } },
+    { key: "goats",       label: "Goats owned",        type: "number", pmt: true,
+      constraints: { min: 0, step: 1 } },
     { key: "radio",       label: "Owns radio",         type: "select", pmt: true,
       options: ["yes","no"] },
     { key: "tv",          label: "Owns TV",            type: "select", pmt: true,
@@ -99,8 +105,10 @@ const CATEGORIES = [
       options: ["yes","no"] },
   ]},
   { key: "food", label: "Food & Shocks",       tone: "quality",      fields: [
-    { key: "meals",  label: "Meals per day",          type: "number", pmt: true },
-    { key: "fcs",    label: "Food consumption score", type: "number", pmt: true },
+    { key: "meals",  label: "Meals per day",          type: "number", pmt: true,
+      constraints: { min: 0, max: 10, step: 1 } },
+    { key: "fcs",    label: "Food consumption score", type: "number", pmt: true,
+      constraints: { min: 0, max: 112, step: 1 } },
     { key: "shock",  label: "Recent shock",           type: "select", pmt: true,
       options: ["drought","flood","death_head","theft","illness","none","other"] },
     { key: "coping", label: "Coping strategy",        type: "select", pmt: true,
@@ -254,12 +262,33 @@ const RowInput = ({ meta, value, onChange, autoFocus }) => {
       </select>
     );
   }
+  // US-S28-INPUT-CONSTRAINTS: surface backend-defined bounds as
+  // HTML5 attrs. `max_today: true` on a date constraint resolves
+  // dynamically — birthdays can't be in the future, etc. Falsy /
+  // missing constraint stays unconstrained.
+  const c = meta.constraints || {};
+  const today = new Date().toISOString().slice(0, 10);
+  const numericAttrs = meta.type === "number"
+    ? {
+        ...(c.min != null ? { min: c.min } : {}),
+        ...(c.max != null ? { max: c.max } : {}),
+        ...(c.step != null ? { step: c.step } : {}),
+      }
+    : {};
+  const dateAttrs = meta.type === "date"
+    ? {
+        ...(c.min ? { min: c.min } : {}),
+        ...(c.max ? { max: c.max } : (c.max_today ? { max: today } : {})),
+      }
+    : {};
   return (
     <input ref={inputRef} type={meta.type === "number" ? "number"
                               : meta.type === "date" ? "date" : "text"}
       className="field-input"
       value={value} onChange={(e) => onChange(e.target.value)}
       placeholder={meta.type === "date" ? "" : "New value"}
+      {...numericAttrs}
+      {...dateAttrs}
       style={{ width:"100%" }}/>
   );
 };
