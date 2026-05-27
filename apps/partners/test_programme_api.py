@@ -171,3 +171,59 @@ class TestProgrammeWriteFlag:
         settings.PARTNERS_MODULE_ENABLED = False
         r = c.get(URL_LIST)
         assert r.status_code == 200
+
+
+# --- US-S11-039 — DELETE Programme (drafts only) --------------------------
+
+@pytest.mark.django_db
+class TestProgrammeDelete:
+    """DELETE /api/v1/programmes/{id}/ — only allowed when status=draft.
+    Active+ Programmes have enrolments + sign-offs that hard-delete
+    would orphan, so they must use the /close/ lifecycle action."""
+
+    def test_delete_draft_succeeds_with_audit(self, api, partner):
+        c, _ = api
+        prog = Programme.objects.create(
+            partner=partner, code="DRAFT-1", name="Draft to bin",
+            kind="cash_transfer", status="draft",
+        )
+        r = c.delete(f"{URL_LIST}{prog.id}/")
+        assert r.status_code == 204
+        assert not Programme.objects.filter(id=prog.id).exists()
+        ev = AuditEvent.objects.filter(
+            action="partners.programme.deleted", entity_id=str(prog.id),
+        ).first()
+        assert ev is not None
+        assert ev.field_changes.get("code") == "DRAFT-1"
+
+    def test_delete_non_draft_is_rejected(self, api, partner):
+        c, _ = api
+        prog = Programme.objects.create(
+            partner=partner, code="LIVE-1", name="Live cohort",
+            kind="cash_transfer", status="active",
+        )
+        r = c.delete(f"{URL_LIST}{prog.id}/")
+        assert r.status_code == 400
+        assert "status is 'active'" in r.json()["detail"]
+        # Row survives.
+        assert Programme.objects.filter(id=prog.id).exists()
+
+    def test_delete_closed_is_rejected(self, api, partner):
+        c, _ = api
+        prog = Programme.objects.create(
+            partner=partner, code="DONE-1", name="Closed cohort",
+            kind="cash_transfer", status="closed",
+        )
+        r = c.delete(f"{URL_LIST}{prog.id}/")
+        assert r.status_code == 400
+        assert Programme.objects.filter(id=prog.id).exists()
+
+    def test_delete_gated_by_write_flag(self, api, partner, settings):
+        c, _ = api
+        prog = Programme.objects.create(
+            partner=partner, code="DRAFT-2", name="Draft",
+            kind="cash_transfer", status="draft",
+        )
+        settings.PARTNERS_MODULE_ENABLED = False
+        r = c.delete(f"{URL_LIST}{prog.id}/")
+        assert r.status_code == 403

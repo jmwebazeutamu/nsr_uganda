@@ -33,6 +33,7 @@ from rest_framework.response import Response
 
 from apps.data_management.serializer_labels import attach_label_methodfields
 from apps.security.abac import PartnerScopedQuerysetMixin
+from apps.security.audit import emit as emit_audit
 from apps.security.audit_views import AuditReadMixin
 
 from .choice_field_map import MODEL_FIELDS
@@ -105,8 +106,52 @@ class PartnerViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
     queryset = Partner.objects.all().order_by("-last_activity_at", "code")
     serializer_class = PartnerSerializer
     permission_classes = [permissions.IsAuthenticated, _PartnersWriteFlagPermission]
-    # Disable PUT — the spec only authorises PATCH (partial update).
-    http_method_names = ["get", "post", "patch", "head", "options"]
+    # PUT is disabled (spec only authorises PATCH). DELETE is wired
+    # via the destroy override below — refuses when any
+    # DSA/Programme/Contact still references the partner (US-S11-039).
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def destroy(self, request, *args, **kwargs):
+        """Hard-delete only when no DSAs, Programmes, or PartnerContacts
+        still reference the partner — those FKs are PROTECT at the
+        model level, so a naive .delete() raises IntegrityError. We
+        pre-empt that with a count check so the operator sees a clean
+        4xx instead of a 500."""
+        from django.db.models import ProtectedError
+        partner = self.get_object()
+        blockers = []
+        dsa_count = partner.dsas.count()
+        prog_count = Programme.objects.filter(partner=partner).count()
+        contact_count = partner.contacts.count()
+        if dsa_count:
+            blockers.append(f"{dsa_count} DSA(s)")
+        if prog_count:
+            blockers.append(f"{prog_count} programme(s)")
+        if contact_count:
+            blockers.append(f"{contact_count} contact(s)")
+        if blockers:
+            return Response(
+                {"detail": (
+                    f"Cannot delete partner {partner.code} — referenced by "
+                    + ", ".join(blockers) + ". Close / reassign the dependent "
+                    "rows first."
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        actor = (getattr(request.user, "username", "") or "").strip() or "admin"
+        emit_audit(
+            "partners.partner.deleted", "partner", str(partner.id),
+            actor=actor,
+            reason=request.data.get("reason", "") if hasattr(request, "data") else "",
+        )
+        try:
+            partner.delete()
+        except ProtectedError as exc:  # defensive — count check should have caught it
+            return Response(
+                {"detail": f"Cannot delete: {exc}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -460,7 +505,36 @@ class DsaViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
     )
     serializer_class = DsaSerializer
     permission_classes = [permissions.IsAuthenticated, _PartnersWriteFlagPermission]
-    http_method_names = ["get", "post", "patch", "head", "options"]
+    # PUT disabled (PATCH only); DELETE wired through destroy() with a
+    # status guard — drafts only (US-S11-039). Signed/active DSAs use
+    # the renew + close lifecycle path so audit + signature chains
+    # don't orphan.
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def destroy(self, request, *args, **kwargs):
+        dsa = self.get_object()
+        if dsa.status != "draft":
+            return Response(
+                {"detail": (
+                    f"Cannot hard-delete {dsa.reference} — status is "
+                    f"'{dsa.status}'. Only draft DSAs may be deleted; use "
+                    "renew / edit-scope / suspend on signed agreements."
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        actor = (getattr(request.user, "username", "") or "").strip() or "admin"
+        emit_audit(
+            "partners.dsa.deleted", "dsa", str(dsa.id),
+            actor=actor,
+            reason=request.data.get("reason", "") if hasattr(request, "data") else "",
+            field_changes={
+                "reference": dsa.reference,
+                "partner_code": dsa.partner.code if dsa.partner_id else "",
+                "version": dsa.version,
+            },
+        )
+        dsa.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -660,7 +734,37 @@ class ProgrammeViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
     )
     serializer_class = ProgrammeSerializer
     permission_classes = [permissions.IsAuthenticated, _PartnersWriteFlagPermission]
-    http_method_names = ["get", "post", "patch", "head", "options"]
+    # PUT disabled (PATCH only); DELETE wired through destroy() with a
+    # status guard — drafts only (US-S11-039). Active+ Programmes use
+    # the /close/ lifecycle action so enrolment + sign-off chains
+    # don't orphan.
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def destroy(self, request, *args, **kwargs):
+        prog = self.get_object()
+        if prog.status != "draft":
+            return Response(
+                {"detail": (
+                    f"Cannot hard-delete programme {prog.code} — status "
+                    f"is '{prog.status}'. Only draft programmes may be "
+                    "deleted; use /close/ on active programmes so the "
+                    "lifecycle event survives the deletion."
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        actor = (getattr(request.user, "username", "") or "").strip() or "admin"
+        emit_audit(
+            "partners.programme.deleted", "programme", str(prog.id),
+            actor=actor,
+            reason=request.data.get("reason", "") if hasattr(request, "data") else "",
+            field_changes={
+                "code": prog.code,
+                "partner_code": prog.partner.code if prog.partner_id else "",
+                "name": prog.name,
+            },
+        )
+        prog.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -695,8 +799,7 @@ class ProgrammeViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
             webhook_secret_hash=digest,
             created_by=actor,
         )
-        # Audit the create.
-        from apps.security.audit import emit as emit_audit
+        # Audit the create (emit_audit imported at module level).
         emit_audit(
             "programme_created", "programme", prog.id,
             actor=actor,

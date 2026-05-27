@@ -218,3 +218,116 @@ class TestDsaListFilters:
             "DSA-UBOS-2026-DRAFT",
             "DSA-WFP-2026-EXPIRY",
         }
+
+
+# --- US-S11-039 — DELETE Partner / DSA --------------------------------------
+
+from datetime import date as _delete_date  # noqa: E402
+
+from apps.partners.models import DataSharingAgreement, Programme  # noqa: E402
+from apps.security.models import AuditEvent  # noqa: E402
+
+
+@pytest.mark.django_db
+class TestPartnerDelete:
+    """DELETE /api/v1/partners/{id}/ — refuses when downstream rows
+    (DSAs, Programmes, Contacts) still reference the partner. The
+    response message names the blockers so the operator doesn't have
+    to chase a generic FK error."""
+
+    def test_delete_unreferenced_partner_succeeds(self, api, settings):
+        settings.PARTNERS_MODULE_ENABLED = True
+        p = Partner.objects.create(
+            code="GHOST", name="Will be deleted", type="ministry",
+            sector="social_protection", status="onboarding", tone="neutral",
+        )
+        r = api.delete(f"{URL}{p.id}/")
+        assert r.status_code == 204
+        assert not Partner.objects.filter(id=p.id).exists()
+        ev = AuditEvent.objects.filter(
+            action="partners.partner.deleted", entity_id=str(p.id),
+        ).first()
+        assert ev is not None
+
+    def test_delete_partner_with_dsa_is_rejected(self, api, settings):
+        settings.PARTNERS_MODULE_ENABLED = True
+        p = Partner.objects.create(
+            code="BLOCKED", name="Has a DSA", type="ministry",
+            sector="social_protection", status="active", tone="primary",
+        )
+        DataSharingAgreement.objects.create(
+            partner=p, reference="DSA-BLOCKED-001",
+            status="draft", version=1,
+            effective_from=_delete_date(2026, 1, 1),
+            effective_to=_delete_date(2027, 1, 1),
+        )
+        r = api.delete(f"{URL}{p.id}/")
+        assert r.status_code == 400
+        assert "1 DSA(s)" in r.json()["detail"]
+        assert Partner.objects.filter(id=p.id).exists()
+
+    def test_delete_partner_with_programme_is_rejected(self, api, settings):
+        settings.PARTNERS_MODULE_ENABLED = True
+        p = Partner.objects.create(
+            code="PROGGED", name="Has a programme", type="ministry",
+            sector="social_protection", status="active", tone="primary",
+        )
+        Programme.objects.create(
+            partner=p, code="PG-01", name="Active programme",
+            kind="cash_transfer", status="active",
+        )
+        r = api.delete(f"{URL}{p.id}/")
+        assert r.status_code == 400
+        assert "1 programme(s)" in r.json()["detail"]
+
+    def test_delete_gated_by_write_flag(self, api, settings):
+        settings.PARTNERS_MODULE_ENABLED = False
+        p = Partner.objects.create(
+            code="GATED", name="Gated", type="ministry",
+            sector="social_protection", status="onboarding", tone="neutral",
+        )
+        r = api.delete(f"{URL}{p.id}/")
+        assert r.status_code == 403
+
+
+@pytest.mark.django_db
+class TestDsaDelete:
+    """DELETE /api/v1/dsas/{id}/ — drafts only. Active+ DSAs use
+    renew/edit-scope/suspend so signature + audit chain doesn't
+    orphan."""
+
+    def test_delete_draft_succeeds_with_audit(self, api, settings):
+        settings.PARTNERS_MODULE_ENABLED = True
+        p = Partner.objects.create(
+            code="DEL1", name="X", type="ministry",
+            sector="social_protection", status="active", tone="primary",
+        )
+        dsa = DataSharingAgreement.objects.create(
+            partner=p, reference="DSA-DEL-001", status="draft", version=1,
+            effective_from=_delete_date(2026, 1, 1),
+            effective_to=_delete_date(2027, 1, 1),
+        )
+        r = api.delete(f"/api/v1/dsas/{dsa.id}/")
+        assert r.status_code == 204
+        assert not DataSharingAgreement.objects.filter(id=dsa.id).exists()
+        ev = AuditEvent.objects.filter(
+            action="partners.dsa.deleted", entity_id=str(dsa.id),
+        ).first()
+        assert ev is not None
+        assert ev.field_changes.get("reference") == "DSA-DEL-001"
+
+    def test_delete_active_dsa_is_rejected(self, api, settings):
+        settings.PARTNERS_MODULE_ENABLED = True
+        p = Partner.objects.create(
+            code="DEL2", name="Y", type="ministry",
+            sector="social_protection", status="active", tone="primary",
+        )
+        dsa = DataSharingAgreement.objects.create(
+            partner=p, reference="DSA-DEL-002", status="active", version=1,
+            effective_from=_delete_date(2026, 1, 1),
+            effective_to=_delete_date(2027, 1, 1),
+        )
+        r = api.delete(f"/api/v1/dsas/{dsa.id}/")
+        assert r.status_code == 400
+        assert "status is 'active'" in r.json()["detail"]
+        assert DataSharingAgreement.objects.filter(id=dsa.id).exists()
