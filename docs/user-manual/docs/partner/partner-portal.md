@@ -52,6 +52,18 @@ The partner portal is your view into NSR. It is the same React console operators
 
 Download URLs are short-lived (24 h default). You can re-issue from the delivery row. Every issued URL writes a `download_url_issued` AuditEvent.
 
+## Email notifications (v0.3)
+
+The system emails the inbox on `Partner.primary_email` plus the original requester at every transition. Keep `Partner.primary_email` set to a monitored shared mailbox (e.g. `pdm-data@opm.go.ug`) — relying on one person's inbox creates a single-point handover risk.
+
+| Event | What you get |
+|---|---|
+| Steward approves | "Data request `<id>` approved" — the extract starts generating |
+| Steward rejects | "Data request `<id>` REJECTED" with the verbatim reason — revise and resubmit |
+| Extract delivered | "Data extract ready · `<id>` · `<N>` rows" with **manifest SHA-256**, expiry timestamp, integrity-check guidance |
+
+**Verify the bundle against the manifest SHA-256 before processing.** Compute the SHA-256 of the downloaded file (`sha256sum extract.csv` on Linux/macOS, `Get-FileHash` on PowerShell) and compare to the value in the email. Any mismatch indicates tampering in transit — do not load the data, contact the DPO via [grievances](../field/grievances.md) or your usual NSR Unit contact.
+
 ## Volume gauges
 
 The dashboard shows a monthly gauge against your DSA's `volume_cap_per_month`. Submitting past the cap is rejected. The cap is enforced by row count, not file size.

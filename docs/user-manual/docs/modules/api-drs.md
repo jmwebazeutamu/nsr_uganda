@@ -25,6 +25,9 @@ See [API reference](../partner/api-reference.md) for the full list. Highlights:
 |---|---|---|
 | `/api/v1/drs/requests/` | GET, POST | List, create draft |
 | `/api/v1/drs/requests/{id}/submit/` | POST | Validate against DSA, route to review |
+| `/api/v1/drs/requests/{id}/approve/` | POST | Steward approval; emails partner + requester |
+| `/api/v1/drs/requests/{id}/reject/` | POST | Steward rejection with reason; emails both |
+| `/api/v1/drs/requests/{id}/deliver/` | POST | Mark DELIVERED with manifest SHA + row count; emails both |
 | `/api/v1/drs/requests/builder-schema/` | GET | Live field catalogue |
 | `/api/v1/drs/requests/{id}/deliveries/` | GET | Generated files |
 
@@ -33,6 +36,20 @@ See [API reference](../partner/api-reference.md) for the full list. Highlights:
 - `DataRequest`
 - `Delivery`
 - `BuilderSchema` (field catalogue, generated)
+
+## Email notifications (v0.3)
+
+Each lifecycle transition emails the partner contact + the request requester. Recipients: `dsa.partner.primary_email` + `DataRequest.requester`.
+
+| Transition | Subject | Includes |
+|---|---|---|
+| `approve_data_request` | `Data request <id>… approved` | Approver, DSA reference, "delivery email follows" |
+| `reject_data_request` | `Data request <id>… REJECTED` | Verbatim reason |
+| `deliver_data_request` | `Data extract ready · <id>… · <N> rows` | **Manifest SHA-256**, row count, expiry timestamp, integrity-check guidance |
+
+The delivery email is the partner's primary delivery channel until the webhook lands. Verify the bundle against the manifest SHA-256 before processing — any mismatch indicates tampering in transit; report to the DPO.
+
+Every notification attempt is audited (`data_request.approved.notified` / `.rejected.notified` / `.delivered.notified`). When `Partner.primary_email` is empty, the helper writes a `notification.skipped` audit row instead so DPO can reconcile gaps in partner contact data.
 
 ## Validation
 

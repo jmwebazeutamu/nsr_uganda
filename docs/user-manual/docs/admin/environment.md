@@ -51,6 +51,39 @@ Both belong in the NITA-U KMS. Rotate per the rotation runbook (Planned in Sprin
 |---|---|---|
 | `PARTNERS_MODULE_ENABLED` | `True` | Gates the partners-module UI + write endpoints (US-S23). Read endpoints stay open. |
 | `PARTNERS_DOCUSIGN_ENABLED` | `False` | Switches DSA signature backend from the in-memory stub to DocuSign (per ADR-0012). CI keeps this false. |
+| `QUESTIONNAIRE_EDITOR_V2` | `DEBUG` | Gates the Sprint 19 Questionnaire builder admin UI (US-117b). |
+| `CHATBOT_ENABLED` | `False` | Gates the Chatbot RAG endpoints (ADR-0021, US-CHB-001..006). |
+
+## Email / SMTP (v0.3)
+
+The system sends transactional email for PMT sign-off, DSA signing, Programme sign-off, DRS request lifecycle, and DPO audit-chain alerts. Without an SMTP backend configured nothing is sent — workflows still complete on the audit-bearing side.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `EMAIL_BACKEND` | `django.core.mail.backends.console.EmailBackend` | Dev default — emails print to stdout, nobody is contacted. Set to `django.core.mail.backends.smtp.EmailBackend` for real delivery. |
+| `EMAIL_HOST` | `comms.quasar.ug` | The quasar.ug relay (same one the rental_project uses) |
+| `EMAIL_PORT` | `587` | STARTTLS port |
+| `EMAIL_USE_TLS` | `True` | |
+| `EMAIL_HOST_USER` | (empty) | Set to `admin@quasar.ug` in prod |
+| `EMAIL_HOST_PASSWORD` | (empty) | KMS-managed in prod. **Never commit this to git** — `.env` is gitignored; `.env.example` carries only the placeholder. |
+| `EMAIL_TIMEOUT` | `30` | seconds |
+| `DEFAULT_FROM_EMAIL` | `NSR MIS <admin@quasar.ug>` | Used as the `From:` header when callers don't override |
+| `SERVER_EMAIL` | inherits `DEFAULT_FROM_EMAIL` | Used by Django for error mails to ADMINS |
+| `DPO_EMAIL` | (empty) | DPO inbox for chain-break alerts (`apps.security.tasks.verify_audit_chain_task`). Leave empty in dev to disable alerts. |
+| `SLACK_WEBHOOK_URL` | (empty) | Parallel chain-break channel. Independent of email. |
+
+To roll out real email to a new environment:
+
+1. Get the SMTP password from the secrets manager (or copy from the `comms` rental_project — same relay).
+2. Set `EMAIL_HOST_USER` + `EMAIL_HOST_PASSWORD` + flip `EMAIL_BACKEND` to the SMTP backend.
+3. Smoke-test via the Django shell:
+   ```python
+   from django.core.mail import send_mail
+   send_mail("[NSR MIS] SMTP smoke test", "body", None, ["you@example.com"], fail_silently=False)
+   ```
+4. Once verified, set `DPO_EMAIL` (and optionally `SLACK_WEBHOOK_URL`) so the audit-chain task starts alerting on tampering.
+
+See [Notifications](notifications.md) for the workflow→recipient matrix.
 
 ## Per-environment values
 

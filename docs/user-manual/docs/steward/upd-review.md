@@ -19,30 +19,39 @@ UPD is the workflow that takes a change request from any source (citizen via GRM
 ```
 submitted → routed → in_review → approved → committed
                               ↘ rejected
+                              ↘ on_hold ↻ released → in_review
 ```
 
 | State | Who acts | Next |
 |---|---|---|
 | `submitted` | Auto-routed by the matrix (REF-DATA) | `routed` |
 | `routed` | Reviewer claims the request | `in_review` |
-| `in_review` | Reviewer + (if needed) a second approver | `approved` or `rejected` |
+| `in_review` | Reviewer + (if needed) a second approver | `approved`, `rejected`, or `on_hold` |
+| `on_hold` | Reviewer awaits additional info | `released` (back to in_review) |
 | `approved` | System commits | `committed` |
 | `committed` | n/a | Terminal |
+| `rejected` | n/a | Terminal |
 
 The routing matrix lives in `apps.reference_data` as a `ChoiceList` so it can be updated by an Admin Console operator without code change.
 
-## The review screen
+## The reviewer workbench
 
-When built (S5), the screen shows:
+The screen has **three tabs** above the queue (v0.3):
+
+- **Pending** — `pending_approval` rows. The default landing tab; bulk + per-row action affordances are enabled.
+- **On hold** — rows held for more information. The action bar offers a single Release action.
+- **Decided** — `committed` + `rejected` rows. Read-only: the SLA column flips to a status chip, bulk + action-bar buttons hide (they 400 on terminal rows). Use this to find historical decisions or pull audit detail.
+
+The queue uses a single fetch with `?status=` (comma-separated, so the Decided tab pulls committed + rejected in one round-trip).
+
+The detail rail to the right shows:
 
 - **Before / After diff card** — every changed field highlighted with `--accent-update` border (per `components.md §5.2`).
 - **Source signal** — where the change came from (GRM ticket, NIRA event, Parish Chief, partner).
 - **Routing trail** — every operator who touched it.
 - **PMT preview** — what the recomputed PMT band would be after commit, so the reviewer sees programme-eligibility implications.
 - **DQA preview** — re-evaluates rules against the proposed state.
-- **Approve / Reject** action bar with mandatory reason.
-
-Until the screen lands, you use the Django admin at `/admin/update_workflow/changerequest/` or the API.
+- **Approve / Reject / Hold / Escalate** action bar with mandatory reason. Hidden when viewing a Decided row.
 
 ## Auto-commit cases
 

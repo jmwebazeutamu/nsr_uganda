@@ -24,9 +24,24 @@ Runs candidate matchers across the staged record and the canonical store. Flags 
 |---|---|---|
 | `/api/v1/ddup/candidates/` | GET | Pending candidates, ABAC-scoped |
 | `/api/v1/ddup/candidates/{id}/` | GET | One candidate pair with compare data |
-| `/api/v1/ddup/merge/` | POST | Commit a merge (transactional) |
+| `/api/v1/ddup/match-pairs/{id}/merge/` | POST | Commit a merge (transactional) |
+| `/api/v1/ddup/match-pairs/{id}/discard/` | POST | Keep one record intact, soft-delete the other |
+| `/api/v1/ddup/match-pairs/{id}/reject/` | POST | Mark the pair as not-a-duplicate; both stay registered |
+| `/api/v1/ddup/merge-decisions/{id}/reverse/` | POST | Un-merge within the 30-day window |
 | `/api/v1/ddup/match-models/` | GET, POST | The matcher catalogue |
 | `/api/v1/ddup/match-models/{id}/approve/` | POST | Dual-approve a new matcher |
+
+## Three compare-screen actions
+
+The compare screen offers three terminal actions on a pending pair. They differ in what happens to the field values and which record survives:
+
+| Action | Both records are… | What happens to the survivor | What happens to the loser |
+|---|---|---|---|
+| **Reject pair** | NOT duplicates | Stays registered, unchanged | Stays registered, unchanged. Pair marked REJECTED so it won't re-queue. |
+| **Discard duplicate** (v0.3) | The same person, but the loser is bad data | Untouched | Soft-deleted with `merged_into=survivor`; `Household.head_member` references re-point |
+| **Merge** | The same person, both have valid partial information | Fields updated per the operator's per-field A/B picks | Soft-deleted exactly as Discard |
+
+Discard and Merge both write the loser the same way on disk — the difference is whether any field values move. **Both are reversible** through the same 30-day window via `reverse_merge_decision`. The pair flips to `MERGED` in either case; the `MergeDecision.action` records the distinction (`merge` vs `discard_loser`) so audit + reporting can tell them apart.
 
 ## Key entities
 

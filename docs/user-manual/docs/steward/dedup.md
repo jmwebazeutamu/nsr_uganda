@@ -62,11 +62,21 @@ On commit, in a single transaction:
 
 If anything in the transaction fails, the entire merge rolls back. No partial state.
 
-## When NOT to merge
+## Three terminal actions (v0.3)
+
+The compare screen offers three buttons above the field-pick grid:
+
+- **Reject pair** — the two records ARE NOT the same person. Both stay registered. Use this when a tier-1 NIN match turned out to be a NIN-typo collision or a tier-2 phone match resolves to two siblings who share a phone.
+- **Discard duplicate** (NEW) — the two records ARE the same person, but the loser is bad data (test entry, double-tap submission, garbled re-capture). The survivor stays untouched — no field combining. The loser is soft-deleted exactly like a merge loser; the 30-day reverse window applies.
+- **Commit merge** — the two records ARE the same person and both have valid partial information. Combine the fields per your A / B picks (see grid).
+
+Discard is a focused modal: radio buttons to pick which record to keep + a reason textarea (≥ 6 chars). No field-by-field grid — that's the whole point. The pair lands in MERGED state with `MergeDecision.action = "discard_loser"` so reporting can tell discard apart from merge.
+
+## When NOT to merge or discard
 
 - The candidates have different NINs and only a name + DOB match. Send to tier-3 probabilistic review (Planned) or escalate.
 - One candidate is recent and the other has been registered for years with referrals in flight. Open a ticket for the Programme Owner first.
-- The records are clearly two different people who share a name. Mark **Not a match** with a reason; the matcher records this as a feedback signal.
+- The records are clearly two different people who share a name. **Reject pair** with a reason; the matcher records this as a feedback signal.
 
 ## Match model versioning
 

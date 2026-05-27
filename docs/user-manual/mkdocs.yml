@@ -87,6 +87,7 @@ nav:
       - Keycloak and access: admin/keycloak.md
       - Reference data loaders: admin/reference-data.md
       - DIH connectors: admin/connectors.md
+      - Notifications: admin/notifications.md
       - Observability: admin/observability.md
       - DPIA and threat model: admin/dpia-and-threat-model.md
       - Runbooks: admin/runbooks.md

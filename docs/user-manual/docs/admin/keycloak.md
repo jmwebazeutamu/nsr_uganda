@@ -34,6 +34,7 @@ Realm-level roles. A single token carries every role the user holds.
 | Role | Maps to in Django | Visibility |
 |---|---|---|
 | `NSR_UNIT_COORDINATOR` | `is_superuser=True`, scope NATIONAL | Everything; the unblock-everyone role |
+| `SOCIAL_REGISTRY_MANAGER` | scope NATIONAL | Approval-focused persona. Sees the unified Approvals queue (CL / DQA / PMT) + bulk DRS dual-approval. Designed for testing AC-UPD-NO-SELF-APPROVE flows without swapping accounts. |
 | `DPO` | `is_staff=True`, scope NATIONAL | Audit chain + DPIA; reads only |
 | `SA` | `is_superuser=True` | System administration; bypasses ABAC |
 | `CDO` | scope DISTRICT | District data + GRM L2 |
@@ -42,6 +43,8 @@ Realm-level roles. A single token carries every role the user holds.
 | `DISTRICT_M_AND_E` | scope DISTRICT | Same scope as CDO, different routing for UPD escalation |
 | `PARTNER_ANALYST` | scope PARTNER (Partner.code) | Their partner's DSAs and DataRequests |
 | `PARTNER_DPO` | scope PARTNER, `is_staff=True` | Read-only across their partner's data |
+
+The Tweaks panel in the design preview also offers a **Render as** dropdown matching these role values. Picking one switches the home dashboard persona, KPI cards, and queue projections — it does NOT change the authenticated session (the server still enforces ABAC against whoever is actually logged in via `/admin/`).
 
 ## SAML federation for partner MDAs
 

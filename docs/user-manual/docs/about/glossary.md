@@ -40,6 +40,7 @@
 | **RPT** | Reporting module. |
 | **SAD** | Solution Architecture Document. The master spec at `/docs/01_solution_architecture.docx`. |
 | **SEC** | Security cross-cutting module. Audit, ABAC, encryption, integrity. |
+| **SRM** | Social Registry Manager. National-level approval-focused operator role. Sees the unified Approvals queue across CL / DQA / PMT and the bulk DRS dual-approval queue. Cannot approve their own submissions (AC-UPD-NO-SELF-APPROVE). |
 | **UBOS** | Uganda Bureau of Statistics. Owns the geographic hierarchy. |
 | **UPD** | Update Workflow module. Routes change requests through approval. |
 | **WFP-SCOPE** | World Food Programme's SCOPE platform. Connector lands records via DIH. |

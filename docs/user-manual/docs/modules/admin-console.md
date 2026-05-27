@@ -22,6 +22,9 @@ Hosts the surfaces that change system configuration: rules, models, reference da
 
 | Section | Screen | What you do |
 |---|---|---|
+| **Queue — Approvals** | `screens-admin-approvals.jsx` | Single round-trip across CL / DQA / PMT pending approvals — no more walking five sub-screens to find what needs signing (v0.3) |
+| Eligibility — PMT Dashboard | `screens-pmt-dashboard.jsx` | Read-only operational dashboard. Live data from `/api/v1/admin/pmt/dashboard/`. Run-now button refreshes snapshots + thresholds + writes a downloadable CSV/JSON report (v0.3) |
+| Eligibility — PMT Configuration | `screens-pmt-configuration.jsx` | DSL variable editor, calibration metadata, three-step sign-off chain. Lives off `/api/v1/admin/pmt/versions/` (v0.3 live wiring) |
 | Reference data — Geography | `screens-admin-refdata-geography.jsx` | Browse UBOS, mark superseded, version splits |
 | Reference data — ChoiceLists | `screens-admin-refdata-choicelists.jsx` | Edit ChoiceLists with dual-approval |
 | Workflow — DQA | `screens-admin-workflow-dqa.jsx` | DQA Rule Editor |
@@ -29,8 +32,21 @@ Hosts the surfaces that change system configuration: rules, models, reference da
 | Workflow — Routing | `screens-admin-workflow-routing.jsx` | UPD + GRM routing matrix |
 | Security — Roles | `screens-admin-security-roles.jsx` | Role catalogue (read-only mirror of Keycloak) |
 | Security — Audit | `screens-admin-security-audit.jsx` | Audit chain reader |
+| Assistant — Chatbot | `screens-chatbot-assistant.jsx` | RAG over the user manual; ADR-0021 |
 | Partners | `screens-partners.jsx`, `screens-dsas.jsx` | Partner catalogue + DSA management |
 | Programmes | `screens-programmes.jsx`, `screens-programme-detail.jsx` | Programme catalogue |
+
+### Approvals queue (v0.3)
+
+`GET /api/v1/admin/approvals/` aggregates every PENDING_APPROVAL item across:
+
+- `ChoiceList` (reference-data drafts)
+- `DqaRule` (DQA rule drafts)
+- `PMTModelVersion` (sign-off chains awaiting steward / DG)
+
+Returns one row per pending item with `kind`, `id`, `name`, `version`, `author`, `submitted_at`, `next_signer_role`. The sidebar entry under **Queue → Approvals** opens the unified workbench; clicking a row deep-links into the corresponding module's detail screen.
+
+DDUP versions are intentionally excluded — DDUP doesn't expose a submit/sign REST surface yet (`workflow_api` only ships list/detail/clone). Add them once the lifecycle endpoints land.
 
 ## Permissions
 

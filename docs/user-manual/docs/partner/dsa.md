@@ -82,6 +82,19 @@ Every DataRequest carries the DSA ID it was validated against. The audit chain r
 
 Reviewing your historical extracts is a `data_request_read` action on your account.
 
+## Email notifications (v0.3)
+
+You'll receive email at every milestone of the DSA lifecycle. Make sure `Partner.primary_email` is set to a monitored inbox — the system uses it as the partner-side recipient.
+
+| Event | What we send | When |
+|---|---|---|
+| DocuSign envelope | DocuSign-branded "Please sign" email to your Authorized Signatory | When NSR Unit submits the DSA for sign-off (handled by DocuSign, not NSR MIS) |
+| Step advances to NSR Unit Lead / DPO | "DSA awaits your signature" — internal-only | After step 1 / step 2 signs |
+| **DSA ACTIVATED** | "DSA `<ref>` is now ACTIVE" — to every signer + `Partner.primary_email` | When step 3 (DPO) signs |
+| **DSA DECLINED** | "DSA `<ref>` was DECLINED at step `<N>`" with verbatim reason — to every signer + `Partner.primary_email` | When any signer declines. The DSA reverts to DRAFT for revision. |
+
+Every notification attempt is itself in the audit chain (`dsa.signoff.notified` / `dsa.activation.notified` / `dsa.decline.notified`). If an email fails to send, the DSA still activates / declines on the audit side — the system never blocks the workflow on a flaky relay.
+
 ## Related
 
 - [Partner portal](partner-portal.md) — where you see your DSA status

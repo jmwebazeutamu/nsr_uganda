@@ -47,6 +47,33 @@ Maintains the Partner catalogue. Maintains DSAs per partner with full scope (fie
 | `PARTNERS_MODULE_ENABLED` | True |
 | `PARTNERS_DOCUSIGN_ENABLED` | False (in-memory stub default) |
 
+## Email notifications (v0.3)
+
+### DSA signing chain
+
+The three-step sign chain (Partner Auth Signatory → NSR Unit Lead → DPO) now triggers email at every transition. Step 1 (Partner Auth Signatory, `method = docusign`) receives a DocuSign envelope — we don't duplicate. Steps 2 + 3 (`method = in_console`) get an email from NSR MIS pointing them at the Admin Console to sign.
+
+| Transition | Recipient(s) |
+|---|---|
+| `record_signature` (chain advances to an in-console step) | Next pending signer's `signer_email` |
+| `record_signature` (all 3 signed → DSA activates) | Every signer + `Partner.primary_email` |
+| `decline_signature` | Every signer (signed + pending) + `Partner.primary_email`, with the verbatim reason — DSA reverts to DRAFT |
+
+Audit footprint: `dsa.signoff.notified`, `dsa.activation.notified`, `dsa.decline.notified`. SMTP failures audit as `notification.failed` and never roll back the workflow.
+
+### Programme sign-off chain
+
+Four-step chain (NSR Coordinator → Partner Steward → DPO → Director). Each step gets notified when the chain advances to its turn.
+
+| Transition | Recipient(s) |
+|---|---|
+| `submit_for_signoff` | NSR Coordinator (step 1) |
+| `sign_step` (not last) | Next pending signer |
+| `sign_step` (final, programme activated) | Creator + every signer |
+| `reject_step` | Every expected signer + creator, with verbatim reason. Programme rolls back to DRAFT (or ACTIVE for amendments). |
+
+Audit footprint: `programme.signoff.notified`, `programme.activation.notified`, `programme.rejection.notified`.
+
 ## ADRs
 
 - [ADR-0011](../appendices/adrs.md) — Partners module
