@@ -310,6 +310,12 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
   const [scopeOpen, setScopeOpen] = useSDsa(false);
   const [renewOpen, setRenewOpen] = useSDsa(false);
   const [submitOpen, setSubmitOpen] = useSDsa(false);
+  // US-S11-038 — non-scope Edit + draft-only Delete. Scope edits
+  // route through ScopeEditModal (existing); this modal patches the
+  // header-level fields the operator actually wants to fix during
+  // draft (effective_to, monthly_row_budget, breach_sla_hours, etc).
+  const [editOpen, setEditOpen] = useSDsa(false);
+  const [deleteOpen, setDeleteOpen] = useSDsa(false);
   const [toast, setToast] = useSDsa("");
 
   if (!dsaId) {
@@ -368,6 +374,20 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
             <button className="btn" onClick={() => setRenewOpen(true)}>
               <Icon name="refresh" size={13}/> Renew
             </button>
+          )}
+          {d.status === "draft" && (
+            <>
+              <button className="btn" onClick={() => setEditOpen(true)}
+                      title="Edit dates, monthly budget, retention, breach SLA, classification">
+                <Icon name="edit" size={13}/> Edit details
+              </button>
+              <button className="btn"
+                      style={{color:"var(--accent-danger)"}}
+                      onClick={() => setDeleteOpen(true)}
+                      title="Hard-delete the draft (DELETE /api/v1/dsas/{id}/)">
+                <Icon name="trash" size={13}/> Delete draft
+              </button>
+            </>
           )}
         </>}
       />
@@ -568,6 +588,30 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
         }}
       />
 
+      <DsaEditDetailsModal
+        open={editOpen}
+        dsa={d}
+        onClose={() => setEditOpen(false)}
+        onSaved={() => {
+          setEditOpen(false);
+          setToast(`Updated ${d.reference} details.`);
+          dsaMeta.refresh();
+        }}
+        onError={(msg) => setToast(`Edit failed: ${msg}`)}
+      />
+
+      <DsaDeleteDraftConfirm
+        open={deleteOpen}
+        dsa={d}
+        onClose={() => setDeleteOpen(false)}
+        onDeleted={() => {
+          setDeleteOpen(false);
+          setToast(`Deleted draft ${d.reference}.`);
+          if (onBack) onBack();
+        }}
+        onError={(msg) => setToast(`Delete failed: ${msg}`)}
+      />
+
       <DsaRenewModal
         open={renewOpen}
         dsa={d}
@@ -594,6 +638,180 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
 
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>
+  );
+};
+
+
+// ════════════════════════════════════════════════════════════════
+// 2b. Edit-details modal — wraps PATCH /api/v1/dsas/{id}/ (US-S11-038)
+//
+// Header-level fields only — scope edits route through ScopeEditModal.
+// Available on draft DSAs; active+ DSAs use renew/edit-scope/submit
+// for the audit-bearing change path.
+// ════════════════════════════════════════════════════════════════
+
+const DsaEditDetailsModal = ({ open, dsa, onClose, onSaved, onError }) => {
+  const [effectiveFrom, setEffectiveFrom] = useSDsa("");
+  const [effectiveTo, setEffectiveTo] = useSDsa("");
+  const [monthlyBudget, setMonthlyBudget] = useSDsa("");
+  const [retentionDays, setRetentionDays] = useSDsa("");
+  const [breachSlaHours, setBreachSlaHours] = useSDsa("");
+  const [classification, setClassification] = useSDsa("");
+  const [dpiaRef, setDpiaRef] = useSDsa("");
+  const [submitting, setSubmitting] = useSDsa(false);
+
+  React.useEffect(() => {
+    if (!open || !dsa) return;
+    setEffectiveFrom(dsa.effective_from || "");
+    setEffectiveTo(dsa.effective_to || "");
+    setMonthlyBudget(dsa.monthly_row_budget ?? "");
+    setRetentionDays(dsa.retention_days ?? "");
+    setBreachSlaHours(dsa.breach_sla_hours ?? "");
+    setClassification(dsa.classification || "");
+    setDpiaRef(dsa.dpia_document_ref || "");
+  }, [open, dsa]);
+
+  if (!open || !dsa) return null;
+  const canSave = !submitting;
+
+  const save = async () => {
+    if (!canSave) return;
+    setSubmitting(true);
+    try {
+      const payload = {
+        effective_from: effectiveFrom || null,
+        effective_to: effectiveTo || null,
+        classification: classification.trim(),
+        dpia_document_ref: dpiaRef.trim(),
+      };
+      // Numerics — only ship when filled; serializer rejects "" on
+      // IntegerField.
+      if (monthlyBudget !== "")  payload.monthly_row_budget = parseInt(monthlyBudget, 10);
+      if (retentionDays !== "")  payload.retention_days   = parseInt(retentionDays, 10);
+      if (breachSlaHours !== "") payload.breach_sla_hours = parseInt(breachSlaHours, 10);
+      await nsrApi.patch(`/api/v1/dsas/${dsa.id}/`, payload);
+      setSubmitting(false);
+      onSaved();
+    } catch (err) {
+      setSubmitting(false);
+      const detail = (err && err.body && (err.body.detail
+        || Object.values(err.body).flat().join(" · "))) || err.message;
+      onError(detail);
+    }
+  };
+
+  return (
+    <Modal open={true} onClose={() => !submitting && onClose()}
+           title={`Edit details · ${dsa.reference}`} size="md">
+      <p className="t-bodysm muted" style={{marginTop:0, marginBottom:16}}>
+        Patches header-level fields on a draft DSA. Scope edits and
+        partner changes route through their dedicated workflows
+        (Edit scope / Submit for sign-off).
+      </p>
+
+      <div className="grid grid-2" style={{gap:12, marginBottom:12}}>
+        <Field label="Effective from">
+          <input type="date" value={effectiveFrom}
+                 onChange={e => setEffectiveFrom(e.target.value)} disabled={submitting}/>
+        </Field>
+        <Field label="Effective to">
+          <input type="date" value={effectiveTo}
+                 onChange={e => setEffectiveTo(e.target.value)} disabled={submitting}/>
+        </Field>
+      </div>
+
+      <div className="grid grid-3" style={{gap:12, marginBottom:12}}>
+        <Field label="Monthly row budget">
+          <input type="number" min={0} value={monthlyBudget}
+                 onChange={e => setMonthlyBudget(e.target.value)} disabled={submitting}/>
+        </Field>
+        <Field label="Retention (days)">
+          <input type="number" min={0} value={retentionDays}
+                 onChange={e => setRetentionDays(e.target.value)} disabled={submitting}/>
+        </Field>
+        <Field label="Breach SLA (hours)">
+          <input type="number" min={0} value={breachSlaHours}
+                 onChange={e => setBreachSlaHours(e.target.value)} disabled={submitting}/>
+        </Field>
+      </div>
+
+      <Field label="Classification">
+        <input value={classification} onChange={e => setClassification(e.target.value)}
+               disabled={submitting} placeholder="e.g. RESTRICTED, INTERNAL"/>
+      </Field>
+      <Field label="DPIA document ref">
+        <input value={dpiaRef} onChange={e => setDpiaRef(e.target.value)} disabled={submitting}
+               placeholder="DPIA-… or document store link"/>
+      </Field>
+
+      <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
+        <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
+        <button className="btn btn-primary" onClick={save} disabled={!canSave}>
+          {submitting ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </Modal>
+  );
+};
+
+
+// ════════════════════════════════════════════════════════════════
+// 2c. Delete-draft confirm — DELETE /api/v1/dsas/{id}/ (US-S11-038)
+// ════════════════════════════════════════════════════════════════
+
+const DsaDeleteDraftConfirm = ({ open, dsa, onClose, onDeleted, onError }) => {
+  const [reason, setReason] = useSDsa("");
+  const [submitting, setSubmitting] = useSDsa(false);
+  React.useEffect(() => { if (open) setReason(""); }, [open]);
+  if (!open || !dsa) return null;
+  const isDraft = dsa.status === "draft";
+
+  const fire = async () => {
+    setSubmitting(true);
+    try {
+      await nsrApi.delete(`/api/v1/dsas/${dsa.id}/`);
+      setSubmitting(false);
+      onDeleted();
+    } catch (err) {
+      setSubmitting(false);
+      const detail = (err && err.body && (err.body.detail
+        || JSON.stringify(err.body))) || err.message;
+      onError(detail);
+    }
+  };
+
+  return (
+    <Modal open={true} onClose={() => !submitting && onClose()}
+           title={`Delete draft ${dsa.reference}?`} size="sm">
+      {!isDraft && (
+        <div className="callout" style={{
+          background:"var(--accent-danger-bg)", color:"var(--accent-danger)",
+          padding:"10px 12px", borderRadius:4, marginBottom:12, fontSize:13,
+        }}>
+          <strong>DSA is not in draft.</strong> Hard-delete is disabled —
+          use Edit scope (v+1 clone), Renew, or wait for natural expiry.
+        </div>
+      )}
+      <p className="t-bodysm" style={{margin:"4px 0 12px"}}>
+        Hard-deletes the draft DSA. No signatures or programmes can be
+        attached to a draft, so the cascade is clean.
+      </p>
+      <Field label="Reason (audit only)">
+        <textarea value={reason} onChange={e => setReason(e.target.value)}
+                  rows={2} disabled={submitting}
+                  placeholder="e.g. partner withdrew before sign-off, replaced by new partner-managed draft."/>
+      </Field>
+      <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
+        <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
+        <button
+          className="btn"
+          style={{background:"var(--accent-danger)", color:"white", borderColor:"var(--accent-danger)"}}
+          onClick={fire} disabled={!isDraft || submitting || !reason.trim()}
+        >
+          {submitting ? "Deleting…" : "Delete draft"}
+        </button>
+      </div>
+    </Modal>
   );
 };
 
