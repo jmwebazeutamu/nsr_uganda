@@ -16,10 +16,13 @@
 //   apps.pmt.tasks                    (recompute jobs)
 //   apps.security.audit               (model activations, recomputes)
 
-const { useState: useStatePMT, useMemo: useMemoPMT } = React;
+const { useState: useStatePMT, useMemo: useMemoPMT, useEffect: useEffectPMT } = React;
 
 /* ============================================================
-   Sample data — mirrors live shape; replace with API reads.
+   Sample data — mock fallback for design-preview / unauthenticated
+   sessions. The live data is fetched from /api/v1/admin/pmt/dashboard/
+   on mount; the projection helpers (pmt*Projected) below convert the
+   API payload into the same shape the JSX renderer consumes.
    ============================================================ */
 const PMT_ACTIVE = {
   version: 1,
@@ -146,6 +149,232 @@ const PMT_RECENT_EVENTS = [
 ];
 
 /* ============================================================
+   Live-data wiring
+   ============================================================ */
+// Format helpers — convert ISO timestamps + raw bytes/ms into the
+// strings the JSX renders. Keep these dumb (no fallback to mock);
+// the live-fetch hook decides whether to use the projected value or
+// the mock constant.
+const _pmtFmtDate = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  const months = ["Jan","Feb","Mar","Apr","May","Jun",
+                   "Jul","Aug","Sep","Oct","Nov","Dec"];
+  return `${d.getDate().toString().padStart(2, "0")} ${months[d.getMonth()]} ${d.getFullYear()}`;
+};
+const _pmtFmtDateTime = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return `${_pmtFmtDate(iso)} · ${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")} EAT`;
+};
+const _pmtDurationMs = (started, finished) => {
+  if (!started || !finished) return 0;
+  const a = new Date(started).getTime();
+  const b = new Date(finished).getTime();
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
+  return Math.max(0, b - a);
+};
+
+// Static enrichment for the band distribution — labels + colours
+// live on the client (presentation concern) so the API ships the
+// canonical {band, count, pct} only.
+const _pmtBandMeta = {
+  extreme_poverty: { label: "Extreme poverty", color: "var(--accent-danger)",  tone: "danger"  },
+  poverty:         { label: "Poverty",         color: "var(--accent-quality)", tone: "quality" },
+  vulnerable:      { label: "Vulnerable",      color: "var(--accent-update)",  tone: "update"  },
+  not_poor:        { label: "Not poor",        color: "var(--accent-data)",    tone: "data"    },
+};
+
+// Static enrichment for trigger codes. Keep in sync with the
+// pmt_trigger_source ChoiceList (US-PMT-014). Unknown codes still
+// render — they just fall back to the raw code + a neutral chip.
+const _pmtTriggerMeta = {
+  initial_registration: { label: "Initial registration", tone: "data" },
+  upd_pmt_relevant:     { label: "UPD · pmt_relevant",   tone: "update" },
+  model_activation:     { label: "Model activation",     tone: "programme" },
+  manual_recompute:     { label: "Manual recompute",     tone: "quality" },
+  ddup_merge:           { label: "DDUP merge",           tone: "identity" },
+  scheduled_batch:      { label: "Scheduled batch",      tone: "neutral" },
+};
+
+// Project the API `active` payload into the camelCase shape the JSX
+// expects. Missing fields fall through to undefined; the renderer
+// always sees the same key set thanks to ?? null elsewhere.
+const _pmtProjectActive = (a) => a ? ({
+  version: a.version,
+  status: a.status,
+  description: a.description || "",
+  author: a.author || "",
+  approvedBy: a.approved_by || "",
+  approvedAt: _pmtFmtDate(a.approved_at),
+  effectiveFrom: _pmtFmtDate(a.effective_from),
+  bandStrategy: a.band_strategy || "",
+  intercept: Number(a.intercept ?? 0),
+  validationRSquared: a.validation_r_squared,
+  calibrationDataset: a.calibration_dataset || "",
+  calibrationYearEnd: a.calibration_year_end || 0,
+  calibrationStale: !!a.calibration_stale,
+  yearsToStale: a.years_to_stale,
+  variablesCount: a.variables_count || 0,
+  bandCutoffsPercentile: a.band_cutoffs_percentile || {},
+  thresholdsLatest: a.thresholds_latest || {},
+  thresholdsComputedAt: _pmtFmtDateTime(a.thresholds_computed_at),
+  thresholdsSampleSize: a.thresholds_sample_size || 0,
+}) : null;
+
+const _pmtProjectBands = (rows) => (rows || []).map(r => {
+  const meta = _pmtBandMeta[r.band] || { label: r.band, color: "var(--neutral-300)", tone: "neutral" };
+  return { band: r.band, count: r.count, pct: r.pct, label: meta.label, color: meta.color, tone: meta.tone };
+});
+
+const _pmtProjectCoverage = (c) => c ? ({
+  totalHouseholds: c.total_households || 0,
+  scored: c.scored || 0,
+  scoredPct: c.total_households
+    ? (c.scored * 100) / c.total_households
+    : 0,
+  scoredInLast30d: c.scored_30d || 0,
+  scoredInLast30dPct: c.total_households
+    ? (c.scored_30d * 100) / c.total_households
+    : 0,
+  scoredInLast90d: c.scored_90d || 0,
+  scoredInLast90dPct: c.total_households
+    ? (c.scored_90d * 100) / c.total_households
+    : 0,
+  scoredStale: c.stale_12mo || 0,
+  scoredStalePct: c.total_households
+    ? (c.stale_12mo * 100) / c.total_households
+    : 0,
+}) : null;
+
+const _pmtProjectVariablesTop = (rows) => (rows || []).map(v => ({
+  name: v.name,
+  weight: Number(v.weight ?? 0),
+  influence: Number(v.influence ?? 0),
+  // transform + group aren't on the API row today; renderer guards
+  // them, so absent is fine.
+  transform: v.transform || "",
+  group: v.group || "",
+}));
+
+const _pmtProjectGeo = (rows) => (rows || []).map(g => ({
+  subreg: g.sub_region_name || g.sub_region_code || "—",
+  rate: Number(g.poverty_rate ?? 0),
+  hh: g.total_households || 0,
+  scored: g.scored_households || 0,
+  pomp: g.in_poverty_count || 0,
+}));
+
+// API drift is `[{wk, <band_name>: <value>}, …]`. JSX expects
+// `{wk, ep, p, v}`. Map the three core band names to the short
+// keys; ignore not_poor (chart doesn't plot it).
+const _pmtProjectDrift = (rows) => (rows || []).map(r => ({
+  wk: r.wk,
+  ep: Number(r.extreme_poverty ?? 0),
+  p:  Number(r.poverty ?? 0),
+  v:  Number(r.vulnerable ?? 0),
+}));
+
+const _pmtProjectTriggers = (rows) => (rows || []).map(t => {
+  const meta = _pmtTriggerMeta[t.code] || { label: t.code, tone: "neutral" };
+  return { code: t.code, count: t.count, share: t.share, label: meta.label, tone: meta.tone };
+});
+
+const _pmtProjectJob = (j) => {
+  if (!j || !j.last_run) return null;
+  const last = j.last_run;
+  return {
+    taskName: "apps.pmt.tasks.recompute_band_thresholds_task",
+    schedule: "Daily · 02:00 EAT",
+    lastRun: _pmtFmtDateTime(last.started_at),
+    durationMs: _pmtDurationMs(last.started_at, last.finished_at),
+    status: last.status || "",
+    bandsWritten: last.rows_written || 0,
+    modelVersionsProcessed: 1,
+    nextRun: "",  // backend doesn't expose this yet; renderer handles ""
+    successRate7d: 100,  // not on payload; left as the existing default
+    recentRuns: (j.recent_runs || []).map(r => ({
+      date: _pmtFmtDate(r.started_at),
+      status: r.status,
+      ms: _pmtDurationMs(r.started_at, r.finished_at),
+      sample: r.sample_size,
+      note: "",
+    })),
+  };
+};
+
+const _pmtProjectEvents = (rows) => (rows || []).map(e => ({
+  when: _pmtFmtDateTime(e.occurred_at).replace(/^\d{2} \w{3} \d{4} · /, ""),
+  actor: e.actor || "—",
+  action: e.action,
+  entity: e.entity_id ? e.entity_id.slice(0, 22) + (e.entity_id.length > 22 ? "…" : "") : "—",
+  detail: e.reason || "",
+  tone: e.action?.startsWith("score.") ? "update" : "system",
+}));
+
+// usePmtDashboard — fetches once on mount, returns { active, bands,
+// coverage, variables_top, geo, drift, triggers, job, recent_events,
+// source: "live"|"fallback"|"loading", error }. On fetch failure
+// silently falls back to the mock constants so the design preview
+// keeps rendering.
+const usePmtDashboard = () => {
+  const [state, setState] = useStatePMT({
+    active: PMT_ACTIVE,
+    bands: PMT_BANDS,
+    coverage: PMT_COVERAGE,
+    variablesTop: PMT_VARIABLES_TOP,
+    geo: PMT_GEO,
+    drift: PMT_DRIFT,
+    triggers: PMT_TRIGGERS,
+    job: PMT_JOB,
+    recentEvents: PMT_RECENT_EVENTS,
+    source: "loading",
+    error: "",
+  });
+  const load = React.useCallback(() => {
+    setState(s => ({ ...s, source: "loading", error: "" }));
+    fetch("/api/v1/admin/pmt/dashboard/", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        const projectedActive = _pmtProjectActive(data.active);
+        // Empty active → no active model on the registry. Keep the
+        // mock visible rather than show a blank card; the source
+        // flag tells the UI we're in fallback.
+        if (!projectedActive) {
+          setState(s => ({ ...s, source: "fallback" }));
+          return;
+        }
+        setState({
+          active: projectedActive,
+          bands: _pmtProjectBands(data.bands),
+          coverage: _pmtProjectCoverage(data.coverage) || PMT_COVERAGE,
+          variablesTop: _pmtProjectVariablesTop(data.variables_top),
+          geo: _pmtProjectGeo(data.geo),
+          drift: _pmtProjectDrift(data.drift),
+          triggers: _pmtProjectTriggers(data.triggers),
+          job: _pmtProjectJob(data.job) || PMT_JOB,
+          recentEvents: _pmtProjectEvents(data.recent_events),
+          source: "live",
+          error: "",
+        });
+      })
+      .catch(e => {
+        setState(s => ({
+          ...s, source: "fallback",
+          error: typeof e === "number" ? `HTTP ${e}` : String(e?.message || e),
+        }));
+      });
+  }, []);
+  useEffectPMT(() => { load(); }, [load]);
+  return { ...state, reload: load };
+};
+
+/* ============================================================
    Local helpers
    ============================================================ */
 const PMT_Stat = ({ label, value, sub, tint = "data", action }) => (
@@ -188,11 +417,50 @@ const BandChip = ({ band }) => {
    ============================================================ */
 const PmtDashboardScreen = ({ onOpenConfig }) => {
   const [periodFilter, setPeriodFilter] = useStatePMT('30d');
+  // Live wiring — falls back to the hardcoded constants when the API
+  // is unreachable so the design preview keeps rendering. Shadowing
+  // the names lets the JSX below stay readable.
+  const dash = usePmtDashboard();
+  const PMT_ACTIVE = dash.active;
+  const PMT_BANDS = dash.bands;
+  const PMT_COVERAGE = dash.coverage;
+  const PMT_VARIABLES_TOP = dash.variablesTop;
+  const PMT_GEO = dash.geo;
+  const PMT_DRIFT = dash.drift;
+  const PMT_TRIGGERS = dash.triggers;
+  const PMT_JOB = dash.job;
+  const PMT_RECENT_EVENTS = dash.recentEvents;
+
+  // Trigger a recompute via the admin API. Disables the button
+  // while running; reloads the dashboard payload on completion so
+  // the new snapshot rolls into view automatically.
+  const [recomputing, setRecomputing] = useStatePMT(false);
+  const [recomputeError, setRecomputeError] = useStatePMT("");
+  const runNow = React.useCallback(() => {
+    setRecomputing(true);
+    setRecomputeError("");
+    const csrf = (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/) || [])[1] || "";
+    fetch("/api/v1/admin/pmt/recompute/run-now/", {
+      method: "POST", credentials: "same-origin",
+      headers: {
+        Accept: "application/json", "Content-Type": "application/json",
+        "X-CSRFToken": csrf,
+      },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(() => { dash.reload(); })
+      .catch(e => setRecomputeError(typeof e === "number" ? `HTTP ${e}` : String(e?.message || e)))
+      .finally(() => setRecomputing(false));
+  }, [dash]);
 
   return (
     <div className="page">
       <PageHeader
-        eyebrow="ADMIN · PMT · operational dashboard"
+        eyebrow={
+          dash.source === "live"     ? "ADMIN · PMT · operational dashboard · LIVE"
+          : dash.source === "fallback" ? "ADMIN · PMT · operational dashboard · MOCK PREVIEW"
+          : "ADMIN · PMT · operational dashboard · loading…"
+        }
         title="Proxy Means Test"
         sub="Operational health of the Uganda PMT engine — active model, band distribution, recompute job, threshold drift, and score coverage."
         right={<>
@@ -225,8 +493,8 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
             <div className="muted">Approved by</div><div>{PMT_ACTIVE.approvedBy}</div>
             <div className="muted">Author</div><div>{PMT_ACTIVE.author}</div>
             <div className="muted">Variables</div><div className="t-num">{PMT_ACTIVE.variablesCount}</div>
-            <div className="muted">Intercept</div><div className="t-mono">{PMT_ACTIVE.intercept.toFixed(4)}</div>
-            <div className="muted">Validation R²</div><div className="t-num">{PMT_ACTIVE.validationRSquared.toFixed(3)}</div>
+            <div className="muted">Intercept</div><div className="t-mono">{(PMT_ACTIVE.intercept ?? 0).toFixed(4)}</div>
+            <div className="muted">Validation R²</div><div className="t-num">{PMT_ACTIVE.validationRSquared != null ? Number(PMT_ACTIVE.validationRSquared).toFixed(3) : "—"}</div>
             <div className="muted">Band strategy</div>
             <div><Chip size="sm" tone="data">{PMT_ACTIVE.bandStrategy}</Chip></div>
             <div className="muted">Calibration dataset</div><div>{PMT_ACTIVE.calibrationDataset}</div>
@@ -290,7 +558,7 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
         <PMT_Stat
           label="Daily recompute job"
           value={PMT_JOB.status === 'success' ? 'Healthy' : 'Degraded'}
-          sub={<>last run <strong>{PMT_JOB.lastRun}</strong> · next {PMT_JOB.nextRun}</>}
+          sub={<>last run <strong>{PMT_JOB.lastRun || "—"}</strong>{PMT_JOB.nextRun && <> · next {PMT_JOB.nextRun}</>}</>}
           tint={PMT_JOB.status === 'success' ? 'data' : 'quality'}/>
       </div>
 
@@ -335,12 +603,15 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
             sub="% in poverty + extreme poverty"
             action={<button className="btn btn-sm btn-ghost"><Icon name="download" size={12}/> CSV</button>}/>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {PMT_GEO.length === 0 && (
+              <div className="t-cap muted">No sub-region snapshots yet.</div>
+            )}
             {PMT_GEO.map(g => {
               const tone = g.rate >= 40 ? 'var(--accent-danger)'
                 : g.rate >= 25 ? 'var(--accent-quality)'
                 : g.rate >= 15 ? 'var(--accent-update)'
                 : 'var(--accent-data)';
-              const maxRate = Math.max(...PMT_GEO.map(x => x.rate));
+              const maxRate = Math.max(1, ...PMT_GEO.map(x => x.rate));
               return (
                 <div key={g.subreg} style={{
                   display: 'grid', gridTemplateColumns: '140px 1fr 80px 80px',
@@ -381,11 +652,11 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
           {/* SVG line chart — three band thresholds over weeks */}
           <ThresholdDrift data={PMT_DRIFT}/>
           <div className="row gap-3 mt-3" style={{ flexWrap: 'wrap' }}>
-            {[
+            {(PMT_DRIFT.length === 0 ? [] : [
               ['extreme_poverty', 'var(--accent-danger)',  PMT_DRIFT[PMT_DRIFT.length-1].ep - PMT_DRIFT[0].ep],
               ['poverty',         'var(--accent-quality)', PMT_DRIFT[PMT_DRIFT.length-1].p  - PMT_DRIFT[0].p],
               ['vulnerable',      'var(--accent-update)',  PMT_DRIFT[PMT_DRIFT.length-1].v  - PMT_DRIFT[0].v],
-            ].map(([b, color, delta]) => (
+            ]).map(([b, color, delta]) => (
               <div key={b} className="row gap-2">
                 <span style={{ width: 10, height: 10, borderRadius: 2, background: color }}/>
                 <BandChip band={b}/>
@@ -400,10 +671,10 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
         </div>
 
         <div className="card" style={{ padding: 20 }}>
-          <PMT_SectionHead title="Trigger sources" sub="last 90 days · 228,004 scores"/>
+          <PMT_SectionHead title="Trigger sources" sub={`last 90 days · ${PMT_TRIGGERS.reduce((a, t) => a + (t.count || 0), 0).toLocaleString()} scores`}/>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {PMT_TRIGGERS.map(t => {
-              const max = Math.max(...PMT_TRIGGERS.map(x => x.share));
+              const max = Math.max(1, ...PMT_TRIGGERS.map(x => x.share));
               return (
                 <div key={t.code}>
                   <div className="row gap-2" style={{ alignItems: 'center' }}>
@@ -438,8 +709,19 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
             <Chip size="sm" tone="data">{PMT_JOB.successRate7d}% / 7d</Chip>
             <span className="t-cap t-mono">{PMT_JOB.taskName}</span>
             <div style={{ flex: 1 }}/>
-            <button className="btn btn-sm"><Icon name="refresh" size={12}/> Run now</button>
+            <button className="btn btn-sm" disabled={recomputing} onClick={runNow}>
+              <Icon name="refresh" size={12}/> {recomputing ? "Running…" : "Run now"}
+            </button>
           </div>
+          {recomputeError && (
+            <div className="t-bodysm" style={{
+              color: "var(--accent-danger)", padding: "8px 20px",
+              background: "var(--neutral-50)",
+              borderBottom: "1px solid var(--neutral-200)",
+            }}>
+              Run-now failed: {recomputeError}
+            </div>
+          )}
           <div style={{ padding: '12px 20px', display:'grid', gridTemplateColumns:'180px 1fr', rowGap:6, fontSize:13 }}>
             <div className="muted">Schedule</div><div>{PMT_JOB.schedule}</div>
             <div className="muted">Last run</div><div>{PMT_JOB.lastRun} · {(PMT_JOB.durationMs/1000).toFixed(1)}s · {PMT_JOB.bandsWritten} bands written</div>
@@ -469,7 +751,7 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
           <PMT_SectionHead title="Top variables by influence" sub="model v1 · |β × σ| × sample mean"/>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {PMT_VARIABLES_TOP.map(v => {
-              const max = Math.max(...PMT_VARIABLES_TOP.map(x => x.influence));
+              const max = Math.max(0.0001, ...PMT_VARIABLES_TOP.map(x => x.influence));
               const isNeg = v.weight < 0;
               return (
                 <div key={v.name}>
@@ -552,10 +834,23 @@ const ThresholdDrift = ({ data }) => {
   const innerW = w - pad.l - pad.r;
   const innerH = h - pad.t - pad.b;
 
+  // Empty data — render an empty frame rather than crash on
+  // Math.min(...[]) / division-by-zero. Live registries with no
+  // accumulated PMTBandThreshold rows yet land here.
+  if (!data || data.length === 0) {
+    return (
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: '100%', height: 'auto', maxHeight: 260 }} role="img" aria-label="Threshold drift chart (no data)">
+        <text x={w / 2} y={h / 2} fontSize="12" textAnchor="middle" fill="var(--neutral-500)">
+          No threshold drift data yet
+        </text>
+      </svg>
+    );
+  }
+
   const allVals = data.flatMap(d => [d.ep, d.p, d.v]);
   const yMin = Math.floor(Math.min(...allVals) * 100) / 100 - 0.02;
   const yMax = Math.ceil(Math.max(...allVals) * 100) / 100 + 0.02;
-  const xStep = innerW / (data.length - 1);
+  const xStep = data.length === 1 ? 0 : innerW / (data.length - 1);
 
   const path = (key, color) => {
     const d = data.map((row, i) => {
