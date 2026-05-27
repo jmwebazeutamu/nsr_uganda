@@ -14,6 +14,7 @@ from django.utils import timezone
 
 from apps.data_management.models import Household
 from apps.security.audit import emit as emit_audit
+from apps.security.notifications import send_notification
 
 from .constants import PMT_TRIGGER_MANUAL
 from .engine import compute_pmt
@@ -141,6 +142,31 @@ def submit_for_approval(
         reason=f"submitted for sign-off · v{version.version}",
         field_changes={"steward": steward, "ubos_dg": dg},
     )
+
+    # Notify the next signer in the chain. On submit that's the
+    # MGLSD steward (step 2 — step 1 is the author, who's already
+    # signed by submitting). UBOS DG (step 3) gets notified when
+    # the steward signs, NOT on submit, so the chain advances
+    # one-at-a-time. Best-effort: SMTP failures audit themselves
+    # via send_notification and never break the workflow.
+    send_notification(
+        to=steward,
+        subject=f"[NSR MIS] PMT v{version.version} awaits your signature",
+        body=(
+            f"PMT model v{version.version} has been submitted for sign-off "
+            f"by {actor} and is awaiting the MGLSD Steward signature "
+            f"(step 2 of 3).\n\n"
+            f"Description: {version.description or '(none)'}\n"
+            f"Variables: {len(version.variables or [])}\n\n"
+            f"Open the PMT Configuration screen in the Admin Console "
+            f"to review and sign.\n"
+        ),
+        entity_type="pmt_model_version",
+        entity_id=str(version.id),
+        audit_actor=actor,
+        audit_action="pmt.signoff.notified",
+        audit_reason=f"step 2 (steward) notified on v{version.version} submit",
+    )
     return version
 
 
@@ -222,17 +248,67 @@ def sign_step(
     # Last sign — activate via the existing service so the
     # AC-PMT-MODEL-VERSION audit row + prior-active-retirement
     # invariants stay centralised.
-    remaining = PMTModelSignOff.objects.filter(
-        model_version=version,
-        revision=version.version,
-        status=PMTModelSignOff.PENDING,
-    ).exists()
-    if not remaining:
+    next_pending = (
+        PMTModelSignOff.objects
+        .filter(
+            model_version=version,
+            revision=version.version,
+            status=PMTModelSignOff.PENDING,
+        )
+        .order_by("step")
+        .first()
+    )
+    if next_pending is None:
         activate_model_version(version, approver=actor)
         emit_audit(
             "pmt.model.activated", "pmt_model_version", version.id,
             actor=actor,
             reason="all sign-off steps signed",
+        )
+        # Chain complete — tell the author + everyone who signed
+        # that the model is now ACTIVE. The author is on step 1's
+        # `actual_email`; the prior signers are in `prior`.
+        author_email = _norm_email(version.author)
+        send_notification(
+            to=list(prior | ({author_email} if author_email else set())),
+            subject=f"[NSR MIS] PMT v{version.version} is now ACTIVE",
+            body=(
+                f"PMT model v{version.version} has completed its three-step "
+                f"sign-off and is now ACTIVE.\n\n"
+                f"Final signer: {actor} (step {step})\n"
+                f"Description: {version.description or '(none)'}\n\n"
+                f"Score recompute will pick up the new model on its next "
+                f"tick. PMT Dashboard reflects the change immediately.\n"
+            ),
+            entity_type="pmt_model_version",
+            entity_id=str(version.id),
+            audit_actor=actor,
+            audit_action="pmt.activation.notified",
+            audit_reason=f"v{version.version} activated; chain complete",
+        )
+    else:
+        # Chain advances — notify the next signer.
+        send_notification(
+            to=next_pending.expected_email,
+            subject=(
+                f"[NSR MIS] PMT v{version.version} awaits your signature"
+            ),
+            body=(
+                f"PMT model v{version.version} has been signed at step "
+                f"{step} by {actor}. It now awaits your signature at "
+                f"step {next_pending.step} ({next_pending.expected_role}).\n\n"
+                f"Description: {version.description or '(none)'}\n\n"
+                f"Open the PMT Configuration screen in the Admin Console "
+                f"to review and sign.\n"
+            ),
+            entity_type="pmt_model_version",
+            entity_id=str(version.id),
+            audit_actor=actor,
+            audit_action="pmt.signoff.notified",
+            audit_reason=(
+                f"step {next_pending.step} ({next_pending.expected_role}) "
+                f"notified after step {step} signed"
+            ),
         )
 
     return version
@@ -310,6 +386,30 @@ def reject_step(
         actor=actor,
         reason=reason,
         field_changes={"step": step, "terminal_status": "rejected"},
+    )
+
+    # Notify the author that their model was rejected, so they
+    # know to clone a fresh draft and revise. Reason is included
+    # verbatim — the author needs to see exactly what the reviewer
+    # said. The reviewer who rejected is named so the author can
+    # follow up directly if anything is unclear.
+    send_notification(
+        to=_norm_email(version.author),
+        subject=f"[NSR MIS] PMT v{version.version} was REJECTED at step {step}",
+        body=(
+            f"Your PMT model v{version.version} was rejected at step "
+            f"{step} ({row.expected_role}) by {actor}.\n\n"
+            f"Reason given:\n{reason}\n\n"
+            f"This version is now terminally REJECTED — the audit chain "
+            f"keeps the row, but the operator UI hides it from default "
+            f"listings. To revise, clone the draft from PMT Configuration "
+            f"and submit again.\n"
+        ),
+        entity_type="pmt_model_version",
+        entity_id=str(version.id),
+        audit_actor=actor,
+        audit_action="pmt.rejection.notified",
+        audit_reason=f"v{version.version} rejected at step {step}",
     )
     return version
 

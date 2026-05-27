@@ -31,6 +31,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.security.audit import emit as emit_audit
+from apps.security.notifications import send_notification
 
 if TYPE_CHECKING:
     from apps.partners.models import DataSharingAgreement, DsaSignature
@@ -233,6 +234,35 @@ def record_signature(
                 entity_type="dsa_signature", entity_id=next_sig.id,
                 reason=next_sig.docusign_envelope_id or "stub",
             )
+        else:
+            # In-console signers don't get a DocuSign envelope, so
+            # we email them directly. Without this they have no
+            # signal to log in and act on the pending row.
+            send_notification(
+                to=next_sig.signer_email,
+                subject=(
+                    f"[NSR MIS] DSA {signature.dsa.reference} "
+                    f"awaits your signature"
+                ),
+                body=(
+                    f"DSA {signature.dsa.reference} v{signature.dsa.version} "
+                    f"has been signed by the previous party ({signature.signer_role}) "
+                    f"and is now awaiting your signature as "
+                    f"{next_sig.signer_role} (step "
+                    f"{next_sig.sequence_order} of 3).\n\n"
+                    f"Partner: {signature.dsa.partner.name}\n\n"
+                    f"Open the DSA in the Admin Console to review and sign.\n"
+                ),
+                entity_type="dsa_signature",
+                entity_id=str(next_sig.id),
+                audit_actor=actor,
+                audit_action="dsa.signoff.notified",
+                audit_reason=(
+                    f"step {next_sig.sequence_order} "
+                    f"({next_sig.signer_role}) notified "
+                    f"after step {signature.sequence_order} signed"
+                ),
+            )
     else:
         # All signed — activate.
         dsa = signature.dsa
@@ -243,6 +273,35 @@ def record_signature(
             actor=actor, action="activate",
             entity_type="dsa", entity_id=dsa.id,
             reason="all three signatures complete",
+        )
+        # Notify every signer + the partner that the DSA is now
+        # active. Dedup happens inside send_notification so a
+        # partner-signer whose email also matches the partner
+        # primary_email only gets one mail.
+        all_signer_emails = list(
+            DsaSignature.objects
+            .filter(dsa=dsa, status="signed")
+            .values_list("signer_email", flat=True),
+        )
+        partner_email = getattr(dsa.partner, "primary_email", "") or ""
+        send_notification(
+            to=all_signer_emails + [partner_email],
+            subject=(
+                f"[NSR MIS] DSA {dsa.reference} is now ACTIVE"
+            ),
+            body=(
+                f"DSA {dsa.reference} v{dsa.version} between MGLSD NSR and "
+                f"{dsa.partner.name} has completed its three-step sign-off "
+                f"and is now ACTIVE.\n\n"
+                f"Effective from: {dsa.effective_from or '(see record)'}\n"
+                f"Effective to:   {dsa.effective_to or '(see record)'}\n\n"
+                f"Data requests against this DSA can now be processed.\n"
+            ),
+            entity_type="dsa",
+            entity_id=str(dsa.id),
+            audit_actor=actor,
+            audit_action="dsa.activation.notified",
+            audit_reason=f"{dsa.reference} v{dsa.version} activated",
         )
         # Supersession (ADR-0016 §"Decision 4"): if this newly
         # active DSA is the v(N+1) of an existing reference, the
@@ -336,5 +395,36 @@ def decline_signature(
         actor=actor, action="suspend",
         entity_type="dsa", entity_id=dsa.id,
         reason=f"declined by {signature.signer_role}",
+    )
+
+    # Notify every signer (signed + pending) and the partner that
+    # the DSA reverted to draft so the originator can revise and
+    # resubmit. Reason is included verbatim; the next iteration
+    # depends on it.
+    from apps.partners.models import DsaSignature as _DsaSig
+    notify_emails = list(
+        _DsaSig.objects
+        .filter(dsa=dsa)
+        .values_list("signer_email", flat=True),
+    )
+    partner_email = getattr(dsa.partner, "primary_email", "") or ""
+    send_notification(
+        to=notify_emails + [partner_email],
+        subject=(
+            f"[NSR MIS] DSA {dsa.reference} was DECLINED at step "
+            f"{signature.sequence_order}"
+        ),
+        body=(
+            f"DSA {dsa.reference} v{dsa.version} was declined at step "
+            f"{signature.sequence_order} ({signature.signer_role}).\n\n"
+            f"Reason given:\n{reason}\n\n"
+            f"The DSA has reverted to DRAFT. The originator can revise "
+            f"and resubmit for sign-off.\n"
+        ),
+        entity_type="dsa",
+        entity_id=str(dsa.id),
+        audit_actor=actor,
+        audit_action="dsa.decline.notified",
+        audit_reason=f"{dsa.reference} declined at step {signature.sequence_order}",
     )
     return signature

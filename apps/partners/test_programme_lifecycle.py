@@ -591,3 +591,85 @@ class TestProgrammeReadEndpoints:
         assert r.status_code == 200
         assert r.data["revision"] == 99
         assert r.data["items"] == []
+
+
+@pytest.mark.django_db
+class TestProgrammeNotifications:
+    """Each lifecycle transition emails the right party. Submit
+    notifies step 1; each sign notifies the next pending step;
+    final sign notifies creator + every signer; rejection notifies
+    everyone with the verbatim reason."""
+
+    def test_submit_emails_step_1_signer(self, draft_programme, emails):
+        from django.core import mail
+        mail.outbox.clear()
+        from apps.partners.services.programme_lifecycle import submit_for_signoff
+        submit_for_signoff(draft_programme, actor="florence", **emails)
+        assert len(mail.outbox) == 1
+        msg = mail.outbox[0]
+        assert msg.to == ["coordinator@nsr.go.ug"]
+        assert "step 1 of 4" in msg.body
+
+    def test_sign_emails_next_step(self, draft_programme, emails):
+        from django.core import mail
+
+        from apps.partners.services.programme_lifecycle import (
+            sign_step,
+            submit_for_signoff,
+        )
+        submit_for_signoff(draft_programme, actor="florence", **emails)
+        mail.outbox.clear()
+        sign_step(draft_programme, 1, actor_email="coordinator@nsr.go.ug")
+        assert len(mail.outbox) == 1
+        assert mail.outbox[0].to == ["steward@opm.go.ug"]
+
+    def test_final_sign_emails_creator_and_all_signers(
+        self, draft_programme, emails,
+    ):
+        from django.core import mail
+
+        from apps.partners.services.programme_lifecycle import (
+            sign_step,
+            submit_for_signoff,
+        )
+        submit_for_signoff(draft_programme, actor="florence", **emails)
+        sign_step(draft_programme, 1, actor_email="coordinator@nsr.go.ug")
+        sign_step(draft_programme, 2, actor_email="steward@opm.go.ug")
+        sign_step(draft_programme, 3, actor_email="dpo@nsr.go.ug")
+        mail.outbox.clear()
+        sign_step(draft_programme, 4, actor_email="director@nsr.go.ug")
+        activations = [m for m in mail.outbox if "ACTIVE" in m.subject]
+        assert len(activations) == 1
+        # Every signer + creator (florence) — helper dedupes.
+        assert set(activations[0].to) >= {
+            "coordinator@nsr.go.ug", "steward@opm.go.ug",
+            "dpo@nsr.go.ug", "director@nsr.go.ug",
+            "florence",
+        }
+
+    def test_reject_emails_everyone_with_reason(
+        self, draft_programme, emails,
+    ):
+        from django.core import mail
+
+        from apps.partners.services.programme_lifecycle import (
+            reject_step,
+            submit_for_signoff,
+        )
+        submit_for_signoff(draft_programme, actor="florence", **emails)
+        mail.outbox.clear()
+        reject_step(
+            draft_programme, 1,
+            actor_email="coordinator@nsr.go.ug",
+            reason="missing PMT impact assessment — please attach",
+        )
+        rejects = [m for m in mail.outbox if "REJECTED" in m.subject]
+        assert len(rejects) == 1
+        msg = rejects[0]
+        # All 4 expected signers + the creator.
+        assert set(msg.to) >= {
+            "coordinator@nsr.go.ug", "steward@opm.go.ug",
+            "dpo@nsr.go.ug", "director@nsr.go.ug",
+            "florence",
+        }
+        assert "missing PMT impact assessment" in msg.body

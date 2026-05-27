@@ -28,6 +28,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.security.audit import emit as emit_audit
+from apps.security.notifications import send_notification
 
 if TYPE_CHECKING:
     from apps.partners.models import Programme
@@ -141,6 +142,35 @@ def submit_for_signoff(
         actor=actor,
         reason=f"submitted for sign-off · revision {programme.current_revision}",
         field_changes={"emails": list(emails.values())},
+    )
+
+    # Notify the first signer in the chain that their action is
+    # required. Subsequent signers learn one-at-a-time as the chain
+    # advances (see sign_step). All emails are best-effort — SMTP
+    # failures audit themselves and never block the workflow.
+    first = rows[0]
+    send_notification(
+        to=first.expected_email,
+        subject=(
+            f"[NSR MIS] Programme {programme.code or programme.id} "
+            f"awaits your signature"
+        ),
+        body=(
+            f"Programme {programme.code or programme.id} "
+            f"({programme.name or 'unnamed'}) has been submitted for sign-off "
+            f"by {actor} and is now awaiting your signature as "
+            f"{first.expected_role} (step 1 of {len(rows)}).\n\n"
+            f"Open the Programme record in the Admin Console to review "
+            f"and sign.\n"
+        ),
+        entity_type="programme",
+        entity_id=str(programme.id),
+        audit_actor=actor,
+        audit_action="programme.signoff.notified",
+        audit_reason=(
+            f"step 1 ({first.expected_role}) notified on submit · "
+            f"revision {programme.current_revision}"
+        ),
     )
     return programme
 
@@ -256,13 +286,20 @@ def sign_step(
         row.audit_event_id = str(audit_event.id)
         row.save(update_fields=["audit_event_id", "updated_at"])
 
-    # 4th sign — flip the programme to ACTIVE.
-    remaining_pending = ProgrammeSignOff.objects.filter(
-        programme=programme,
-        revision=programme.current_revision,
-        status=ProgrammeSignOff.PENDING,
-    ).exists()
-    if not remaining_pending:
+    # 4th sign — flip the programme to ACTIVE. Up to that point, the
+    # chain advances one signer at a time and the next pending row's
+    # holder gets a notification.
+    next_pending = (
+        ProgrammeSignOff.objects
+        .filter(
+            programme=programme,
+            revision=programme.current_revision,
+            status=ProgrammeSignOff.PENDING,
+        )
+        .order_by("step")
+        .first()
+    )
+    if next_pending is None:
         was_amendment = programme.status == PENDING_AMENDMENT
         programme.status = ACTIVE
         if programme.activated_at is None:
@@ -275,6 +312,65 @@ def sign_step(
                 "all 4 steps signed"
                 if not was_amendment
                 else f"amendment r{programme.current_revision} approved"
+            ),
+        )
+        # Tell the creator + every signer that the programme is
+        # active. Signers might also include the creator's email
+        # in rare configurations — dedup happens inside helper.
+        signer_emails = list(
+            ProgrammeSignOff.objects
+            .filter(
+                programme=programme,
+                revision=programme.current_revision,
+                status=ProgrammeSignOff.SIGNED,
+            )
+            .values_list("actual_email", flat=True),
+        )
+        send_notification(
+            to=signer_emails + [_norm_email(programme.created_by)],
+            subject=(
+                f"[NSR MIS] Programme {programme.code or programme.id} "
+                f"is now ACTIVE"
+            ),
+            body=(
+                f"Programme {programme.code or programme.id} "
+                f"({programme.name or 'unnamed'}) has completed its 4-step "
+                f"sign-off and is now ACTIVE.\n\n"
+                f"Final signer: {actor} (step {step})\n"
+                f"Revision: {programme.current_revision}\n\n"
+                f"Referrals + enrolments can now run against this programme.\n"
+            ),
+            entity_type="programme",
+            entity_id=str(programme.id),
+            audit_actor=actor,
+            audit_action="programme.activation.notified",
+            audit_reason=(
+                f"r{programme.current_revision} activated · chain complete"
+            ),
+        )
+    else:
+        # Chain advances — notify the next signer.
+        send_notification(
+            to=next_pending.expected_email,
+            subject=(
+                f"[NSR MIS] Programme {programme.code or programme.id} "
+                f"awaits your signature"
+            ),
+            body=(
+                f"Programme {programme.code or programme.id} "
+                f"({programme.name or 'unnamed'}) has been signed at step "
+                f"{step} by {actor}. It now awaits your signature at "
+                f"step {next_pending.step} ({next_pending.expected_role}).\n\n"
+                f"Open the Programme record in the Admin Console to review "
+                f"and sign.\n"
+            ),
+            entity_type="programme",
+            entity_id=str(programme.id),
+            audit_actor=actor,
+            audit_action="programme.signoff.notified",
+            audit_reason=(
+                f"step {next_pending.step} ({next_pending.expected_role}) "
+                f"notified after step {step} signed"
             ),
         )
 
@@ -363,6 +459,41 @@ def reject_step(
         actor=actor,
         reason=reason,
         field_changes={"step": step, "rolled_back_to": rollback},
+    )
+
+    # Notify the creator + every signer (signed + pending) so they
+    # know the chain has rolled back. The pending signers especially
+    # — they were waiting for an upstream signature that's no longer
+    # coming. Reason is verbatim so the creator can act on it.
+    all_emails = list(
+        ProgrammeSignOff.objects
+        .filter(
+            programme=programme,
+            revision=programme.current_revision,
+        )
+        .values_list("expected_email", flat=True),
+    )
+    send_notification(
+        to=all_emails + [_norm_email(programme.created_by)],
+        subject=(
+            f"[NSR MIS] Programme {programme.code or programme.id} "
+            f"was REJECTED at step {step}"
+        ),
+        body=(
+            f"Programme {programme.code or programme.id} "
+            f"({programme.name or 'unnamed'}) was rejected at step "
+            f"{step} ({row.expected_role}) by {actor}.\n\n"
+            f"Reason given:\n{reason}\n\n"
+            f"The programme has rolled back to {rollback}. "
+            f"Revise and resubmit when ready.\n"
+        ),
+        entity_type="programme",
+        entity_id=str(programme.id),
+        audit_actor=actor,
+        audit_action="programme.rejection.notified",
+        audit_reason=(
+            f"r{programme.current_revision} rejected at step {step}"
+        ),
     )
     return programme
 

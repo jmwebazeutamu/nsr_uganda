@@ -256,3 +256,79 @@ class TestReject:
                 actor_email="analyst@nsr.go.ug",
                 reason="self-reject attempt long enough",
             )
+
+
+# ───────────────────────────────────────────────────────────────
+# Email notifications — each lifecycle transition emails the right
+# party. SMTP backend is `locmem` in tests, so we read django.core.mail.outbox.
+# ───────────────────────────────────────────────────────────────
+
+@pytest.mark.django_db
+class TestSignoffNotifications:
+
+    def test_submit_emails_the_steward(self, draft_version, emails):
+        from django.core import mail
+        mail.outbox.clear()
+        submit_for_approval(
+            draft_version, actor="analyst@nsr.go.ug", **emails,
+        )
+        # Only the steward gets emailed on submit — the UBOS DG
+        # waits until the steward signs (chain advances one-at-a-time).
+        assert len(mail.outbox) == 1
+        msg = mail.outbox[0]
+        assert msg.to == ["steward@mglsd.go.ug"]
+        assert f"v{draft_version.version}" in msg.subject
+        assert "step 2 of 3" in msg.body
+
+    def test_steward_signing_emails_the_dg(self, draft_version, emails):
+        from django.core import mail
+        submit_for_approval(
+            draft_version, actor="analyst@nsr.go.ug", **emails,
+        )
+        mail.outbox.clear()
+        sign_step(
+            draft_version, 2,
+            actor_email="steward@mglsd.go.ug",
+            note="approved · seven-day calibration sample",
+        )
+        # Chain advanced — DG gets the "awaits your signature" mail.
+        assert len(mail.outbox) == 1
+        msg = mail.outbox[0]
+        assert msg.to == ["dg@ubos.go.ug"]
+        assert "awaits your signature" in msg.subject
+
+    def test_final_signing_emails_author_and_prior_signers(
+        self, draft_version, emails,
+    ):
+        from django.core import mail
+        submit_for_approval(
+            draft_version, actor="analyst@nsr.go.ug", **emails,
+        )
+        sign_step(draft_version, 2, actor_email="steward@mglsd.go.ug")
+        mail.outbox.clear()
+        sign_step(draft_version, 3, actor_email="dg@ubos.go.ug")
+        # Chain complete — author + steward both get the "ACTIVE" mail.
+        assert len(mail.outbox) == 1
+        msg = mail.outbox[0]
+        assert "ACTIVE" in msg.subject
+        assert set(msg.to) == {"analyst@nsr.go.ug", "steward@mglsd.go.ug"}
+
+    def test_rejection_emails_the_author_with_reason(
+        self, draft_version, emails,
+    ):
+        from django.core import mail
+        submit_for_approval(
+            draft_version, actor="analyst@nsr.go.ug", **emails,
+        )
+        mail.outbox.clear()
+        reject_step(
+            draft_version, 2,
+            actor_email="steward@mglsd.go.ug",
+            reason="validation R² below acceptance threshold",
+        )
+        assert len(mail.outbox) == 1
+        msg = mail.outbox[0]
+        assert msg.to == ["analyst@nsr.go.ug"]
+        assert "REJECTED" in msg.subject
+        # Reason is included verbatim so the author can act on it.
+        assert "validation R² below acceptance threshold" in msg.body

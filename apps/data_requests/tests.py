@@ -222,6 +222,60 @@ class TestDeliver:
                                  row_count=1, actor="x")
 
 
+class TestDrsNotifications:
+    """Each lifecycle transition emails the partner contact + the
+    request requester. Reasons are passed through verbatim;
+    delivery emails carry the manifest SHA + expiry."""
+
+    def test_approve_emails_partner_and_requester(self, draft_request, partner):
+        from django.core import mail
+        partner.primary_email = "ops@partner.go.ug"
+        partner.save()
+        submit_data_request(draft_request)
+        mail.outbox.clear()
+        approve_data_request(draft_request, approver="dpo-1")
+        approvals = [m for m in mail.outbox if "approved" in m.subject]
+        assert len(approvals) == 1
+        assert set(approvals[0].to) == {"ops@partner.go.ug", "partner-analyst-1"}
+
+    def test_reject_emails_with_reason(self, draft_request, partner):
+        from django.core import mail
+        partner.primary_email = "ops@partner.go.ug"
+        partner.save()
+        submit_data_request(draft_request)
+        mail.outbox.clear()
+        reject_data_request(
+            draft_request, approver="dpo-1",
+            reason="requested fields outside DSA scope",
+        )
+        rejects = [m for m in mail.outbox if "REJECTED" in m.subject]
+        assert len(rejects) == 1
+        msg = rejects[0]
+        assert set(msg.to) == {"ops@partner.go.ug", "partner-analyst-1"}
+        assert "requested fields outside DSA scope" in msg.body
+
+    def test_deliver_emails_manifest_sha_and_expiry(self, draft_request, partner):
+        from django.core import mail
+        partner.primary_email = "ops@partner.go.ug"
+        partner.save()
+        submit_data_request(draft_request)
+        approve_data_request(draft_request, approver="dpo-1")
+        mail.outbox.clear()
+        sha = "f" * 64
+        deliver_data_request(
+            draft_request, manifest_sha256=sha,
+            row_count=1234, actor="export-bot",
+        )
+        deliveries = [m for m in mail.outbox if "extract ready" in m.subject]
+        assert len(deliveries) == 1
+        msg = deliveries[0]
+        assert set(msg.to) == {"ops@partner.go.ug", "partner-analyst-1"}
+        # Body carries the manifest SHA so the partner can verify
+        # integrity, and the row count for sanity-check.
+        assert sha in msg.body
+        assert "1,234" in msg.body
+
+
 class TestExpire:
     def test_expire_after_delivery(self, draft_request):
         submit_data_request(draft_request)

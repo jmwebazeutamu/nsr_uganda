@@ -26,6 +26,7 @@ from django.utils import timezone
 
 from apps.partners.models import DataSharingAgreement
 from apps.security.audit import emit as emit_audit
+from apps.security.notifications import send_notification
 
 from .models import (
     DataRequest,
@@ -296,6 +297,30 @@ def approve_data_request(req: DataRequest, *, approver: str) -> DataRequest:
     req.save(update_fields=["status", "approver", "decided_at", "updated_at"])
     emit_audit("approve", "data_request", req.id, actor=approver,
                reason="approved")
+
+    # Notify the partner that their request was approved and is now
+    # queued for delivery. The actual extract bundle email lands later
+    # (deliver_data_request); this is the "your request is moving"
+    # signal so partners aren't left wondering.
+    partner_email = getattr(req.dsa.partner, "primary_email", "") or ""
+    send_notification(
+        to=[partner_email, req.requester],
+        subject=(
+            f"[NSR MIS] Data request {str(req.id)[:12]}… approved"
+        ),
+        body=(
+            f"Your data request against DSA {req.dsa.reference} "
+            f"(v{req.dsa.version}) has been approved by {approver}.\n\n"
+            f"The extract will be generated and delivered shortly. "
+            f"You'll receive a second email when the bundle is ready, "
+            f"including the manifest SHA-256 and download link.\n"
+        ),
+        entity_type="data_request",
+        entity_id=str(req.id),
+        audit_actor=approver,
+        audit_action="data_request.approved.notified",
+        audit_reason=f"approved by {approver}",
+    )
     return req
 
 
@@ -315,6 +340,28 @@ def reject_data_request(req: DataRequest, *, approver: str, reason: str) -> Data
         "status", "approver", "decided_at", "decision_reason", "updated_at",
     ])
     emit_audit("reject", "data_request", req.id, actor=approver, reason=reason)
+
+    # Notify the requester + partner contact with the verbatim
+    # reason so they know what to revise if they want to resubmit.
+    partner_email = getattr(req.dsa.partner, "primary_email", "") or ""
+    send_notification(
+        to=[partner_email, req.requester],
+        subject=(
+            f"[NSR MIS] Data request {str(req.id)[:12]}… REJECTED"
+        ),
+        body=(
+            f"Your data request against DSA {req.dsa.reference} "
+            f"(v{req.dsa.version}) was rejected by {approver}.\n\n"
+            f"Reason given:\n{reason}\n\n"
+            f"Revise the request scope or contact the approver if "
+            f"anything is unclear.\n"
+        ),
+        entity_type="data_request",
+        entity_id=str(req.id),
+        audit_actor=approver,
+        audit_action="data_request.rejected.notified",
+        audit_reason=f"rejected by {approver}",
+    )
     return req
 
 
@@ -358,6 +405,41 @@ def deliver_data_request(
             "dsa_reference": req.dsa.reference,
             "rows_delivered": row_count,
         },
+    )
+
+    # Tell the partner the bundle is ready, with the manifest SHA so
+    # they can verify integrity, and the expiry window so they know
+    # how long they have to download. Per ADR-0013 (Sprint 23) the
+    # partner_code lives on the audit event too — keeping the body
+    # human-readable here, the audit row is the structured form.
+    partner_email = getattr(req.dsa.partner, "primary_email", "") or ""
+    send_notification(
+        to=[partner_email, req.requester],
+        subject=(
+            f"[NSR MIS] Data extract ready · "
+            f"{str(req.id)[:12]}… · {row_count} rows"
+        ),
+        body=(
+            f"The data extract for your request against DSA "
+            f"{req.dsa.reference} (v{req.dsa.version}) is ready.\n\n"
+            f"Rows delivered: {row_count:,}\n"
+            f"Manifest SHA-256: {manifest_sha256}\n"
+            f"Available until: {req.expires_at.isoformat()}\n\n"
+            f"Download the bundle from the partner DRS portal before "
+            f"the expiry date. After expiry the bundle is purged from "
+            f"object storage; you'll need to re-request.\n\n"
+            f"Verify the bundle against the manifest SHA-256 above "
+            f"before processing — any mismatch indicates tampering "
+            f"in transit and should be reported to the DPO immediately.\n"
+        ),
+        entity_type="data_request",
+        entity_id=str(req.id),
+        audit_actor=actor,
+        audit_action="data_request.delivered.notified",
+        audit_reason=(
+            f"delivered · {row_count} rows · expires "
+            f"{req.expires_at.isoformat()}"
+        ),
     )
     return req
 

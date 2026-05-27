@@ -186,6 +186,73 @@ class TestDecline:
 
 
 @pytest.mark.django_db
+class TestDsaSigningNotifications:
+    """Each chain transition emails the right parties. Partner-auth
+    signer (sequence 1) is reached via DocuSign envelope — we don't
+    duplicate. In-console signers (sequences 2 + 3) get our email.
+    Activation emails every signer + the partner's primary contact.
+    Decline does the same with the verbatim reason."""
+
+    def _submitted(self, dsa):
+        signature_service.submit_for_signoff(
+            dsa, actor="x",
+            partner_signer_email="signer1@partner.go.ug",
+            nsr_unit_lead_email="lead@nsr.go.ug",
+            dpo_email="dpo@mglsd.go.ug",
+        )
+
+    def test_first_sign_emails_in_console_lead(self, draft_dsa):
+        from django.core import mail
+        self._submitted(draft_dsa)
+        mail.outbox.clear()
+        sig1 = draft_dsa.signatures.get(sequence_order=1)
+        signature_service.record_signature(sig1, actor="signer1@partner.go.ug")
+        assert len(mail.outbox) == 1
+        msg = mail.outbox[0]
+        assert msg.to == ["lead@nsr.go.ug"]
+        assert "awaits your signature" in msg.subject
+
+    def test_activation_emails_all_signers_plus_partner(self, draft_dsa):
+        from django.core import mail
+        self._submitted(draft_dsa)
+        for seq in (1, 2, 3):
+            sig = draft_dsa.signatures.get(sequence_order=seq)
+            signature_service.record_signature(sig, actor=f"signer-{seq}")
+        # Find the activation notification — it's the most recent
+        # mail whose subject contains "ACTIVE".
+        activations = [m for m in mail.outbox if "ACTIVE" in m.subject]
+        assert len(activations) == 1
+        # All three signers receive it. Partner primary_email is
+        # empty on this fixture; helper dedupes and drops blanks.
+        assert set(activations[0].to) == {
+            "signer1@partner.go.ug",
+            "lead@nsr.go.ug",
+            "dpo@mglsd.go.ug",
+        }
+
+    def test_decline_emails_everyone_with_reason(self, draft_dsa):
+        from django.core import mail
+        self._submitted(draft_dsa)
+        mail.outbox.clear()
+        sig2 = draft_dsa.signatures.get(sequence_order=2)
+        signature_service.decline_signature(
+            sig2, actor="lead", reason="scope too broad",
+        )
+        declines = [m for m in mail.outbox if "DECLINED" in m.subject]
+        assert len(declines) == 1
+        msg = declines[0]
+        # Every signer on the chain (all 3) is notified — even the
+        # pending DPO step, so they don't sit waiting for an
+        # envelope that's no longer coming.
+        assert set(msg.to) >= {
+            "signer1@partner.go.ug",
+            "lead@nsr.go.ug",
+            "dpo@mglsd.go.ug",
+        }
+        assert "scope too broad" in msg.body
+
+
+@pytest.mark.django_db
 class TestDsaApiEndpoints:
     def test_list_filter_by_partner(self, api, partner, draft_dsa):
         c, _ = api
