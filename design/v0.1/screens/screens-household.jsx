@@ -148,7 +148,9 @@ const _hhApiToView = (h) => {
         line: m.line_number,
         name: [m.surname, m.first_name].filter(Boolean).join(" ") || "—",
         rel: (m.id === h.head_member) ? "Head" : (m.relationship_to_head_label || m.relationship_to_head || "—"),
+        relationship_to_head: m.relationship_to_head || "",
         sex: m.sex_label || m.sex || "—",
+        sexRaw: m.sex || "",
         age: m.age_years ?? "—",
         nin: m.nin_last4 ? `…${m.nin_last4}` : "—",
         dob: m.date_of_birth || "—",
@@ -160,16 +162,23 @@ const _hhApiToView = (h) => {
         highestGrade:       qm.education?.highest_grade || "—",
         currentlyAttending: lm.education?.currently_attending ?? qm.education?.currently_attending ?? "—",
         neverReason:        lm.education?.never_school_reason ?? qm.education?.never_school_reason ?? "—",
-        health: qm.health || null,
+        health: m.health || qm.health || null,
         healthLabels: lm.health || null,
-        education: qm.education || null,
+        disability: m.disability || qm.disability || null,
+        education: m.education || qm.education || null,
         educationLabels: lm.education || null,
-        employment: qm.employment || null,
+        employment: m.employment || qm.employment || null,
         employmentLabels: lm.employment || null,
       };
     }),
     questionnaire: payload,
     questionnaireLabels: payloadLabels,
+    householdRecord: h,
+    dwelling: h.dwelling || null,
+    utilities: h.utilities || null,
+    livelihood: h.livelihood || null,
+    food_security: h.food_security || null,
+    food_consumption: h.food_consumption || null,
     sourcePayload: payload,
   };
 };
@@ -192,11 +201,46 @@ const _hhApiToView = (h) => {
 const projectCurrentValues = (h) => {
   if (!h) return {};
   const cv = {};
+  const addValue = (key, value, label) => {
+    if (value == null || value === "" || value === "—") return;
+    cv[key] = label && label !== value ? { value: String(value), label: String(label) } : String(value);
+  };
+  const addRecord = (prefix, record) => {
+    if (!record) return;
+    for (const [key, value] of Object.entries(record)) {
+      if (key === "id" || key === "is_deleted" || key === "updated_at" || key === "sub_region_code") continue;
+      if (key.endsWith("_label") || key.endsWith("_labels")) continue;
+      addValue(`${prefix}.${key}`, value, record[`${key}_label`] ?? record[`${key}_labels`]);
+    }
+  };
   const hg  = h.questionnaire?.housing      || {};
   const hgL = h.questionnaireLabels?.housing || {};
   const fs  = h.questionnaire?.food_security || {};
   const sc  = h.questionnaire?.shocks_coping || {};
   const scL = h.questionnaireLabels?.shocks_coping || {};
+
+  addValue("household.region", h.householdRecord?.region, h.householdRecord?.region_name);
+  addValue("household.sub_region", h.householdRecord?.sub_region, h.householdRecord?.sub_region_name);
+  addValue("household.district", h.householdRecord?.district, h.householdRecord?.district_name);
+  addValue("household.county", h.householdRecord?.county, h.householdRecord?.county_name);
+  addValue("household.sub_county", h.householdRecord?.sub_county, h.householdRecord?.sub_county_name);
+  addValue("household.parish", h.householdRecord?.parish, h.householdRecord?.parish_name);
+  addValue("household.village", h.householdRecord?.village, h.householdRecord?.village_name);
+  addValue("household.urban_rural", h.householdRecord?.urban_rural, h.householdRecord?.urban_rural_label);
+  addValue("household.enumeration_area", h.enumerationArea);
+  addValue("household.household_number", h.householdNumber);
+  addValue("household.address_narrative", h.householdRecord?.address_narrative);
+  addValue("household.gps_lat", h.gps?.lat);
+  addValue("household.gps_lng", h.gps?.lng);
+  addValue("household.gps_accuracy_m", h.gps?.acc);
+  addValue("household.dwelling_tenure", h.householdRecord?.dwelling_tenure, h.householdRecord?.dwelling_tenure_label);
+  addValue("household.residence_status", h.householdRecord?.residence_status, h.householdRecord?.residence_status_label);
+
+  addRecord("dwelling", h.dwelling);
+  addRecord("utilities", h.utilities);
+  addRecord("livelihood", h.livelihood);
+  addRecord("food_security", h.food_security);
+  addRecord("food_consumption", h.food_consumption);
 
   // iden
   if (h.phone && h.phone !== "—")          cv["iden.phone"]     = h.phone;
@@ -267,12 +311,37 @@ const projectMembers = (h) => {
 const projectMemberValues = (h) => {
   if (!h || !Array.isArray(h.members)) return {};
   const out = {};
+  const addValue = (cv, key, value, label) => {
+    if (value == null || value === "" || value === "—") return;
+    cv[key] = label && label !== value ? { value: String(value), label: String(label) } : String(value);
+  };
+  const addRecord = (cv, prefix, record) => {
+    if (!record) return;
+    for (const [key, value] of Object.entries(record)) {
+      if (key === "id" || key === "is_deleted" || key === "updated_at" || key === "sub_region_code") continue;
+      if (key.endsWith("_label") || key.endsWith("_labels")) continue;
+      addValue(cv, `${prefix}.${key}`, value, record[`${key}_label`] ?? record[`${key}_labels`]);
+    }
+  };
   for (const m of h.members) {
     const cv = {};
+    addValue(cv, "member.line_number", m.line);
     if (m.name && m.name !== "—") cv["rost.member_name"]     = m.name;
     if (m.dob)                     cv["rost.member_dob"]      = m.dob;
     if (m.sex_label || m.sex)      cv["rost.member_sex"]      = m.sex_label || m.sex;
     if (m.rel && m.rel !== "Head") cv["rost.member_relation"] = m.rel;
+    const [surname, ...givenParts] = (m.name || "").split(" ");
+    addValue(cv, "member.surname", surname);
+    addValue(cv, "member.first_name", givenParts.join(" "));
+    addValue(cv, "member.relationship_to_head", m.relationship_to_head || m.rel, m.rel);
+    addValue(cv, "member.sex", m.sexRaw || m.sex, m.sex);
+    addValue(cv, "member.date_of_birth", m.dob);
+    addValue(cv, "member.age_years", m.age);
+    addValue(cv, "member.telephone_1", m.phone);
+    addRecord(cv, "health", m.health);
+    addRecord(cv, "disability", m.disability);
+    addRecord(cv, "education", m.education);
+    addRecord(cv, "employment", m.employment);
     out[m.id] = cv;
   }
   return out;

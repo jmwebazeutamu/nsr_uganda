@@ -84,6 +84,42 @@ const _updRowDate = (r) => {
   return "—";
 };
 
+const _updCatalogToFlat = (categories) => {
+  const out = {};
+  for (const c of categories || []) {
+    for (const f of c.fields || []) {
+      out[`${c.key}.${f.key}`] = {
+        ...f,
+        category: c.key,
+        _categoryLabel: c.label,
+      };
+    }
+  }
+  return out;
+};
+
+const _updOptionLabel = (value, meta) => {
+  if (value == null || value === "") return null;
+  if (meta?.type === "boolean") {
+    if (value === true || value === "true") return "Yes";
+    if (value === false || value === "false") return "No";
+  }
+  const option = (meta?.options || []).find(o => {
+    const code = typeof o === "string" ? o : o?.code;
+    return String(code) === String(value);
+  });
+  if (!option) return null;
+  return typeof option === "string" ? option : option.label;
+};
+
+const _updFormatDiffValue = (value, meta) => {
+  if (value == null || value === "") return "—";
+  const label = _updOptionLabel(value, meta);
+  if (label) return label;
+  if (meta?.type === "date") return _updFmtDate(value);
+  return String(value);
+};
+
 // Mock queue — what's PENDING_APPROVAL in the reviewer's scope.
 // In production this comes from GET /api/v1/upd/change-requests/?status=
 // pending_approval, sorted by SLA-soonest-first. Mix of change_types +
@@ -180,6 +216,7 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
   const [busy, setBusy] = useStateUpd(false);
   const [current, setCurrent] = useStateUpd(null);
   const [me, setMe] = useStateUpd(null);
+  const [fieldCatalog, setFieldCatalog] = useStateUpd({});
 
   // Bulk-action state (US-S11-004). `selected` holds the row ids;
   // `bulkModal` opens the reason modal with the captured action.
@@ -199,6 +236,22 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
     on_hold:  "on_hold",
     decided:  "committed,rejected",
   };
+
+  useEffectUpd(() => {
+    let cancelled = false;
+    fetch("/api/v1/upd/field-catalog/", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (!cancelled) setFieldCatalog(_updCatalogToFlat(data?.categories || []));
+      })
+      .catch(() => {
+        if (!cancelled) setFieldCatalog({});
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   // Refresh the queue from the API for the current tab. Used on mount,
   // on tab change, and after every successful action. On unreachable
@@ -368,17 +421,28 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
   // semantic section metadata, so live rows collapse into a single
   // "Change fields" section. Mock keeps the rich pre-grouped UPD.diff.
   const diffSource = isLive
+    && Array.isArray(current._raw.display_changes)
+    && current._raw.display_changes.length > 0
+    ? current._raw.display_changes.map(row => ({
+        field: row.field_label || row.key,
+        before: row.old_display || _updFormatDiffValue(row.old, fieldCatalog[row.key]),
+        after: row.new_display || _updFormatDiffValue(row.new, fieldCatalog[row.key]),
+        section: row.section || "Change fields",
+        important: !!row.pmt,
+      }))
+    : isLive
     && current._raw.changes
     && Object.keys(current._raw.changes).length > 0
-    ? Object.entries(current._raw.changes).map(([field, ch]) => ({
-        field,
-        before: ch && ch.old !== undefined && ch.old !== null && ch.old !== ""
-                  ? String(ch.old) : "—",
-        after:  ch && ch.new !== undefined && ch.new !== null
-                  ? String(ch.new) : "—",
-        section: "Change fields",
-        important: false,
-      }))
+      ? Object.entries(current._raw.changes).map(([field, ch]) => {
+        const meta = fieldCatalog[field] || null;
+        return {
+          field: meta?.label || field,
+          before: _updFormatDiffValue(ch?.old, meta),
+          after: _updFormatDiffValue(ch?.new, meta),
+          section: meta?._categoryLabel || "Change fields",
+          important: !!meta?.pmt,
+        };
+      })
     : UPD.diff;
   const visible = showAll ? diffSource : diffSource.filter(d => !d.unchanged);
   const grouped = visible.reduce((acc, r) => {

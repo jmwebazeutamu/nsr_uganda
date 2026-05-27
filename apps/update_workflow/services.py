@@ -26,12 +26,19 @@ from datetime import timedelta
 from typing import Any
 
 import django.dispatch
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 
-from apps.data_management.models import Household, HouseholdVersion, Member, MemberVersion
+from apps.data_management.models import (
+    AssetOwnership,
+    Household,
+    HouseholdVersion,
+    Member,
+    MemberVersion,
+)
 from apps.security.audit import emit as emit_audit
 
+from .field_catalog import field_meta
 from .models import ChangeRequest, ChangeStatus, ChangeType, EntityType, UpdRoutingRule
 from .routing import route
 
@@ -80,6 +87,62 @@ def _load_target(entity_type: str, entity_id: str, *, lock: bool = False):
     if lock:
         qs = qs.select_for_update()
     return qs.get(pk=entity_id)
+
+
+def _jsonish_value(value):
+    if value is None:
+        return ""
+    if hasattr(value, "pk") and hasattr(value, "_meta"):
+        return value.pk
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def _resolve_change_attr(root, key: str):
+    if "." not in key:
+        return root, key
+    category, field = key.split(".", 1)
+    if category == "assets":
+        household = root if isinstance(root, Household) else root.household
+        asset, _ = AssetOwnership.objects.get_or_create(
+            household=household,
+            asset_type=field,
+            is_deleted=False,
+            defaults={"count": 0, "sub_region_code": household.sub_region_code},
+        )
+        return asset, "count"
+    if category in ("household", "member"):
+        return root, field
+    meta = field_meta(category, field)
+    if not meta:
+        raise UpdError(f"unknown field {key!r}")
+    try:
+        detail = getattr(root, category)
+    except Exception as e:  # noqa: BLE001
+        raise UpdError(f"missing detail record for {category!r}") from e
+    return detail, field
+
+
+def _coerce_for_field(obj, field_name: str, value):
+    field = obj._meta.get_field(field_name)
+    if value == "" and getattr(field, "null", False):
+        return None
+    if isinstance(field, models.ForeignKey):
+        return field.remote_field.model.objects.get(pk=value)
+    if isinstance(field, (models.BooleanField,)):
+        if isinstance(value, bool):
+            return value
+        return str(value).lower() in ("1", "true", "yes", "y")
+    if isinstance(field, (models.IntegerField, models.PositiveIntegerField, models.PositiveSmallIntegerField)):
+        return int(value)
+    if isinstance(field, models.DecimalField):
+        from decimal import Decimal
+        return Decimal(str(value))
+    if isinstance(field, models.DateField):
+        from datetime import date
+        return date.fromisoformat(str(value))
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +251,8 @@ def commit_change_request(
     # Re-validate the diff against the live row (concurrent edit detection).
     target = _load_target(req.entity_type, req.entity_id, lock=True)
     for field, change in (req.changes or {}).items():
-        current = getattr(target, field)
+        obj, attr = _resolve_change_attr(target, field)
+        current = _jsonish_value(getattr(obj, attr))
         if current != change["old"]:
             raise UpdError(
                 f"concurrent edit detected on {field}: live={current!r} "
@@ -196,12 +260,21 @@ def commit_change_request(
             )
 
     # Apply the new values.
-    applied_fields = []
+    saves: dict[models.Model, set[str]] = {}
     for field, change in (req.changes or {}).items():
-        setattr(target, field, change["new"])
-        applied_fields.append(field)
-    if applied_fields:
-        target.save(update_fields=applied_fields + ["updated_at"])
+        obj, attr = _resolve_change_attr(target, field)
+        setattr(obj, attr, _coerce_for_field(obj, attr, change["new"]))
+        saves.setdefault(obj, set()).add(attr)
+    applied_fields = []
+    for obj, fields in saves.items():
+        update_fields = sorted(fields)
+        if hasattr(obj, "updated_at"):
+            update_fields.append("updated_at")
+        obj.save(update_fields=update_fields)
+        applied_fields.extend(
+            f if obj is target else f"{obj._meta.model_name}.{f}"
+            for f in sorted(fields)
+        )
 
     # Write the paired _Version row.
     _write_version(req.entity_type, target, req)

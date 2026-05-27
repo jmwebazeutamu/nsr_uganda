@@ -12,9 +12,9 @@ from apps.security.abac import ChangeRequestScopedQuerysetMixin
 from apps.security.audit_views import AuditReadMixin
 from apps.security.models import AuditEvent
 
-from .field_catalog import CATEGORIES, field_keys_by_category
+from .field_catalog import CATEGORIES, field_keys_by_category, field_meta
 from .field_catalog import is_pmt_relevant as _catalog_is_pmt_relevant
-from .models import ChangeRequest, ChangeType, EntityType, SourceChannel
+from .models import ChangeRequest, ChangeStatus, ChangeType, EntityType, SourceChannel
 from .routing import route_label
 from .services import (
     UpdError,
@@ -27,19 +27,242 @@ from .services import (
 )
 
 
+def _jsonish_value(value):
+    if value is None:
+        return ""
+    if hasattr(value, "pk") and hasattr(value, "_meta"):
+        return value.pk
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+def _current_value_for_bundle_row(entity_type: str, entity_id: str, category: str, field: str):
+    from apps.data_management.models import Household, Member
+
+    target = (Household if entity_type == EntityType.HOUSEHOLD else Member).objects.get(pk=entity_id)
+    if category in ("household", "member"):
+        return _jsonish_value(getattr(target, field, ""))
+    try:
+        detail = getattr(target, category)
+    except Exception:  # noqa: BLE001 - missing reverse one-to-one
+        return ""
+    return _jsonish_value(getattr(detail, field, ""))
+
+
+LEGACY_CHANGE_KEYS = {
+    "phone": ("household", "head_phone"),
+    "ever_school": ("education", "ever_attended"),
+    "grade": ("education", "highest_grade"),
+    "occ": ("employment", "main_activity_last_30d"),
+    "sector": ("employment", "sector"),
+}
+
+
+MEMBER_PAYLOAD_FIELD_PATHS = {
+    ("health", "chronic_illness_flag"): ("health", "chronic_illness"),
+    ("disability", "seeing"): ("health", "seeing"),
+    ("disability", "hearing"): ("health", "hearing"),
+    ("disability", "walking"): ("health", "walking"),
+    ("disability", "memory"): ("health", "remembering"),
+    ("disability", "selfcare"): ("health", "self_care"),
+    ("disability", "communication"): ("health", "communicating"),
+    ("education", "literacy_status"): ("education", "literacy"),
+    ("education", "ever_attended"): ("education", "ever_school"),
+    ("education", "never_attended_reason"): ("education", "never_school_reason"),
+    ("education", "highest_grade"): ("education", "highest_grade"),
+    ("education", "currently_attending"): ("education", "currently_attending"),
+    ("education", "why_stopped"): ("education", "stopped_school_reason"),
+    ("employment", "main_activity_last_30d"): ("employment", "main_job"),
+    ("employment", "work_frequency"): ("employment", "work_frequency"),
+    ("employment", "sector"): ("employment", "work_sector"),
+    ("employment", "employment_status"): ("employment", "work_status"),
+    ("employment", "not_working_reason"): ("employment", "not_working_reason"),
+    ("employment", "is_govt_programme_beneficiary"): ("employment", "gov_program_beneficiary"),
+    ("employment", "currently_benefiting"): ("employment", "currently_benefiting"),
+    ("employment", "made_savings"): ("employment", "made_savings"),
+    ("employment", "savings_location"): ("employment", "savings_place"),
+}
+
+
+HOUSEHOLD_PAYLOAD_FIELD_PATHS = {
+    ("household", "dwelling_tenure"): ("housing", "tenure"),
+    ("dwelling", "tenure"): ("housing", "tenure"),
+    ("dwelling", "dwelling_type"): ("housing", "dwelling_type"),
+    ("dwelling", "roof_material"): ("housing", "roof_material"),
+    ("dwelling", "wall_material"): ("housing", "wall_material"),
+    ("dwelling", "floor_material"): ("housing", "floor_material"),
+    ("utilities", "cooking_fuel"): ("housing", "cooking_fuel"),
+    ("utilities", "lighting_energy"): ("housing", "lighting_source"),
+    ("utilities", "drinking_water_source"): ("housing", "water_source"),
+    ("utilities", "toilet_facility"): ("housing", "toilet_type"),
+    ("utilities", "waste_disposal"): ("housing", "waste_disposal"),
+    ("livelihood", "main_livelihood"): ("housing", "livelihood_source"),
+    ("livelihood", "land_ownership"): ("agriculture", "land_ownership"),
+    ("livelihood", "agricultural_purpose"): ("agriculture", "ag_purpose"),
+    ("livelihood", "land_title"): ("agriculture", "title_deed"),
+}
+
+
+def _normalise_change_key(key: str) -> tuple[str, str]:
+    if "." in key:
+        return key.split(".", 1)
+    return LEGACY_CHANGE_KEYS.get(key, ("", key))
+
+
+def _asset_options(language: str = "en") -> list[dict]:
+    from apps.reference_data.services import resolve_options
+    return resolve_options("asset_type", language=language)
+
+
+def _asset_codes() -> set[str]:
+    return {str(o["code"]) for o in _asset_options()}
+
+
+def _asset_field_meta(field: str, *, language: str = "en") -> dict | None:
+    for option in _asset_options(language):
+        if str(option["code"]) == str(field):
+            return {
+                "key": str(option["code"]),
+                "field_id": f"assets.{option['code']}",
+                "label": f"{option['label']} count",
+                "type": "number",
+                "pmt": True,
+                "entity": "household",
+                "model": "data_management.AssetOwnership",
+                "choice_list": None,
+                "constraints": {"min": 0, "max": 9, "step": 1},
+            }
+    return None
+
+
+def _meta_for(category: str, field: str, *, language: str = "en") -> dict | None:
+    if category == "assets":
+        return _asset_field_meta(field, language=language)
+    return field_meta(category, field) if category else None
+
+
+def _category_label(category: str) -> str:
+    if category == "assets":
+        return "Assets"
+    return next((c["label"] for c in CATEGORIES if c["key"] == category), "Change fields")
+
+
+def _source_payload_member_value(member, category: str, field: str):
+    path = MEMBER_PAYLOAD_FIELD_PATHS.get((category, field))
+    if not path:
+        return ""
+    from apps.ingestion_hub.models import StageRecord
+    stage = (
+        StageRecord.objects
+        .filter(provisional_registry_id=member.household_id)
+        .only("canonical_payload")
+        .first()
+    )
+    payload = stage.canonical_payload if stage else {}
+    for row in payload.get("members") or []:
+        if row.get("line_number") != member.line_number:
+            continue
+        node = row
+        for part in path:
+            node = node.get(part) if isinstance(node, dict) else None
+            if node in (None, ""):
+                return ""
+        return _jsonish_value(node)
+    return ""
+
+
+def _source_payload_household_value(household_id: str, category: str, field: str):
+    path = HOUSEHOLD_PAYLOAD_FIELD_PATHS.get((category, field))
+    if not path:
+        return ""
+    from apps.ingestion_hub.models import StageRecord
+    stage = (
+        StageRecord.objects
+        .filter(provisional_registry_id=household_id)
+        .only("canonical_payload")
+        .first()
+    )
+    node = stage.canonical_payload if stage else {}
+    for part in path:
+        node = node.get(part) if isinstance(node, dict) else None
+        if node in (None, ""):
+            return ""
+    return _jsonish_value(node)
+
+
+def _current_value_for_change_key(entity_type: str, entity_id: str, key: str):
+    category, field = _normalise_change_key(key)
+    if category == "assets":
+        from apps.data_management.models import AssetOwnership, Household
+        household_id = entity_id
+        if entity_type == EntityType.MEMBER:
+            from apps.data_management.models import Member
+            household_id = Member.objects.values_list("household_id", flat=True).get(pk=entity_id)
+        # Ensure the household exists and the operator is not querying a random id.
+        Household.objects.only("id").get(pk=household_id)
+        count = (
+            AssetOwnership.objects
+            .filter(household_id=household_id, asset_type=field, is_deleted=False)
+            .values_list("count", flat=True)
+            .first()
+        )
+        return 0 if count is None else count
+    if category == "household" and field == "head_phone":
+        from apps.data_management.models import Household
+        household = Household.objects.select_related("head_member").get(pk=entity_id)
+        return _jsonish_value(getattr(household.head_member, "telephone_1", ""))
+    if not category:
+        from apps.data_management.models import Household, Member
+        target = (Household if entity_type == EntityType.HOUSEHOLD else Member).objects.get(pk=entity_id)
+        return _jsonish_value(getattr(target, field, ""))
+    current = _current_value_for_bundle_row(entity_type, entity_id, category, field)
+    if current not in (None, ""):
+        return current
+    if entity_type == EntityType.HOUSEHOLD:
+        return _source_payload_household_value(entity_id, category, field)
+    if entity_type != EntityType.MEMBER:
+        return current
+    from apps.data_management.models import Member
+    member = Member.objects.only("id", "household_id", "line_number").get(pk=entity_id)
+    return _source_payload_member_value(member, category, field)
+
+
+def _display_value(value, meta: dict | None):
+    if value is None or value == "":
+        return ""
+    if meta and meta.get("type") == "boolean":
+        return "Yes" if value in (True, "true", "True", "1", 1) else "No"
+    if meta and meta.get("type") == "select" and meta.get("choice_list"):
+        from apps.reference_data.services import resolve_label
+        return resolve_label(meta["choice_list"], value)
+    if meta and meta.get("type") == "geo":
+        from apps.reference_data.models import GeographicUnit
+        unit = (
+            GeographicUnit.objects
+            .filter(pk=value)
+            .values_list("name", flat=True)
+            .first()
+        )
+        return unit or str(value)
+    return str(value)
+
+
 class ChangeRequestSerializer(serializers.ModelSerializer):
     # household_id is the household the CR ultimately affects — equal to
     # entity_id when entity_type='household', resolved via Member FK when
     # entity_type='member'. Exposed so the "Open household" affordance in
     # the React UPD screen can navigate without a second API round-trip.
     household_id = serializers.SerializerMethodField()
+    changes = serializers.SerializerMethodField()
+    display_changes = serializers.SerializerMethodField()
 
     class Meta:
         model = ChangeRequest
         fields = (
             "id", "entity_type", "entity_id", "household_id",
             "change_type", "pmt_relevant",
-            "changes", "evidence",
+            "changes", "display_changes", "evidence",
             "source_channel", "requester", "requester_note",
             "status", "required_role", "sla_deadline",
             "approver", "decided_at", "decision_reason",
@@ -51,6 +274,52 @@ class ChangeRequestSerializer(serializers.ModelSerializer):
             "approver", "decided_at", "decision_reason",
             "pmt_preview", "created_at", "updated_at",
         )
+
+    def get_changes(self, obj):
+        changes = dict(obj.changes or {})
+        if obj.status not in {
+            ChangeStatus.SUBMITTED,
+            ChangeStatus.PENDING_APPROVAL,
+            ChangeStatus.ON_HOLD,
+        }:
+            return changes
+        for key, change in list(changes.items()):
+            if not isinstance(change, dict):
+                continue
+            old = change.get("old")
+            if old not in (None, ""):
+                continue
+            try:
+                changes[key] = {
+                    **change,
+                    "old": _current_value_for_change_key(obj.entity_type, obj.entity_id, key),
+                }
+            except Exception:  # noqa: BLE001 - display fallback only
+                continue
+        return changes
+
+    def get_display_changes(self, obj):
+        rows = []
+        for key, change in self.get_changes(obj).items():
+            category, field = _normalise_change_key(key)
+            meta = _meta_for(category, field)
+            old = change.get("old") if isinstance(change, dict) else ""
+            new = change.get("new") if isinstance(change, dict) else ""
+            old_display = _display_value(old, meta) or "Not recorded"
+            new_display = _display_value(new, meta)
+            rows.append({
+                "key": key,
+                "category": category,
+                "field": field,
+                "field_label": (meta or {}).get("label") or key.replace("_", " ").title(),
+                "section": _category_label(category),
+                "pmt": bool((meta or {}).get("pmt")),
+                "old": old,
+                "new": new,
+                "old_display": old_display,
+                "new_display": new_display,
+            })
+        return rows
 
     def get_household_id(self, obj):
         if obj.entity_type == "household":
@@ -66,6 +335,63 @@ class ChangeRequestSerializer(serializers.ModelSerializer):
                 .first()
             )
         return None
+
+
+class _CurrentValuesRequest(serializers.Serializer):
+    entity = serializers.ChoiceField(choices=[EntityType.HOUSEHOLD.value, EntityType.MEMBER.value])
+    household_id = serializers.CharField(max_length=26, min_length=26, required=False, allow_blank=True)
+    member_id = serializers.CharField(max_length=26, min_length=26, required=False, allow_blank=True)
+    fields = serializers.ListField(
+        child=serializers.CharField(max_length=96),
+        min_length=1,
+        max_length=100,
+    )
+
+    def validate(self, attrs):
+        if attrs["entity"] == EntityType.MEMBER and not attrs.get("member_id"):
+            raise serializers.ValidationError({"member_id": "required when entity='member'"})
+        if attrs["entity"] == EntityType.HOUSEHOLD and not attrs.get("household_id"):
+            raise serializers.ValidationError({"household_id": "required when entity='household'"})
+        return attrs
+
+
+class CurrentValuesView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        fields = request.query_params.getlist("fields")
+        if len(fields) == 1 and "," in fields[0]:
+            fields = [f for f in fields[0].split(",") if f]
+        ser = _CurrentValuesRequest(data={
+            "entity": request.query_params.get("entity"),
+            "household_id": request.query_params.get("household_id", ""),
+            "member_id": request.query_params.get("member_id", ""),
+            "fields": fields,
+        })
+        ser.is_valid(raise_exception=True)
+        data = ser.validated_data
+        entity_id = data.get("member_id") if data["entity"] == EntityType.MEMBER else data.get("household_id")
+        values = {}
+        for field_id in data["fields"]:
+            category, field = _normalise_change_key(field_id)
+            meta = _meta_for(category, field)
+            try:
+                raw = _current_value_for_change_key(data["entity"], entity_id, field_id)
+            except Exception:  # noqa: BLE001 - per-field missing state
+                raw = ""
+            values[field_id] = {
+                "field_id": field_id,
+                "raw": raw,
+                "display": _display_value(raw, meta) or "Not recorded",
+                "field_label": (meta or {}).get("label") or field_id.replace("_", " ").title(),
+                "section": _category_label(category),
+                "exists": raw not in (None, ""),
+            }
+        return Response({
+            "entity": data["entity"],
+            "entity_id": entity_id,
+            "values": values,
+        })
 
 
 class _ActorReason(serializers.Serializer):
@@ -133,9 +459,14 @@ class _BundleRequest(serializers.Serializer):
         catalog = field_keys_by_category()
         for row in value:
             cat, fld = row["category"], row["field"]
-            if cat not in catalog:
+            if cat == "assets":
+                if fld not in _asset_codes():
+                    raise serializers.ValidationError(
+                        f"unknown asset field {fld!r}",
+                    )
+            elif cat not in catalog:
                 raise serializers.ValidationError(f"unknown category {cat!r}")
-            if fld not in catalog[cat]:
+            elif fld not in catalog[cat]:
                 raise serializers.ValidationError(
                     f"unknown field {fld!r} for category {cat!r}",
                 )
@@ -221,7 +552,7 @@ class _BundleRequest(serializers.Serializer):
             # Every row must be a member-scope field.
             offenders = [
                 f"{r['category']}.{r['field']}" for r in rows
-                if field_entity(r["category"], r["field"]) != "member"
+                if r["category"] == "assets" or field_entity(r["category"], r["field"]) != "member"
             ]
             if offenders:
                 raise serializers.ValidationError(
@@ -242,7 +573,7 @@ class _BundleRequest(serializers.Serializer):
             # member they target).
             offenders = [
                 f"{r['category']}.{r['field']}" for r in rows
-                if field_entity(r["category"], r["field"]) == "member"
+                if r["category"] != "assets" and field_entity(r["category"], r["field"]) == "member"
             ]
             if offenders:
                 raise serializers.ValidationError(
@@ -457,17 +788,10 @@ class ChangeRequestViewSet(
         # sending false when any row is PMT-relevant is auto-bumped
         # to keep the audit honest.
         derived_pmt = any(
-            _catalog_is_pmt_relevant(r["category"], r["field"]) for r in data["rows"]
+            r["category"] == "assets" or _catalog_is_pmt_relevant(r["category"], r["field"])
+            for r in data["rows"]
         )
         pmt_relevant = bool(data.get("pmt_relevant", False)) or derived_pmt
-
-        # Build the changes JSON. Old is "" (the commit-time
-        # concurrent-edit guard will re-read live values and refuse
-        # to apply if the diff doesn't line up — protects against
-        # stale-snapshot submissions).
-        changes: dict[str, dict[str, str]] = {}
-        for r in data["rows"]:
-            changes[r["field"]] = {"old": "", "new": r["new_value"]}
 
         # Map "all_members" to household for storage; commit-time
         # fan-out is the follow-up slice. Surface the operator's
@@ -487,6 +811,12 @@ class ChangeRequestViewSet(
             entity_type = EntityType.HOUSEHOLD
             entity_id = data["household_id"]
             note = data["note"]
+
+        changes: dict[str, dict[str, str]] = {}
+        for r in data["rows"]:
+            key = f"{r['category']}.{r['field']}"
+            old = _current_value_for_change_key(entity_type, entity_id, key)
+            changes[key] = {"old": old, "new": r["new_value"]}
 
         actor = getattr(request.user, "username", "") or "console-operator"
 
@@ -647,9 +977,8 @@ def _resolve_field_options(field: dict, *, language: str) -> list[dict]:
          active ChoiceList version at today's date (the active version
          IS the source of truth — no `as_of` knob here; bulk-DRS
          queries handle historical resolution separately).
-      2. Otherwise fall back to the hardcoded `options` array, treating
-         each entry as both code and label (legacy fields whose labels
-         haven't been promoted into a ChoiceList yet).
+      2. Otherwise return an empty list. Selectable values should come
+         from ChoiceList-backed backend metadata.
     """
     cl_name = field.get("choice_list")
     if cl_name:
@@ -661,9 +990,9 @@ def _resolve_field_options(field: dict, *, language: str) -> list[dict]:
         resolved = resolve_options(cl_name, language=language)
         if resolved:
             return resolved
-        # ChoiceList missing or inactive — fall through to the
-        # hardcoded options rather than ship an empty dropdown.
-    return [{"code": o, "label": o} for o in (field.get("options") or [])]
+        # ChoiceList missing or inactive — ship an empty dropdown rather
+        # than invent values client-side.
+    return []
 
 
 def _serialise_field(field: dict, *, language: str) -> dict:
@@ -672,14 +1001,26 @@ def _serialise_field(field: dict, *, language: str) -> dict:
     strips internal-only keys."""
     out = {
         "key": field["key"],
+        "field_id": field.get("field_id"),
         "label": field["label"],
         "type": field["type"],
         "pmt": bool(field.get("pmt", False)),
         "entity": field.get("entity", "household"),
+        "model": field.get("model"),
+        "model_path": field.get("model_path"),
+        "questionnaire_section": field.get("questionnaire_section", ""),
     }
     if field["type"] == "select":
         out["choice_list"] = field.get("choice_list")
+        out["choice_kind"] = field.get("choice_kind", "single")
         out["options"] = _resolve_field_options(field, language=language)
+    if field["type"] == "boolean":
+        out["options"] = [
+            {"code": True, "label": "Yes"},
+            {"code": False, "label": "No"},
+        ]
+    if field["type"] == "geo":
+        out["options_source"] = field.get("options_source")
     # US-S28-INPUT-CONSTRAINTS: pass through min/max/step (numbers)
     # and min/max_today (dates) so the modal's HTML5 input can
     # advertise them. Backend doesn't enforce these — they're an
@@ -690,19 +1031,35 @@ def _serialise_field(field: dict, *, language: str) -> dict:
 
 
 def _build_field_catalog_bundle(*, language: str) -> dict:
+    categories = [
+        {
+            "key": c["key"],
+            "label": c["label"],
+            "tone": c.get("tone", "neutral"),
+            "model": c.get("model"),
+            "entity": c.get("entity", "household"),
+            "questionnaire_section": c.get("questionnaire_section", ""),
+            "fields": [
+                _serialise_field(f, language=language) for f in c["fields"]
+            ],
+        }
+        for c in CATEGORIES
+    ]
+    asset_fields = [_asset_field_meta(str(o["code"]), language=language) for o in _asset_options(language)]
+    asset_fields = [f for f in asset_fields if f]
+    if asset_fields:
+        categories.append({
+            "key": "assets",
+            "label": "Assets",
+            "tone": "eligibility",
+            "model": "data_management.AssetOwnership",
+            "entity": "household",
+            "questionnaire_section": "G15",
+            "fields": asset_fields,
+        })
     return {
         "language": language,
-        "categories": [
-            {
-                "key": c["key"],
-                "label": c["label"],
-                "tone": c.get("tone", "neutral"),
-                "fields": [
-                    _serialise_field(f, language=language) for f in c["fields"]
-                ],
-            }
-            for c in CATEGORIES
-        ],
+        "categories": categories,
     }
 
 
@@ -721,17 +1078,15 @@ def _field_catalog_etag(bundle: dict) -> str:
         "Returns the full Open-CR field catalog used by the modal. "
         "Select fields tagged with `choice_list` get their options "
         "resolved against the active ChoiceList version at request "
-        "time, so the modal never ships stale codes. Legacy select "
-        "fields (no `choice_list`) ship their hardcoded options as "
-        "{code, label} pairs unchanged. `lang` param selects label "
+        "time, so the modal never ships stale codes. Select fields "
+        "without a `choice_list` return no options. `lang` param selects label "
         "language (default 'en'). ETag-cached — 304 on repeat reads."
     ),
     responses={200: OpenApiResponse(description="Catalog bundle")},
 )
 class FieldCatalogView(APIView):
     """ADR-0010 — coded fields via ChoiceList. Single round-trip catalog
-    for the Open-CR modal, replacing the duplicated JSX hardcoded
-    field list at design/v0.1/components/change-request-modal.jsx."""
+    for the Open-CR modal."""
 
     permission_classes = [IsAuthenticated]
 

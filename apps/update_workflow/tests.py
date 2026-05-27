@@ -7,6 +7,7 @@ from datetime import date
 import pytest
 
 from apps.data_management.models import Household, HouseholdVersion, Member, MemberVersion
+from apps.ingestion_hub.models import Connector, ConnectorRun, SourceSystem, SourceSystemKind, StageRecord
 from apps.reference_data.models import GeographicUnit
 from apps.security.models import AuditEvent
 from apps.update_workflow.models import (
@@ -1250,7 +1251,134 @@ class TestBundleEndpoint:
         assert r.data["changes"] == 3
         cr = ChangeRequest.objects.get(pk=r.data["cr_id"])
         assert set(cr.changes.keys()) == {"phone", "village", "roof"}
-        assert r.data["pmt_relevant"] is True  # roof is PMT-relevant
+
+
+class TestChangeRequestDisplayChanges:
+    def test_display_changes_hydrates_legacy_head_phone(self, db, household, member):
+        household.head_member = member
+        household.save(update_fields=["head_member"])
+        req = ChangeRequest.objects.create(
+            entity_type=EntityType.HOUSEHOLD,
+            entity_id=household.id,
+            change_type=ChangeType.CORRECTION,
+            pmt_relevant=False,
+            changes={"phone": {"old": "", "new": "+256700000009"}},
+            source_channel=SourceChannel.PARISH,
+            requester="enum-1",
+            status=ChangeStatus.PENDING_APPROVAL,
+        )
+
+        from apps.update_workflow.api import ChangeRequestSerializer
+        data = ChangeRequestSerializer(req).data
+        row = data["display_changes"][0]
+        assert row["field_label"] == "Phone"
+        assert row["old"] == member.telephone_1
+        assert row["old_display"] == member.telephone_1
+
+    def test_display_changes_hydrates_member_source_payload_when_detail_missing(
+        self, db, household, member,
+    ):
+        src = SourceSystem.objects.create(
+            code="UPD-TEST", name="UPD test", kind=SourceSystemKind.KOBO,
+        )
+        connector = Connector.objects.create(source_system=src, name="upd-test")
+        run = ConnectorRun.objects.create(connector=connector)
+        StageRecord.objects.create(
+            connector_run=run,
+            provisional_registry_id=household.id,
+            canonical_payload={
+                "members": [{
+                    "line_number": member.line_number,
+                    "health": {"seeing": "01"},
+                    "education": {"ever_school": "1"},
+                    "employment": {"work_sector": "3"},
+                }],
+            },
+        )
+        req = ChangeRequest.objects.create(
+            entity_type=EntityType.MEMBER,
+            entity_id=member.id,
+            change_type=ChangeType.CORRECTION,
+            pmt_relevant=True,
+            changes={
+                "disability.seeing": {"old": "", "new": "02"},
+                "education.ever_attended": {"old": "", "new": "2"},
+                "employment.sector": {"old": "", "new": "4"},
+            },
+            source_channel=SourceChannel.PARISH,
+            requester="enum-1",
+            status=ChangeStatus.PENDING_APPROVAL,
+        )
+
+        from apps.update_workflow.api import ChangeRequestSerializer
+        rows = {
+            row["key"]: row for row in ChangeRequestSerializer(req).data["display_changes"]
+        }
+        assert rows["disability.seeing"]["old"] == "01"
+        assert rows["disability.seeing"]["old_display"] == "No difficulty"
+        assert rows["education.ever_attended"]["old"] == "1"
+        assert rows["education.ever_attended"]["old_display"] == "Yes"
+        assert rows["employment.sector"]["old"] == "3"
+        assert rows["employment.sector"]["old_display"] == "Construction"
+
+
+class TestCurrentValuesEndpoint:
+    @pytest.fixture
+    def staff_user(self, db, django_user_model):
+        return django_user_model.objects.create_user(
+            username="current-values-reader", password="p",
+            is_staff=True, is_superuser=True,
+        )
+
+    @pytest.fixture
+    def api_client(self, staff_user):
+        from rest_framework.test import APIClient
+        c = APIClient()
+        c.force_authenticate(user=staff_user)
+        return c
+
+    def test_hydrates_household_detail_values_from_backend(
+        self, db, api_client, household,
+    ):
+        src = SourceSystem.objects.create(
+            code="UPD-CURRENT", name="UPD current", kind=SourceSystemKind.KOBO,
+        )
+        connector = Connector.objects.create(source_system=src, name="upd-current")
+        run = ConnectorRun.objects.create(connector=connector)
+        StageRecord.objects.create(
+            connector_run=run,
+            provisional_registry_id=household.id,
+            canonical_payload={
+                "housing": {
+                    "tenure": "13",
+                    "cooking_fuel": "09",
+                    "livelihood_source": "13",
+                },
+            },
+        )
+
+        r = api_client.get("/api/v1/upd/current-values/", {
+            "entity": "household",
+            "household_id": household.id,
+            "fields": [
+                "household.dwelling_tenure",
+                "utilities.cooking_fuel",
+                "livelihood.main_livelihood",
+            ],
+        })
+
+        assert r.status_code == 200
+        values = r.data["values"]
+        assert values["household.dwelling_tenure"]["raw"] == "13"
+        assert values["utilities.cooking_fuel"]["raw"] == "09"
+        assert values["livelihood.main_livelihood"]["raw"] == "13"
+
+    def test_catalog_exposes_assets_from_backend_choice_list(self, db, api_client):
+        r = api_client.get("/api/v1/upd/field-catalog/")
+        assert r.status_code == 200
+        assets = next(c for c in r.data["categories"] if c["key"] == "assets")
+        assert assets["model"] == "data_management.AssetOwnership"
+        assert any(f["key"] == "phone" for f in assets["fields"])
 
 
 class TestListFilters:

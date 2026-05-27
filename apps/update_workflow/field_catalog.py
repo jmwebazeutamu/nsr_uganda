@@ -1,201 +1,292 @@
-"""US-S22-003 — Open-CR modal field catalog.
+"""Backend-owned Open-CR field catalog.
 
-Mirror of `design/v0.1/components/change-request-modal.jsx`'s catalog.
-The bundle endpoint validates incoming `rows` against this — drift
-between the two would let the modal send fields the server doesn't
-recognise. tests.test_field_catalog_parity guards the match.
-
-Each category carries:
-- key          short code used in payloads ("iden", "loc", "rost", …)
-- label        operator-facing category name
-- tone         design-token accent for chips / category strips
-- fields       list of {key, label, type, pmt, options?}
-
-`pmt` is the per-field flag: when any selected row carries pmt=True
-the bundle endpoint auto-derives `pmt_relevant=True` (the modal
-mirrors this and disables the Force-PMT checkbox while it's true).
-
-`entity` is the per-field scope flag ("household" or "member").
-Missing = "household" (default). Member-scope fields can only be
-submitted with entity="member" in the bundle payload + a member_id
-that belongs to the household. Enforced in `validate_member_field`.
-
-`choice_list` (per ADR-0010) names the reference-data ChoiceList that
-backs a select field's options. When set, the modal's options come
-from the active ChoiceList version at render time — NOT from the
-hardcoded `options` array below (which is kept as a development-time
-fallback only). See `field_catalog_view` in api.py for the resolution
-path.
-
-`constraints` (US-S28-INPUT-CONSTRAINTS) carries the bounds the
-modal's HTML5 number / date input should advertise:
-
-  - {"min": N, "max": N, "step": N}   for numbers
-  - {"min": "YYYY-MM-DD"}              for dates
-  - {"max_today": True}                for dates whose upper bound is
-                                       "today" (computed at render
-                                       time — birthdays can't be in
-                                       the future).
-
-Constraints are advisory at the HTML5 layer; the server still
-validates the row payload against the field schema before commit.
+The change-request wizard must not carry its own questionnaire/model
+catalog. This module derives the editable surface from Django model
+metadata and the existing ADR-0010 ChoiceList maps in
+apps.data_management.choice_field_map.
 """
 
 from __future__ import annotations
 
-CATEGORIES: list[dict] = [
+from functools import lru_cache
+
+from django.db import models
+
+from apps.data_management import choice_field_map as choices
+from apps.data_management.models import (
+    Disability,
+    Dwelling,
+    Education,
+    Employment,
+    FoodConsumption,
+    FoodSecurity,
+    Health,
+    Household,
+    Livelihood,
+    Member,
+    Utilities,
+)
+from apps.reference_data.models import GeographicUnit
+
+
+EXCLUDED_FIELDS = {
+    "id",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+    "is_deleted",
+    "sub_region_code",
+    "merged_into",
+    "nin_value",
+    "nin_hash",
+    "nin_last4",
+    "current_pmt_score",
+    "current_vulnerability_band",
+    "current_intake_source",
+    "current_consent_state",
+    "head_member",
+    "household",
+    "member",
+}
+
+QUESTIONNAIRE_SECTIONS = {
+    "household": "A/B",
+    "member": "C",
+    "health": "D",
+    "disability": "D",
+    "education": "E",
+    "employment": "F",
+    "dwelling": "G1-G7",
+    "utilities": "G8-G14",
+    "livelihood": "G16/H",
+    "food_security": "I1-I8",
+    "food_consumption": "I9-I17",
+}
+
+CATALOG_MODELS = [
     {
-        "key": "iden", "label": "Identification", "tone": "identity",
-        "fields": [
-            {"key": "phone",     "label": "Phone",                "type": "text",   "pmt": False},
-            {"key": "email",     "label": "Email",                "type": "text",   "pmt": False},
-            {"key": "head_name", "label": "Head of household",    "type": "text",   "pmt": False},
-            {"key": "head_nin",  "label": "Head NIN",             "type": "text",   "pmt": False},
-            {"key": "lang",      "label": "Preferred language",   "type": "select", "pmt": False,
-             "options": ["English", "Luganda", "Swahili", "Acholi", "Karamojong",
-                         "Lugbara", "Runyankole"]},
-        ],
+        "key": "household",
+        "label": "Household",
+        "tone": "identity",
+        "model": Household,
+        "entity": "household",
+        "choice_map": choices.HOUSEHOLD_FIELDS,
     },
     {
-        "key": "loc", "label": "Location", "tone": "data",
-        "fields": [
-            {"key": "gps",         "label": "GPS coordinates",   "type": "text",   "pmt": False},
-            {"key": "ea",          "label": "Enumeration area",  "type": "text",   "pmt": False},
-            # ADR-0010: urban_rural is a coded ChoiceList field — options
-            # MUST be the seed codes (rural_urban: 1=Urban, 2=Rural). The
-            # display label is resolved by the resolver at render time.
-            {"key": "urban_rural", "label": "Urban / rural",     "type": "select", "pmt": True,
-             "choice_list": "rural_urban", "options": ["1", "2"]},
-            {"key": "village",     "label": "Village",           "type": "text",   "pmt": False},
-            {"key": "parish",      "label": "Parish",            "type": "text",   "pmt": False},
-        ],
+        "key": "member",
+        "label": "Roster member",
+        "tone": "update",
+        "model": Member,
+        "entity": "member",
+        "choice_map": choices.MEMBER_FIELDS,
     },
     {
-        "key": "rost", "label": "Roster", "tone": "update",
-        "fields": [
-            {"key": "hh_size",         "label": "Household size",          "type": "number", "pmt": True,
-             "constraints": {"min": 1, "max": 30, "step": 1}},
-            {"key": "add_member",      "label": "Add member (name)",       "type": "text",   "pmt": False},
-            {"key": "remove_member",   "label": "Remove member (line #)",  "type": "number", "pmt": False,
-             "constraints": {"min": 1, "step": 1}},
-            {"key": "member_name",     "label": "Member name",             "type": "text",
-             "pmt": False, "entity": "member"},
-            {"key": "member_dob",      "label": "Member date of birth",    "type": "date",
-             "pmt": False, "entity": "member",
-             "constraints": {"min": "1900-01-01", "max_today": True}},
-            # ADR-0010: member_sex is a coded ChoiceList field — options
-            # MUST be the seed codes (sex: 1=Male, 2=Female).
-            {"key": "member_sex",      "label": "Member sex",              "type": "select",
-             "pmt": False, "choice_list": "sex", "options": ["1", "2"], "entity": "member"},
-            {"key": "member_relation", "label": "Member relation to head", "type": "text",
-             "pmt": False, "entity": "member"},
-        ],
+        "key": "health",
+        "label": "Health",
+        "tone": "danger",
+        "model": Health,
+        "entity": "member",
+        "choice_map": choices.HEALTH_FIELDS,
     },
     {
-        "key": "hd", "label": "Health & Disability", "tone": "danger",
-        "fields": [
-            {"key": "disab",     "label": "Disability status",          "type": "select", "pmt": True,
-             "options": ["none", "mild", "moderate", "severe"], "entity": "member"},
-            {"key": "chronic",   "label": "Chronic illness",            "type": "select", "pmt": True,
-             "options": ["yes", "no"], "entity": "member"},
-            {"key": "u5_breg",   "label": "Under-5 birth registration", "type": "select", "pmt": False,
-             "options": ["yes", "no", "partial"], "entity": "member"},
-            {"key": "preg_lact", "label": "Pregnant / lactating",       "type": "select", "pmt": False,
-             "options": ["yes", "no"], "entity": "member"},
-        ],
+        "key": "disability",
+        "label": "Disability",
+        "tone": "danger",
+        "model": Disability,
+        "entity": "member",
+        "choice_map": choices.DISABILITY_FIELDS,
     },
     {
-        "key": "ed", "label": "Education", "tone": "programme",
-        "fields": [
-            {"key": "ever_school", "label": "Ever attended school", "type": "select", "pmt": True,
-             "options": ["yes", "no"], "entity": "member"},
-            {"key": "grade",       "label": "Highest grade",        "type": "text",   "pmt": True, "entity": "member"},
-            {"key": "attending",   "label": "Currently attending",  "type": "select", "pmt": False,
-             "options": ["yes", "no"], "entity": "member"},
-        ],
+        "key": "education",
+        "label": "Education",
+        "tone": "programme",
+        "model": Education,
+        "entity": "member",
+        "choice_map": choices.EDUCATION_FIELDS,
     },
     {
-        "key": "emp", "label": "Employment", "tone": "system",
-        "fields": [
-            {"key": "occ",        "label": "Primary occupation",  "type": "text",   "pmt": True, "entity": "member"},
-            {"key": "sector",     "label": "Sector",              "type": "select", "pmt": True,
-             "options": ["agriculture", "trade", "services", "manufacturing",
-                         "public", "none"], "entity": "member"},
-            {"key": "income_src", "label": "Main income source",  "type": "text",   "pmt": True, "entity": "member"},
-        ],
+        "key": "employment",
+        "label": "Employment",
+        "tone": "system",
+        "model": Employment,
+        "entity": "member",
+        "choice_map": choices.EMPLOYMENT_FIELDS,
     },
     {
-        "key": "hous", "label": "Housing & Assets", "tone": "eligibility",
-        "fields": [
-            {"key": "roof",        "label": "Roof material",     "type": "select", "pmt": True,
-             "options": ["Iron sheets", "Tiles", "Thatch", "Asbestos", "Other"]},
-            {"key": "wall",        "label": "Wall material",     "type": "select", "pmt": True,
-             "options": ["Brick", "Mud", "Wood", "Iron sheets", "Other"]},
-            {"key": "floor",       "label": "Floor material",    "type": "select", "pmt": True,
-             "options": ["Cement", "Earth", "Tiles", "Wood", "Other"]},
-            {"key": "water",       "label": "Water source",      "type": "select", "pmt": True,
-             "options": ["Tap", "Borehole", "Spring", "River", "Vendor", "Other"]},
-            {"key": "toilet",      "label": "Toilet type",       "type": "select", "pmt": True,
-             "options": ["Flush", "Pit (covered)", "Pit (open)", "None", "Other"]},
-            {"key": "fuel",        "label": "Cooking fuel",      "type": "select", "pmt": True,
-             "options": ["Firewood", "Charcoal", "Gas", "Electricity", "Other"]},
-            {"key": "light",       "label": "Lighting source",   "type": "select", "pmt": True,
-             "options": ["Electricity", "Solar", "Kerosene", "Candle", "Other"]},
-            {"key": "tenure",      "label": "Dwelling tenure",   "type": "select", "pmt": True,
-             "options": ["Owned", "Rented", "Free", "Other"]},
-            {"key": "land_acres",  "label": "Land owned (acres)", "type": "number", "pmt": True,
-             "constraints": {"min": 0, "step": 0.1}},
-            {"key": "cattle",      "label": "Cattle owned",       "type": "number", "pmt": True,
-             "constraints": {"min": 0, "step": 1}},
-            {"key": "goats",       "label": "Goats owned",        "type": "number", "pmt": True,
-             "constraints": {"min": 0, "step": 1}},
-            {"key": "radio",       "label": "Owns radio",         "type": "select", "pmt": True,
-             "options": ["yes", "no"]},
-            {"key": "tv",          "label": "Owns TV",            "type": "select", "pmt": True,
-             "options": ["yes", "no"]},
-            {"key": "phone_owned", "label": "Owns phone",         "type": "select", "pmt": True,
-             "options": ["yes", "no"]},
-        ],
+        "key": "dwelling",
+        "label": "Dwelling",
+        "tone": "eligibility",
+        "model": Dwelling,
+        "entity": "household",
+        "choice_map": choices.DWELLING_FIELDS,
     },
     {
-        "key": "food", "label": "Food & Shocks", "tone": "quality",
-        "fields": [
-            {"key": "meals",  "label": "Meals per day",            "type": "number", "pmt": True,
-             "constraints": {"min": 0, "max": 10, "step": 1}},
-            {"key": "fcs",    "label": "Food consumption score",   "type": "number", "pmt": True,
-             "constraints": {"min": 0, "max": 112, "step": 1}},
-            {"key": "shock",  "label": "Recent shock",             "type": "select", "pmt": True,
-             "options": ["drought", "flood", "death_head", "theft", "illness",
-                         "none", "other"]},
-            {"key": "coping", "label": "Coping strategy",          "type": "select", "pmt": True,
-             "options": ["asset_sale", "reduce_meals", "skip_meal", "borrow",
-                         "migrate", "none", "other"]},
-        ],
+        "key": "utilities",
+        "label": "Utilities",
+        "tone": "eligibility",
+        "model": Utilities,
+        "entity": "household",
+        "choice_map": choices.UTILITIES_FIELDS,
+    },
+    {
+        "key": "livelihood",
+        "label": "Livelihood & agriculture",
+        "tone": "quality",
+        "model": Livelihood,
+        "entity": "household",
+        "choice_map": choices.LIVELIHOOD_FIELDS,
+    },
+    {
+        "key": "food_security",
+        "label": "Food security",
+        "tone": "quality",
+        "model": FoodSecurity,
+        "entity": "household",
+        "choice_map": choices.FOOD_SECURITY_FIELDS,
+    },
+    {
+        "key": "food_consumption",
+        "label": "Food consumption",
+        "tone": "quality",
+        "model": FoodConsumption,
+        "entity": "household",
+        "choice_map": choices.FOOD_CONSUMPTION_FIELDS,
     },
 ]
 
 
+PMT_RELEVANT_MODELS = {
+    "dwelling",
+    "utilities",
+    "livelihood",
+    "food_security",
+    "food_consumption",
+    "education",
+    "employment",
+    "health",
+    "disability",
+}
+
+
+def _label_for(field: models.Field) -> str:
+    return str(field.verbose_name or field.name).replace("_", " ").title()
+
+
+def _constraints_for(field: models.Field) -> dict:
+    if isinstance(field, (models.PositiveSmallIntegerField, models.PositiveIntegerField)):
+        return {"min": 0, "step": 1}
+    if isinstance(field, models.IntegerField):
+        return {"step": 1}
+    if isinstance(field, models.DecimalField):
+        return {"step": float(10 ** -field.decimal_places)}
+    if isinstance(field, models.DateField):
+        return {"max_today": True}
+    return {}
+
+
+def _type_for(field: models.Field, choice_map: dict) -> str:
+    if field.name in choice_map:
+        return "select"
+    if isinstance(field, models.ForeignKey) and field.remote_field.model is GeographicUnit:
+        return "geo"
+    if isinstance(field, models.BooleanField):
+        return "boolean"
+    if isinstance(field, models.DateField):
+        return "date"
+    if isinstance(
+        field,
+        (
+            models.IntegerField,
+            models.PositiveIntegerField,
+            models.PositiveSmallIntegerField,
+            models.DecimalField,
+            models.FloatField,
+        ),
+    ):
+        return "number"
+    return "text"
+
+
+def _editable_fields(model: type[models.Model]):
+    for field in model._meta.get_fields():
+        if not getattr(field, "concrete", False):
+            continue
+        if field.auto_created or field.name in EXCLUDED_FIELDS:
+            continue
+        yield field
+
+
+def _serialise_model_field(section: dict, field: models.Field) -> dict:
+    choice_map = section["choice_map"]
+    field_type = _type_for(field, choice_map)
+    out = {
+        "key": field.name,
+        "field_id": f"{section['key']}.{field.name}",
+        "model": section["model"]._meta.label,
+        "model_path": f"{section['model'].__name__}.{field.name}",
+        "label": _label_for(field),
+        "questionnaire_section": QUESTIONNAIRE_SECTIONS.get(section["key"], ""),
+        "type": field_type,
+        "pmt": section["key"] in PMT_RELEVANT_MODELS,
+        "entity": section["entity"],
+    }
+    if field.name in choice_map:
+        list_name, kind = choice_map[field.name]
+        out["choice_list"] = list_name
+        out["choice_kind"] = kind
+    if field_type == "geo":
+        out["options_source"] = (
+            "/api/v1/reference-data/geographic-units/"
+            f"?level={field.name}&status=active&page_size=500"
+        )
+    constraints = _constraints_for(field)
+    if constraints:
+        out["constraints"] = constraints
+    return out
+
+
+@lru_cache(maxsize=1)
+def categories() -> list[dict]:
+    built = []
+    for section in CATALOG_MODELS:
+        fields = [_serialise_model_field(section, f) for f in _editable_fields(section["model"])]
+        if not fields:
+            continue
+        built.append({
+            "key": section["key"],
+            "label": section["label"],
+            "tone": section["tone"],
+            "model": section["model"]._meta.label,
+            "entity": section["entity"],
+            "questionnaire_section": QUESTIONNAIRE_SECTIONS.get(section["key"], ""),
+            "fields": fields,
+        })
+    return built
+
+
 def category_keys() -> set[str]:
-    return {c["key"] for c in CATEGORIES}
+    return {c["key"] for c in categories()}
 
 
 def field_keys_by_category() -> dict[str, set[str]]:
-    return {c["key"]: {f["key"] for f in c["fields"]} for c in CATEGORIES}
+    return {c["key"]: {f["key"] for f in c["fields"]} for c in categories()}
 
 
-def is_pmt_relevant(category: str, field: str) -> bool:
-    for c in CATEGORIES:
+def field_meta(category: str, field: str) -> dict | None:
+    for c in categories():
         if c["key"] != category:
             continue
         for f in c["fields"]:
             if f["key"] == field:
-                return bool(f["pmt"])
-        return False
-    return False
+                return f
+    return None
+
+
+def is_pmt_relevant(category: str, field: str) -> bool:
+    return bool((field_meta(category, field) or {}).get("pmt", False))
 
 
 def validate_row(category: str, field: str) -> None:
-    """Raise ValueError if (category, field) isn't in the catalog."""
     pairs = field_keys_by_category()
     if category not in pairs:
         raise ValueError(f"unknown category {category!r}")
@@ -204,25 +295,18 @@ def validate_row(category: str, field: str) -> None:
 
 
 def field_entity(category: str, field: str) -> str:
-    """Return 'household' or 'member' for the given field.
-
-    Missing `entity` key in the catalog → 'household' (the default —
-    used by every legacy field that pre-dated the member-scope split).
-    """
-    for c in CATEGORIES:
-        if c["key"] != category:
-            continue
-        for f in c["fields"]:
-            if f["key"] == field:
-                return f.get("entity", "household")
-    return "household"
+    return (field_meta(category, field) or {}).get("entity", "household")
 
 
 def member_field_pairs() -> set[tuple[str, str]]:
-    """All (category, field) pairs whose entity scope is 'member'."""
     out: set[tuple[str, str]] = set()
-    for c in CATEGORIES:
+    for c in categories():
         for f in c["fields"]:
             if f.get("entity") == "member":
                 out.add((c["key"], f["key"]))
     return out
+
+
+# Backwards-compatible public name used by api/tests. It is backend-owned
+# and generated from model metadata, not copied from JSX.
+CATEGORIES = categories()

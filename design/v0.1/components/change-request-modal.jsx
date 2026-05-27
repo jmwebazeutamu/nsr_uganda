@@ -17,109 +17,14 @@
 const { useState: useCR, useEffect: useECR, useMemo: useMCR, useRef: useRCR } = React;
 
 // ────────────────────────────────────────────────────────────────
-// Field catalog — kept in lockstep with apps/update_workflow/field_catalog.py
+// Field catalog — backend owned.
 // ────────────────────────────────────────────────────────────────
-const CATEGORIES = [
-  { key: "iden", label: "Identification",      tone: "identity",     fields: [
-    { key: "phone",     label: "Phone",                type: "text",   pmt: false },
-    { key: "email",     label: "Email",                type: "text",   pmt: false },
-    { key: "head_name", label: "Head of household",    type: "text",   pmt: false },
-    { key: "head_nin",  label: "Head NIN",             type: "text",   pmt: false },
-    { key: "lang",      label: "Preferred language",   type: "select", pmt: false,
-      options: ["English","Luganda","Swahili","Acholi","Karamojong","Lugbara","Runyankole"] },
-  ]},
-  { key: "loc", label: "Location",             tone: "data",         fields: [
-    { key: "gps",         label: "GPS coordinates",   type: "text",   pmt: false },
-    { key: "ea",          label: "Enumeration area",  type: "text",   pmt: false },
-    { key: "urban_rural", label: "Urban / rural",     type: "select", pmt: true,
-      // ADR-0010 seed codes (rural_urban: 1=Urban, 2=Rural).
-      options: ["1","2"] },
-    { key: "village",     label: "Village",           type: "text",   pmt: false },
-    { key: "parish",      label: "Parish",            type: "text",   pmt: false },
-  ]},
-  { key: "rost", label: "Roster",              tone: "update",       fields: [
-    { key: "hh_size",         label: "Household size",         type: "number", pmt: true,
-      constraints: { min: 1, max: 30, step: 1 } },
-    { key: "add_member",      label: "Add member (name)",      type: "text",   pmt: false },
-    { key: "remove_member",   label: "Remove member (line #)", type: "number", pmt: false,
-      constraints: { min: 1, step: 1 } },
-    { key: "member_name",     label: "Member name",            type: "text",   pmt: false, entity: "member" },
-    { key: "member_dob",      label: "Member date of birth",   type: "date",   pmt: false, entity: "member",
-      constraints: { min: "1900-01-01", max_today: true } },
-    { key: "member_sex",      label: "Member sex",             type: "select", pmt: false, entity: "member",
-      // ADR-0010 seed codes (sex: 1=Male, 2=Female).
-      options: ["1","2"] },
-    { key: "member_relation", label: "Member relation to head", type: "text",   pmt: false, entity: "member" },
-  ]},
-  { key: "hd", label: "Health & Disability",   tone: "danger",       fields: [
-    { key: "disab",     label: "Disability status",          type: "select", pmt: true, entity: "member",
-      options: ["none","mild","moderate","severe"] },
-    { key: "chronic",   label: "Chronic illness",            type: "select", pmt: true, entity: "member",
-      options: ["yes","no"] },
-    { key: "u5_breg",   label: "Under-5 birth registration", type: "select", pmt: false, entity: "member",
-      options: ["yes","no","partial"] },
-    { key: "preg_lact", label: "Pregnant / lactating",       type: "select", pmt: false, entity: "member",
-      options: ["yes","no"] },
-  ]},
-  { key: "ed", label: "Education",             tone: "programme",    fields: [
-    { key: "ever_school", label: "Ever attended school", type: "select", pmt: true, entity: "member",
-      options: ["yes","no"] },
-    { key: "grade",       label: "Highest grade",        type: "text",   pmt: true, entity: "member" },
-    { key: "attending",   label: "Currently attending",  type: "select", pmt: false, entity: "member",
-      options: ["yes","no"] },
-  ]},
-  { key: "emp", label: "Employment",           tone: "system",       fields: [
-    { key: "occ",        label: "Primary occupation",  type: "text",   pmt: true, entity: "member" },
-    { key: "sector",     label: "Sector",              type: "select", pmt: true, entity: "member",
-      options: ["agriculture","trade","services","manufacturing","public","none"] },
-    { key: "income_src", label: "Main income source",  type: "text",   pmt: true, entity: "member" },
-  ]},
-  { key: "hous", label: "Housing & Assets",    tone: "eligibility",  fields: [
-    { key: "roof",        label: "Roof material",     type: "select", pmt: true,
-      options: ["Iron sheets","Tiles","Thatch","Asbestos","Other"] },
-    { key: "wall",        label: "Wall material",     type: "select", pmt: true,
-      options: ["Brick","Mud","Wood","Iron sheets","Other"] },
-    { key: "floor",       label: "Floor material",    type: "select", pmt: true,
-      options: ["Cement","Earth","Tiles","Wood","Other"] },
-    { key: "water",       label: "Water source",      type: "select", pmt: true,
-      options: ["Tap","Borehole","Spring","River","Vendor","Other"] },
-    { key: "toilet",      label: "Toilet type",       type: "select", pmt: true,
-      options: ["Flush","Pit (covered)","Pit (open)","None","Other"] },
-    { key: "fuel",        label: "Cooking fuel",      type: "select", pmt: true,
-      options: ["Firewood","Charcoal","Gas","Electricity","Other"] },
-    { key: "light",       label: "Lighting source",   type: "select", pmt: true,
-      options: ["Electricity","Solar","Kerosene","Candle","Other"] },
-    { key: "tenure",      label: "Dwelling tenure",   type: "select", pmt: true,
-      options: ["Owned","Rented","Free","Other"] },
-    { key: "land_acres",  label: "Land owned (acres)", type: "number", pmt: true,
-      constraints: { min: 0, step: 0.1 } },
-    { key: "cattle",      label: "Cattle owned",       type: "number", pmt: true,
-      constraints: { min: 0, step: 1 } },
-    { key: "goats",       label: "Goats owned",        type: "number", pmt: true,
-      constraints: { min: 0, step: 1 } },
-    { key: "radio",       label: "Owns radio",         type: "select", pmt: true,
-      options: ["yes","no"] },
-    { key: "tv",          label: "Owns TV",            type: "select", pmt: true,
-      options: ["yes","no"] },
-    { key: "phone_owned", label: "Owns phone",         type: "select", pmt: true,
-      options: ["yes","no"] },
-  ]},
-  { key: "food", label: "Food & Shocks",       tone: "quality",      fields: [
-    { key: "meals",  label: "Meals per day",          type: "number", pmt: true,
-      constraints: { min: 0, max: 10, step: 1 } },
-    { key: "fcs",    label: "Food consumption score", type: "number", pmt: true,
-      constraints: { min: 0, max: 112, step: 1 } },
-    { key: "shock",  label: "Recent shock",           type: "select", pmt: true,
-      options: ["drought","flood","death_head","theft","illness","none","other"] },
-    { key: "coping", label: "Coping strategy",        type: "select", pmt: true,
-      options: ["asset_sale","reduce_meals","skip_meal","borrow","migrate","none","other"] },
-  ]},
-];
+const EMPTY_CATEGORIES = [];
 
 // Flat lookup: "{category}:{field}" → { category, field, label, type, pmt, options? }
 const FIELDS_FLAT = (() => {
   const out = {};
-  for (const c of CATEGORIES) {
+  for (const c of EMPTY_CATEGORIES) {
     for (const f of c.fields) {
       out[`${c.key}:${f.key}`] = { category: c.key, ...f, _categoryLabel: c.label, _tone: c.tone };
     }
@@ -127,20 +32,14 @@ const FIELDS_FLAT = (() => {
   return out;
 })();
 
-const CATEGORY_BY_KEY = Object.fromEntries(CATEGORIES.map(c => [c.key, c]));
+const CATEGORY_BY_KEY = Object.fromEntries(EMPTY_CATEGORIES.map(c => [c.key, c]));
 
 // ────────────────────────────────────────────────────────────────
 // Live catalog fetch (US-S28-CATALOG)
 // ────────────────────────────────────────────────────────────────
-// The modal fetches /api/v1/upd/field-catalog/ on mount and uses the
-// response as the source of truth for category list, field metadata,
-// and SELECT options (resolved against the active ChoiceList version
-// for any field tagged `choice_list` in the backend catalog).
-//
-// On unreachable API (file:// preview, 401, network error) the hook
-// silently returns the hardcoded CATEGORIES so the design preview
-// keeps working. Same fall-through pattern as every other live-wired
-// screen in this codebase.
+// The modal fetches /api/v1/upd/field-catalog/ on mount and uses that
+// response as the only source of truth for sections, fields, questions,
+// types, constraints, and option sets.
 const _liveCatalogToFlat = (categories) => {
   const out = {};
   for (const c of categories) {
@@ -155,28 +54,44 @@ const _liveCatalogToFlat = (categories) => {
 
 const useFieldCatalog = () => {
   const [state, setState] = useCR({
-    categories: CATEGORIES,
+    categories: EMPTY_CATEGORIES,
     fieldsFlat: FIELDS_FLAT,
-    source: "fallback",  // "fallback" | "live"
+    source: "loading",  // "loading" | "live" | "error"
+    error: "",
   });
   useECR(() => {
     let cancelled = false;
-    fetch("/api/v1/upd/field-catalog/", {
+    const origin = window.location.origin && window.location.origin !== "null"
+      ? window.location.origin
+      : "http://localhost";
+    const url = new URL("/api/v1/upd/field-catalog/", origin);
+    fetch(url.toString(), {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
     })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`field-catalog HTTP ${r.status}`)))
       .then(data => {
         if (cancelled) return;
         const cats = Array.isArray(data?.categories) ? data.categories : null;
-        if (!cats || cats.length === 0) return;
+        if (!cats || cats.length === 0) {
+          throw new Error("field-catalog returned no categories");
+        }
         setState({
           categories: cats,
           fieldsFlat: _liveCatalogToFlat(cats),
           source: "live",
+          error: "",
         });
       })
-      .catch(() => { /* keep fallback */ });
+      .catch((err) => {
+        if (cancelled) return;
+        setState({
+          categories: [],
+          fieldsFlat: {},
+          source: "error",
+          error: String(err?.message || err),
+        });
+      });
     return () => { cancelled = true; };
   }, []);
   return state;
@@ -226,30 +141,80 @@ const derivePmt = (rows, fieldsFlat = FIELDS_FLAT) => rows.some(r => {
   return !!meta?.pmt;
 });
 
-// Quick-add seeds for the empty state — the half-dozen common
-// corrections operators reach for first.
-const QUICK_ADDS = [
-  { category: "iden", field: "phone" },
-  { category: "hous", field: "roof" },
-  { category: "rost", field: "hh_size" },
-  { category: "loc",  field: "gps" },
-  { category: "hous", field: "water" },
-  { category: "emp",  field: "occ" },
-];
+const quickAddsFor = (categories) =>
+  categories.flatMap(c => c.fields.slice(0, 2).map(f => ({ category: c.key, field: f.key }))).slice(0, 6);
 
 // ────────────────────────────────────────────────────────────────
 // Row inputs — keyed by field.type
 // ────────────────────────────────────────────────────────────────
+const GeoInput = ({ meta, value, onChange, autoFocus }) => {
+  const inputRef = useRCR(null);
+  const [q, setQ] = useCR("");
+  const [options, setOptions] = useCR([]);
+  useECR(() => {
+    if (autoFocus) inputRef.current?.focus();
+  }, [autoFocus]);
+  useECR(() => {
+    if (!meta.options_source) return;
+    const origin = window.location.origin && window.location.origin !== "null"
+      ? window.location.origin
+      : "http://localhost";
+    const url = new URL(meta.options_source, origin);
+    if (q.trim()) url.searchParams.set("search", q.trim());
+    let cancelled = false;
+    fetch(url.pathname + url.search, {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (cancelled) return;
+        const rows = Array.isArray(data?.results) ? data.results : Array.isArray(data) ? data : [];
+        setOptions(rows.slice(0, 50));
+      })
+      .catch(() => {
+        if (!cancelled) setOptions([]);
+      });
+    return () => { cancelled = true; };
+  }, [meta.options_source, q]);
+  const selected = options.find(o => o.id === value || o.code === value);
+  return (
+    <div style={{display:"flex", flexDirection:"column", gap:4}}>
+      <input ref={inputRef} className="field-input"
+        value={q || selected?.name || value || ""}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="Search geography..."
+        style={{ width:"100%" }}/>
+      <div style={{maxHeight:140, overflowY:"auto", border:"1px solid var(--neutral-200)", borderRadius:4}}>
+        {options.map(o => {
+          const id = o.id || o.code;
+          return (
+            <button key={id} type="button"
+              onClick={() => {
+                onChange(id);
+                setQ(o.name || o.label || id);
+              }}
+              style={{
+                width:"100%", border:0, background: value === id ? "var(--primary-100)" : "white",
+                padding:"6px 8px", textAlign:"left", fontSize:12.5, cursor:"pointer",
+              }}>
+              <strong>{o.name || o.label || id}</strong>
+              <span className="t-mono muted" style={{marginLeft:6}}>{o.code || id}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const RowInput = ({ meta, value, onChange, autoFocus }) => {
   const inputRef = useRCR(null);
   useECR(() => {
     if (autoFocus) inputRef.current?.focus();
   }, [autoFocus]);
   if (meta.type === "select") {
-    // Normalise options so the renderer works for both the legacy
-    // fallback shape (["Iron sheets", "Tiles", …]) and the live API
-    // shape ([{code: "01", label: "Iron sheets"}, …]). Wire value is
-    // always the `code`.
+    // Normalise options from the backend. Wire value is always `code`.
     const options = (meta.options || []).map(o =>
       typeof o === "string" ? { code: o, label: o } : o
     );
@@ -261,6 +226,25 @@ const RowInput = ({ meta, value, onChange, autoFocus }) => {
         {options.map(o => <option key={o.code} value={o.code}>{o.label}</option>)}
       </select>
     );
+  }
+  if (meta.type === "boolean") {
+    return (
+      <div style={{display:"flex", gap:8}}>
+        <label style={{display:"inline-flex", alignItems:"center", gap:4}}>
+          <input type="radio" checked={value === "true" || value === true}
+            onChange={() => onChange("true")}/>
+          Yes
+        </label>
+        <label style={{display:"inline-flex", alignItems:"center", gap:4}}>
+          <input type="radio" checked={value === "false" || value === false}
+            onChange={() => onChange("false")}/>
+          No
+        </label>
+      </div>
+    );
+  }
+  if (meta.type === "geo") {
+    return <GeoInput meta={meta} value={value} onChange={onChange} autoFocus={autoFocus}/>;
   }
   // US-S28-INPUT-CONSTRAINTS: surface backend-defined bounds as
   // HTML5 attrs. `max_today: true` on a date constraint resolves
@@ -300,7 +284,7 @@ const RowInput = ({ meta, value, onChange, autoFocus }) => {
 // Composer: dashed button → cascading category + field selects.
 // `categories` is the visible-by-entity-scope subset (defaults to the
 // full catalog for backward-compat).
-const AddComposer = ({ disabled, addedKeys, onAdd, categories = CATEGORIES }) => {
+const AddComposer = ({ disabled, addedKeys, onAdd, categories = [] }) => {
   const catByKey = useMCR(
     () => Object.fromEntries(categories.map(c => [c.key, c])),
     [categories],
@@ -364,7 +348,7 @@ const AddComposer = ({ disabled, addedKeys, onAdd, categories = CATEGORIES }) =>
 // flat list of every (category, field) row. `fieldsFlat` defaults to
 // the global FIELDS_FLAT; the modal passes a filtered subset when the
 // entity scope is restricted (member-only flow).
-const AddPicker = ({ disabled, addedKeys, onAdd, fieldsFlat = FIELDS_FLAT }) => {
+const AddPicker = ({ disabled, addedKeys, onAdd, fieldsFlat = {} }) => {
   const [open, setOpen] = useCR(false);
   const [q, setQ] = useCR("");
   const all = useMCR(() => Object.values(fieldsFlat), [fieldsFlat]);
@@ -451,7 +435,7 @@ const AddPicker = ({ disabled, addedKeys, onAdd, fieldsFlat = FIELDS_FLAT }) => 
 
 // Tree: each category folds out to its fields. Discovery-oriented.
 // `categories` honors the entity-scope filter passed by the modal.
-const AddTree = ({ disabled, addedKeys, onAdd, categories = CATEGORIES }) => {
+const AddTree = ({ disabled, addedKeys, onAdd, categories = [] }) => {
   const [open, setOpen] = useCR(false);
   const [expanded, setExpanded] = useCR(() => new Set());
   const toggle = (key) => {
@@ -547,21 +531,54 @@ const AddTree = ({ disabled, addedKeys, onAdd, categories = CATEGORIES }) => {
 // ────────────────────────────────────────────────────────────────
 // The modal
 // ────────────────────────────────────────────────────────────────
-// Format a current value for the "current: X" chip beside each row.
-// Keys off the field meta so dates render as the EAT day, selects
-// passthrough (codes match labels in the seeded ChoiceLists today),
-// long strings truncate to keep the chip a fixed width.
-const formatCurrent = (value, meta) => {
+const _rawValue = (value) => {
+  if (value && typeof value === "object" && !Array.isArray(value) && "value" in value) {
+    return value.value;
+  }
+  return value;
+};
+
+const _valueLabel = (value) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value.label ?? value.name ?? null;
+  }
+  return null;
+};
+
+const _optionLabel = (value, meta) => {
   if (value == null || value === "") return null;
+  if (meta?.type === "boolean") {
+    if (value === true || value === "true") return "Yes";
+    if (value === false || value === "false") return "No";
+  }
+  const option = (meta?.options || []).find(o => {
+    const code = typeof o === "string" ? o : o?.code;
+    return String(code) === String(value);
+  });
+  if (!option) return null;
+  return typeof option === "string" ? option : option.label;
+};
+
+// Format a current/new value for chips and review rows. Backend choice
+// options carry code+label, while current values may arrive as either
+// a raw code or {value, label} from the household projection.
+const formatCurrent = (value, meta) => {
+  const raw = _rawValue(value);
+  const display = _optionLabel(raw, meta) || _valueLabel(value);
+  if (display) {
+    const s = String(display);
+    return s.length > 28 ? s.slice(0, 26) + "…" : s;
+  }
+  if (raw == null || raw === "") return null;
   if (meta?.type === "date") {
     // YYYY-MM-DD on the wire; render as 14 May 2026 in the chip.
-    const d = new Date(`${value}T00:00:00Z`);
+    const d = new Date(`${raw}T00:00:00Z`);
     if (!Number.isNaN(d.getTime())) {
       const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
       return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
     }
   }
-  const s = String(value);
+  const s = String(raw);
   return s.length > 28 ? s.slice(0, 26) + "…" : s;
 };
 
@@ -610,6 +627,7 @@ const ChangeRequestModal = ({
   // 15 MB total, 3 files, PDF/JPG/PNG/HEIC/WebP).
   const [documents, setDocuments]   = useCR([]);
   const [docError, setDocError]     = useCR("");
+  const [backendCurrentValues, setBackendCurrentValues] = useCR({});
 
   // Reset every time the modal opens — operators expect a clean
   // sheet, not whatever they typed last time.
@@ -627,6 +645,7 @@ const ChangeRequestModal = ({
     setFocusFieldKey("");
     setDocuments([]);
     setDocError("");
+    setBackendCurrentValues({});
     setStep(1);
   }, [open]);
 
@@ -638,12 +657,12 @@ const ChangeRequestModal = ({
     if (!open) return;
     setRows([]);
     setMemberId("");
+    setBackendCurrentValues({});
   }, [entity]);
 
   // Live catalog from /api/v1/upd/field-catalog/ — falls back to the
-  // hardcoded CATEGORIES when the API is unreachable (file:// preview,
-  // 401, network error). Each render past mount uses whichever is in
-  // state; the fetch happens once per modal mount.
+  // backend catalog state. Field controls stay unavailable until it is
+  // loaded; there is intentionally no local field fallback.
   const liveCatalog = useFieldCatalog();
 
   // Visible catalog — household scope hides member-only fields and
@@ -675,9 +694,11 @@ const ChangeRequestModal = ({
   // Effective current values — when a member is selected, merge that
   // member's snapshot on top of the household-level snapshot.
   const effectiveCurrentValues = useMCR(() => {
-    if (entity !== "member" || !memberId) return currentValues;
-    return { ...currentValues, ...(memberValues[memberId] || {}) };
-  }, [entity, memberId, currentValues, memberValues]);
+    const local = entity !== "member" || !memberId
+      ? currentValues
+      : { ...currentValues, ...(memberValues[memberId] || {}) };
+    return { ...local, ...backendCurrentValues };
+  }, [entity, memberId, currentValues, memberValues, backendCurrentValues]);
 
   const selectedMember = useMCR(
     () => (entity === "member" && memberId)
@@ -690,6 +711,41 @@ const ChangeRequestModal = ({
     () => new Set(rows.map(r => `${r.category}:${r.field}`)),
     [rows],
   );
+
+  useECR(() => {
+    if (!open || rows.length === 0) {
+      setBackendCurrentValues({});
+      return;
+    }
+    if (entity === "member" && !memberId) return;
+    if (entity !== "member" && !householdId) return;
+    const origin = window.location.origin && window.location.origin !== "null"
+      ? window.location.origin
+      : "http://localhost";
+    const url = new URL("/api/v1/upd/current-values/", origin);
+    url.searchParams.set("entity", entity);
+    if (householdId) url.searchParams.set("household_id", householdId);
+    if (entity === "member" && memberId) url.searchParams.set("member_id", memberId);
+    rows.forEach(r => url.searchParams.append("fields", `${r.category}.${r.field}`));
+    let cancelled = false;
+    fetch(url.pathname + url.search, {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (cancelled) return;
+        const next = {};
+        for (const [fieldId, item] of Object.entries(data?.values || {})) {
+          next[fieldId] = { value: item.raw, label: item.display };
+        }
+        setBackendCurrentValues(next);
+      })
+      .catch(() => {
+        if (!cancelled) setBackendCurrentValues({});
+      });
+    return () => { cancelled = true; };
+  }, [open, entity, householdId, memberId, rows]);
 
   // Auto-derived PMT-relevance. Force-PMT can raise but not lower:
   // when derivedPmt is true the checkbox is disabled and stays on.
@@ -726,7 +782,7 @@ const ChangeRequestModal = ({
   const isRowChanged = (r) => {
     const v = (r.value || "").trim();
     if (v.length === 0) return false;
-    const cv = effectiveCurrentValues[`${r.category}.${r.field}`];
+    const cv = _rawValue(effectiveCurrentValues[`${r.category}.${r.field}`]);
     if (cv == null || cv === "") return true;
     return v !== String(cv).trim();
   };
@@ -868,6 +924,8 @@ const ChangeRequestModal = ({
       .filter(c => map.has(c.key))
       .map(c => ({ category: c, rows: map.get(c.key) }));
   }, [rows, visibleCategories]);
+
+  const quickAdds = useMCR(() => quickAddsFor(visibleCategories), [visibleCategories]);
 
   const submit = async () => {
     if (!valid || !onSubmit) return;
@@ -1022,6 +1080,20 @@ const ChangeRequestModal = ({
             : <Chip tone="neutral" size="sm" data-testid="summary-pmt-chip">cosmetic</Chip>}
         </div>
 
+        {liveCatalog.source !== "live" && (
+          <div data-testid="field-catalog-state" className="t-bodysm" style={{
+            padding:"8px 12px",
+            background:"var(--neutral-50)",
+            border:"1px solid var(--neutral-200)",
+            borderRadius:6,
+            color: liveCatalog.source === "error" ? "var(--accent-danger)" : "var(--neutral-600)",
+          }}>
+            {liveCatalog.source === "loading"
+              ? "Loading fields from backend..."
+              : `Could not load backend field catalog: ${liveCatalog.error}`}
+          </div>
+        )}
+
         {/* Step 1) Target strip */}
         {step === 1 && (<>
         {/* 1) Target strip */}
@@ -1170,14 +1242,14 @@ const ChangeRequestModal = ({
           </div>
 
           <div style={{padding:16, display:"flex", flexDirection:"column", gap:12}}>
-            {rows.length === 0 && (
+            {rows.length === 0 && liveCatalog.source === "live" && (
               <div className="col gap-3">
                 <div className="t-bodysm muted" style={{textAlign:"center"}}>
                   No changes yet. Tap a quick-add or use the picker below.
                 </div>
                 <div style={{display:"flex", flexWrap:"wrap", gap:8,
                               justifyContent:"center"}}>
-                  {QUICK_ADDS.map(({ category, field }) => {
+                  {quickAdds.map(({ category, field }) => {
                     const meta = liveCatalog.fieldsFlat[`${category}:${field}`];
                     if (!meta) return null;
                     return (
@@ -1196,6 +1268,12 @@ const ChangeRequestModal = ({
                     );
                   })}
                 </div>
+              </div>
+            )}
+
+            {liveCatalog.source !== "live" && (
+              <div className="t-bodysm muted" style={{textAlign:"center", padding:16}}>
+                Field selection is unavailable until the backend catalog loads.
               </div>
             )}
 
@@ -1280,7 +1358,7 @@ const ChangeRequestModal = ({
                               }}>Before</span>
                               <span
                                 data-testid={`current-${r.category}-${r.field}`}
-                                title={cv == null ? "" : String(cv)}
+                                title={cv == null ? "" : String(formatCurrent(cv, meta) || _rawValue(cv))}
                                 style={{
                                   fontSize:13,
                                   color: cvFormatted ? "var(--neutral-900)" : "var(--neutral-500)",
@@ -1474,7 +1552,7 @@ const ChangeRequestModal = ({
                     <span className="t-bodysm muted">
                       {formatCurrent(cv, meta) || "—"}
                     </span>
-                    <span><strong>{r.value || "(empty)"}</strong></span>
+                    <span><strong>{formatCurrent(r.value, meta) || "(empty)"}</strong></span>
                   </div>
                 );
               })}
@@ -1553,7 +1631,7 @@ const ChangeRequestModal = ({
 // consumer) can pull them off `window` without a bundler.
 Object.assign(window, {
   ChangeRequestModal,
-  CR_CATEGORIES: CATEGORIES,
+  CR_CATEGORIES: EMPTY_CATEGORIES,
   CR_FIELDS_FLAT: FIELDS_FLAT,
   CR_ROUTING: ROUTING,
   routeFor,
