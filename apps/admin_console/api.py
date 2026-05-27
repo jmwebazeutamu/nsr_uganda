@@ -320,7 +320,8 @@ def pmt_dashboard(request):
 @permission_classes([permissions.IsAuthenticated, IsAdminConsoleUser])
 def pmt_recompute_run_now(request):
     """Synchronous run for now (Celery wiring deferred). Writes a
-    PMTRecomputeJobRun row and re-aggregates the snapshot tables."""
+    PMTRecomputeJobRun row, re-aggregates the snapshot tables, and
+    re-runs the empirical band-threshold percentile pass."""
     from apps.admin_console.snapshots import recompute_dashboard_snapshots
     actor = str(request.user.username or request.user.id)
     run = recompute_dashboard_snapshots(actor=actor)
@@ -331,7 +332,190 @@ def pmt_recompute_run_now(request):
         "sample_size": run.sample_size,
         "started_at": run.started_at.isoformat(),
         "finished_at": run.finished_at.isoformat() if run.finished_at else "",
+        # report_url is what the dashboard's "Download report" button
+        # points at after a successful Run-now.
+        "report_url": f"/api/v1/admin/pmt/recompute/runs/{run.id}/report/",
     }, status=status.HTTP_202_ACCEPTED)
+
+
+@extend_schema(
+    tags=["admin-console"],
+    summary="Downloadable report for a single recompute run",
+    description=(
+        "Returns the computational artefacts of a single "
+        "PMTRecomputeJobRun: run metadata, active-model context at "
+        "run time, the PMTBandThreshold rows written during the run "
+        "(filtered by computed_at ∈ [started_at, finished_at]), and "
+        "a distribution summary (min / p25 / median / p75 / max) of "
+        "the PMTResult.score population the run percentiled across. "
+        "Pass ?as=csv for a flat CSV download; default response is "
+        "JSON. (`format` is reserved by DRF for content negotiation, "
+        "so we use `as` here.) Operators use this for audit / sign-off."
+    ),
+)
+@api_view(["GET"])
+@permission_classes([permissions.IsAuthenticated, IsAdminConsoleUser])
+def pmt_recompute_run_report(request, run_id: str):
+    """Build the report for one PMTRecomputeJobRun."""
+    from apps.pmt.models import (
+        PMTBandThreshold,
+        PMTModelVersion,
+        PMTRecomputeJobRun,
+        PMTResult,
+    )
+    try:
+        run = PMTRecomputeJobRun.objects.get(id=run_id)
+    except PMTRecomputeJobRun.DoesNotExist:
+        return Response({"detail": "run not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    mv = PMTModelVersion.objects.filter(status="active").order_by("-version").first()
+    model_ctx = {}
+    if mv is not None:
+        model_ctx = {
+            "id": str(mv.id),
+            "version": mv.version,
+            "band_strategy": mv.band_strategy,
+            "band_cutoffs": mv.band_cutoffs or {},
+            "calibration_dataset": mv.calibration_dataset or "",
+            "calibration_year_end": mv.calibration_year_end,
+            "intercept": float(mv.intercept) if mv.intercept is not None else None,
+            "validation_r_squared":
+                float(mv.validation_r_squared)
+                if mv.validation_r_squared is not None else None,
+            "variables_count": len(mv.variables or []),
+        }
+
+    # Threshold rows written during this run. computed_at must fall
+    # within the run's wall-clock window. Inclusive of the start so
+    # the same-instant row (timestamp == started_at) is included.
+    rows: list[dict] = []
+    if mv is not None and run.finished_at is not None:
+        qs = PMTBandThreshold.objects.filter(
+            model_version=mv,
+            computed_at__gte=run.started_at,
+            computed_at__lte=run.finished_at,
+        ).order_by("percentile_rank")
+        for r in qs:
+            rows.append({
+                "band_name": r.band_name,
+                "percentile_rank": r.percentile_rank,
+                "score_threshold": float(r.score_threshold),
+                "sample_size": r.sample_size,
+                "computed_at": r.computed_at.isoformat(),
+            })
+
+    # Distribution summary for context — same population the run
+    # percentiled across. Cheap to recompute since sample_size is
+    # the gating factor anyway.
+    distribution: dict = {}
+    if mv is not None:
+        scores = sorted(
+            float(s) for s in
+            PMTResult.objects
+            .filter(model_version=mv, household__is_deleted=False)
+            .values_list("score", flat=True)
+        )
+        if scores:
+            n = len(scores)
+            def _q(rank: int) -> float:
+                pos = (rank / 100.0) * (n - 1)
+                lo = int(pos)
+                hi = min(lo + 1, n - 1)
+                frac = pos - lo
+                return scores[lo] + (scores[hi] - scores[lo]) * frac
+            distribution = {
+                "n": n,
+                "min": scores[0],
+                "p25": _q(25),
+                "median": _q(50),
+                "p75": _q(75),
+                "max": scores[-1],
+            }
+
+    payload = {
+        "run": {
+            "id": str(run.id),
+            "actor": run.actor,
+            "status": run.status,
+            "started_at": run.started_at.isoformat(),
+            "finished_at": run.finished_at.isoformat() if run.finished_at else "",
+            "duration_ms": (
+                int((run.finished_at - run.started_at).total_seconds() * 1000)
+                if run.finished_at else None
+            ),
+            "rows_written": run.rows_written,
+            "sample_size": run.sample_size,
+            "note": run.note or "",
+        },
+        "active_model": model_ctx,
+        "thresholds_written": rows,
+        "distribution": distribution,
+    }
+
+    if (request.query_params.get("as") or "").lower() == "csv":
+        return _render_report_as_csv(payload)
+    return Response(payload)
+
+
+def _render_report_as_csv(payload: dict):
+    """Flat CSV for ops download. One section per logical block,
+    blank-line separated — Excel renders this cleanly without
+    needing a workbook generator."""
+    import csv
+    import io
+
+    from django.http import HttpResponse
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+
+    run = payload["run"]
+    w.writerow(["section", "run"])
+    w.writerow(["run_id", run["id"]])
+    w.writerow(["actor", run["actor"]])
+    w.writerow(["status", run["status"]])
+    w.writerow(["started_at", run["started_at"]])
+    w.writerow(["finished_at", run["finished_at"]])
+    w.writerow(["duration_ms", run["duration_ms"] if run["duration_ms"] is not None else ""])
+    w.writerow(["rows_written", run["rows_written"]])
+    w.writerow(["sample_size", run["sample_size"]])
+    w.writerow(["note", run["note"]])
+    w.writerow([])
+
+    mc = payload["active_model"] or {}
+    w.writerow(["section", "active_model"])
+    for k in ("id", "version", "band_strategy", "calibration_dataset",
+              "calibration_year_end", "intercept", "validation_r_squared",
+              "variables_count"):
+        if k in mc:
+            w.writerow([k, mc[k] if mc[k] is not None else ""])
+    cutoffs = mc.get("band_cutoffs") or {}
+    for band, rank in cutoffs.items():
+        w.writerow([f"band_cutoffs.{band}", rank])
+    w.writerow([])
+
+    w.writerow(["section", "thresholds_written"])
+    w.writerow(["band_name", "percentile_rank", "score_threshold",
+                "sample_size", "computed_at"])
+    for r in payload["thresholds_written"]:
+        w.writerow([
+            r["band_name"], r["percentile_rank"],
+            f'{r["score_threshold"]:.6f}',
+            r["sample_size"], r["computed_at"],
+        ])
+    w.writerow([])
+
+    dist = payload["distribution"] or {}
+    w.writerow(["section", "distribution"])
+    for k in ("n", "min", "p25", "median", "p75", "max"):
+        if k in dist:
+            v = dist[k]
+            w.writerow([k, f"{v:.6f}" if isinstance(v, float) else v])
+
+    response = HttpResponse(buf.getvalue(), content_type="text/csv")
+    filename = f"pmt-recompute-{run['id']}.csv"
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
 
 
 # ───────────────────────────────────────────────────────────────

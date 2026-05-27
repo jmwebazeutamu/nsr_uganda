@@ -110,6 +110,156 @@ class TestRecomputeRunNow:
         admin_client.post("/api/v1/admin/pmt/recompute/run-now/")
         assert PMTCoverageSnapshot.objects.exists()
 
+    def _seed_pmt_results(self, n=10):
+        """Recompute only writes thresholds when there's a population
+        to percentile across. Test DB starts empty of PMTResult rows;
+        seed a small spread so the percentile pass has data."""
+        from datetime import date
+        from decimal import Decimal
+
+        from apps.data_management.models import Household
+        from apps.pmt.models import Band, PMTResult
+        from apps.reference_data.models import GeographicUnit
+        active = PMTModelVersion.objects.filter(status="active").first()
+        # Reuse any household the test fixtures created; otherwise mint
+        # a full geo cascade + one household. Geo cascade is required
+        # because Household.county / sub_county / parish / village are
+        # NOT NULL (per the schema).
+        hh = Household.objects.filter(is_deleted=False).first()
+        if hh is None:
+            geo = {}
+            for level, key, parent in [
+                ("region", "r", None), ("sub_region", "sr", "r"),
+                ("district", "d", "sr"), ("county", "c", "d"),
+                ("sub_county", "sc", "c"), ("parish", "p", "sc"),
+                ("village", "v", "p"),
+            ]:
+                geo[key] = GeographicUnit.objects.create(
+                    level=level, code=f"PMTTEST-{key.upper()}", name=key.title(),
+                    parent=geo.get(parent), effective_from=date(2026, 1, 1),
+                )
+            hh = Household.objects.create(
+                region=geo["r"], sub_region=geo["sr"], district=geo["d"],
+                county=geo["c"], sub_county=geo["sc"],
+                parish=geo["p"], village=geo["v"],
+                urban_rural="2", address_narrative="PMT test",
+            )
+        for i in range(n):
+            PMTResult.objects.create(
+                household=hh, model_version=active,
+                score=Decimal(str(10 + i * 1.5)),
+                band=Band.POVERTY,
+                triggered_by="manual",
+            )
+
+    def test_recompute_writes_band_thresholds(self, admin_client):
+        """Run-now must refresh PMTBandThreshold rows too — earlier
+        only the snapshot tables were refreshed, leaving the
+        Empirical Thresholds card on the dashboard stale until the
+        nightly Celery beat tick."""
+        from apps.pmt.models import PMTBandThreshold
+        self._seed_pmt_results()
+        before = PMTBandThreshold.objects.count()
+        r = admin_client.post("/api/v1/admin/pmt/recompute/run-now/")
+        assert r.status_code == 202
+        # 4 bands per active model (band_cutoffs has 4 entries).
+        assert PMTBandThreshold.objects.count() == before + 4
+
+    def test_response_includes_report_url(self, admin_client):
+        r = admin_client.post("/api/v1/admin/pmt/recompute/run-now/")
+        assert r.status_code == 202
+        assert r.data["report_url"] == f"/api/v1/admin/pmt/recompute/runs/{r.data['id']}/report/"
+
+
+@pytest.mark.django_db
+class TestRecomputeRunReport:
+    """GET /api/v1/admin/pmt/recompute/runs/<run_id>/report/ —
+    downloadable artefact for one run. Run-now exposes report_url
+    pointing here; the dashboard's "Download report" button hits
+    this endpoint."""
+
+    def _seed_pmt_results(self, n=10):
+        from datetime import date
+        from decimal import Decimal
+
+        from apps.data_management.models import Household
+        from apps.pmt.models import Band, PMTResult
+        from apps.reference_data.models import GeographicUnit
+        active = PMTModelVersion.objects.filter(status="active").first()
+        hh = Household.objects.filter(is_deleted=False).first()
+        if hh is None:
+            geo = {}
+            for level, key, parent in [
+                ("region", "r", None), ("sub_region", "sr", "r"),
+                ("district", "d", "sr"), ("county", "c", "d"),
+                ("sub_county", "sc", "c"), ("parish", "p", "sc"),
+                ("village", "v", "p"),
+            ]:
+                geo[key] = GeographicUnit.objects.create(
+                    level=level, code=f"PMTREP-{key.upper()}", name=key.title(),
+                    parent=geo.get(parent), effective_from=date(2026, 1, 1),
+                )
+            hh = Household.objects.create(
+                region=geo["r"], sub_region=geo["sr"], district=geo["d"],
+                county=geo["c"], sub_county=geo["sc"],
+                parish=geo["p"], village=geo["v"],
+                urban_rural="2", address_narrative="PMT report test",
+            )
+        for i in range(n):
+            PMTResult.objects.create(
+                household=hh, model_version=active,
+                score=Decimal(str(10 + i * 1.5)),
+                band=Band.POVERTY,
+                triggered_by="manual",
+            )
+
+    def _trigger_run(self, admin_client):
+        self._seed_pmt_results()
+        r = admin_client.post("/api/v1/admin/pmt/recompute/run-now/")
+        return r.data["id"]
+
+    def test_json_report_carries_run_model_and_thresholds(self, admin_client):
+        run_id = self._trigger_run(admin_client)
+        r = admin_client.get(f"/api/v1/admin/pmt/recompute/runs/{run_id}/report/")
+        assert r.status_code == 200
+        assert r.data["run"]["id"] == run_id
+        assert r.data["run"]["status"] == "ok"
+        assert r.data["run"]["duration_ms"] is not None
+        # Active model context is included so the report is
+        # auditable on its own (no need to re-query the model).
+        assert r.data["active_model"]["version"] == 1
+        assert "band_cutoffs" in r.data["active_model"]
+        # Thresholds the run wrote are listed by percentile rank.
+        assert len(r.data["thresholds_written"]) >= 1
+        for row in r.data["thresholds_written"]:
+            assert {"band_name", "percentile_rank",
+                    "score_threshold", "sample_size",
+                    "computed_at"}.issubset(row.keys())
+
+    def test_csv_format_uses_as_param(self, admin_client):
+        """DRF reserves ?format= for content negotiation, so the
+        CSV switch lives on ?as=csv. Verifies Content-Type +
+        Content-Disposition + that the body has all four sections."""
+        run_id = self._trigger_run(admin_client)
+        r = admin_client.get(
+            f"/api/v1/admin/pmt/recompute/runs/{run_id}/report/?as=csv",
+        )
+        assert r.status_code == 200
+        assert r.headers["Content-Type"] == "text/csv"
+        assert "attachment" in r.headers["Content-Disposition"]
+        assert f"pmt-recompute-{run_id}.csv" in r.headers["Content-Disposition"]
+        body = r.content.decode("utf-8")
+        assert "section,run" in body
+        assert "section,active_model" in body
+        assert "section,thresholds_written" in body
+        assert "section,distribution" in body
+
+    def test_404_for_unknown_run_id(self, admin_client):
+        r = admin_client.get(
+            "/api/v1/admin/pmt/recompute/runs/01XXXXXXXXXXXXXXXXXXXXXXXX/report/",
+        )
+        assert r.status_code == 404
+
 
 # ───────────────────────────────────────────────────────────────
 # Configuration: versions list + clone + edit-active-refusal

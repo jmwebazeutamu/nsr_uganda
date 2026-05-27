@@ -10,6 +10,7 @@ from apps.admin_console.api import (
     pmt_dashboard,
     pmt_events,
     pmt_recompute_run_now,
+    pmt_recompute_run_report,
     pmt_transforms,
 )
 from apps.admin_console.approvals_api import approvals_queue
@@ -67,6 +68,8 @@ urlpatterns = [
     # PMT (sprint 22)
     path("pmt/dashboard/",            pmt_dashboard,        name="admin-pmt-dashboard"),
     path("pmt/recompute/run-now/",    pmt_recompute_run_now, name="admin-pmt-recompute-run-now"),
+    path("pmt/recompute/runs/<str:run_id>/report/",
+         pmt_recompute_run_report, name="admin-pmt-recompute-run-report"),
     path("pmt/events/",               pmt_events,           name="admin-pmt-events"),
     path("pmt/transforms/",           pmt_transforms,       name="admin-pmt-transforms"),
 

@@ -433,9 +433,12 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
 
   // Trigger a recompute via the admin API. Disables the button
   // while running; reloads the dashboard payload on completion so
-  // the new snapshot rolls into view automatically.
+  // the new snapshot rolls into view automatically. `lastRun` is
+  // the response payload from the most recent Run-now, used to
+  // expose the Download report button.
   const [recomputing, setRecomputing] = useStatePMT(false);
   const [recomputeError, setRecomputeError] = useStatePMT("");
+  const [lastRun, setLastRun] = useStatePMT(null);
   const runNow = React.useCallback(() => {
     setRecomputing(true);
     setRecomputeError("");
@@ -448,10 +451,29 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
       },
     })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(() => { dash.reload(); })
+      .then(payload => {
+        setLastRun(payload);
+        dash.reload();
+      })
       .catch(e => setRecomputeError(typeof e === "number" ? `HTTP ${e}` : String(e?.message || e)))
       .finally(() => setRecomputing(false));
   }, [dash]);
+
+  // Trigger a CSV download for the most recent Run-now. Uses an
+  // anchor element + click() so the browser handles the file save
+  // dialog natively — same-origin cookies flow automatically.
+  const downloadReport = React.useCallback((runId, format) => {
+    if (!runId) return;
+    const suffix = format === "csv" ? "?as=csv" : "";
+    const url = `/api/v1/admin/pmt/recompute/runs/${runId}/report/${suffix}`;
+    const a = document.createElement("a");
+    a.href = url;
+    if (format === "csv") a.download = `pmt-recompute-${runId}.csv`;
+    else a.target = "_blank";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }, []);
 
   return (
     <div className="page">
@@ -709,10 +731,40 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
             <Chip size="sm" tone="data">{PMT_JOB.successRate7d}% / 7d</Chip>
             <span className="t-cap t-mono">{PMT_JOB.taskName}</span>
             <div style={{ flex: 1 }}/>
+            {lastRun && lastRun.report_url && (
+              <>
+                <button className="btn btn-sm"
+                  data-testid="download-report-csv"
+                  onClick={() => downloadReport(lastRun.id, "csv")}
+                  title="Download the computational result of the most recent Run-now as CSV">
+                  <Icon name="download" size={12}/> Report (CSV)
+                </button>
+                <button className="btn btn-sm btn-ghost"
+                  data-testid="download-report-json"
+                  onClick={() => downloadReport(lastRun.id, "json")}
+                  title="View the same report as JSON in a new tab">
+                  JSON
+                </button>
+              </>
+            )}
             <button className="btn btn-sm" disabled={recomputing} onClick={runNow}>
               <Icon name="refresh" size={12}/> {recomputing ? "Running…" : "Run now"}
             </button>
           </div>
+          {lastRun && !recomputing && !recomputeError && (
+            <div className="t-bodysm" style={{
+              color: "var(--accent-data)", padding: "8px 20px",
+              background: "var(--neutral-50)",
+              borderBottom: "1px solid var(--neutral-200)",
+              display: "flex", alignItems: "center", gap: 8,
+            }}>
+              <Icon name="check" size={14} color="var(--accent-data)"/>
+              <span>
+                Run <span className="t-mono">{(lastRun.id || "").slice(0, 12)}…</span> completed
+                — {lastRun.rows_written} rows written, sample n={lastRun.sample_size}.
+              </span>
+            </div>
+          )}
           {recomputeError && (
             <div className="t-bodysm" style={{
               color: "var(--accent-danger)", padding: "8px 20px",

@@ -29,8 +29,18 @@ from apps.pmt.models import (
 @transaction.atomic
 def recompute_dashboard_snapshots(actor: str = "celery-beat") -> PMTRecomputeJobRun:
     """Re-materialise every PMT dashboard snapshot table from the
-    current PMTResult / Household population. Returns the
-    PMTRecomputeJobRun row recording the execution."""
+    current PMTResult / Household population AND re-run the empirical
+    band-threshold percentile pass. Returns the PMTRecomputeJobRun
+    row recording the execution.
+
+    Threshold recompute was previously split off into its own Celery
+    beat (`apps.pmt.tasks.recompute_band_thresholds_task`). The
+    operator-facing Run-now button only refreshed snapshots, which
+    meant the Empirical Thresholds card on the dashboard stayed
+    stale until the next 02:00 EAT tick. Folding both into one
+    transaction restores intuitive Run-now semantics: one click,
+    everything the dashboard reads is fresh.
+    """
     run = PMTRecomputeJobRun.objects.create(actor=actor, status="ok")
     rows_written = 0
     sample_size = 0
@@ -57,6 +67,7 @@ def recompute_dashboard_snapshots(actor: str = "celery-beat") -> PMTRecomputeJob
             rows_written += _refresh_subregion_snapshots(active)
             rows_written += _refresh_variable_influence(active)
         rows_written += _refresh_coverage_snapshot()
+        rows_written += _refresh_band_thresholds(actor=actor)
     except Exception as exc:  # noqa: BLE001
         run.status = PMTRecomputeJobRun.FAILED
         run.note = str(exc)[:1000]
@@ -65,6 +76,19 @@ def recompute_dashboard_snapshots(actor: str = "celery-beat") -> PMTRecomputeJob
     run.sample_size = sample_size
     run.save()
     return run
+
+
+def _refresh_band_thresholds(*, actor: str) -> int:
+    """Walk active models and append fresh PMTBandThreshold rows.
+    Delegates to apps.pmt.tasks._recompute_for_model so the maths +
+    audit emission stay in one place. Returns the total number of
+    rows written across every active model."""
+    from apps.pmt.tasks import _recompute_for_model
+    written = 0
+    for mv in PMTModelVersion.objects.filter(status="active"):
+        result = _recompute_for_model(mv, actor=actor)
+        written += len(result)
+    return written
 
 
 def _refresh_subregion_snapshots(active: PMTModelVersion) -> int:
