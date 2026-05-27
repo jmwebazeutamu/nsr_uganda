@@ -1,12 +1,32 @@
 import random
 
+from django.conf import settings
+from django.utils.dateparse import parse_datetime
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from .engine import evaluate
-from .models import DqaResult, DqaRule, DqaRulePreviewRun
+from .household_evaluator import (
+    EVALUATOR_SERVICE_VERSION,
+    evaluate_household,
+    load_active_household_rules,
+    persist_household_evaluation,
+)
+from .models import (
+    DqaEvaluation,
+    DqaResult,
+    DqaRule,
+    DqaRulePreviewRun,
+    EvaluationOutcome,
+    ExpressionType,
+    RuleCategory,
+    RuleScope,
+    RuleStage,
+    Severity,
+)
 from .services import ApprovalError, approve, reject, retire, submit_for_approval
 
 
@@ -44,6 +64,11 @@ class DqaRuleSerializer(serializers.ModelSerializer):
             "author", "approved_by", "approved_at",
             # DQA-1 lifecycle audit fields.
             "approval_note", "rejection_reason", "submitted_at",
+            # US-S11-044 intra-household additions. Rule Editor reads
+            # and writes these; the seed bootstrap-creates them as DRAFT.
+            "category", "scope", "expression_type", "stages",
+            "parameters", "applies_to", "test_fixtures",
+            "message_template_i18n_key",
         )
 
 
@@ -278,3 +303,267 @@ class DqaResultViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = DqaResult.objects.all().order_by("-executed_at")
     serializer_class = DqaResultSerializer
     filterset_fields = ["passed", "severity", "record_type"]
+
+
+# ---------------------------------------------------------------------------
+# US-S11-044 — intra-household evaluation surface.
+#
+# Three endpoints, all feature-flag-gated on DQA_INTRA_HOUSEHOLD_ENABLED:
+#
+#   POST /dqa/evaluate/household        — synchronous evaluator. Wizard
+#                                          calls this on each field-edit
+#                                          batch. Optionally persists.
+#   GET  /dqa/evaluations/{household_id} — DqaEvaluation history. Powers
+#                                          household detail panel.
+#   GET  /dqa/severity-vocabulary        — design tokens for the UI.
+#
+# Rule CRUD + lifecycle uses the existing DqaRuleViewSet (the new
+# category/scope/stages/parameters/applies_to/test_fixtures fields are
+# now surfaced by DqaRuleSerializer).
+
+
+def _flag_enabled() -> bool:
+    return bool(getattr(settings, "DQA_INTRA_HOUSEHOLD_ENABLED", False))
+
+
+def _disabled_response():
+    return Response(
+        {"detail": "intra-household DQA is disabled in this environment"},
+        status=status.HTTP_503_SERVICE_UNAVAILABLE,
+    )
+
+
+class _EvaluateHouseholdRequest(serializers.Serializer):
+    """Request body for /dqa/evaluate/household.
+
+    `payload` is the household dict the wizard / DIH builds; shape
+    follows /docs/06_questionnaire.docx (household + members[]).
+    `stage` tells the evaluator which stage filter to apply when
+    loading rules from the catalog.
+    `persist`+`household_id` together opt into writing a
+    DqaEvaluation row and emitting an AuditEvent.
+    """
+
+    payload = serializers.JSONField()
+    stage = serializers.ChoiceField(choices=RuleStage.choices)
+    persist = serializers.BooleanField(required=False, default=False)
+    household_id = serializers.CharField(required=False, allow_blank=True, default="")
+    household_version = serializers.IntegerField(required=False, allow_null=True)
+    evaluated_at = serializers.DateTimeField(required=False)
+
+
+class _EvaluateHouseholdResponse(serializers.Serializer):
+    stage = serializers.CharField()
+    outcome = serializers.ChoiceField(choices=EvaluationOutcome.choices)
+    evaluator_service_version = serializers.CharField()
+    results = serializers.ListField(child=serializers.DictField())
+    evaluation_id = serializers.CharField(required=False)
+    rules_evaluated = serializers.IntegerField()
+
+
+class EvaluateHouseholdView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @extend_schema(
+        tags=["dqa"],
+        summary="Evaluate intra-household DQA rules (US-S11-044)",
+        description=(
+            "Runs the active intra-household rule catalog (filtered by "
+            "stage) against the supplied household payload and returns "
+            "per-rule pass/fail/error + aggregate outcome. Pass "
+            "`persist=true` with a `household_id` to record a "
+            "DqaEvaluation row and emit a `dqa.household.evaluated` "
+            "AuditEvent. The wizard calls this with persist=false on "
+            "each field-edit batch; the pipeline (DIH ingest/promote, "
+            "post-promote) calls it with persist=true."
+        ),
+        request=_EvaluateHouseholdRequest,
+        responses={
+            200: _EvaluateHouseholdResponse,
+            400: OpenApiResponse(description="bad request body"),
+            503: OpenApiResponse(description="feature flag disabled"),
+        },
+    )
+    def post(self, request):
+        if not _flag_enabled():
+            return _disabled_response()
+        ser = _EvaluateHouseholdRequest(data=request.data)
+        ser.is_valid(raise_exception=True)
+        stage = ser.validated_data["stage"]
+        payload = ser.validated_data["payload"]
+        persist = ser.validated_data.get("persist") or False
+        household_id = ser.validated_data.get("household_id") or ""
+        actor = getattr(request.user, "username", "") or "system"
+        # `evaluated_at` lets callers replay history deterministically;
+        # absent in normal flows.
+        now = ser.validated_data.get("evaluated_at")
+        if isinstance(now, str):
+            now = parse_datetime(now)
+        if persist:
+            if not household_id:
+                return Response(
+                    {"detail": "household_id is required when persist=true"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            eval_row = persist_household_evaluation(
+                payload, stage=stage, actor=actor,
+                household_id=household_id,
+                household_version=ser.validated_data.get("household_version"),
+                now=now,
+            )
+            body = {
+                "stage": eval_row.stage,
+                "outcome": eval_row.outcome,
+                "evaluator_service_version": eval_row.evaluator_service_version,
+                "results": eval_row.results,
+                "evaluation_id": str(eval_row.id),
+                "rules_evaluated": len(eval_row.results or []),
+            }
+        else:
+            rules = load_active_household_rules(stage)
+            aggregate = evaluate_household(
+                rules, payload, stage=stage, now=now,
+            )
+            body = {
+                "stage": aggregate["stage"],
+                "outcome": aggregate["outcome"],
+                "evaluator_service_version": aggregate["evaluator_service_version"],
+                "results": aggregate["results"],
+                "rules_evaluated": len(rules),
+            }
+        return Response(body)
+
+
+class _DqaEvaluationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DqaEvaluation
+        fields = (
+            "id", "household_id", "household_version",
+            "stage", "outcome", "results",
+            "evaluator_service_version", "actor", "evaluated_at",
+        )
+
+
+class HouseholdEvaluationsView(APIView):
+    """Returns the evaluation history for one household_id, newest
+    first. Powers the household detail DQA panel and supports
+    audit replay."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    @extend_schema(
+        tags=["dqa"],
+        summary="List DQA evaluations for a household",
+        responses={
+            200: _DqaEvaluationSerializer(many=True),
+            503: OpenApiResponse(description="feature flag disabled"),
+        },
+    )
+    def get(self, request, household_id: str):
+        if not _flag_enabled():
+            return _disabled_response()
+        qs = DqaEvaluation.objects.filter(
+            household_id=household_id,
+        ).order_by("-evaluated_at")
+        # Optional filters — the household detail panel narrows by stage
+        # ("show me the post-promote run") or outcome ("only blocks").
+        stage = request.query_params.get("stage")
+        if stage:
+            qs = qs.filter(stage=stage)
+        outcome = request.query_params.get("outcome")
+        if outcome:
+            qs = qs.filter(outcome=outcome)
+        limit_raw = request.query_params.get("limit")
+        try:
+            limit = int(limit_raw) if limit_raw else 50
+        except ValueError:
+            limit = 50
+        limit = max(1, min(limit, 200))
+        return Response(
+            _DqaEvaluationSerializer(qs[:limit], many=True).data,
+        )
+
+
+class SeverityVocabularyView(APIView):
+    """Returns the BLOCK / REJECT_WITH_OVERRIDE / FLAG / INFO vocabulary
+    with display + design-token hints so the wizard, Rule Editor, and
+    household detail panel render the same icon/colour for the same
+    severity. Open to any authenticated user — it's UI metadata, not
+    PII."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    # Severity → (UI token, blocking?). The blocking flag tells the
+    # wizard whether to gate Save / Next; the token feeds into the
+    # design system's status palette per /docs/04_ui_design_brief.md.
+    _VOCAB: list[dict] = [
+        {
+            "value": Severity.BLOCK.value, "label": "Block",
+            "token": "status-danger", "blocks_save": True,
+            "description": (
+                "Hard stop. Save / promotion is refused until the "
+                "violation is resolved."
+            ),
+        },
+        {
+            "value": Severity.REJECT_WITH_OVERRIDE.value,
+            "label": "Reject with override",
+            "token": "status-danger-soft", "blocks_save": True,
+            "description": (
+                "Refused by default. A supervisor can override with a "
+                "documented reason; the override is audited."
+            ),
+        },
+        {
+            "value": Severity.FLAG.value, "label": "Flag",
+            "token": "status-warning", "blocks_save": False,
+            "description": (
+                "Saves but opens an UPD review case. Enumerator sees the "
+                "warning inline; supervisor triages."
+            ),
+        },
+        {
+            "value": Severity.INFO.value, "label": "Info",
+            "token": "status-info", "blocks_save": False,
+            "description": (
+                "Logged for analytics. Not surfaced to enumerator unless "
+                "the rule is also flagged for display."
+            ),
+        },
+    ]
+
+    @extend_schema(
+        tags=["dqa"],
+        summary="DQA severity vocabulary + UI tokens",
+        responses={
+            200: serializers.ListField(child=serializers.DictField()),
+            503: OpenApiResponse(description="feature flag disabled"),
+        },
+    )
+    def get(self, request):
+        if not _flag_enabled():
+            return _disabled_response()
+        return Response({
+            "severities": self._VOCAB,
+            "stages": [
+                {"value": v, "label": label}
+                for v, label in RuleStage.choices
+            ],
+            "categories": [
+                {"value": v, "label": label}
+                for v, label in RuleCategory.choices
+            ],
+            "scopes": [
+                {"value": v, "label": label}
+                for v, label in RuleScope.choices
+            ],
+            "expression_types": [
+                {"value": v, "label": label}
+                for v, label in ExpressionType.choices
+            ],
+            "outcomes": [
+                {"value": v, "label": label}
+                for v, label in EvaluationOutcome.choices
+            ],
+            "evaluator_service_version": EVALUATOR_SERVICE_VERSION,
+        })

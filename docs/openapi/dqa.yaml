@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: NSR MIS — DAT-DQA
-  version: "0.2.0"
+  version: "0.3.0"
   description: |
     Data Quality Assurance rules engine + lifecycle endpoints.
     Authoritative source for rule definition, preview, and
@@ -168,6 +168,94 @@ paths:
       summary: List DQA evaluation results (read-only)
       responses: { "200": { description: Paginated result list } }
 
+  # ---------------------------------------------------------------------------
+  # US-S11-044 — intra-household evaluation surface.
+  # Gated on DQA_INTRA_HOUSEHOLD_ENABLED; 503 when off.
+  # ---------------------------------------------------------------------------
+
+  /evaluate/household:
+    post:
+      tags: [dqa]
+      summary: Evaluate intra-household DQA rules
+      description: |
+        Runs the active intra-household rule catalog (filtered by
+        stage) against the supplied household payload and returns
+        per-rule pass/fail/error plus an aggregate outcome.
+
+        Call modes:
+          - persist=false (default): pure evaluation. The wizard uses
+            this on each field-edit batch.
+          - persist=true: writes a DqaEvaluation row + emits a
+            `dqa.household.evaluated` AuditEvent. `household_id` is
+            required (use the provisional Registry ID at DIH_INGEST).
+
+        The pipeline (DIH ingest/promote, registry post-promote) calls
+        with persist=true; the React wizard calls with persist=false.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EvaluateHouseholdRequest" }
+      responses:
+        "200":
+          description: Evaluation result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvaluateHouseholdResponse" }
+        "400": { description: Missing household_id when persist=true }
+        "503": { description: Feature flag DQA_INTRA_HOUSEHOLD_ENABLED is off }
+
+  /evaluations/{household_id}:
+    get:
+      tags: [dqa]
+      summary: List DQA evaluations for a household (newest first)
+      parameters:
+        - { name: household_id, in: path, required: true, schema: { type: string } }
+        - name: stage
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [dih_ingest, dih_promote, registry_post_promote]
+        - name: outcome
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [pass, review, block]
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: DqaEvaluation list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DqaEvaluation" }
+        "503": { description: Feature flag off }
+
+  /severity-vocabulary:
+    get:
+      tags: [dqa]
+      summary: DQA severity vocabulary + UI tokens
+      description: |
+        Static-ish metadata bundle. Returns the severity vocabulary
+        with display tokens (so the wizard, Rule Editor, and the
+        household detail panel render the same icon/colour for the
+        same severity) plus the enum surface for stage, category,
+        scope, expression_type, and outcome — populated by the Rule
+        Editor's dropdowns from one call.
+      responses:
+        "200":
+          description: Vocabulary bundle
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SeverityVocabulary" }
+        "503": { description: Feature flag off }
+
 components:
   schemas:
     DqaRule:
@@ -179,7 +267,18 @@ components:
         description: { type: string }
         severity:
           type: string
-          enum: [blocking, warning, info]
+          description: |
+            US-S11-044 expanded the vocabulary to
+            block / reject_with_override / flag / info. Legacy values
+            (blocking, warning) accepted on read for back-compat
+            until the P2 cleanup commit ships.
+          enum:
+            - block
+            - reject_with_override
+            - flag
+            - info
+            - blocking
+            - warning
         applicability_filter:
           type: object
           description: |
@@ -202,6 +301,41 @@ components:
         approval_note: { type: string }
         rejection_reason: { type: string }
         submitted_at: { type: string, format: date-time, nullable: true }
+        # US-S11-044 additions.
+        category:
+          type: string
+          enum: [intra_household, field_level, geographic, identity, duplicate]
+        scope:
+          type: string
+          enum: [field, record, household, cross_household]
+        expression_type:
+          type: string
+          enum: [dsl, python_callable, sql]
+        stages:
+          type: array
+          items:
+            type: string
+            enum: [dih_ingest, dih_promote, registry_post_promote]
+        parameters: { type: object }
+        applies_to:
+          type: object
+          description: |
+            Watched-fields manifest. Shape: {"household": [...], "members": [...]}.
+            The wizard's validation panel subscribes only to rules whose
+            applies_to overlaps the field being edited.
+        test_fixtures:
+          type: array
+          description: |
+            Pass/fail fixtures evaluated against the rule on every save,
+            mirrored against the seed in CI to catch DSL typos.
+          items:
+            type: object
+            properties:
+              input: { type: object }
+              expected_outcome:
+                type: string
+                enum: [pass, fail, error]
+        message_template_i18n_key: { type: string }
 
     DqaRuleCreate:
       type: object
@@ -212,10 +346,142 @@ components:
         description: { type: string }
         severity:
           type: string
-          enum: [blocking, warning, info]
+          description: |
+            US-S11-044 expanded the vocabulary to
+            block / reject_with_override / flag / info. Legacy values
+            (blocking, warning) accepted on read for back-compat
+            until the P2 cleanup commit ships.
+          enum:
+            - block
+            - reject_with_override
+            - flag
+            - info
+            - blocking
+            - warning
         applicability_filter: { type: object }
         expression: { type: object }
         error_message_template: { type: string }
         effective_from: { type: string, format: date }
         effective_to: { type: string, format: date }
         author: { type: string }
+
+    # ---------------------------------------------------------------------
+    # US-S11-044 intra-household schemas
+    # ---------------------------------------------------------------------
+
+    EvaluateHouseholdRequest:
+      type: object
+      required: [payload, stage]
+      properties:
+        payload:
+          type: object
+          description: |
+            Household dict per /docs/06_questionnaire.docx — household
+            fields at top level plus a `members` array. The evaluator
+            treats the input as opaque JSON; rules walk it via the DSL.
+        stage:
+          type: string
+          enum: [dih_ingest, dih_promote, registry_post_promote]
+        persist:
+          type: boolean
+          default: false
+          description: When true, writes a DqaEvaluation row + emits AuditEvent.
+        household_id:
+          type: string
+          description: Required when persist=true. Provisional Registry ID at DIH_INGEST.
+        household_version:
+          type: integer
+          nullable: true
+        evaluated_at:
+          type: string
+          format: date-time
+          description: For deterministic replay (tests, audit walk-throughs).
+
+    EvaluateHouseholdResponse:
+      type: object
+      properties:
+        stage:
+          type: string
+          enum: [dih_ingest, dih_promote, registry_post_promote]
+        outcome:
+          type: string
+          enum: [pass, review, block]
+        evaluator_service_version: { type: string }
+        rules_evaluated: { type: integer }
+        evaluation_id:
+          type: string
+          description: ULID. Only present when persist=true.
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/DqaRuleResult" }
+
+    DqaRuleResult:
+      type: object
+      properties:
+        rule_code: { type: string }
+        rule_version: { type: integer }
+        status:
+          type: string
+          enum: [pass, fail, error]
+        severity:
+          type: string
+          enum: [block, reject_with_override, flag, info]
+        message:
+          type: string
+          description: Interpolated error_message_template. Empty on pass.
+        offending_member_ids:
+          type: array
+          items: { type: string }
+          description: |
+            Member line numbers / NINs the rule flagged. Used by the
+            household detail panel + AC-DUPLICATE-MEMBER → Dedup hook.
+        parameters_used: { type: object }
+
+    DqaEvaluation:
+      type: object
+      properties:
+        id: { type: string, description: ULID }
+        household_id: { type: string }
+        household_version: { type: integer, nullable: true }
+        stage:
+          type: string
+          enum: [dih_ingest, dih_promote, registry_post_promote]
+        outcome:
+          type: string
+          enum: [pass, review, block]
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/DqaRuleResult" }
+        evaluator_service_version: { type: string }
+        actor: { type: string }
+        evaluated_at: { type: string, format: date-time }
+
+    SeverityVocabulary:
+      type: object
+      properties:
+        severities:
+          type: array
+          items:
+            type: object
+            properties:
+              value: { type: string }
+              label: { type: string }
+              token:
+                type: string
+                description: Design token from /docs/04 §4 (status-danger, status-warning, ...).
+              blocks_save:
+                type: boolean
+                description: Wizard / pipeline must refuse Save / promotion on fail.
+              description: { type: string }
+        stages:
+          type: array
+          items:
+            type: object
+            properties:
+              value: { type: string }
+              label: { type: string }
+        categories: { type: array, items: { type: object } }
+        scopes: { type: array, items: { type: object } }
+        expression_types: { type: array, items: { type: object } }
+        outcomes: { type: array, items: { type: object } }
+        evaluator_service_version: { type: string }
