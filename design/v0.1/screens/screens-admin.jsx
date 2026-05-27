@@ -1664,6 +1664,10 @@ const OperatorScopesTab = () => {
   const [revokeTarget, setRevokeTarget] = useStateAdmin(null);
   const [revokeSubmitting, setRevokeSubmitting] = useStateAdmin(false);
   const [toast, setToast] = useStateAdmin("");
+  // US-S11-042 — Impersonate-user modal state. Same surface area as
+  // OperatorScope admin (this tab already has the user-search + the
+  // nsr_admin gate), so it's a natural home.
+  const [impersonateOpen, setImpersonateOpen] = useStateAdmin(false);
 
   const _fetchScopes = () => {
     setLoading(true); setError("");
@@ -1793,6 +1797,10 @@ const OperatorScopesTab = () => {
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
+          <button className="btn" onClick={() => setImpersonateOpen(true)}
+                  title="Log into the console as another user (audit-bearing, read-only)">
+            <Icon name="shield" size={13}/> Impersonate user
+          </button>
           <button className="btn primary" onClick={() => setModalOpen(true)}>
             <Icon name="plus" size={13}/> Grant scope
           </button>
@@ -1888,8 +1896,129 @@ const OperatorScopesTab = () => {
           onConfirm={revoke}
         />
       )}
+      {impersonateOpen && (
+        <ImpersonateUserModal
+          onClose={() => setImpersonateOpen(false)}
+          onSuccess={() => {
+            // Reload so /me/ refreshes + the topbar banner appears.
+            window.location.reload();
+          }}
+          onError={(msg) => setToast(`Impersonate failed: ${msg}`)}
+        />
+      )}
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </>
+  );
+};
+
+
+// ── ImpersonateUserModal (US-S11-042) ─────────────────────────────────
+// Two-step: pick a user (search) → confirm with a reason → POST to
+// /api/v1/security/impersonate/ → page reload. The banner across the
+// top of the shell takes over from there.
+const ImpersonateUserModal = ({ onClose, onSuccess, onError }) => {
+  const [user, setUser] = useStateAdmin(null);
+  const [reason, setReason] = useStateAdmin("");
+  const [submitting, setSubmitting] = useStateAdmin(false);
+
+  const canSubmit = !submitting && user && reason.trim();
+
+  const submit = (e) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setSubmitting(true);
+    fetch("/api/v1/security/impersonate/", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-CSRFToken": _adminCsrfToken(),
+      },
+      body: JSON.stringify({ user_id: user.id, reason: reason.trim() }),
+    })
+      .then(r => r.json().then(body => ({ ok: r.ok, body })))
+      .then(({ ok, body }) => {
+        setSubmitting(false);
+        if (!ok) {
+          onError(typeof body.detail === "string" ? body.detail : "unknown error");
+          return;
+        }
+        onSuccess(body);
+      })
+      .catch(err => {
+        setSubmitting(false);
+        onError(String(err));
+      });
+  };
+
+  return (
+    <div
+      role="dialog" aria-label="Impersonate user"
+      style={{
+        position:"fixed", inset:0, background:"rgba(0,0,0,0.4)",
+        display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000,
+      }}
+      onClick={() => !submitting && onClose()}
+    >
+      <form
+        onClick={e => e.stopPropagation()}
+        onSubmit={submit}
+        style={{
+          background:"white", padding:"24px", borderRadius:"8px",
+          minWidth:"500px", maxWidth:"560px",
+          boxShadow:"0 8px 32px rgba(0,0,0,0.2)",
+        }}
+      >
+        <h3 className="t-h3" style={{marginTop:0}}>Impersonate user</h3>
+        <p className="t-bodysm muted" style={{marginTop:4, marginBottom:12}}>
+          Log into the console as the selected user. Writes are
+          <strong> disabled</strong> in impersonation mode — this is
+          read-only debugging. Audit chain captures both identities
+          plus the reason; banner across the top reminds you you're
+          impersonating until you stop.
+        </p>
+
+        <label className="t-cap" style={{display:"block", marginBottom:4}}>
+          User
+        </label>
+        <UserPicker value={user} onChange={setUser} disabled={submitting}/>
+        {user && (
+          <p className="t-bodysm" style={{margin:"6px 0 12px", color:"var(--accent-data)"}}>
+            ✓ Will impersonate: <strong>{user.username}</strong>
+            {user.display_name !== user.username && ` — ${user.display_name}`}
+          </p>
+        )}
+
+        <label className="t-cap" style={{display:"block", marginBottom:4, marginTop:8}}>
+          Reason <span style={{color:"var(--accent-danger)"}}>*</span>
+        </label>
+        <textarea
+          value={reason} onChange={e => setReason(e.target.value)}
+          rows={2} disabled={submitting}
+          placeholder="e.g. Debugging the DRS field-selector bug from ticket #847"
+          style={{
+            width:"100%", padding:"8px", marginBottom:16,
+            border:"1px solid var(--neutral-300)", borderRadius:"4px",
+            fontSize:13, fontFamily:"inherit", resize:"vertical",
+          }}
+        />
+
+        <div style={{display:"flex", justifyContent:"flex-end", gap:8}}>
+          <button type="button" className="btn" onClick={onClose} disabled={submitting}>
+            Cancel
+          </button>
+          <button
+            type="submit" className="btn"
+            style={{background:"var(--accent-quality)", color:"white",
+                    borderColor:"var(--accent-quality)"}}
+            disabled={!canSubmit}
+          >
+            {submitting ? "Switching…" : "Impersonate"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 };
 

@@ -4,6 +4,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 
 from .audit import emit as emit_audit
+from .integrity import verify_audit_chain
 from .models import AuditEvent, OperatorScope, ScopeLevel
 
 # Group gating the OperatorScope management surface (US-S11-028).
@@ -64,6 +65,36 @@ class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
     # Audit tab can fetch a single entity's chain in one round-trip.
     filterset_fields = ["action", "entity_type", "actor_kind", "entity_id"]
 
+    @extend_schema(
+        tags=["security"],
+        summary="Verify audit-chain integrity",
+        request=None,
+        responses={200: OpenApiResponse(description="chain verification report")},
+    )
+    @action(detail=False, methods=["post"], url_path="verify-chain")
+    def verify_chain(self, request):
+        raw_limit = request.data.get("limit") if isinstance(request.data, dict) else None
+        try:
+            limit = int(raw_limit) if raw_limit not in (None, "", "all") else None
+        except (TypeError, ValueError):
+            return Response({"detail": "limit must be an integer or omitted"},
+                            status=status.HTTP_400_BAD_REQUEST)
+        report = verify_audit_chain(limit=limit)
+        return Response({
+            "ok": report.ok,
+            "mode": report.mode,
+            "rows_scanned": report.rows_scanned,
+            "breaks": [
+                {
+                    "event_id": b.event_id,
+                    "occurred_at": b.occurred_at,
+                    "expected_prev_hash": b.expected_prev_hash.hex() if b.expected_prev_hash else None,
+                    "actual_prev_hash": b.actual_prev_hash.hex() if b.actual_prev_hash else None,
+                }
+                for b in report.breaks
+            ],
+        })
+
 
 @extend_schema(
     tags=["security"],
@@ -106,6 +137,22 @@ def me(request):
                 "name": p.name,
                 "tone": p.tone or "neutral",
             }
+    # US-S11-042 — when the session is impersonating, surface the
+    # impersonator's identity so the topbar can render a banner.
+    impersonator_payload = None
+    impersonator_id = request.session.get("_impersonator_id")
+    if impersonator_id is not None:
+        from django.contrib.auth import get_user_model
+        User = get_user_model()  # noqa: N806 — matches Django convention
+        imp = User.objects.filter(id=impersonator_id).first()
+        if imp is not None:
+            impersonator_payload = {
+                "id": imp.id,
+                "username": imp.username,
+                "display_name": imp.get_full_name() or imp.username,
+                "reason": request.session.get("_impersonator_reason", ""),
+            }
+
     return Response({
         "username": u.username,
         "display_name": (u.get_full_name() or u.username) if u.is_authenticated else "",
@@ -114,6 +161,7 @@ def me(request):
         "is_staff": bool(u.is_staff),
         "role": role,
         "partner": partner_payload,
+        "impersonator": impersonator_payload,
     })
 
 
@@ -410,3 +458,97 @@ def user_search(request):
         for u in qs
     ]
     return Response(out)
+
+
+# ---------------------------------------------------------------------------
+# Impersonation (US-S11-042)
+#
+# Audit-bearing "Login as another user" for the System Admin console.
+# Read-only mode is enforced by ImpersonationGuardMiddleware — this
+# module just owns the start/stop endpoints.
+
+
+class ImpersonateRequestSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    # allow_blank + trim_whitespace=False so the service-level guard
+    # ("Reason is required") fires consistently — the serializer would
+    # otherwise reject whitespace-only with a different error shape.
+    reason = serializers.CharField(
+        max_length=512, allow_blank=True, trim_whitespace=False,
+    )
+
+
+@extend_schema(
+    tags=["security"],
+    summary="Start impersonating another user (US-S11-042)",
+    description=(
+        "Swaps the session's authenticated user over to `user_id`, "
+        "stashing the original admin in session._impersonator_id. "
+        "Only superusers or members of the `nsr_admin` group may "
+        "impersonate; another superuser cannot be impersonated. "
+        "Audit-bearing — emits security.impersonation.started "
+        "naming both identities + reason."
+    ),
+    request=ImpersonateRequestSerializer,
+    responses={
+        200: OpenApiResponse(description="Impersonation started"),
+        400: OpenApiResponse(description="Bad request (target invalid, etc)"),
+        403: OpenApiResponse(description="Caller lacks impersonation permission"),
+    },
+)
+@api_view(["POST"])
+@permission_classes([IsOperatorScopeAdmin])
+def impersonate_start(request):
+    from .impersonation import ImpersonationError, start_impersonation
+    ser = ImpersonateRequestSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+    try:
+        actor, target = start_impersonation(
+            request,
+            target_user_id=ser.validated_data["user_id"],
+            reason=ser.validated_data["reason"],
+        )
+    except ImpersonationError as exc:
+        return Response(
+            {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST,
+        )
+    return Response({
+        "ok": True,
+        "impersonator": {"id": actor.id, "username": actor.username},
+        "target": {
+            "id": target.id,
+            "username": target.username,
+            "display_name": target.get_full_name() or target.username,
+        },
+    })
+
+
+@extend_schema(
+    tags=["security"],
+    summary="Stop impersonating (US-S11-042)",
+    description=(
+        "Reverts the session back to the original admin. Exempt from "
+        "the read-only middleware so an admin can always get out. "
+        "Audit-bearing — emits security.impersonation.stopped."
+    ),
+    request=None,
+    responses={
+        200: OpenApiResponse(description="Reverted"),
+        400: OpenApiResponse(description="No active impersonation"),
+    },
+)
+@api_view(["POST"])
+@permission_classes([permissions.IsAuthenticated])
+def impersonate_stop(request):
+    from .impersonation import ImpersonationError, stop_impersonation
+    try:
+        impersonator, target_was = stop_impersonation(request)
+    except ImpersonationError as exc:
+        return Response(
+            {"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST,
+        )
+    return Response({
+        "ok": True,
+        "impersonator": {"id": impersonator.id, "username": impersonator.username},
+        "stopped_target": {"id": target_was.id, "username": target_was.username},
+    })

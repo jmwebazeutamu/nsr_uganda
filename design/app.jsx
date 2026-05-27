@@ -3,6 +3,15 @@
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
 
+// CSRF helper for the impersonation Stop button (US-S11-042). Same
+// pattern as _getCsrfToken in screens-dih / _adminCsrfToken in
+// screens-admin — read Django's csrftoken cookie, fall back to "".
+const _appCsrfToken = () => {
+  if (typeof document === "undefined") return "";
+  const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  return m ? m[1] : "";
+};
+
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "density": "comfortable",
   "role": "nsr-unit",
@@ -138,8 +147,61 @@ function App() {
     return true;
   });
 
+  // US-S11-042 — when /me/ returns an impersonator block we're acting
+  // as another user. The banner across the top makes that visible on
+  // every page so the admin can't forget; the read-only-writes
+  // middleware also enforces the safety net server-side.
+  const impersonator = me?.impersonator || null;
+  const stopImpersonating = () => {
+    fetch("/api/v1/security/impersonate/stop/", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-CSRFToken": _appCsrfToken(),
+      },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(() => { window.location.reload(); })
+      .catch(() => alert("Stop impersonating failed — try logging out + back in."));
+  };
+
   return (
     <div className="app-shell">
+      {impersonator && (
+        <div
+          role="alert"
+          style={{
+            background: "var(--accent-quality)",
+            color: "white", padding: "8px 16px",
+            display: "flex", alignItems: "center", gap: 12,
+            fontSize: 13, fontWeight: 500,
+          }}
+        >
+          <Icon name="shield" size={16}/>
+          <span>
+            Impersonating <strong>{me.username}</strong> ({identityRoleLabel}) as{" "}
+            <strong>{impersonator.username}</strong>.{" "}
+            <span style={{opacity:0.85}}>Writes are disabled in this session.</span>
+          </span>
+          <span className="t-cap" style={{opacity:0.85}} title={impersonator.reason}>
+            reason: {impersonator.reason || "(none)"}
+          </span>
+          <div style={{flex:1}}/>
+          <button
+            type="button"
+            onClick={stopImpersonating}
+            style={{
+              background:"white", color:"var(--accent-quality)",
+              border:"none", padding:"4px 12px", borderRadius:4,
+              fontSize:12, fontWeight:600, cursor:"pointer",
+            }}
+          >
+            Stop impersonating
+          </button>
+        </div>
+      )}
       {/* Topbar */}
       <header className="topbar">
         <div className="topbar-brand">

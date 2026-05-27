@@ -97,6 +97,10 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    # US-S11-042 — must sit after AuthenticationMiddleware so
+    # request.user is populated, but before any view dispatch so
+    # the read-only guard can short-circuit non-SAFE writes.
+    "apps.security.impersonation.ImpersonationGuardMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
