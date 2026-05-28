@@ -25,7 +25,15 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 // lands.
 const NAV = [
   { id: "home",    label: "Home",          icon: "home" },
-  { id: "kit",     label: "Design system", icon: "sliders" },
+  // Data Explorer — discovery + aggregate surface (ADR-0023,
+  // US-DATA-EXP-001). Opens the standalone 5-screen bundle in a
+  // new tab. Gated on the data_explorer.enabled feature flag AND
+  // the user's EXPLORER realm role; hidden (not greyed) when
+  // either fails, per design brief §6. Replaces the old
+  // "Design system" link at the same nav slot.
+  { id: "data-explorer", label: "Data Explorer", icon: "database",
+    featureFlag: "data_explorer_enabled", requireRole: "EXPLORER",
+    externalHref: "v0.1/screens/data-explorer/Data Explorer - Catalogue.html" },
   { section: "WORKFLOWS" },
   { id: "dih",     label: "DIH review",    icon: "inbox",     count: 342 },
   { id: "upd",     label: "Updates",       icon: "edit",      count: 23 },
@@ -37,13 +45,6 @@ const NAV = [
   { id: "programmes",       label: "Programmes",      icon: "book",  screen: true },
   { id: "beneficiaries",    label: "Beneficiaries",   icon: "book",  screen: true },
   { id: "drs",     label: "Data Requests", icon: "download",  count: 9 },
-  // Data Explorer — discovery + aggregate surface (ADR-0023,
-  // US-DATA-EXP-001). Gated on the data_explorer.enabled feature
-  // flag AND the user's EXPLORER realm role; hidden (not greyed)
-  // when either fails, per design brief §6.
-  { id: "data-explorer", label: "Data Explorer", icon: "database", indent: 1,
-    featureFlag: "data_explorer_enabled", requireRole: "EXPLORER",
-    externalHref: "v0.1/screens/data-explorer/Data Explorer - Catalogue.html" },
   { id: "partner-drs", label: "My requests", icon: "download", count: 5 },
   // Partner self-service surfaces — visible only when role is
   // partner-analyst (see role-filter below). Read-only views of the
