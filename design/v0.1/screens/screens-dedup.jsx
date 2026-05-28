@@ -163,18 +163,39 @@ const DedupScreen = () => {
     body: JSON.stringify(body),
   });
   const _refreshNext = () => {
+    // Flip into the loading state so the screen visibly transitions
+    // and the operator can see the post-action refresh.
     setLivePair(null);
-    _fetchJson("/api/v1/ddup/match-pairs/?status=pending&page_size=1")
+    setLoadNote("loading…");
+    // Cache-bust so a CDN / browser-cache layer doesn't hand back the
+    // just-acted-on pair (the API itself isn't cached, but Safari has
+    // been seen to coalesce repeat GETs on the same URL within a tick).
+    const url = `/api/v1/ddup/match-pairs/?status=pending&page_size=1&_ts=${Date.now()}`;
+    _fetchJson(url)
       .then(data => {
         const pairs = data.results || data;
-        if (!pairs.length) return;
+        if (!pairs.length) {
+          // Empty queue — flip to the empty-state surface. Without
+          // this the screen stays stuck on "loading…" forever.
+          setLoadNote("queue empty");
+          setLivePair(false);
+          return null;
+        }
         const pair = pairs[0];
         return Promise.all([
           _fetchJson(`/api/v1/data-management/members/${pair.record_a_id}/`),
           _fetchJson(`/api/v1/data-management/members/${pair.record_b_id}/`),
-        ]).then(([mA, mB]) => setLivePair(_buildLivePair(pair, mA, mB)));
+        ]).then(([mA, mB]) => {
+          setLivePair(_buildLivePair(pair, mA, mB));
+          setLoadNote("");
+        });
       })
-      .catch(() => {});
+      .catch(e => {
+        // Surface the failure instead of swallowing it — silent
+        // catches caused "screen looks frozen" reports.
+        setLoadNote(`fetch failed: ${e}`);
+        setLivePair(false);
+      });
   };
   const commitMerge = () => {
     setConfirm(false);
