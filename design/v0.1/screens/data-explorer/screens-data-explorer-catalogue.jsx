@@ -2,6 +2,7 @@
    Icon, Chip, PageHeader,
    DE_DATASETS, DE_VARIABLES_BY_DATASET, DE_PRIVACY, DE_PRIVACY_ORDER,
    PrivacyChip, DEShell, ScreenJumpTweak,
+   useDeCatalogue, useDeDataset, useDeMe, RoleGateBanner,
    TweaksPanel, useTweaks, TweakSection */
 
 // NSR MIS — Data Explorer · Catalogue browse (screen 1 of 5)
@@ -18,39 +19,44 @@ const CatalogueScreen = () => {
   const [activePrivacy, setActivePrivacy] = useCat("");
   const [activeId, setActiveId] = useCat("ds_hh_profile");
 
-  const filteredDs = useCatM(() => DE_DATASETS.filter(d => {
+  const me = useDeMe();
+  const [datasets, dsMeta] = useDeCatalogue();
+  const [{ variables: liveVars }] = useDeDataset(activeId);
+
+  const filteredDs = useCatM(() => datasets.filter(d => {
     if (activePrivacy && d.privacy !== activePrivacy) return false;
     if (!q) return true;
     const needle = q.toLowerCase();
     return d.code.toLowerCase().includes(needle)
       || d.label.toLowerCase().includes(needle)
-      || d.desc.toLowerCase().includes(needle);
-  }), [q, activePrivacy]);
+      || (d.desc || "").toLowerCase().includes(needle);
+  }), [q, activePrivacy, datasets]);
 
   const grouped = useCatM(() => {
     const g = Object.fromEntries(DE_PRIVACY_ORDER.map(k => [k, []]));
-    filteredDs.forEach(d => g[d.privacy].push(d));
+    filteredDs.forEach(d => g[d.privacy] && g[d.privacy].push(d));
     return g;
   }, [filteredDs]);
 
-  const ds = DE_DATASETS.find(d => d.id === activeId);
+  const ds = datasets.find(d => d.id === activeId || d.code === activeId);
   const vars = useCatM(() => {
-    const list = DE_VARIABLES_BY_DATASET[activeId] || [];
+    const list = liveVars && liveVars.length ? liveVars : (DE_VARIABLES_BY_DATASET[activeId] || []);
     if (!q) return list;
     const n = q.toLowerCase();
     return list.filter(v =>
-      v.code.toLowerCase().includes(n) || v.label.toLowerCase().includes(n)
-      || v.domain.toLowerCase().includes(n));
-  }, [activeId, q]);
+      v.code.toLowerCase().includes(n) || (v.label || "").toLowerCase().includes(n)
+      || (v.domain || "").toLowerCase().includes(n));
+  }, [activeId, q, liveVars]);
 
   const totals = useCatM(() => {
     const c = { public:0, internal:0, personal:0, sensitive:0 };
-    DE_DATASETS.forEach(d => c[d.privacy]++);
+    datasets.forEach(d => { if (c[d.privacy] !== undefined) c[d.privacy]++; });
     return c;
-  }, []);
+  }, [datasets]);
 
   return (
     <DEShell active="catalogue" refreshed_at={ds?.refreshed_at || "28 May 2026 06:00 UTC"}>
+      <RoleGateBanner me={me}/>
       <PageHeader
         eyebrow="DATA EXPLORER · CATALOGUE BROWSE"
         title="Browse datasets & variables"
@@ -75,7 +81,7 @@ const CatalogueScreen = () => {
         <div style={{display:"flex", alignItems:"center", gap:6}}>
           <span className="t-cap" style={{marginRight:6}}>PRIVACY:</span>
           <button className={`cat-filter-btn ${activePrivacy === "" ? "on" : ""}`}
-            onClick={() => setActivePrivacy("")}>All <span className="t-cap">{DE_DATASETS.length}</span></button>
+            onClick={() => setActivePrivacy("")}>All <span className="t-cap">{datasets.length}</span></button>
           {DE_PRIVACY_ORDER.map(k => (
             <button key={k}
               className={`cat-filter-btn ${activePrivacy === k ? "on" : ""}`}
@@ -87,7 +93,7 @@ const CatalogueScreen = () => {
             </button>
           ))}
         </div>
-        <span className="t-cap">{filteredDs.length} of {DE_DATASETS.length} datasets</span>
+        <span className="t-cap">{filteredDs.length} of {datasets.length} datasets</span>
       </div>
 
       {/* Main: rail + variable pane */}

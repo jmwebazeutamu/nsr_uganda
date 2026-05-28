@@ -3,6 +3,7 @@
    DE_DATASETS, DE_VARIABLES_BY_DATASET, DE_PRIVACY, DE_GEO_LEVELS,
    PrivacyChip, DEShell, ScreenJumpTweak,
    strictestClass, violatesFloor, FloorViolationBanner,
+   useDeCatalogue, useDeDataset, useDeMe, RoleGateBanner, submitAggregate,
    TweaksPanel, useTweaks, TweakSection */
 
 // NSR MIS — Data Explorer · Aggregate builder (screen 2 of 5)
@@ -52,8 +53,47 @@ const BuilderScreen = () => {
   const [scopeCodes, setScopeCodes] = useBld(SEED.scopeCodes);
   const [showVarPicker, setShowVarPicker] = useBld(false);
 
-  const ds = DE_DATASETS.find(d => d.id === datasetId);
-  const vars = DE_VARIABLES_BY_DATASET[datasetId] || [];
+  const me = useDeMe();
+  const [datasets] = useDeCatalogue();
+  const [{ dataset: liveDs, variables: liveVars }] = useDeDataset(datasetId);
+  const [runState, setRunState] = useBld({ pending: false, error: null });
+
+  const ds = liveDs || datasets.find(d => d.id === datasetId || d.code === datasetId);
+  const vars = (liveVars && liveVars.length) ? liveVars : (DE_VARIABLES_BY_DATASET[datasetId] || []);
+
+  const runAggregate = async () => {
+    if (!validForRun || runState.pending) return;
+    setRunState({ pending: true, error: null });
+    const payload = {
+      dataset_code: ds.code,
+      projection,
+      filters: filters
+        .filter(f => f.var)
+        .map(f => ({ variable: f.var, op: f.op, value: f.value })),
+      geographic_scope: { level: scopeLevel, codes: scopeCodes },
+    };
+    try {
+      const resp = await submitAggregate(payload);
+      // Stash the result for the Results screen to pick up.
+      sessionStorage.setItem("de_last_aggregate", JSON.stringify({
+        ts: Date.now(),
+        payload, response: resp,
+      }));
+      location.href = "Data Explorer - Results.html";
+    } catch (err) {
+      // Preview mode (no backend) → still hand off to Results so the
+      // designer can review the layout against the mock corpus.
+      const noBackend = err && (err.status === 404 || /Failed to fetch/i.test(String(err.message || "")));
+      if (noBackend) {
+        sessionStorage.setItem("de_last_aggregate", JSON.stringify({
+          ts: Date.now(), payload, response: null, preview: true,
+        }));
+        location.href = "Data Explorer - Results.html";
+        return;
+      }
+      setRunState({ pending: false, error: String(err.body?.error || err.message || err) });
+    }
+  };
 
   // Strictest class — driven by projection + filter + dataset
   const involvedKlasses = useBldM(() => {
@@ -90,6 +130,22 @@ const BuilderScreen = () => {
 
   return (
     <DEShell active="builder" refreshed_at={ds?.refreshed_at || "28 May 2026 06:00 UTC"}>
+      <RoleGateBanner me={me}/>
+      {runState.error && (
+        <div style={{
+          background: "var(--accent-danger-bg)",
+          borderBottom: "1px solid var(--accent-danger)",
+          padding: "8px 24px", color: "var(--accent-danger)",
+          fontSize: 12.5, display:"flex", alignItems:"center", gap:8,
+        }}>
+          <Icon name="alertTriangle" size={14}/>
+          <strong>Aggregate failed.</strong>
+          <span style={{color:"var(--neutral-700)"}}>{runState.error}</span>
+          <button className="icon-btn" onClick={() => setRunState({pending:false,error:null})}>
+            <Icon name="x" size={12}/>
+          </button>
+        </div>
+      )}
       <PageHeader
         eyebrow="DATA EXPLORER · AGGREGATE BUILDER"
         title="Build an aggregate query"
@@ -108,8 +164,8 @@ const BuilderScreen = () => {
           <div style={{display:"flex", alignItems:"center", gap:10, marginTop:4}}>
             <select className="field-select" style={{maxWidth:340}}
               value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
-              {DE_DATASETS.filter(d => d.privacy !== "sensitive").map(d =>
-                <option key={d.id} value={d.id}>{d.code} — {d.label}</option>
+              {datasets.filter(d => d.privacy !== "sensitive").map(d =>
+                <option key={d.id || d.code} value={d.id || d.code}>{d.code} — {d.label}</option>
               )}
             </select>
             <PrivacyChip klass={ds.privacy} showFloor/>
@@ -333,10 +389,11 @@ const BuilderScreen = () => {
         <div style={{flex:1}}/>
         <button className="btn"><Icon name="arrowRight" size={14}/> Request record-level data</button>
         <button className="btn"><Icon name="save" size={14}/> Save query</button>
-        <button className="btn btn-primary" disabled={!validForRun}
-          onClick={() => location.href="Data Explorer - Results.html"}
-          title={!validForRun ? (floorViolated ? "Geographic floor violation — fix the scope" : "Add at least one projection") : "Run /aggregate/"}>
-          <Icon name="play" size={14}/> Run aggregate
+        <button className="btn btn-primary" disabled={!validForRun || runState.pending}
+          onClick={runAggregate}
+          title={!validForRun ? (floorViolated ? "Geographic floor violation — fix the scope" : "Add at least one projection") : "POST /aggregate/"}>
+          <Icon name={runState.pending ? "loader" : "play"} size={14}/>
+          {runState.pending ? " Running…" : " Run aggregate"}
         </button>
       </div>
 

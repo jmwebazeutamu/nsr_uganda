@@ -2,6 +2,7 @@
    Icon, Chip, PageHeader,
    DE_DATASETS, DE_PRIVACY, DE_COVERAGE_ROWS,
    PrivacyChip, DEShell, ScreenJumpTweak,
+   useDeCatalogue, useDeCoverage, useDeMe, RoleGateBanner,
    TweaksPanel, useTweaks, TweakSection */
 
 // NSR MIS — Data Explorer · Coverage view (screen 4 of 5)
@@ -20,16 +21,29 @@ const CoverageScreen = () => {
   const [sortKey, setSortKey] = useCov("completeness");
   const [sortDir, setSortDir] = useCov("desc");
 
-  const ds = DE_DATASETS.find(d => d.id === datasetId);
+  const me = useDeMe();
+  const [datasets] = useDeCatalogue();
+  const ds = datasets.find(d => d.id === datasetId || d.code === datasetId) || DE_DATASETS.find(d => d.id === datasetId);
+  const [coverage] = useDeCoverage(ds?.id || ds?.code || datasetId);
+  // Coverage payload may use either `completeness` or
+  // `completeness_pct` (0-1 vs 0-100); normalise to 0-1.
+  const normalised = useCovM(() => coverage.map(r => ({
+    ...r,
+    completeness: r.completeness != null
+      ? Number(r.completeness)
+      : (r.completeness_pct != null ? Number(r.completeness_pct) / 100 : 0),
+    rows: r.rows ?? r.row_count ?? 0,
+    geo_label: r.geo_label || r.label || r.geo_code,
+  })), [coverage]);
 
   const sortedRows = useCovM(() => {
-    const filt = DE_COVERAGE_ROWS.filter(r => r.completeness >= threshold);
+    const filt = normalised.filter(r => r.completeness >= threshold);
     return [...filt].sort((a, b) => {
       const av = a[sortKey], bv = b[sortKey];
       if (typeof av === "number") return sortDir === "asc" ? av - bv : bv - av;
       return sortDir === "asc" ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
     });
-  }, [threshold, sortKey, sortDir]);
+  }, [threshold, sortKey, sortDir, normalised]);
 
   const setSort = (k) => {
     if (k === sortKey) setSortDir(sortDir === "asc" ? "desc" : "asc");
@@ -40,10 +54,11 @@ const CoverageScreen = () => {
     sortedRows.reduce((s, r) => s + r.completeness, 0) / Math.max(1, sortedRows.length),
     [sortedRows]);
   const totalRows = useCovM(() => sortedRows.reduce((s, r) => s + r.rows, 0), [sortedRows]);
-  const areasUnder80 = useCovM(() => DE_COVERAGE_ROWS.filter(r => r.completeness < 0.8).length, []);
+  const areasUnder80 = useCovM(() => normalised.filter(r => r.completeness < 0.8).length, [normalised]);
 
   return (
-    <DEShell active="coverage" refreshed_at={ds.refreshed_at}>
+    <DEShell active="coverage" refreshed_at={ds?.refreshed_at}>
+      <RoleGateBanner me={me}/>
       <PageHeader
         eyebrow="DATA EXPLORER · COVERAGE VIEW"
         title="Coverage by geographic area"
@@ -64,7 +79,7 @@ const CoverageScreen = () => {
           <div style={{display:"flex", alignItems:"center", gap:10, marginTop:4}}>
             <select className="field-select" style={{maxWidth:320}}
               value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
-              {DE_DATASETS.filter(d => d.privacy !== "sensitive").map(d =>
+              {datasets.filter(d => d.privacy !== "sensitive").map(d =>
                 <option key={d.id} value={d.id}>{d.code} — {d.label}</option>
               )}
             </select>
@@ -76,7 +91,7 @@ const CoverageScreen = () => {
           accent={meanCompleteness >= 0.9 ? "data" : meanCompleteness >= 0.8 ? "quality" : "danger"}/>
         <KPI label="Areas under 80%" value={areasUnder80}
           accent={areasUnder80 === 0 ? "data" : "quality"}
-          foot={`of ${DE_COVERAGE_ROWS.length} ${DE_COVERAGE_ROWS[0].geo_level}s`}/>
+          foot={`of ${normalised.length} ${normalised[0]?.geo_level || "areas"}`}/>
         <KPI label="Visible rows" value={totalRows.toLocaleString()} accent="neutral"
           foot={`${sortedRows.length} areas`}/>
         <div>
@@ -96,8 +111,8 @@ const CoverageScreen = () => {
       {/* Choropleth-style table */}
       <div className="card" style={{padding:0}}>
         <div className="card-toolbar">
-          <strong className="t-bodysm">{ds.code} · coverage by {DE_COVERAGE_ROWS[0].geo_level}</strong>
-          <span className="t-cap">{sortedRows.length} of {DE_COVERAGE_ROWS.length} {DE_COVERAGE_ROWS[0].geo_level}s</span>
+          <strong className="t-bodysm">{ds.code} · coverage by {normalised[0]?.geo_level || "area"}</strong>
+          <span className="t-cap">{sortedRows.length} of {normalised.length} {normalised[0]?.geo_level || "area"}s</span>
           <div style={{flex:1}}/>
           <span className="t-cap">GET /coverage/{ds.id}/</span>
         </div>

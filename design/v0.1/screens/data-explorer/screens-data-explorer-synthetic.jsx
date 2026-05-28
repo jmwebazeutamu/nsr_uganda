@@ -2,6 +2,7 @@
    Icon, Chip, PageHeader,
    DE_DATASETS, DE_PRIVACY, DE_SYNTHETIC_ROWS,
    PrivacyChip, DEShell, ScreenJumpTweak,
+   useDeCatalogue, useDeSynthetic, useDeMe, RoleGateBanner,
    TweaksPanel, useTweaks, TweakSection */
 
 // NSR MIS — Data Explorer · Synthetic sample (screen 5 of 5)
@@ -31,11 +32,15 @@ const SyntheticScreen = () => {
   const [rowCount, setRowCount] = useSyn(10);
   const [seed, setSeed] = useSyn("ug-nsr-2026-05-28");
 
-  const ds = DE_DATASETS.find(d => d.id === datasetId);
-  const visible = DE_SYNTHETIC_ROWS.slice(0, rowCount);
+  const me = useDeMe();
+  const [datasets] = useDeCatalogue();
+  const ds = datasets.find(d => d.id === datasetId || d.code === datasetId) || DE_DATASETS.find(d => d.id === datasetId);
+  const [rows] = useDeSynthetic(ds?.id || ds?.code || datasetId);
+  const visible = rows.slice(0, rowCount);
 
   return (
-    <DEShell active="synthetic" refreshed_at={ds.refreshed_at}>
+    <DEShell active="synthetic" refreshed_at={ds?.refreshed_at}>
+      <RoleGateBanner me={me}/>
       <PageHeader
         eyebrow="DATA EXPLORER · SYNTHETIC SAMPLE"
         title="Synthetic sample"
@@ -88,7 +93,7 @@ const SyntheticScreen = () => {
           <div style={{display:"flex", alignItems:"center", gap:10, marginTop:4}}>
             <select className="field-select" style={{maxWidth:320}}
               value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
-              {DE_DATASETS.filter(d => d.privacy !== "sensitive").map(d =>
+              {datasets.filter(d => d.privacy !== "sensitive").map(d =>
                 <option key={d.id} value={d.id}>{d.code} — {d.label}</option>
               )}
             </select>
@@ -99,12 +104,12 @@ const SyntheticScreen = () => {
         <div>
           <div className="t-cap">SAMPLE SIZE</div>
           <div style={{display:"flex", alignItems:"center", gap:8, marginTop:8}}>
-            <input type="range" min={3} max={DE_SYNTHETIC_ROWS.length} step={1}
+            <input type="range" min={3} max={Math.max(3, rows.length)} step={1}
               value={rowCount} onChange={(e) => setRowCount(parseInt(e.target.value, 10))}
               style={{flex:1}}/>
             <span className="t-mono" style={{width:44, fontSize:13, fontWeight:600}}>{rowCount}</span>
           </div>
-          <div className="t-cap mt-1">rows · capped at {DE_SYNTHETIC_ROWS.length}</div>
+          <div className="t-cap mt-1">rows · capped at {rows.length}</div>
         </div>
         <div>
           <div className="t-cap">SEED</div>

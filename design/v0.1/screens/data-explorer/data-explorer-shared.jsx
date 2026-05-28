@@ -499,6 +499,186 @@ const DE_SYNTHETIC_ROWS = [
   { synth_id: "synth-0010", hh_size: 4, head_sex: "M", head_age_band: "50–59", subregion: "Acholi",        district: "Gulu",      roof_material: "Iron sheets",   water_source: "Borehole < 1 km", pmt_band: "Poorest 40%" },
 ];
 
+/* ================================================================
+   Live data hooks — wrap window.useApi (loaded by api-client.jsx).
+   Each hook returns [data, meta] where meta = { loading, error,
+   isLive }. When the API isn't reachable (preview under file://
+   or backend down), `data` falls back to the in-module mock so the
+   harness still renders something useful and isLive = false.
+
+   Shape mapping: the backend API responses don't carry the
+   demo-friendly fields the screens render (refresh cadence label,
+   row counts, domain tags). Where we can't infer them from the
+   response, we leave the live row with the literal API value and
+   the screen formats it.
+   ================================================================ */
+
+const _DE_API_PREFIX = "/api/v1/data-explorer";
+
+const _mergeMock = (live, mock, keyFn) => {
+  /* Fill missing display-only fields on `live` from `mock` keyed by
+     keyFn (e.g. d => d.code). This keeps the rich demo copy on screen
+     while preserving the canonical id/code/privacy_class from the API. */
+  if (!Array.isArray(live)) return mock;
+  const byKey = new Map(mock.map(m => [keyFn(m), m]));
+  return live.map(l => {
+    const m = byKey.get(keyFn(l)) || {};
+    return { ...m, ...l };
+  });
+};
+
+const _normaliseDataset = (raw) => {
+  /* Backend ships either flattened (privacy_class_code) or nested
+     (privacy_class: {code}). The screens want a flat `privacy` field. */
+  if (!raw) return raw;
+  const privacy = raw.privacy
+    || (raw.privacy_class && raw.privacy_class.code)
+    || raw.privacy_class_code
+    || "internal";
+  const floor = raw.floor
+    || raw.geographic_floor
+    || (DE_PRIVACY[privacy] && DE_PRIVACY[privacy].geo_floor)
+    || "sub-county";
+  return { ...raw, privacy, floor };
+};
+
+const useDeCatalogue = () => {
+  const useApi = (typeof window !== "undefined" && window.useApi) || null;
+  if (!useApi) return [DE_DATASETS, { loading: false, error: null, isLive: false }];
+  const [resp, meta] = useApi(`${_DE_API_PREFIX}/datasets/`);
+  const rows = (resp && (resp.datasets || resp.results || resp)) || null;
+  if (meta.loading) {
+    return [DE_DATASETS, { ...meta, isLive: false }];
+  }
+  if (meta.error || !Array.isArray(rows) || rows.length === 0) {
+    return [DE_DATASETS, { loading: false, error: meta.error, isLive: false }];
+  }
+  const merged = _mergeMock(rows.map(_normaliseDataset), DE_DATASETS, d => d.code);
+  return [merged, { loading: false, error: null, isLive: true }];
+};
+
+const useDeDataset = (datasetId) => {
+  /* Returns the dataset detail (with variables[]) for the given id.
+     Falls back to the mock by id (or by code if id-lookup miss). */
+  const useApi = (typeof window !== "undefined" && window.useApi) || null;
+  const mockDs = DE_DATASETS.find(d => d.id === datasetId || d.code === datasetId);
+  const mockVars = DE_VARIABLES_BY_DATASET[mockDs?.id] || [];
+  if (!useApi || !datasetId) {
+    return [{ dataset: mockDs, variables: mockVars },
+            { loading: false, error: null, isLive: false }];
+  }
+  const [resp, meta] = useApi(`${_DE_API_PREFIX}/datasets/${datasetId}/`);
+  if (meta.loading) {
+    return [{ dataset: mockDs, variables: mockVars }, { ...meta, isLive: false }];
+  }
+  if (meta.error || !resp) {
+    return [{ dataset: mockDs, variables: mockVars },
+            { loading: false, error: meta.error, isLive: false }];
+  }
+  return [
+    { dataset: _normaliseDataset(resp), variables: resp.variables || mockVars },
+    { loading: false, error: null, isLive: true },
+  ];
+};
+
+const useDeCoverage = (datasetId) => {
+  const useApi = (typeof window !== "undefined" && window.useApi) || null;
+  if (!useApi || !datasetId) return [DE_COVERAGE_ROWS, { loading: false, error: null, isLive: false }];
+  const [resp, meta] = useApi(`${_DE_API_PREFIX}/coverage/${datasetId}/`);
+  const rows = (resp && (resp.rows || resp.results || resp)) || null;
+  if (meta.loading) return [DE_COVERAGE_ROWS, { ...meta, isLive: false }];
+  if (meta.error || !Array.isArray(rows) || rows.length === 0) {
+    return [DE_COVERAGE_ROWS, { loading: false, error: meta.error, isLive: false }];
+  }
+  return [rows, { loading: false, error: null, isLive: true }];
+};
+
+const useDeSynthetic = (datasetId) => {
+  const useApi = (typeof window !== "undefined" && window.useApi) || null;
+  if (!useApi || !datasetId) return [DE_SYNTHETIC_ROWS, { loading: false, error: null, isLive: false }];
+  const [resp, meta] = useApi(`${_DE_API_PREFIX}/synthetic-sample/${datasetId}/`);
+  const rows = (resp && (resp.rows || resp.results || resp)) || null;
+  if (meta.loading) return [DE_SYNTHETIC_ROWS, { ...meta, isLive: false }];
+  if (meta.error || !Array.isArray(rows) || rows.length === 0) {
+    return [DE_SYNTHETIC_ROWS, { loading: false, error: meta.error, isLive: false }];
+  }
+  return [rows, { loading: false, error: null, isLive: true }];
+};
+
+const useDeMe = () => {
+  /* Role + feature-flag gate. Returns { hasRole, flagOn, me, loading,
+     error }. EXPLORER role required + data_explorer_enabled feature
+     flag required to "live" mode. When the API is unreachable, we
+     report flagOn=false so the UI shows a "preview mode" banner. */
+  const useApi = (typeof window !== "undefined" && window.useApi) || null;
+  if (!useApi) return { hasRole: false, flagOn: false, me: null, loading: false, error: null };
+  const [resp, meta] = useApi("/api/v1/users/me/");
+  if (meta.loading) {
+    return { hasRole: false, flagOn: false, me: null, loading: true, error: null };
+  }
+  if (meta.error || !resp) {
+    return { hasRole: false, flagOn: false, me: null, loading: false, error: meta.error };
+  }
+  const roles = Array.isArray(resp.roles) ? resp.roles : [];
+  const flags = (resp.feature_flags || {});
+  return {
+    hasRole: roles.includes("EXPLORER"),
+    flagOn: Boolean(flags.data_explorer_enabled),
+    me: resp,
+    loading: false,
+    error: null,
+  };
+};
+
+const submitAggregate = async (payload) => {
+  /* POST the aggregate query. Returns the parsed response or throws.
+     Caller is responsible for stashing the result in sessionStorage
+     so the Results page can render it. */
+  if (typeof window === "undefined" || !window.nsrApi) {
+    throw new Error("nsrApi unavailable — load api-client.jsx first");
+  }
+  return window.nsrApi.post(`${_DE_API_PREFIX}/aggregate/`, payload);
+};
+
+const RoleGateBanner = ({ me }) => {
+  /* Renders a stripe at the top of the screen when:
+     - The API is unreachable (preview mode), or
+     - The user lacks the EXPLORER role, or
+     - The data_explorer_enabled flag is off.
+     Doesn't render when everything checks out. */
+  if (me.loading) return null;
+  if (me.hasRole && me.flagOn) return null;
+  let label, tone, detail;
+  if (me.error || !me.me) {
+    label = "Preview mode";
+    tone = "info";
+    detail = "Showing the in-bundle mock data — the API is unreachable. Sign in to a Django session with the EXPLORER realm role and feature flag DATA_EXPLORER_ENABLED to see live data.";
+  } else if (!me.flagOn) {
+    label = "Feature flag off";
+    tone = "warn";
+    detail = "DATA_EXPLORER_ENABLED is false in this environment. Showing mock data; live data not exposed.";
+  } else if (!me.hasRole) {
+    label = "Role missing";
+    tone = "warn";
+    detail = `Your session (${me.me.username || "—"}) lacks the EXPLORER realm role. Live data is read-only for EXPLORER users; see the DPIA addendum for the activation gate.`;
+  }
+  const bg = tone === "warn" ? "var(--accent-quality-bg)" : "var(--accent-update-bg)";
+  const fg = tone === "warn" ? "var(--accent-quality)" : "var(--accent-update)";
+  return (
+    <div style={{
+      background: bg,
+      borderBottom: `1px solid ${fg}`,
+      padding: "8px 24px",
+      display: "flex", alignItems: "center", gap: 10,
+      fontSize: 12.5,
+    }}>
+      <Icon name="info" size={14} color={fg}/>
+      <strong style={{color: fg}}>{label}.</strong>
+      <span style={{color: "var(--neutral-700)"}}>{detail}</span>
+    </div>
+  );
+};
+
 Object.assign(window, {
   DE_PRIVACY, DE_PRIVACY_ORDER,
   DE_DATASETS, DE_VARIABLES_BY_DATASET,
@@ -507,4 +687,7 @@ Object.assign(window, {
   DE_RESULT_ROWS, DE_COVERAGE_ROWS, DE_SYNTHETIC_ROWS,
   PrivacyChip, DEShell, ScreenJumpTweak,
   strictestClass, SuppressedCell, FloorViolationBanner,
+  // Live-data wiring (US-DATA-EXP-001):
+  useDeCatalogue, useDeDataset, useDeCoverage, useDeSynthetic,
+  useDeMe, submitAggregate, RoleGateBanner,
 });

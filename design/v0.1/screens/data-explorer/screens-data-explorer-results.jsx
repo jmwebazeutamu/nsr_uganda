@@ -2,6 +2,7 @@
    Icon, Chip, PageHeader,
    DE_DATASETS, DE_VARIABLES_BY_DATASET, DE_PRIVACY, DE_RESULT_ROWS, DE_SUPPRESSION,
    PrivacyChip, DEShell, ScreenJumpTweak, SuppressedCell,
+   useDeCatalogue, useDeMe, RoleGateBanner,
    TweaksPanel, useTweaks, TweakSection */
 
 // NSR MIS — Data Explorer · Results panel (screen 3 of 5)
@@ -32,26 +33,54 @@ const COLUMNS = [
   { key: "pmt_avg",   label: "Mean PMT score",  group: "agg",   num: true, fmt: (v) => v == null ? null : v.toFixed(3) },
 ];
 
+const _readSession = () => {
+  try {
+    const raw = sessionStorage.getItem("de_last_aggregate");
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+};
+
 const ResultsScreen = () => {
   const [t, setTweak] = useTweaks({ screen: "results" });
   const [sortKey, setSortKey] = useRes("count");
   const [sortDir, setSortDir] = useRes("desc");
   const [showSuppressed, setShowSuppressed] = useRes(true);
 
-  const ds = DE_DATASETS.find(d => d.code === QUERY.dataset_code);
+  const me = useDeMe();
+  const [datasets] = useDeCatalogue();
+  // Pull the most recent aggregate response stashed by the Builder.
+  // Falls back to the seeded QUERY + DE_RESULT_ROWS when nothing is in
+  // sessionStorage so a fresh tab still renders a believable page.
+  const session = useRes(_readSession())[0];
+  const liveResponse = session?.response;
+  const livePayload  = session?.payload;
+
+  const datasetCode = livePayload?.dataset_code || QUERY.dataset_code;
+  const ds = datasets.find(d => d.code === datasetCode) || DE_DATASETS.find(d => d.code === datasetCode);
   const k = DE_PRIVACY[ds.privacy].k_floor;
+
+  const projection = livePayload?.projection || QUERY.projection;
 
   // Strictest class — based on projection + dataset
   const klass = useResM(() => {
     const vars = DE_VARIABLES_BY_DATASET[ds.id] || [];
-    const list = QUERY.projection.map(p => vars.find(v => v.code === p)?.privacy).filter(Boolean);
+    const list = projection.map(p => vars.find(v => v.code === p)?.privacy).filter(Boolean);
     list.push(ds.privacy);
     const order = { public: 0, internal: 1, personal: 2, sensitive: 3 };
     return list.reduce((best, c) => order[c] > order[best] ? c : best, "public");
-  }, [ds]);
+  }, [ds, projection]);
+
+  // Live rows from the API, else the seeded mock corpus.
+  const rawRows = (liveResponse && Array.isArray(liveResponse.rows))
+    ? liveResponse.rows.map(r => ({
+        ...r,
+        count: r.count == null ? null : Number(r.count),
+        suppressed: r.suppressed === true || r.count == null,
+      }))
+    : DE_RESULT_ROWS;
 
   const sortedRows = useResM(() => {
-    const rows = showSuppressed ? DE_RESULT_ROWS : DE_RESULT_ROWS.filter(r => !r.suppressed);
+    const rows = showSuppressed ? rawRows : rawRows.filter(r => !r.suppressed);
     return [...rows].sort((a, b) => {
       const av = a[sortKey], bv = b[sortKey];
       if (av == null && bv == null) return 0;
@@ -60,11 +89,15 @@ const ResultsScreen = () => {
       if (typeof av === "number") return sortDir === "asc" ? av - bv : bv - av;
       return sortDir === "asc" ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
     });
-  }, [sortKey, sortDir, showSuppressed]);
+  }, [sortKey, sortDir, showSuppressed, rawRows]);
 
-  const suppressedCount = DE_RESULT_ROWS.filter(r => r.suppressed).length;
-  const totalCellCount = DE_RESULT_ROWS.length * COLUMNS.filter(c => c.group === "count" || c.group === "agg").length;
-  const queryHash = "qh_8f3a92e4c1b6d0a7";
+  const suppressedCount = liveResponse?.metadata?.suppressed_cell_count
+    ?? rawRows.filter(r => r.suppressed).length;
+  const totalCellCount = liveResponse?.metadata?.total_cell_count
+    ?? rawRows.length * COLUMNS.filter(c => c.group === "count" || c.group === "agg").length;
+  const queryHash = liveResponse?.metadata?.query_hash || "qh_8f3a92e4c1b6d0a7";
+  const matview = liveResponse?.metadata?.matview;
+  const refreshedAt = liveResponse?.metadata?.refreshed_at || ds.refreshed_at;
 
   const setSort = (key) => {
     if (sortKey === key) setSortDir(sortDir === "asc" ? "desc" : "asc");
@@ -72,11 +105,12 @@ const ResultsScreen = () => {
   };
 
   return (
-    <DEShell active="results" refreshed_at={ds.refreshed_at}>
+    <DEShell active="results" refreshed_at={refreshedAt}>
+      <RoleGateBanner me={me}/>
       <PageHeader
         eyebrow={<>DATA EXPLORER · RESULTS · <span className="t-mono">qh:{queryHash.slice(3, 11)}…</span></>}
         title="Aggregate results"
-        sub={<>HTTP 200 · {sortedRows.length} of {DE_RESULT_ROWS.length} rows · returned in 412 ms · {suppressedCount} suppressed cell{suppressedCount === 1 ? "" : "s"}</>}
+        sub={<>HTTP 200 · {sortedRows.length} of {rawRows.length} rows{matview ? <> · matview <span className="t-mono">{matview}</span></> : null} · {suppressedCount} suppressed cell{suppressedCount === 1 ? "" : "s"}</>}
         right={<>
           <button className="btn"><Icon name="download" size={14}/> Export CSV</button>
           <button className="btn"><Icon name="save" size={14}/> Save query</button>
@@ -188,8 +222,8 @@ const ResultsScreen = () => {
           display:"grid", gridTemplateColumns:"repeat(5, 1fr)", gap:18,
           fontSize:12.5,
         }}>
-          <MetaCell label="Matview"            value={<span className="t-mono">{ds.matview}</span>}/>
-          <MetaCell label="Refreshed"          value={<span className="t-mono">{ds.refreshed_at}</span>}/>
+          <MetaCell label="Matview"            value={<span className="t-mono">{matview || ds.matview}</span>}/>
+          <MetaCell label="Refreshed"          value={<span className="t-mono">{refreshedAt}</span>}/>
           <MetaCell label="k-floor used"       value={`k≥${k}`}/>
           <MetaCell label="Suppressed cells"   value={`${suppressedCount} of ${totalCellCount}`}
             extra={<span className="t-cap" style={{color:"var(--accent-quality)"}}>{Math.round(100 * suppressedCount / totalCellCount)}% suppressed</span>}/>
