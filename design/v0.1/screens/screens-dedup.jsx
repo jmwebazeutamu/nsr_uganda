@@ -76,37 +76,96 @@ const REASON_OPTS_REJECT = [
 ];
 
 const DedupScreen = () => {
-  // Backend-driven: live pair fetched from /api/v1/ddup/match-pairs/.
-  // No mock fallback — the screen renders a true empty state when
-  // the queue has no pending pairs.
-  // States: null = still loading; false = confirmed empty / error;
-  // object = a live pair is ready to display.
+  // Backend-driven queue view. The screen now keeps the FULL pending
+  // list at the top and renders the adjudication panel for the
+  // selected pair below. Click a row → adjudication switches.
+  //
+  // State machine for `pendingList`:
+  //   null  → first load in flight; show loading card
+  //   false → fetch errored; show error card
+  //   []    → fetch succeeded but queue is empty; show empty card
+  //   [...] → at least one pending pair; render list + adjudication
+  //
+  // `membersById` is the cross-pair member cache so we don't refetch
+  // the same registry Member when two pairs reference it.
+  const [pendingList, setPendingList] = useStateDup(null);
+  const [membersById, setMembersById] = useStateDup({});
+  const [selectedPairId, setSelectedPairId] = useStateDup(null);
   const [livePair, setLivePair] = useStateDup(null);
   const [loadNote, setLoadNote] = useStateDup("loading…");
-  useEffectDup(() => {
-    let cancelled = false;
-    _fetchJson("/api/v1/ddup/match-pairs/?status=pending&page_size=1")
+
+  // Bulk-fetch helper: resolve every unique Member id referenced by
+  // the list of pairs in parallel. Caches into membersById so the
+  // adjudication panel's selection swap is instant.
+  const _resolveMembers = (pairs, existing) => {
+    const need = new Set();
+    pairs.forEach(p => {
+      if (p.record_a_id && !existing[p.record_a_id]) need.add(p.record_a_id);
+      if (p.record_b_id && !existing[p.record_b_id]) need.add(p.record_b_id);
+    });
+    if (need.size === 0) return Promise.resolve(existing);
+    return Promise.all(
+      Array.from(need).map(id =>
+        _fetchJson(`/api/v1/data-management/members/${id}/`)
+          .then(m => [id, m])
+          .catch(() => [id, null]),
+      ),
+    ).then(entries => {
+      const next = { ...existing };
+      for (const [id, m] of entries) { if (m) next[id] = m; }
+      return next;
+    });
+  };
+
+  // Load the queue list + every referenced member in one shot, then
+  // auto-select the first pending pair. Triggered once on mount and
+  // again by _refreshList after a Merge/Reject/Discard.
+  const _loadQueue = (preferredId = null) => {
+    setLoadNote("loading…");
+    return _fetchJson(
+      `/api/v1/ddup/match-pairs/?status=pending&page_size=50&_ts=${Date.now()}`,
+    )
       .then(data => {
         const pairs = data.results || data;
         if (!pairs.length) {
-          if (!cancelled) { setLoadNote("queue empty"); setLivePair(false); }
-          return null;
+          setPendingList([]);
+          setSelectedPairId(null);
+          setLivePair(false);
+          setLoadNote("queue empty");
+          return;
         }
-        const pair = pairs[0];
-        return Promise.all([
-          _fetchJson(`/api/v1/data-management/members/${pair.record_a_id}/`),
-          _fetchJson(`/api/v1/data-management/members/${pair.record_b_id}/`),
-        ]).then(([mA, mB]) => {
-          if (cancelled) return;
-          setLivePair(_buildLivePair(pair, mA, mB));
+        return _resolveMembers(pairs, membersById).then(nextMembers => {
+          setMembersById(nextMembers);
+          setPendingList(pairs);
+          // Preserve a deliberate selection across refreshes when the
+          // user pinned a specific pair (e.g. they were in the middle
+          // of adjudicating); otherwise jump to the head of the queue.
+          const target = preferredId && pairs.some(p => p.id === preferredId)
+            ? preferredId : pairs[0].id;
+          setSelectedPairId(target);
           setLoadNote("");
         });
       })
       .catch(e => {
-        if (!cancelled) { setLoadNote(`fetch failed: ${e}`); setLivePair(false); }
+        setPendingList(false);
+        setLivePair(false);
+        setLoadNote(`fetch failed: ${e}`);
       });
-    return () => { cancelled = true; };
-  }, []);
+  };
+
+  useEffectDup(() => { _loadQueue(); /* mount only */ }, []);
+
+  // Derive livePair from the current selection. The members are
+  // already in the cache from _loadQueue, so this is a pure compose
+  // step — no fetch on selection change.
+  useEffectDup(() => {
+    if (!selectedPairId || !Array.isArray(pendingList)) return;
+    const pair = pendingList.find(p => p.id === selectedPairId);
+    if (!pair) { setLivePair(false); return; }
+    const mA = membersById[pair.record_a_id];
+    const mB = membersById[pair.record_b_id];
+    if (mA && mB) setLivePair(_buildLivePair(pair, mA, mB));
+  }, [selectedPairId, pendingList, membersById]);
 
   // Stable empty-shape so downstream choice-init / field-reduce calls
   // don't crash before livePair arrives or when the queue is empty.
@@ -162,40 +221,37 @@ const DedupScreen = () => {
     },
     body: JSON.stringify(body),
   });
+  // Optimistic queue update after a Merge/Reject/Discard succeeds:
+  // drop the acted-on pair, advance selection to the next pending
+  // pair (or flip to empty if the queue is drained). Then reconcile
+  // with the server so concurrent edits in another tab don't leave
+  // stale rows on screen.
   const _refreshNext = () => {
-    // Flip into the loading state so the screen visibly transitions
-    // and the operator can see the post-action refresh.
     setLivePair(null);
-    setLoadNote("loading…");
-    // Cache-bust so a CDN / browser-cache layer doesn't hand back the
-    // just-acted-on pair (the API itself isn't cached, but Safari has
-    // been seen to coalesce repeat GETs on the same URL within a tick).
-    const url = `/api/v1/ddup/match-pairs/?status=pending&page_size=1&_ts=${Date.now()}`;
-    _fetchJson(url)
-      .then(data => {
-        const pairs = data.results || data;
-        if (!pairs.length) {
-          // Empty queue — flip to the empty-state surface. Without
-          // this the screen stays stuck on "loading…" forever.
-          setLoadNote("queue empty");
-          setLivePair(false);
-          return null;
-        }
-        const pair = pairs[0];
-        return Promise.all([
-          _fetchJson(`/api/v1/data-management/members/${pair.record_a_id}/`),
-          _fetchJson(`/api/v1/data-management/members/${pair.record_b_id}/`),
-        ]).then(([mA, mB]) => {
-          setLivePair(_buildLivePair(pair, mA, mB));
-          setLoadNote("");
-        });
-      })
-      .catch(e => {
-        // Surface the failure instead of swallowing it — silent
-        // catches caused "screen looks frozen" reports.
-        setLoadNote(`fetch failed: ${e}`);
+    const actedId = selectedPairId;
+    if (Array.isArray(pendingList) && actedId) {
+      const remaining = pendingList.filter(p => p.id !== actedId);
+      setPendingList(remaining);
+      if (remaining.length === 0) {
+        setSelectedPairId(null);
         setLivePair(false);
-      });
+        setLoadNote("queue empty");
+      } else {
+        // Pick the pair that took the acted-on row's slot in the
+        // list (or fall back to the head if we were on the tail).
+        const idx = pendingList.findIndex(p => p.id === actedId);
+        const next = remaining[Math.min(idx, remaining.length - 1)];
+        setSelectedPairId(next.id);
+      }
+    }
+    // Reconcile against the server. Pass the next-selected id so the
+    // refresh keeps the operator on that row instead of jumping to
+    // the queue head.
+    _loadQueue(
+      Array.isArray(pendingList) && actedId
+        ? (pendingList.filter(p => p.id !== actedId)[0] || {}).id
+        : null,
+    );
   };
   const commitMerge = () => {
     setConfirm(false);
@@ -286,10 +342,11 @@ const DedupScreen = () => {
       .catch(e => setToast(`Reject failed: ${e.message}`));
   };
 
-  // Loading + empty-state surfaces — render before the compare grid
-  // because the grid assumes activePair.fields has at least the
-  // header row.
-  if (livePair === null) {
+  // ── Loading + empty / error gates ────────────────────────────────
+  // The queue surface (PendingPairsTable) is the source of truth now.
+  // While pendingList is still loading we render a single card; once
+  // it resolves to [] or `false` we render the empty / error card.
+  if (pendingList === null) {
     return (
       <div className="page" style={{paddingBottom:0}}>
         <PageHeader
@@ -304,7 +361,7 @@ const DedupScreen = () => {
       </div>
     );
   }
-  if (livePair === false) {
+  if (pendingList === false || (Array.isArray(pendingList) && pendingList.length === 0)) {
     const errored = loadNote && loadNote.startsWith("fetch failed");
     return (
       <div className="page" style={{paddingBottom:0}}>
@@ -318,7 +375,7 @@ const DedupScreen = () => {
           }
           right={<>
             <button className="btn"
-              onClick={() => { setLivePair(null); setLoadNote("loading…"); window.location.reload(); }}>
+              onClick={() => { setPendingList(null); setLivePair(null); _loadQueue(); }}>
               <Icon name="play" size={14}/> Reload
             </button>
           </>}
@@ -343,13 +400,94 @@ const DedupScreen = () => {
     <div className="page" style={{paddingBottom:0}}>
       <PageHeader
         eyebrow="DUPLICATES · US-083 · LIVE"
-        title={<>Dedup compare <span className="t-mono" style={{fontSize:14, marginLeft:8, color:'var(--neutral-500)'}}>{activePair.id}</span></>}
-        sub="Decide which record survives. Per-field similarity is shown to the right of each value."
+        title={<>Dedup compare <span className="t-bodysm muted" style={{marginLeft:10}}>{pendingList.length} pending</span></>}
+        sub="Pick a pair from the queue to adjudicate. Decisions advance the queue automatically."
         right={<>
-          <button className="btn"><Icon name="history" size={14}/> Pair history</button>
+          <button className="btn" onClick={() => _loadQueue(selectedPairId)}>
+            <Icon name="play" size={14}/> Refresh queue
+          </button>
           <button className="btn"><Icon name="moreH" size={14}/></button>
         </>}
       />
+
+      {/* ── Pending pairs queue (US-S15-001: queue + adjudication split) */}
+      <div className="card" style={{padding:0, marginBottom:16}}>
+        <div style={{padding:'10px 14px', borderBottom:'1px solid var(--neutral-200)', display:'flex', alignItems:'center', gap:10}}>
+          <strong className="t-bodysm">Pending pairs</strong>
+          <span className="t-cap">{pendingList.length} row{pendingList.length === 1 ? '' : 's'} · click to adjudicate</span>
+        </div>
+        <div style={{maxHeight:260, overflowY:'auto'}}>
+          <table className="tbl" style={{boxShadow:'none'}}>
+            <thead>
+              <tr>
+                <th style={{width:36}}></th>
+                <th>Pair</th>
+                <th>Candidate A</th>
+                <th>Candidate B</th>
+                <th>Tier</th>
+                <th>Reason</th>
+                <th>Score</th>
+                <th>Raised</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pendingList.map(p => {
+                const mA = membersById[p.record_a_id];
+                const mB = membersById[p.record_b_id];
+                const _name = (m) => m ? `${m.first_name || ''} ${m.surname || ''}`.trim() || '—' : '…';
+                const _idShort = (id) => (id || '').slice(0, 12) + '…';
+                const isSel = p.id === selectedPairId;
+                const score = typeof p.composite_score === 'number' ? p.composite_score.toFixed(2) : '—';
+                const raised = (p.created_at || '').slice(0, 10) || '—';
+                return (
+                  <tr
+                    key={p.id}
+                    onClick={() => setSelectedPairId(p.id)}
+                    style={{
+                      cursor:'pointer',
+                      background: isSel ? 'var(--primary-100, #eef3ff)' : undefined,
+                    }}
+                  >
+                    <td>
+                      {isSel && <Icon name="check" size={12} color="var(--primary-900)"/>}
+                    </td>
+                    <td className="t-mono t-bodysm">{_idShort(p.id)}</td>
+                    <td>
+                      <div className="t-bodysm">{_name(mA)}</div>
+                      <div className="t-cap t-mono">{_idShort(p.record_a_id)}</div>
+                    </td>
+                    <td>
+                      <div className="t-bodysm">{_name(mB)}</div>
+                      <div className="t-cap t-mono">{_idShort(p.record_b_id)}</div>
+                    </td>
+                    <td><Chip size="sm">{`tier ${p.tier}`}</Chip></td>
+                    <td className="t-cap">{p.match_reason || '—'}</td>
+                    <td className="t-num">{score}</td>
+                    <td className="t-cap">{raised}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── Adjudication panel (renders when a pair is selected and its
+          members have resolved). Identical UI to before — only the
+          source of `activePair` changed. */}
+      {!livePair && (
+        <div className="card" style={{padding:40, textAlign:'center', color:'var(--neutral-500)', marginBottom:16}}>
+          <Icon name="duplicate" size={28} color="var(--neutral-300)"/>
+          <div className="t-bodysm mt-2">
+            Select a pair from the queue above to adjudicate.
+          </div>
+        </div>
+      )}
+      {livePair && <>
+      <div className="t-cap" style={{marginBottom:8, display:'flex', alignItems:'center', gap:8}}>
+        <Icon name="duplicate" size={12}/> Adjudicating
+        <span className="t-mono" style={{color:'var(--neutral-900)'}}>{activePair.id}</span>
+      </div>
 
       {/* Pair metadata strip */}
       <div className="card" style={{padding:'14px 20px', marginBottom:16, display:'flex', alignItems:'center', gap:24, flexWrap:'wrap'}}>
@@ -581,6 +719,7 @@ const DedupScreen = () => {
           </div>
         </div>
       </Modal>
+      </>}
 
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>
