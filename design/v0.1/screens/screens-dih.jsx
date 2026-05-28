@@ -465,6 +465,31 @@ const DIHScreen = () => {
     setSelection(next);
   };
 
+  // Select-all-shown — mirrors the per-row disabled rule below
+  // (blocking DQA or pending DDUP review locks a row out of bulk
+  // actions). Hidden rows from the active quickFilter are never
+  // touched; this is "shown", not "everything".
+  const _eligible = (r) => !(r.dqa.b > 0 || r.ddup !== null);
+  const shownEligibleIds = visibleRows.filter(_eligible).map(r => r.id);
+  const selectedShownEligibleCount = shownEligibleIds.filter(id => selection.has(id)).length;
+  const allShownSelected =
+    shownEligibleIds.length > 0 && selectedShownEligibleCount === shownEligibleIds.length;
+  const someShownSelected =
+    selectedShownEligibleCount > 0 && !allShownSelected;
+  const toggleSelectAllShown = () => {
+    const next = new Set(selection);
+    if (allShownSelected) {
+      // Deselect every currently-shown row (eligible or not, since
+      // ineligibles shouldn't have been selectable anyway — defensive).
+      for (const r of visibleRows) next.delete(r.id);
+    } else {
+      // Add every eligible shown row to the existing selection
+      // (rows selected on a prior filter view stay selected).
+      for (const id of shownEligibleIds) next.add(id);
+    }
+    setSelection(next);
+  };
+
   return (
     <div className="page" style={{paddingBottom:0, position:'relative'}}>
       <PageHeader
@@ -722,7 +747,27 @@ const DIHScreen = () => {
           <table className="tbl" style={density === "compact" ? { fontSize: 12 } : undefined}>
             <thead>
               <tr>
-                <th style={{width:36}}></th>
+                <th style={{width:36}}>
+                  <input
+                    type="checkbox"
+                    aria-label={
+                      allShownSelected
+                        ? "Deselect all shown rows"
+                        : `Select all ${shownEligibleIds.length} eligible shown row${shownEligibleIds.length === 1 ? "" : "s"}`
+                    }
+                    title={
+                      shownEligibleIds.length === 0
+                        ? "No rows in the current view are eligible for bulk actions"
+                        : allShownSelected
+                          ? `Deselect ${selectedShownEligibleCount} shown row${selectedShownEligibleCount === 1 ? "" : "s"}`
+                          : `Select all ${shownEligibleIds.length} eligible shown row${shownEligibleIds.length === 1 ? "" : "s"}`
+                    }
+                    disabled={shownEligibleIds.length === 0}
+                    checked={allShownSelected}
+                    ref={el => { if (el) el.indeterminate = someShownSelected; }}
+                    onChange={toggleSelectAllShown}
+                  />
+                </th>
                 <th>Provisional ID</th>
                 <th>Head · Parish</th>
                 <th>Source</th>
