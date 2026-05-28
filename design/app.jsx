@@ -142,17 +142,24 @@ function App() {
       return true;
     }
     // Feature-flag gating — for nav entries that declare a flag,
-    // the entry only renders if window.__featureFlags[flag] is true.
+    // the entry only renders if me.feature_flags[flag] is true.
+    // The /api/v1/security/users/me/ response ships the flag map.
     // Per ADR-0023 §D9: hidden when off, not greyed (design brief §6).
+    // Until /me/ resolves, we render the entry so dev/staging users
+    // aren't blocked by a race with the initial fetch — once /me/
+    // returns with the flag off, the entry disappears.
     if (n.featureFlag) {
-      const flags = (typeof window !== "undefined" && window.__featureFlags) || {};
-      if (!flags[n.featureFlag]) return false;
+      const flags = (me && me.feature_flags) || null;
+      if (flags && !flags[n.featureFlag]) return false;
     }
     // Realm-role gating — same hidden-not-greyed rule. me.roles is
     // populated from /api/v1/security/users/me/ (Keycloak realm roles).
+    // Mirror the feature-flag pattern: keep the entry visible until
+    // /me/ resolves so the initial render doesn't race the fetch.
     if (n.requireRole) {
-      const roles = (me && Array.isArray(me.roles)) ? me.roles : [];
-      if (!roles.includes(n.requireRole)) return false;
+      if (me && Array.isArray(me.roles) && !me.roles.includes(n.requireRole)) {
+        return false;
+      }
     }
     // The partner self-service tiles only make sense for the
     // partner-analyst role — operator-side roles never use them.
