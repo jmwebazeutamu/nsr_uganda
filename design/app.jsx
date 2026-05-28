@@ -42,7 +42,8 @@ const NAV = [
   // flag AND the user's EXPLORER realm role; hidden (not greyed)
   // when either fails, per design brief §6.
   { id: "data-explorer", label: "Data Explorer", icon: "database", indent: 1,
-    featureFlag: "data_explorer_enabled", requireRole: "EXPLORER" },
+    featureFlag: "data_explorer_enabled", requireRole: "EXPLORER",
+    externalHref: "v0.1/screens/data-explorer/Data Explorer - Catalogue.html" },
   { id: "partner-drs", label: "My requests", icon: "download", count: 5 },
   // Partner self-service surfaces — visible only when role is
   // partner-analyst (see role-filter below). Read-only views of the
@@ -267,6 +268,20 @@ function App() {
           // (i.e. it's a workflow link, not a plain navigation link).
           const liveCount = navCounts ? navCounts[n.id] : undefined;
           const displayCount = liveCount !== undefined ? liveCount : n.count;
+          if (n.externalHref) {
+            return (
+              <a key={n.id}
+                 className="nav-item"
+                 style={n.indent ? { paddingLeft: 32, textDecoration: "none" } : { textDecoration: "none" }}
+                 href={n.externalHref}
+                 target="_blank"
+                 rel="noopener noreferrer">
+                <Icon name={n.icon} size={18}/>
+                <span className="nav-label">{n.label}</span>
+                <Icon name="externalLink" size={12}/>
+              </a>
+            );
+          }
           return (
             <button key={n.id}
                     className={`nav-item ${active ? 'active' : ''}`}
@@ -308,79 +323,10 @@ function App() {
         {screen === "dedup"   && <DedupScreen/>}
         {screen === "upd"     && <UPDScreen changeRequestId={screenPayload?.changeRequestId} onNavigate={navigate}/>}
         {screen === "drs"     && <DRSScreen onNavigate={navigate}/>}
-        {/* Data Explorer sub-screens — routed by screenPayload.dxView
-            so the single sidebar entry can land on the catalogue and
-            internally navigate to dataset/variable/aggregate/handoff
-            without polluting the top-level NAV array.
-            ADR-0023 §D1 (module boundary), US-DATA-EXP-001. */}
-        {screen === "data-explorer" && (() => {
-          const dxView = screenPayload?.dxView || "catalogue";
-          if (dxView === "dataset" && DatasetDetailScreen) {
-            return <DatasetDetailScreen
-              datasetId={screenPayload?.datasetId}
-              onBack={() => navigate("data-explorer")}
-              onOpenVariable={(dsId, varCode) => navigate("data-explorer", {
-                dxView: "variable", datasetId: dsId, variableCode: varCode,
-              })}
-              onOpenAggregate={(dsId) => navigate("data-explorer", {
-                dxView: "aggregate", datasetId: dsId,
-              })}
-              onRequestRecords={(dataset) => navigate("data-explorer", {
-                dxView: "handoff",
-                aggregateContext: {
-                  dataset_id: dataset.id,
-                  dataset_title: dataset.title,
-                  projection_variables: [],
-                  filters: [],
-                  geographic_scope: { level: "sub_county" },
-                  privacy_classes_spanned: [dataset.privacy_class],
-                  estimated_row_count: null,
-                },
-              })}
-            />;
-          }
-          if (dxView === "variable" && VariableDetailScreen) {
-            return <VariableDetailScreen
-              datasetId={screenPayload?.datasetId}
-              variableCode={screenPayload?.variableCode}
-              onBack={() => navigate("data-explorer", {
-                dxView: "dataset", datasetId: screenPayload?.datasetId,
-              })}
-              onOpenVariable={(dsId, varCode) => navigate("data-explorer", {
-                dxView: "variable", datasetId: dsId, variableCode: varCode,
-              })}
-              onOpenAggregate={(dsId, varCode) => navigate("data-explorer", {
-                dxView: "aggregate", datasetId: dsId, initialProjectionVariable: varCode,
-              })}
-            />;
-          }
-          if (dxView === "aggregate" && AggregateBuilderScreen) {
-            return <AggregateBuilderScreen
-              initialDatasetId={screenPayload?.datasetId}
-              initialProjectionVariable={screenPayload?.initialProjectionVariable}
-              onRequestRecords={(ctx) => navigate("data-explorer", {
-                dxView: "handoff", aggregateContext: ctx,
-              })}
-            />;
-          }
-          if (dxView === "handoff" && HandoffConfirmScreen) {
-            return <HandoffConfirmScreen
-              aggregateContext={screenPayload?.aggregateContext}
-              onBack={() => navigate("data-explorer", {
-                dxView: "aggregate",
-                datasetId: screenPayload?.aggregateContext?.dataset_id,
-              })}
-              onRedirect={(url) => {
-                if (typeof window !== "undefined" && url) window.location.assign(url);
-              }}
-            />;
-          }
-          return CatalogueScreen ? <CatalogueScreen
-            onOpenDataset={(datasetId) => navigate("data-explorer", {
-              dxView: "dataset", datasetId,
-            })}
-          /> : null;
-        })()}
+        {/* Data Explorer — the sidebar entry opens the standalone
+            5-screen harness in a new tab (catalogue → builder →
+            results → coverage → synthetic). Not embedded in this
+            shell. ADR-0023 §D1, US-DATA-EXP-001. */}
         {screen === "grm"     && <GRMScreen onNavigate={navigate}/>}
         {screen === "partner-drs" && <PartnerDRSScreen/>}
         {screen === "my-dsa" && <MyDsaScreen/>}

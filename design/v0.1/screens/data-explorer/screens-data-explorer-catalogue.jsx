@@ -1,0 +1,342 @@
+/* global React, ReactDOM,
+   Icon, Chip, PageHeader,
+   DE_DATASETS, DE_VARIABLES_BY_DATASET, DE_PRIVACY, DE_PRIVACY_ORDER,
+   PrivacyChip, DEShell, ScreenJumpTweak,
+   TweaksPanel, useTweaks, TweakSection */
+
+// NSR MIS — Data Explorer · Catalogue browse (screen 1 of 5)
+// =========================================================
+// Left rail: datasets grouped by privacy class. Right pane:
+// the selected dataset's variable list with class chips per row.
+// Search box filters across both panes.
+
+const { useState: useCat, useMemo: useCatM } = React;
+
+const CatalogueScreen = () => {
+  const [t, setTweak] = useTweaks({ screen: "catalogue" });
+  const [q, setQ] = useCat("");
+  const [activePrivacy, setActivePrivacy] = useCat("");
+  const [activeId, setActiveId] = useCat("ds_hh_profile");
+
+  const filteredDs = useCatM(() => DE_DATASETS.filter(d => {
+    if (activePrivacy && d.privacy !== activePrivacy) return false;
+    if (!q) return true;
+    const needle = q.toLowerCase();
+    return d.code.toLowerCase().includes(needle)
+      || d.label.toLowerCase().includes(needle)
+      || d.desc.toLowerCase().includes(needle);
+  }), [q, activePrivacy]);
+
+  const grouped = useCatM(() => {
+    const g = Object.fromEntries(DE_PRIVACY_ORDER.map(k => [k, []]));
+    filteredDs.forEach(d => g[d.privacy].push(d));
+    return g;
+  }, [filteredDs]);
+
+  const ds = DE_DATASETS.find(d => d.id === activeId);
+  const vars = useCatM(() => {
+    const list = DE_VARIABLES_BY_DATASET[activeId] || [];
+    if (!q) return list;
+    const n = q.toLowerCase();
+    return list.filter(v =>
+      v.code.toLowerCase().includes(n) || v.label.toLowerCase().includes(n)
+      || v.domain.toLowerCase().includes(n));
+  }, [activeId, q]);
+
+  const totals = useCatM(() => {
+    const c = { public:0, internal:0, personal:0, sensitive:0 };
+    DE_DATASETS.forEach(d => c[d.privacy]++);
+    return c;
+  }, []);
+
+  return (
+    <DEShell active="catalogue" refreshed_at={ds?.refreshed_at || "28 May 2026 06:00 UTC"}>
+      <PageHeader
+        eyebrow="DATA EXPLORER · CATALOGUE BROWSE"
+        title="Browse datasets & variables"
+        sub={<>Aggregate-only surface — record-level access happens in the DRS console. Privacy class is shown on every row.</>}
+        right={<>
+          <button className="btn"><Icon name="download" size={14}/> Export catalogue</button>
+          <button className="btn btn-primary" onClick={() => location.href="Data Explorer - Aggregate Builder.html"}>
+            <Icon name="sliders" size={14}/> Build an aggregate
+          </button>
+        </>}
+      />
+
+      {/* Search + privacy filter strip */}
+      <div className="card" style={{padding:"12px 16px", marginBottom:16,
+        display:"grid", gridTemplateColumns:"1fr auto auto", gap:12, alignItems:"center"}}>
+        <div className="search" style={{maxWidth:"none", margin:0}}>
+          <Icon name="search" size={14} color="var(--neutral-500)"/>
+          <input value={q} onChange={(e) => setQ(e.target.value)}
+            placeholder="Search datasets, variables, codes, domains…"/>
+          {q && <button className="icon-btn" onClick={() => setQ("")}><Icon name="x" size={12}/></button>}
+        </div>
+        <div style={{display:"flex", alignItems:"center", gap:6}}>
+          <span className="t-cap" style={{marginRight:6}}>PRIVACY:</span>
+          <button className={`cat-filter-btn ${activePrivacy === "" ? "on" : ""}`}
+            onClick={() => setActivePrivacy("")}>All <span className="t-cap">{DE_DATASETS.length}</span></button>
+          {DE_PRIVACY_ORDER.map(k => (
+            <button key={k}
+              className={`cat-filter-btn ${activePrivacy === k ? "on" : ""}`}
+              style={activePrivacy === k ? { background: DE_PRIVACY[k].bg, borderColor: DE_PRIVACY[k].accent, color: DE_PRIVACY[k].accent } : undefined}
+              onClick={() => setActivePrivacy(activePrivacy === k ? "" : k)}>
+              <span style={{width:6, height:6, borderRadius:"50%", background: DE_PRIVACY[k].accent}}/>
+              {DE_PRIVACY[k].label.toLowerCase()}
+              <span className="t-cap">{totals[k]}</span>
+            </button>
+          ))}
+        </div>
+        <span className="t-cap">{filteredDs.length} of {DE_DATASETS.length} datasets</span>
+      </div>
+
+      {/* Main: rail + variable pane */}
+      <div style={{display:"grid", gridTemplateColumns:"380px minmax(0, 1fr)", gap:16, alignItems:"flex-start"}}>
+        {/* Left rail — datasets grouped by privacy */}
+        <div className="card" style={{padding:0, position:"sticky", top:120, maxHeight:"calc(100vh - 140px)", overflowY:"auto"}}>
+          <div className="card-toolbar">
+            <strong className="t-bodysm">Datasets</strong>
+            <div style={{flex:1}}/>
+            <span className="t-cap">grouped by privacy</span>
+          </div>
+          {DE_PRIVACY_ORDER.map(k => {
+            const list = grouped[k];
+            if (!list.length) return null;
+            const cfg = DE_PRIVACY[k];
+            return (
+              <div key={k}>
+                <div style={{
+                  padding:"8px 14px",
+                  display:"flex", alignItems:"center", gap:8,
+                  background:"var(--neutral-50)",
+                  borderTop:"1px solid var(--neutral-200)",
+                  borderBottom:"1px solid var(--neutral-200)",
+                }}>
+                  <span style={{width:8, height:8, borderRadius:"50%", background: cfg.accent}}/>
+                  <strong className="t-cap" style={{color: cfg.accent, fontWeight:600, letterSpacing:"0.04em"}}>{cfg.label.toUpperCase()}</strong>
+                  <span className="t-cap">k≥{cfg.k_floor ?? "—"} · floor {cfg.geo_floor}</span>
+                  <div style={{flex:1}}/>
+                  <span className="t-cap">{list.length}</span>
+                </div>
+                {list.map(d => {
+                  const isActive = d.id === activeId;
+                  return (
+                    <button key={d.id} onClick={() => setActiveId(d.id)} style={{
+                      display:"block", width:"100%", textAlign:"left",
+                      padding:"12px 14px",
+                      border:0, borderBottom:"1px solid var(--neutral-200)",
+                      background: isActive ? "var(--primary-100)" : "transparent",
+                      cursor:"pointer",
+                      borderLeft: isActive ? `3px solid ${cfg.accent}` : "3px solid transparent",
+                    }}>
+                      <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:4}}>
+                        <span className="t-mono" style={{fontSize:11.5, color:"var(--neutral-700)"}}>{d.code}</span>
+                        {d.featured && <Chip size="sm" tone="data">featured</Chip>}
+                        <div style={{flex:1}}/>
+                        <PrivacyChip klass={d.privacy} size="sm"/>
+                      </div>
+                      <div style={{fontWeight:500, fontSize:13.5, color:"var(--neutral-900)"}}>{d.label}</div>
+                      <div className="t-cap mt-1">{d.rows} rows · {d.variables} variables · {d.refresh}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            );
+          })}
+          {filteredDs.length === 0 && (
+            <div style={{padding:30, textAlign:"center"}} className="t-cap">No datasets match.</div>
+          )}
+        </div>
+
+        {/* Right pane — selected dataset detail */}
+        <div>
+          {ds && <DatasetDetail ds={ds} vars={vars} searchActive={!!q}/>}
+        </div>
+      </div>
+
+      <TweaksPanel title="Tweaks">
+        <TweakSection label="Navigate">
+          <ScreenJumpTweak active="catalogue"/>
+        </TweakSection>
+      </TweaksPanel>
+
+      <style>{`
+        .cat-filter-btn {
+          display: inline-flex; align-items: center; gap: 6px;
+          height: 28px; padding: 0 10px;
+          border: 1px solid var(--neutral-300);
+          border-radius: 14px;
+          background: var(--neutral-0);
+          color: var(--neutral-700);
+          font-size: 12.5px; font-weight: 500;
+          cursor: pointer;
+        }
+        .cat-filter-btn.on:not([style*="background"]) {
+          background: var(--neutral-900); color: #fff; border-color: var(--neutral-900);
+        }
+        .cat-filter-btn .t-cap { color: inherit; opacity: 0.7; }
+        .cat-filter-btn:hover { border-color: var(--neutral-500); }
+      `}</style>
+    </DEShell>
+  );
+};
+
+/* ================================================================
+   Right pane — dataset header + variable list
+   ================================================================ */
+const DatasetDetail = ({ ds, vars, searchActive }) => {
+  const cfg = DE_PRIVACY[ds.privacy];
+
+  // Group variables by domain
+  const domains = {};
+  vars.forEach(v => { (domains[v.domain] = domains[v.domain] || []).push(v); });
+  const domainKeys = Object.keys(domains);
+
+  return (
+    <>
+      {/* Header card */}
+      <div className="card" style={{padding:0, marginBottom:16, borderTop: `3px solid ${cfg.accent}`}}>
+        <div style={{padding:"18px 22px", borderBottom:"1px solid var(--neutral-200)"}}>
+          <div style={{display:"flex", alignItems:"flex-start", gap:14}}>
+            <div style={{flex:1, minWidth:0}}>
+              <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:4}}>
+                <span className="t-mono" style={{fontSize:12, color:"var(--neutral-700)"}}>{ds.code}</span>
+                <PrivacyChip klass={ds.privacy} showFloor/>
+                <Chip size="sm" tone="neutral">{ds.refresh}</Chip>
+              </div>
+              <h2 className="t-h2" style={{margin:0}}>{ds.label}</h2>
+              <div className="t-bodysm muted mt-1">{ds.desc}</div>
+            </div>
+            <button className="btn btn-primary" onClick={() => location.href="Data Explorer - Aggregate Builder.html"}>
+              <Icon name="sliders" size={14}/> Use in builder
+            </button>
+            <button className="btn"><Icon name="database" size={14}/> Synthetic sample</button>
+          </div>
+          <div style={{display:"grid", gridTemplateColumns:"repeat(5, 1fr)", gap:16, marginTop:18}}>
+            <Fact label="Rows" big={ds.rows}/>
+            <Fact label="Variables" big={ds.variables}/>
+            <Fact label="Matview" big={<span className="t-mono" style={{fontSize:13}}>{ds.matview}</span>}/>
+            <Fact label="Refresh cadence" big={ds.refresh}/>
+            <Fact label="Refreshed" big={<span className="t-mono" style={{fontSize:12}}>{ds.refreshed_at}</span>}/>
+          </div>
+        </div>
+
+        {/* Privacy rules card */}
+        <div style={{padding:"14px 22px", background: cfg.bg, borderTop:`1px solid ${cfg.accent}`,
+          display:"grid", gridTemplateColumns:"auto 1fr auto", gap:14, alignItems:"center"}}>
+          <div style={{
+            width:36, height:36, borderRadius:6,
+            background: cfg.accent, color:"#fff",
+            display:"grid", placeItems:"center",
+          }}>
+            <Icon name={cfg.icon || "shield"} size={18}/>
+          </div>
+          <div>
+            <div style={{fontWeight:600, color: cfg.accent, fontSize:13.5}}>{cfg.label} privacy class</div>
+            <div className="t-bodysm" style={{color:"var(--neutral-700)", marginTop:2}}>
+              {cfg.blurb}
+              {cfg.daily_cap && <> Daily caps: <strong>{cfg.daily_cap.user}/user · {cfg.daily_cap.org}/org</strong>.</>}
+            </div>
+          </div>
+          <div className="t-cap" style={{color: cfg.accent, fontWeight:600}}>
+            k_floor {cfg.k_floor ?? "—"} · floor {cfg.geo_floor}
+          </div>
+        </div>
+      </div>
+
+      {/* Variables list */}
+      <div className="card" style={{padding:0}}>
+        <div className="card-toolbar">
+          <strong className="t-bodysm">Variables</strong>
+          <span className="t-cap">{vars.length} {searchActive ? "match search" : "variables"}</span>
+          <div style={{flex:1}}/>
+          <span className="t-cap">grouped by domain</span>
+        </div>
+
+        {ds.privacy === "sensitive" && (
+          <div style={{padding:"12px 18px", background:"var(--accent-danger-bg)",
+            display:"flex", alignItems:"center", gap:10,
+            borderBottom:"1px solid var(--accent-danger)"}}>
+            <Icon name="lock" size={14} color="var(--accent-danger)"/>
+            <span className="t-bodysm" style={{color:"var(--accent-danger)"}}>
+              <strong>Aggregate blocked — record-level only.</strong>
+              {" "}This dataset can be accessed through the DRS request workflow under an active DSA.
+            </span>
+            <div style={{flex:1}}/>
+            <button className="btn btn-danger">
+              <Icon name="arrowRight" size={13}/> Open DRS draft
+            </button>
+          </div>
+        )}
+
+        {domainKeys.length === 0 && (
+          <div style={{padding:40, textAlign:"center"}} className="t-cap">No variables match.</div>
+        )}
+
+        {domainKeys.map(dom => (
+          <div key={dom}>
+            <div style={{
+              padding:"8px 18px",
+              background:"var(--neutral-50)",
+              borderBottom:"1px solid var(--neutral-200)",
+              borderTop:"1px solid var(--neutral-200)",
+              display:"flex", alignItems:"center", gap:8,
+            }}>
+              <strong className="t-cap" style={{color:"var(--neutral-700)", fontWeight:600, letterSpacing:"0.06em"}}>
+                {dom.toUpperCase()}
+              </strong>
+              <span className="t-cap">{domains[dom].length}</span>
+            </div>
+            {domains[dom].map(v => <VariableRow key={v.code} v={v}/>)}
+          </div>
+        ))}
+      </div>
+    </>
+  );
+};
+
+const Fact = ({ label, big }) => (
+  <div>
+    <div className="t-cap">{label.toUpperCase()}</div>
+    <div style={{fontWeight:600, fontSize:15, marginTop:2}}>{big}</div>
+  </div>
+);
+
+const VariableRow = ({ v }) => {
+  const isSensitive = v.privacy === "sensitive";
+  return (
+    <div style={{
+      display:"grid",
+      gridTemplateColumns:"minmax(180px, 1.3fr) 90px minmax(160px, 1.4fr) minmax(140px, 1fr) auto",
+      gap:14, alignItems:"center",
+      padding:"12px 18px",
+      borderBottom:"1px solid var(--neutral-200)",
+      background: isSensitive ? "var(--accent-danger-bg)" : undefined,
+    }}>
+      <div style={{minWidth:0}}>
+        <div style={{display:"flex", alignItems:"center", gap:6}}>
+          {isSensitive && <Icon name="lock" size={12} color="var(--accent-danger)"/>}
+          <span style={{fontWeight:500, fontSize:13.5, color:"var(--neutral-900)"}}>{v.label}</span>
+        </div>
+        <div className="t-cap t-mono mt-1">{v.code}</div>
+      </div>
+      <div>
+        <Chip size="sm" tone="neutral">{v.type}</Chip>
+      </div>
+      <div className="t-bodysm" style={{color:"var(--neutral-700)"}}>
+        {v.desc}
+        {isSensitive && (
+          <div className="t-cap mt-1" style={{color:"var(--accent-danger)", fontWeight:500}}>
+            Aggregate blocked — record-level only
+          </div>
+        )}
+      </div>
+      <div className="t-cap" style={{fontSize:11.5}}>{v.values}</div>
+      <div>
+        <PrivacyChip klass={v.privacy} size="sm"/>
+      </div>
+    </div>
+  );
+};
+
+ReactDOM.createRoot(document.getElementById("app")).render(<CatalogueScreen/>);
