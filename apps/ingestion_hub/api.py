@@ -26,6 +26,8 @@ from .services import (
     promote_stage_record,
     quarantine_stage_record,
     reject_stage_record,
+    resolve_ddup_as_duplicate,
+    resolve_ddup_as_not_duplicate,
     resolve_idv_pending,
     resolve_pinned_form_uid,
     submit_walk_in_capture,
@@ -109,6 +111,25 @@ class ResolveIdvRequestSerializer(serializers.Serializer):
     actor = serializers.CharField(max_length=64)
     decision = serializers.ChoiceField(choices=["accept", "reject"])
     reason = serializers.CharField()
+
+
+class ResolveDdupRequestSerializer(serializers.Serializer):
+    """Operator decision on a DDUP_REVIEW stage record. `decision`:
+    - 'duplicate'      → stage IS the same person as `surviving_member_id`;
+                         provisional ID is voided per AC-DIH-REJECT-VOID,
+                         survivor recorded in audit. No new Member created.
+    - 'not_duplicate'  → operator dismisses the candidate(s); stage
+                         advances to PENDING_PROMOTION. Dismissed
+                         candidates land in the audit chain.
+
+    `surviving_member_id` is required only for 'duplicate' decisions
+    and must match one of the discovered candidates on the stage."""
+    actor = serializers.CharField(max_length=64)
+    decision = serializers.ChoiceField(choices=["duplicate", "not_duplicate"])
+    reason = serializers.CharField()
+    surviving_member_id = serializers.CharField(
+        max_length=26, required=False, allow_blank=True,
+    )
 
 
 class BulkStageActionRequestSerializer(serializers.Serializer):
@@ -658,6 +679,58 @@ class StageRecordViewSet(
                 reason=ser.validated_data["reason"],
                 decision=ser.validated_data["decision"],
             )
+        except DihError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        stage.refresh_from_db()
+        return Response(self.get_serializer(stage).data)
+
+    @extend_schema(
+        tags=["dih"],
+        summary="Resolve a DDUP_REVIEW stage record",
+        description=(
+            "Operator decision on a DDUP_REVIEW stage. `decision=duplicate` "
+            "voids the provisional ID per AC-DIH-REJECT-VOID and records "
+            "`surviving_member_id` in the audit chain. `decision=not_duplicate` "
+            "advances the stage to PENDING_PROMOTION and records the "
+            "dismissed candidates. Refuses when state != DDUP_REVIEW (no "
+            "double-resolve). Bridges the gap between DIH staging-side "
+            "dedup discovery and the registry's MatchPair workflow — no "
+            "MatchPair row is written since there's no Member id for the "
+            "stage yet."
+        ),
+        request=ResolveDdupRequestSerializer,
+        responses={
+            200: StageRecordSerializer,
+            400: OpenApiResponse(
+                description=(
+                    "not ddup_review / reason too short / unknown "
+                    "surviving_member_id / surviving_member_id not in candidates"
+                ),
+            ),
+        },
+    )
+    @action(detail=True, methods=["post"], url_path="resolve-ddup")
+    def resolve_ddup(self, request, pk=None):
+        ser = ResolveDdupRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        stage = self.get_object()
+        decision = ser.validated_data["decision"]
+        try:
+            if decision == "duplicate":
+                resolve_ddup_as_duplicate(
+                    stage,
+                    actor=ser.validated_data["actor"],
+                    reason=ser.validated_data["reason"],
+                    surviving_member_id=(
+                        ser.validated_data.get("surviving_member_id") or ""
+                    ),
+                )
+            else:
+                resolve_ddup_as_not_duplicate(
+                    stage,
+                    actor=ser.validated_data["actor"],
+                    reason=ser.validated_data["reason"],
+                )
         except DihError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         stage.refresh_from_db()

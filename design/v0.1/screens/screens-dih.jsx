@@ -1274,6 +1274,16 @@ const DIHScreen = () => {
                 <Icon name="shield" size={14}/> Resolve IDV
               </button>
             )}
+            {current.state === "ddup_review" && (
+              <button
+                className="btn"
+                style={{background:"var(--accent-danger)", color:"white", borderColor:"var(--accent-danger)"}}
+                onClick={() => setModal('resolve-ddup')}
+                title="Confirm duplicate (rejects this stage) or dismiss the candidates (advances to pending_promotion)"
+              >
+                <Icon name="duplicate" size={14}/> Resolve DDUP
+              </button>
+            )}
             <button className="btn btn-warn" onClick={() => setModal('hold')}><Icon name="clock" size={14}/> Hold for info</button>
             <button className="btn" onClick={() => setModal('merge')}><Icon name="duplicate" size={14}/> Promote-as-merge</button>
             <button className="btn btn-success" onClick={() => setModal('promote')}><Icon name="check" size={14}/> Promote</button>
@@ -1400,6 +1410,27 @@ const DIHScreen = () => {
           }}
           onError={(err) => {
             setToast(`Resolve IDV failed: ${err}`);
+            setModal(null);
+          }}
+        />
+      )}
+      {modal === 'resolve-ddup' && current && (
+        <ResolveDdupModal
+          stageId={current.id}
+          headName={current.head}
+          candidates={current._ddupCandidates || []}
+          onClose={() => setModal(null)}
+          onResolved={(stage) => {
+            const updated = _stageToRow(stage);
+            setRows(rows.map(r => r.id === stage.id ? updated : r));
+            const verb = stage.state === "rejected"
+              ? "Rejected as duplicate"
+              : `Moved to ${stage.state.replace(/_/g, " ")}`;
+            setToast(`${verb} — DDUP resolution written to audit chain.`);
+            setModal(null);
+          }}
+          onError={(err) => {
+            setToast(`Resolve DDUP failed: ${err}`);
             setModal(null);
           }}
         />
@@ -1619,6 +1650,225 @@ const ResolveIdvModal = ({ stageId, headName, idvOutcome, onClose, onResolved, o
             {submitting
               ? (decision === "accept" ? "Accepting…" : "Rejecting…")
               : (decision === "accept" ? "Accept IDV" : "Reject as fraud")}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
+
+// ── Resolve-DDUP modal — bridges DIH staging dedup to MatchPair flow.
+// "duplicate" → POST /resolve-ddup/ with decision=duplicate + the chosen
+// surviving_member_id; stage is rejected (provisional ID voided) and
+// the audit chain records the surviving member. "not_duplicate" →
+// dismisses the candidates and moves the stage to pending_promotion;
+// the dismissed candidates land in the audit chain so a later auditor
+// can challenge the override. No MatchPair is written — the registry
+// MatchPair table is post-promotion (two Member ids) and this stage
+// never gets a Member id in either path.
+const _RESOLVE_DDUP_REASONS_DUP = [
+  "Confirmed duplicate — same NIN, same person",
+  "Same household re-submitted via different channel",
+  "Test / training record submitted in error",
+  "Other (specify in note)",
+];
+const _RESOLVE_DDUP_REASONS_NOT_DUP = [
+  "NIN was mis-typed on existing record — different person",
+  "NIN was mis-typed on this submission — different person",
+  "Different person sharing NIN suffix (collision)",
+  "Other (specify in note)",
+];
+
+const ResolveDdupModal = ({ stageId, headName, candidates, onClose, onResolved, onError }) => {
+  const [decision, setDecision] = useStateDIH("duplicate");
+  const [survivingId, setSurvivingId] = useStateDIH(
+    (candidates[0] && candidates[0].member_id) || "",
+  );
+  const [reason, setReason] = useStateDIH("");
+  const [note, setNote] = useStateDIH("");
+  const [submitting, setSubmitting] = useStateDIH(false);
+
+  const reasonOptions = decision === "duplicate"
+    ? _RESOLVE_DDUP_REASONS_DUP
+    : _RESOLVE_DDUP_REASONS_NOT_DUP;
+  const finalReason = [reason, note].filter(Boolean).join(" — ");
+  const longEnough = finalReason.trim().length >= 6;
+  const survivorRequired = decision === "duplicate";
+  const canSubmit = !submitting && longEnough
+    && (!survivorRequired || Boolean(survivingId));
+
+  const submit = (e) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setSubmitting(true);
+    const body = {
+      actor: "nsr-unit",
+      decision,
+      reason: finalReason,
+    };
+    if (decision === "duplicate") body.surviving_member_id = survivingId;
+    fetch(`/api/v1/dih/stage-records/${stageId}/resolve-ddup/`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-CSRFToken": _getCsrfToken(),
+      },
+      body: JSON.stringify(body),
+    })
+      .then(r => r.json().then(b => ({ ok: r.ok, body: b })))
+      .then(({ ok, body: b }) => {
+        setSubmitting(false);
+        if (!ok) {
+          onError(typeof b.detail === "string" ? b.detail : "Resolve DDUP failed");
+          return;
+        }
+        onResolved(b);
+      })
+      .catch(err => {
+        setSubmitting(false);
+        onError(String(err));
+      });
+  };
+
+  return (
+    <div
+      role="dialog" aria-label="Resolve DDUP"
+      style={{
+        position:"fixed", inset:0, background:"rgba(0,0,0,0.4)",
+        display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000,
+      }}
+      onClick={() => !submitting && onClose()}
+    >
+      <form
+        onClick={e => e.stopPropagation()}
+        onSubmit={submit}
+        style={{
+          background:"white", padding:"24px", borderRadius:"8px",
+          minWidth:"520px", maxWidth:"620px",
+          boxShadow:"0 8px 32px rgba(0,0,0,0.2)",
+        }}
+      >
+        <h3 className="t-h3" style={{marginTop:0}}>Resolve DDUP</h3>
+        <p className="t-bodysm muted" style={{marginTop:4, marginBottom:12}}>
+          DIH discovered {candidates.length || 0} registry candidate
+          {candidates.length === 1 ? "" : "s"} for{" "}
+          <strong>{headName || stageId.slice(0, 12) + "…"}</strong>. Confirm the
+          duplicate (voids this stage, links to the surviving member) or
+          dismiss as a false positive (advances to pending_promotion).
+        </p>
+
+        <div style={{marginBottom:16}}>
+          <label
+            style={{display:"flex", alignItems:"center", gap:8,
+                    padding:"8px 12px", border:"1px solid var(--neutral-300)",
+                    borderRadius:"4px", cursor:"pointer", marginBottom:6,
+                    background: decision === "duplicate" ? "var(--accent-danger-bg, #fbe9e7)" : "white"}}
+          >
+            <input
+              type="radio" name="decision" value="duplicate"
+              checked={decision === "duplicate"}
+              onChange={() => { setDecision("duplicate"); setReason(""); }}
+              disabled={submitting}
+            />
+            <span>
+              <strong>Is duplicate</strong>
+              <span className="muted" style={{display:"block", fontSize:11, marginTop:2}}>
+                Void this stage's provisional ID. Link to the surviving member in audit.
+              </span>
+            </span>
+          </label>
+          <label
+            style={{display:"flex", alignItems:"center", gap:8,
+                    padding:"8px 12px", border:"1px solid var(--neutral-300)",
+                    borderRadius:"4px", cursor:"pointer",
+                    background: decision === "not_duplicate" ? "var(--accent-data-bg, #e8f4f8)" : "white"}}
+          >
+            <input
+              type="radio" name="decision" value="not_duplicate"
+              checked={decision === "not_duplicate"}
+              onChange={() => { setDecision("not_duplicate"); setReason(""); }}
+              disabled={submitting}
+            />
+            <span>
+              <strong>Not a duplicate</strong>
+              <span className="muted" style={{display:"block", fontSize:11, marginTop:2}}>
+                Dismiss the candidates; advance to pending_promotion. Override is audited.
+              </span>
+            </span>
+          </label>
+        </div>
+
+        {decision === "duplicate" && candidates.length > 0 && (
+          <div style={{marginBottom:16}}>
+            <label className="t-cap" style={{display:"block", marginBottom:6}}>
+              Surviving registry member
+            </label>
+            <select
+              value={survivingId}
+              onChange={(e) => setSurvivingId(e.target.value)}
+              disabled={submitting}
+              style={{width:"100%", padding:"8px 10px",
+                border:"1px solid var(--neutral-300)", borderRadius:4,
+                fontFamily:"var(--font-mono)", fontSize:12}}
+            >
+              {candidates.map(c => (
+                <option key={c.member_id} value={c.member_id}>
+                  {c.member_id} · score {Number(c.score || 0).toFixed(2)} · {c.reason}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div style={{marginBottom:12}}>
+          <label className="t-cap" style={{display:"block", marginBottom:6}}>
+            Reason
+          </label>
+          <select
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            disabled={submitting}
+            style={{width:"100%", padding:"8px 10px",
+              border:"1px solid var(--neutral-300)", borderRadius:4}}
+          >
+            <option value="">— select a reason —</option>
+            {reasonOptions.map(r => (
+              <option key={r} value={r}>{r}</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{marginBottom:16}}>
+          <label className="t-cap" style={{display:"block", marginBottom:6}}>
+            Note (free text) {longEnough ? "" : "— combined with reason must be ≥ 6 chars"}
+          </label>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            disabled={submitting}
+            rows={3}
+            style={{width:"100%", padding:"8px 10px",
+              border:"1px solid var(--neutral-300)", borderRadius:4,
+              fontFamily:"inherit", fontSize:13, resize:"vertical"}}
+            placeholder="Optional context — appended to the audit chain."
+          />
+        </div>
+
+        <div style={{display:"flex", gap:8, justifyContent:"flex-end"}}>
+          <button type="button" className="btn" onClick={onClose} disabled={submitting}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className={decision === "duplicate" ? "btn btn-danger" : "btn btn-primary"}
+            disabled={!canSubmit}
+          >
+            {submitting ? "Submitting…"
+              : decision === "duplicate" ? "Confirm duplicate"
+              : "Dismiss candidates"}
           </button>
         </div>
       </form>

@@ -888,6 +888,140 @@ def _discover_stage_candidates(payload: dict) -> list[dict]:
     return [{"member_id": rid, "score": 1.0, "reason": "tier1-nin-exact"} for rid in rows]
 
 
+# ---------------------------------------------------------------------------
+# DDUP_REVIEW resolution — the bridge between DIH staging-side dedup
+# discovery and the registry's MatchPair workflow.
+#
+# Background: _discover_stage_candidates finds NIN-exact matches
+# between a StageRecord's payload and existing registry Members.
+# Because the stage hasn't been promoted, there's no Member id for
+# `record_a_id` and we can't drop a MatchPair row — yet the row
+# needs to leave DDUP_REVIEW somehow. These two functions are the
+# bridge:
+#
+#   resolve_ddup_as_duplicate     → the stage IS the same person as
+#                                   an existing registry Member; void
+#                                   the provisional ID, record the
+#                                   surviving member in the audit
+#                                   chain, mark stage REJECTED with
+#                                   reason 'ddup-duplicate-of: <id>'.
+#                                   No new Member is created.
+#
+#   resolve_ddup_as_not_duplicate → operator reviewed the candidate(s)
+#                                   and decided this is a different
+#                                   person (e.g. NIN was mis-typed in
+#                                   either record). Stage advances to
+#                                   PENDING_PROMOTION; the dismissed
+#                                   candidates land in the audit chain
+#                                   so a later auditor can challenge
+#                                   the override.
+
+def resolve_ddup_as_duplicate(
+    stage: StageRecord, *,
+    surviving_member_id: str,
+    actor: str,
+    reason: str,
+) -> StageRecord:
+    """The staged record IS the same person as `surviving_member_id`.
+    Voids the provisional ID by rejecting the stage record (per
+    AC-DIH-REJECT-VOID), records the surviving member as the
+    duplicate target in the audit chain. No write to MatchPair —
+    that table is post-promotion (two existing Members)."""
+    if stage.state != StageRecordState.DDUP_REVIEW:
+        raise DihError(
+            f"resolve_ddup_as_duplicate: stage is {stage.state}, "
+            f"not ddup_review",
+        )
+    if not actor:
+        raise DihError("resolve_ddup_as_duplicate: actor is required")
+    if not reason or len(reason.strip()) < 6:
+        raise DihError(
+            "resolve_ddup_as_duplicate: reason must be at least 6 characters",
+        )
+    if not surviving_member_id:
+        raise DihError(
+            "resolve_ddup_as_duplicate: surviving_member_id is required",
+        )
+    # Confirm the surviving member exists + isn't already merged
+    # away. Avoid pointing the audit chain at a phantom id.
+    if not Member.objects.filter(
+        id=surviving_member_id, is_deleted=False,
+    ).exists():
+        raise DihError(
+            f"resolve_ddup_as_duplicate: surviving member "
+            f"{surviving_member_id!r} does not exist or is soft-deleted",
+        )
+    # Cross-check that the operator's choice is one of the discovered
+    # candidates. Defends against UI tampering / typoed payload.
+    candidate_ids = {
+        (c or {}).get("member_id") for c in (stage.ddup_candidates or [])
+    }
+    if surviving_member_id not in candidate_ids:
+        raise DihError(
+            f"resolve_ddup_as_duplicate: {surviving_member_id!r} "
+            f"is not among the discovered candidates ({sorted(filter(None, candidate_ids))})",
+        )
+
+    reason_text = reason.strip()
+    # Audit before state change so the duplicate-of context is
+    # preserved even if the reject path fails partway.
+    _emit_audit(
+        action="resolve_ddup_duplicate", entity_type="stage_record",
+        entity_id=stage.id, actor=actor,
+        reason=f"duplicate-of: {reason_text}",
+        field_changes={
+            "surviving_member_id": surviving_member_id,
+            "ddup_candidates": stage.ddup_candidates or [],
+            "previous_state": stage.state,
+        },
+    )
+    # Reject delegates the void + counter increment + AuditEvent to
+    # the shared path; we prefix the reason so the audit chain shows
+    # the rejection was driven by DDUP resolution.
+    return reject_stage_record(
+        stage, actor=actor,
+        reason=f"ddup-duplicate-of: {surviving_member_id} — {reason_text}",
+    )
+
+
+def resolve_ddup_as_not_duplicate(
+    stage: StageRecord, *,
+    actor: str,
+    reason: str,
+) -> StageRecord:
+    """Operator reviewed the candidate(s) and decided this is a
+    different person (NIN mis-typed on either side, name collision,
+    etc.). Stage advances to PENDING_PROMOTION; dismissed candidates
+    are recorded in the audit chain so a later auditor can challenge
+    the override."""
+    if stage.state != StageRecordState.DDUP_REVIEW:
+        raise DihError(
+            f"resolve_ddup_as_not_duplicate: stage is {stage.state}, "
+            f"not ddup_review",
+        )
+    if not actor:
+        raise DihError("resolve_ddup_as_not_duplicate: actor is required")
+    if not reason or len(reason.strip()) < 6:
+        raise DihError(
+            "resolve_ddup_as_not_duplicate: reason must be at least "
+            "6 characters",
+        )
+
+    reason_text = reason.strip()
+    stage.state = StageRecordState.PENDING_PROMOTION
+    stage.save(update_fields=["state", "updated_at"])
+    _emit_audit(
+        action="resolve_ddup_not_duplicate", entity_type="stage_record",
+        entity_id=stage.id, actor=actor,
+        reason=f"not-duplicate: {reason_text}",
+        field_changes={
+            "dismissed_candidates": stage.ddup_candidates or [],
+            "next_state": StageRecordState.PENDING_PROMOTION,
+        },
+    )
+    return stage
+
+
 @transaction.atomic
 def process_stage_record(
     stage: StageRecord, *, actor: str = "system", allow_fast_track: bool = True,

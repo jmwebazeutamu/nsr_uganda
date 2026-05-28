@@ -2359,3 +2359,141 @@ class TestBulkStageActions:
         }, format="json")
         assert resp.status_code == 400
         assert "reason" in resp.json()["detail"].lower()
+
+
+# --- DDUP_REVIEW resolution bridge -----------------------------------------
+
+from apps.ingestion_hub.services import (  # noqa: E402
+    resolve_ddup_as_duplicate,
+    resolve_ddup_as_not_duplicate,
+)
+
+
+@pytest.mark.django_db
+class TestResolveDdup:
+    """Service-level coverage for the DIH/MatchPair bridge. These
+    exits clear DDUP_REVIEW without writing a MatchPair (the stage
+    has no Member id yet)."""
+
+    def _ddup_review_stage(self, connector, geo_codes, *, nin="CM7777777777NM"):
+        """Build a stage parked at DDUP_REVIEW: promote a seed
+        household with a Member carrying `nin`, then feed a new
+        stage with the same NIN through process_stage_record so
+        tier1 DDUP discovery routes it to DDUP_REVIEW."""
+        seed_stage = _make_stage(connector, geo_codes)
+        seed_hh = promote_stage_record(seed_stage, actor="seed")
+        survivor = Member.objects.create(
+            household=seed_hh, line_number=99,
+            surname="Survivor", first_name="One", sex="1",
+            nin_hash=nin_hash(nin),
+        )
+        payload = _payload(geo_codes)
+        payload["members"][0]["nin"] = nin
+        stage = _make_stage(connector, geo_codes, payload=payload)
+        # IDV mock routes to IDV_PENDING for the test NIN; a manual
+        # accept then runs the DDUP gate and parks us at DDUP_REVIEW.
+        # Mirrors TestResolveIdvPending's ddup-review fixture path.
+        process_stage_record(stage, actor="orch")
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.IDV_PENDING
+        resolve_idv_pending(
+            stage, actor="seed-reviewer",
+            reason="ddup smoke fixture — accept to reach DDUP_REVIEW",
+            decision="accept",
+        )
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.DDUP_REVIEW
+        assert len(stage.ddup_candidates) == 1
+        return stage, survivor
+
+    def test_duplicate_rejects_stage_and_records_survivor(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        stage, survivor = self._ddup_review_stage(connector, geo_codes)
+        resolve_ddup_as_duplicate(
+            stage, surviving_member_id=survivor.id, actor="reviewer",
+            reason="confirmed duplicate via paper record",
+        )
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.REJECTED
+        assert stage.rejected_by == "reviewer"
+        assert f"ddup-duplicate-of: {survivor.id}" in stage.rejected_reason
+        # Audit chain carries the survivor id under the
+        # resolve_ddup_duplicate action (emitted before the reject
+        # delegate runs).
+        from apps.security.models import AuditEvent
+        ev = AuditEvent.objects.filter(
+            action="resolve_ddup_duplicate", entity_id=stage.id,
+        ).first()
+        assert ev is not None
+        assert ev.field_changes["surviving_member_id"] == survivor.id
+
+    def test_not_duplicate_advances_to_pending_promotion(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        stage, _ = self._ddup_review_stage(connector, geo_codes)
+        dismissed = list(stage.ddup_candidates)
+        resolve_ddup_as_not_duplicate(
+            stage, actor="reviewer",
+            reason="NIN typo on the existing record — different person",
+        )
+        stage.refresh_from_db()
+        assert stage.state == StageRecordState.PENDING_PROMOTION
+        from apps.security.models import AuditEvent
+        ev = AuditEvent.objects.filter(
+            action="resolve_ddup_not_duplicate", entity_id=stage.id,
+        ).first()
+        assert ev is not None
+        assert ev.field_changes["dismissed_candidates"] == dismissed
+
+    def test_duplicate_rejects_unknown_surviving_id(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        stage, _ = self._ddup_review_stage(connector, geo_codes)
+        with pytest.raises(DihError, match="does not exist"):
+            resolve_ddup_as_duplicate(
+                stage, surviving_member_id="01BOGUSXXXBOGUSXXXBOGUSXX",
+                actor="reviewer", reason="trying a bogus id",
+            )
+
+    def test_duplicate_rejects_id_not_in_candidates(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        stage, _ = self._ddup_review_stage(connector, geo_codes)
+        # Create another Member that exists but isn't on the candidate list.
+        other_hh = promote_stage_record(_make_stage(connector, geo_codes), actor="seed2")
+        other = Member.objects.create(
+            household=other_hh, line_number=42,
+            surname="Other", first_name="Two", sex="2",
+        )
+        with pytest.raises(DihError, match="not among the discovered candidates"):
+            resolve_ddup_as_duplicate(
+                stage, surviving_member_id=other.id,
+                actor="reviewer", reason="wrong target on purpose",
+            )
+
+    def test_resolve_refuses_when_state_not_ddup_review(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        stage, survivor = self._ddup_review_stage(connector, geo_codes)
+        # First resolution succeeds.
+        resolve_ddup_as_not_duplicate(
+            stage, actor="reviewer", reason="moved on for ramp testing",
+        )
+        stage.refresh_from_db()
+        # Second resolution must refuse — stage is no longer DDUP_REVIEW.
+        with pytest.raises(DihError, match="not ddup_review"):
+            resolve_ddup_as_duplicate(
+                stage, surviving_member_id=survivor.id,
+                actor="reviewer", reason="double-resolve attempt",
+            )
+
+    def test_resolve_requires_six_char_reason(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+    ):
+        stage, survivor = self._ddup_review_stage(connector, geo_codes)
+        with pytest.raises(DihError, match="at least 6"):
+            resolve_ddup_as_duplicate(
+                stage, surviving_member_id=survivor.id,
+                actor="reviewer", reason="short",
+            )
