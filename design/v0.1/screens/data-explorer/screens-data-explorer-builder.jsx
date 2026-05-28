@@ -3,7 +3,8 @@
    DE_DATASETS, DE_VARIABLES_BY_DATASET, DE_PRIVACY, DE_GEO_LEVELS,
    PrivacyChip, DEShell, ScreenJumpTweak,
    strictestClass, violatesFloor, FloorViolationBanner,
-   useDeCatalogue, useDeDataset, useDeMe, RoleGateBanner, submitAggregate,
+   useDeCatalogue, useDeDataset, useDeMe, RoleGateBanner,
+   submitAggregate, HandoffPrompt,
    TweaksPanel, useTweaks, TweakSection */
 
 // NSR MIS — Data Explorer · Aggregate builder (screen 2 of 5)
@@ -57,6 +58,8 @@ const BuilderScreen = () => {
   const [datasets] = useDeCatalogue();
   const [{ dataset: liveDs, variables: liveVars }] = useDeDataset(datasetId);
   const [runState, setRunState] = useBld({ pending: false, error: null });
+  const [floorViolation, setFloorViolation] = useBld(null);
+  const [handoffOpen, setHandoffOpen] = useBld(false);
 
   const ds = liveDs || datasets.find(d => d.id === datasetId || d.code === datasetId);
   const vars = (liveVars && liveVars.length) ? liveVars : (DE_VARIABLES_BY_DATASET[datasetId] || []);
@@ -64,6 +67,7 @@ const BuilderScreen = () => {
   const runAggregate = async () => {
     if (!validForRun || runState.pending) return;
     setRunState({ pending: true, error: null });
+    setFloorViolation(null);
     const payload = {
       dataset_code: ds.code,
       projection,
@@ -74,15 +78,27 @@ const BuilderScreen = () => {
     };
     try {
       const resp = await submitAggregate(payload);
-      // Stash the result for the Results screen to pick up.
       sessionStorage.setItem("de_last_aggregate", JSON.stringify({
         ts: Date.now(),
         payload, response: resp,
       }));
       location.href = "Data Explorer - Results.html";
     } catch (err) {
-      // Preview mode (no backend) → still hand off to Results so the
-      // designer can review the layout against the mock corpus.
+      // 422 geographic_floor_violation → render the FloorViolationBanner
+      // with the DRS handoff CTA. The backend payload carries the
+      // floor + requested_level + requested_codes + scope_label.
+      const body = err?.body || {};
+      if (err?.status === 422 && body.error === "geographic_floor_violation") {
+        setFloorViolation({
+          floor: body.floor,
+          requested_level: body.requested_level || scopeLevel,
+          requested_codes: body.requested_codes || scopeCodes,
+          scope_label: body.scope_label
+            || `${(body.requested_codes || scopeCodes).length} ${body.requested_level || scopeLevel}${(body.requested_codes || scopeCodes).length === 1 ? "" : "s"}`,
+        });
+        setRunState({ pending: false, error: null });
+        return;
+      }
       const noBackend = err && (err.status === 404 || /Failed to fetch/i.test(String(err.message || "")));
       if (noBackend) {
         sessionStorage.setItem("de_last_aggregate", JSON.stringify({
@@ -91,9 +107,26 @@ const BuilderScreen = () => {
         location.href = "Data Explorer - Results.html";
         return;
       }
-      setRunState({ pending: false, error: String(err.body?.error || err.message || err) });
+      setRunState({ pending: false, error: String(body.error || err.message || err) });
     }
   };
+
+  // Build the handoff context from current builder state. Used by both
+  // the floor-violation banner and the top "Request record-level data"
+  // button so the DRS draft inherits the same query.
+  const handoffContext = () => ({
+    dataset_code: ds?.code,
+    dataset_label: ds?.label,
+    requested_entity: "Household",
+    requested_fields: projection,
+    geographic_scope: { level: scopeLevel, codes: scopeCodes },
+    filter_expression: {
+      and: filters.filter(f => f.var).map(f => ({
+        variable: f.var, op: f.op, value: f.value,
+      })),
+    },
+    estimated_row_count: null,
+  });
 
   // Strictest class — driven by projection + filter + dataset
   const involvedKlasses = useBldM(() => {
@@ -152,8 +185,28 @@ const BuilderScreen = () => {
         sub={<>Pick variables to project, add filters, choose a geographic scope. Strictest class &amp; the suppression k-floor are derived from the variables you include.</>}
         right={<>
           <button className="btn"><Icon name="save" size={14}/> Save query</button>
-          <button className="btn"><Icon name="arrowRight" size={14}/> Request record-level data</button>
+          <button className="btn" onClick={() => setHandoffOpen(true)}>
+            <Icon name="arrowRight" size={14}/> Request record-level data
+          </button>
         </>}
+      />
+
+      {floorViolation && (
+        <FloorViolationBanner
+          violation={floorViolation}
+          onRequestHandoff={() => setHandoffOpen(true)}
+        />
+      )}
+
+      <HandoffPrompt
+        open={handoffOpen}
+        context={handoffContext()}
+        onClose={(r) => {
+          setHandoffOpen(false);
+          if (r?.ok && r?.preview) {
+            setRunState({ pending: false, error: "Handoff drafted in preview mode (no DRS backend)." });
+          }
+        }}
       />
 
       {/* Dataset selector + strictest-class strip */}
@@ -387,7 +440,9 @@ const BuilderScreen = () => {
           {" "}strictest <strong style={{color:"var(--neutral-900)"}}>{DE_PRIVACY[klass].label.toLowerCase()}</strong>
         </div>
         <div style={{flex:1}}/>
-        <button className="btn"><Icon name="arrowRight" size={14}/> Request record-level data</button>
+        <button className="btn" onClick={() => setHandoffOpen(true)}>
+          <Icon name="arrowRight" size={14}/> Request record-level data
+        </button>
         <button className="btn"><Icon name="save" size={14}/> Save query</button>
         <button className="btn btn-primary" disabled={!validForRun || runState.pending}
           onClick={runAggregate}

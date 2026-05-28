@@ -2,7 +2,7 @@
    Icon, Chip, PageHeader,
    DE_DATASETS, DE_VARIABLES_BY_DATASET, DE_PRIVACY, DE_RESULT_ROWS, DE_SUPPRESSION,
    PrivacyChip, DEShell, ScreenJumpTweak, SuppressedCell,
-   useDeCatalogue, useDeMe, RoleGateBanner,
+   useDeCatalogue, useDeMe, RoleGateBanner, HandoffPrompt,
    TweaksPanel, useTweaks, TweakSection */
 
 // NSR MIS — Data Explorer · Results panel (screen 3 of 5)
@@ -48,6 +48,7 @@ const ResultsScreen = () => {
 
   const me = useDeMe();
   const [datasets] = useDeCatalogue();
+  const [handoffOpen, setHandoffOpen] = useRes(false);
   // Pull the most recent aggregate response stashed by the Builder.
   // Falls back to the seeded QUERY + DE_RESULT_ROWS when nothing is in
   // sessionStorage so a fresh tab still renders a believable page.
@@ -99,6 +100,21 @@ const ResultsScreen = () => {
   const matview = liveResponse?.metadata?.matview;
   const refreshedAt = liveResponse?.metadata?.refreshed_at || ds.refreshed_at;
 
+  const handoffContext = () => ({
+    dataset_code: ds.code,
+    dataset_label: ds.label,
+    requested_entity: "Household",
+    requested_fields: projection,
+    geographic_scope: livePayload?.geographic_scope || QUERY.geographic_scope,
+    filter_expression: {
+      and: (livePayload?.filters || QUERY.filters || []).map(f => ({
+        variable: f.variable || f.var, op: f.op, value: f.value,
+      })),
+    },
+    estimated_row_count: rawRows.length,
+    source_query_hash: queryHash,
+  });
+
   const setSort = (key) => {
     if (sortKey === key) setSortDir(sortDir === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir("desc"); }
@@ -114,8 +130,15 @@ const ResultsScreen = () => {
         right={<>
           <button className="btn"><Icon name="download" size={14}/> Export CSV</button>
           <button className="btn"><Icon name="save" size={14}/> Save query</button>
-          <button className="btn btn-primary"><Icon name="arrowRight" size={14}/> Request record-level data</button>
+          <button className="btn btn-primary" onClick={() => setHandoffOpen(true)}>
+            <Icon name="arrowRight" size={14}/> Request record-level data
+          </button>
         </>}
+      />
+      <HandoffPrompt
+        open={handoffOpen}
+        context={handoffContext()}
+        onClose={() => setHandoffOpen(false)}
       />
 
       {/* Query summary card — what produced these rows */}
@@ -265,7 +288,7 @@ const ResultsScreen = () => {
             Aggregate results can't answer record-specific questions. Open a DRS draft in the Operator Console with this query attached as the originating context.
           </div>
         </div>
-        <button className="btn btn-primary">
+        <button className="btn btn-primary" onClick={() => setHandoffOpen(true)}>
           <Icon name="arrowRight" size={14}/> Request record-level data
         </button>
       </div>

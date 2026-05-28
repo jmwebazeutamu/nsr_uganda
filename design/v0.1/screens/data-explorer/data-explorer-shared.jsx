@@ -640,6 +640,171 @@ const submitAggregate = async (payload) => {
   return window.nsrApi.post(`${_DE_API_PREFIX}/aggregate/`, payload);
 };
 
+const submitHandoff = async (payload) => {
+  /* POST /handoff/ — converts an aggregate context into a DRS draft.
+     Backend response carries { redirect, redirect_url } deep-linking
+     to /data-requests/{id}/ in the operator console. */
+  if (typeof window === "undefined" || !window.nsrApi) {
+    throw new Error("nsrApi unavailable — load api-client.jsx first");
+  }
+  return window.nsrApi.post(`${_DE_API_PREFIX}/handoff/`, payload);
+};
+
+/* ================================================================
+   HandoffPrompt — modal-ish overlay that collects purpose_of_use
+   (DPPA 2019 purpose-limitation principle) and submits to /handoff/.
+   On 201, navigates the user to the DRS draft in a new tab.
+   ================================================================ */
+const HandoffPrompt = ({ open, context, onClose }) => {
+  const [purpose, setPurpose] = React.useState("");
+  const [submitting, setSubmitting] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  if (!open) return null;
+
+  const validPurpose = (purpose || "").trim().length >= 30;
+  const submit = async () => {
+    if (!validPurpose || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const lastAgg = (() => {
+        try { return JSON.parse(sessionStorage.getItem("de_last_aggregate") || "null"); }
+        catch (e) { return null; }
+      })();
+      const payload = {
+        session_id: lastAgg?.response?.session_id,  // backend creates if absent
+        purpose_of_use: purpose.trim(),
+        requested_entity: context.requested_entity || "Household",
+        requested_fields: context.requested_fields || [],
+        geographic_scope: context.geographic_scope || { level: "sub_county", codes: [] },
+        filter_expression: context.filter_expression || { and: [] },
+        estimated_row_count: context.estimated_row_count || null,
+        source_query_hash: context.source_query_hash || lastAgg?.response?.metadata?.query_hash,
+      };
+      const resp = await submitHandoff(payload);
+      const url = resp?.redirect_url || resp?.redirect;
+      if (url) {
+        window.open(url, "_blank", "noopener");
+      }
+      onClose({ ok: true, response: resp });
+    } catch (err) {
+      const noBackend = err && (err.status === 404 || /Failed to fetch/i.test(String(err.message || "")));
+      if (noBackend) {
+        // Preview-mode fall-through: pretend it succeeded so the
+        // designer can review the flow without a live backend.
+        onClose({ ok: true, response: null, preview: true });
+        return;
+      }
+      setError(String(err.body?.error || err.message || err));
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div style={{
+      position:"fixed", top:0, left:0, right:0, bottom:0,
+      background:"rgba(15, 23, 42, 0.5)",
+      display:"grid", placeItems:"center",
+      zIndex:50,
+    }} onClick={() => !submitting && onClose({ ok: false })}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background:"var(--neutral-0)",
+        borderRadius:8,
+        boxShadow:"0 12px 36px rgba(15, 23, 42, 0.3)",
+        width:540, maxWidth:"90vw", maxHeight:"90vh",
+        overflowY:"auto",
+        padding:0,
+      }}>
+        <div style={{
+          padding:"16px 20px",
+          borderBottom:"1px solid var(--neutral-300)",
+          display:"flex", alignItems:"center", gap:10,
+        }}>
+          <Icon name="arrowRight" size={18} color="var(--primary-900)"/>
+          <strong style={{fontSize:15}}>Request record-level data</strong>
+          <div style={{flex:1}}/>
+          <button className="icon-btn" onClick={() => !submitting && onClose({ ok: false })}>
+            <Icon name="x" size={14}/>
+          </button>
+        </div>
+
+        <div style={{padding:"16px 20px"}}>
+          <div style={{
+            background:"var(--accent-update-bg)",
+            border:"1px solid var(--accent-update)",
+            borderLeft:"4px solid var(--accent-update)",
+            padding:"10px 14px", borderRadius:6, marginBottom:14,
+            fontSize:12.5, color:"var(--neutral-700)",
+          }}>
+            This opens a DRS draft pre-filled with your query context. A DPO
+            reviews every record-level request before it can be exported.
+            Audited per DPPA 2019 §3(b) (purpose limitation).
+          </div>
+
+          <div style={{marginBottom:12}}>
+            <label className="t-cap" style={{display:"block", marginBottom:4}}>
+              DATASET / ENTITY
+            </label>
+            <div className="t-mono" style={{fontSize:13}}>
+              {context.dataset_label || context.dataset_code || "—"} → {context.requested_entity || "Household"}
+            </div>
+          </div>
+
+          <div style={{marginBottom:12}}>
+            <label className="t-cap" style={{display:"block", marginBottom:4}}>
+              PURPOSE OF USE <span style={{color:"var(--accent-danger)"}}>*</span>
+            </label>
+            <textarea
+              value={purpose}
+              onChange={(e) => setPurpose(e.target.value)}
+              placeholder="e.g. SAGE benefit eligibility re-targeting in Karamoja sub-region, programme cycle 2026-Q3. Linked to MGLSD M&E plan §4.2."
+              rows={4}
+              disabled={submitting}
+              style={{
+                width:"100%",
+                padding:"8px 10px",
+                border:`1px solid ${validPurpose ? "var(--neutral-300)" : "var(--accent-quality)"}`,
+                borderRadius:4,
+                fontSize:13,
+                resize:"vertical",
+                fontFamily:"inherit",
+              }}/>
+            <div className="t-cap" style={{marginTop:4, color: validPurpose ? "var(--neutral-500)" : "var(--accent-quality)"}}>
+              {purpose.trim().length} of 30 characters minimum (DPPA 2019 — purpose limitation)
+            </div>
+          </div>
+
+          {error && (
+            <div style={{
+              background:"var(--accent-danger-bg)",
+              border:"1px solid var(--accent-danger)",
+              borderRadius:4, padding:"8px 12px", marginBottom:12,
+              fontSize:12.5, color:"var(--accent-danger)",
+            }}>
+              <strong>Handoff rejected.</strong> <span style={{color:"var(--neutral-700)"}}>{error}</span>
+            </div>
+          )}
+        </div>
+
+        <div style={{
+          padding:"12px 20px",
+          borderTop:"1px solid var(--neutral-300)",
+          display:"flex", justifyContent:"flex-end", gap:8,
+          background:"var(--neutral-50)",
+        }}>
+          <button className="btn" disabled={submitting} onClick={() => onClose({ ok: false })}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" disabled={!validPurpose || submitting} onClick={submit}>
+            <Icon name={submitting ? "loader" : "arrowRight"} size={14}/>
+            {submitting ? " Creating draft…" : " Create DRS draft"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const RoleGateBanner = ({ me }) => {
   /* Renders a stripe at the top of the screen when:
      - The API is unreachable (preview mode), or
@@ -689,5 +854,6 @@ Object.assign(window, {
   strictestClass, SuppressedCell, FloorViolationBanner,
   // Live-data wiring (US-DATA-EXP-001):
   useDeCatalogue, useDeDataset, useDeCoverage, useDeSynthetic,
-  useDeMe, submitAggregate, RoleGateBanner,
+  useDeMe, submitAggregate, submitHandoff,
+  RoleGateBanner, HandoffPrompt,
 });
