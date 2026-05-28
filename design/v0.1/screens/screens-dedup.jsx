@@ -63,30 +63,10 @@ const _buildLivePair = (pair, mA, mB) => {
   };
 };
 
-const PAIR = {
-  id: "MP-2026-05-14-00045",
-  score: 0.92,
-  model: "v3.2-aug-2026",
-  queue: "Strong (≥ 0.90)",
-  status: "Pending",
-  fields: [
-    // key, label, A, B, choice (A|B|Both), similarity, list, note
-    { key: "registry_id", label: "Registry ID", A: "01HXY7K3B2N9PVQE4M6FZRWS18", B: "01HZ9NK2P5M3QFB7K6FZRWS22", sim: null, list: false, mono: true, fixed: null },
-    { key: "head_name",   label: "Head name",   A: "Lokol Naume",     B: "Lokol Naumi",   sim: 0.94, list: false, note: "Soundex match · Levenshtein 1" },
-    { key: "head_nin",    label: "Head NIN",    A: "CM12345678ABCD",   B: "CM12345678ABCD", sim: 1.00, list: false, mono: true },
-    { key: "dob",         label: "Date of birth",A: "12 Mar 1989",     B: "12 Mar 1991",   sim: 0.50, list: false, note: "Off by 2 years — must choose" },
-    { key: "sex",         label: "Sex",         A: "F",                B: "F",             sim: 1.00, list: false },
-    { key: "phone",       label: "Phone",       A: "+256 786 234567",  B: "+256 781 552119", sim: 0.20, list: true, mono: true, note: "Different operators — keep both" },
-    { key: "parish",      label: "Parish",      A: "Nakiloro · Moroto",B: "Nakiloro · Moroto", sim: 1.00 },
-    { key: "village",     label: "Village",     A: "Lopuwapuwa A",     B: "Lopuwapuwa B",  sim: 0.78 },
-    { key: "gps",         label: "GPS",         A: "2.49423, 34.65103",B: "2.49481, 34.65118", sim: 0.96, mono: true },
-    { key: "hh_size",     label: "Household size",A: "6",              B: "6",             sim: 1.00 },
-    { key: "roster_n",    label: "Roster members",A: "6 members",      B: "7 members",     sim: 0.85, note: "B has additional dependant — review" },
-    { key: "roof",        label: "Roof material",A: "Iron sheets",     B: "Iron sheets",   sim: 1.00 },
-    { key: "pmt_band",    label: "PMT band",    A: "Poorest 40%",      B: "Poorest 40%",   sim: 1.00 },
-    { key: "captured_at", label: "Captured at", A: "2026-05-14",       B: "2026-04-09",    sim: null, fixed: "A", note: "Most recent capture wins (rule MERGE-LATEST)" },
-  ],
-};
+// PAIR mock removed — Dedup compare is now fully backend-driven.
+// All pair data comes from /api/v1/ddup/match-pairs/ (+ resolved
+// Member detail). Empty queue → renders the empty state; failure →
+// renders an error banner.
 
 const REASON_OPTS_REJECT = [
   "Not the same household (different addresses, members)",
@@ -96,17 +76,20 @@ const REASON_OPTS_REJECT = [
 ];
 
 const DedupScreen = () => {
-  // US-S13-003: live pair fetched from API. Falls back to PAIR
-  // mock when no pending pair exists or the fetch fails.
+  // Backend-driven: live pair fetched from /api/v1/ddup/match-pairs/.
+  // No mock fallback — the screen renders a true empty state when
+  // the queue has no pending pairs.
+  // States: null = still loading; false = confirmed empty / error;
+  // object = a live pair is ready to display.
   const [livePair, setLivePair] = useStateDup(null);
-  const [loadNote, setLoadNote] = useStateDup("");
+  const [loadNote, setLoadNote] = useStateDup("loading…");
   useEffectDup(() => {
     let cancelled = false;
     _fetchJson("/api/v1/ddup/match-pairs/?status=pending&page_size=1")
       .then(data => {
         const pairs = data.results || data;
         if (!pairs.length) {
-          if (!cancelled) setLoadNote("queue empty");
+          if (!cancelled) { setLoadNote("queue empty"); setLivePair(false); }
           return null;
         }
         const pair = pairs[0];
@@ -116,13 +99,19 @@ const DedupScreen = () => {
         ]).then(([mA, mB]) => {
           if (cancelled) return;
           setLivePair(_buildLivePair(pair, mA, mB));
+          setLoadNote("");
         });
       })
-      .catch(e => !cancelled && setLoadNote(`fetch failed: ${e}`));
+      .catch(e => {
+        if (!cancelled) { setLoadNote(`fetch failed: ${e}`); setLivePair(false); }
+      });
     return () => { cancelled = true; };
   }, []);
 
-  const activePair = livePair || PAIR;
+  // Stable empty-shape so downstream choice-init / field-reduce calls
+  // don't crash before livePair arrives or when the queue is empty.
+  const EMPTY_PAIR = { id: "", score: 0, model: "", queue: "", status: "", fields: [] };
+  const activePair = livePair || EMPTY_PAIR;
 
   const initial = {};
   activePair.fields.forEach(f => {
@@ -276,10 +265,63 @@ const DedupScreen = () => {
       .catch(e => setToast(`Reject failed: ${e.message}`));
   };
 
+  // Loading + empty-state surfaces — render before the compare grid
+  // because the grid assumes activePair.fields has at least the
+  // header row.
+  if (livePair === null) {
+    return (
+      <div className="page" style={{paddingBottom:0}}>
+        <PageHeader
+          eyebrow="DUPLICATES · US-083"
+          title="Dedup compare"
+          sub="Loading pending pairs from the registry…"
+        />
+        <div className="card" style={{padding:48, textAlign:"center", color:"var(--neutral-500)"}}>
+          <Icon name="clock" size={28} color="var(--neutral-300)"/>
+          <div className="t-bodysm mt-2">Fetching /api/v1/ddup/match-pairs/?status=pending…</div>
+        </div>
+      </div>
+    );
+  }
+  if (livePair === false) {
+    const errored = loadNote && loadNote.startsWith("fetch failed");
+    return (
+      <div className="page" style={{paddingBottom:0}}>
+        <PageHeader
+          eyebrow="DUPLICATES · US-083"
+          title="Dedup compare"
+          sub={
+            errored
+              ? "The Dedup API call failed — log in via /admin/ and reload, or check the server logs."
+              : "No pending pairs to review. Run NIN-pair discovery or promote new stage records that share a NIN with an existing member to populate the queue."
+          }
+          right={<>
+            <button className="btn"
+              onClick={() => { setLivePair(null); setLoadNote("loading…"); window.location.reload(); }}>
+              <Icon name="play" size={14}/> Reload
+            </button>
+          </>}
+        />
+        <div className="card" style={{padding:48, textAlign:"center", color:"var(--neutral-500)"}}>
+          <Icon name={errored ? "alert" : "inbox"} size={36} color={errored ? "var(--accent-danger)" : "var(--neutral-300)"}/>
+          <div className="t-bodysm mt-2">
+            {errored ? loadNote : "Queue is empty — backend-driven, no mock data."}
+          </div>
+          {!errored && (
+            <div className="t-cap mt-2">
+              To populate the queue: <code className="t-mono">python manage.py shell -c "from apps.ddup.services import discover_nin_pairs; print(len(discover_nin_pairs(actor='ops')))"</code>
+            </div>
+          )}
+        </div>
+        {toast && <Toast message={toast} onDone={() => setToast("")}/>}
+      </div>
+    );
+  }
+
   return (
     <div className="page" style={{paddingBottom:0}}>
       <PageHeader
-        eyebrow={livePair ? "DUPLICATES · US-083 · LIVE" : (loadNote ? `DUPLICATES · US-083 · ${loadNote}` : "DUPLICATES · US-083")}
+        eyebrow="DUPLICATES · US-083 · LIVE"
         title={<>Dedup compare <span className="t-mono" style={{fontSize:14, marginLeft:8, color:'var(--neutral-500)'}}>{activePair.id}</span></>}
         sub="Decide which record survives. Per-field similarity is shown to the right of each value."
         right={<>
