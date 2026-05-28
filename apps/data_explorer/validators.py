@@ -110,7 +110,12 @@ def validate(payload: dict) -> ValidatedQuery:
         )
 
     projection_codes = list(payload.get("projection") or [])
-    filter_codes = list((payload.get("filters") or {}).keys())
+    raw_filters = payload.get("filters") or {}
+    if isinstance(raw_filters, list):
+        filter_codes = [f.get("variable") or f.get("code") for f in raw_filters
+                        if isinstance(f, dict) and (f.get("variable") or f.get("code"))]
+    else:
+        filter_codes = list(raw_filters.keys())
 
     all_codes = set(projection_codes) | set(filter_codes)
     if not all_codes:

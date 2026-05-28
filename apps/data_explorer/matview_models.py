@@ -36,6 +36,9 @@ class _MatviewBase(models.Model):
         abstract = True
         managed = False
 
+    def __str__(self) -> str:
+        return f"{self.__class__.__name__}({self.id[:12]}…)"
+
 
 class HouseholdBySubcountyDemographics(_MatviewBase):
     district_code = models.CharField(max_length=32)

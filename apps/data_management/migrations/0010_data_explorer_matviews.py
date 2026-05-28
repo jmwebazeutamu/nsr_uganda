@@ -124,6 +124,90 @@ def _drop_postgres(apps, schema_editor):
             cur.execute(f"DROP MATERIALIZED VIEW IF EXISTS {name};")
 
 
+# SQLite (and any non-Postgres) shadow: create concrete empty tables
+# matching the unmanaged Django models in apps.data_explorer.matview_models.
+# Tests + dev queries pass against an empty result set instead of a
+# missing-table OperationalError. Production runs Postgres + the real
+# matview DDL above.
+_SQLITE_SHADOW = [
+    (
+        "mv_explorer_household_by_subcounty_demographics",
+        "id VARCHAR(64) PRIMARY KEY, refreshed_at DATETIME, "
+        "sub_region_code VARCHAR(32), district_code VARCHAR(32), "
+        "sub_county_code VARCHAR(32), head_sex_code VARCHAR(8), "
+        "head_age_band VARCHAR(16), household_count INTEGER DEFAULT 0, "
+        "member_count INTEGER DEFAULT 0",
+    ),
+    (
+        "mv_explorer_household_by_subcounty_pmt",
+        "id VARCHAR(64) PRIMARY KEY, refreshed_at DATETIME, "
+        "sub_region_code VARCHAR(32), district_code VARCHAR(32), "
+        "sub_county_code VARCHAR(32), pmt_band VARCHAR(24), "
+        "household_count INTEGER DEFAULT 0",
+    ),
+    (
+        "mv_explorer_member_by_subcounty_education",
+        "id VARCHAR(64) PRIMARY KEY, refreshed_at DATETIME, "
+        "sub_region_code VARCHAR(32), district_code VARCHAR(32), "
+        "sub_county_code VARCHAR(32), sex_code VARCHAR(8), "
+        "age_band VARCHAR(16), attendance_status VARCHAR(32), "
+        "highest_grade VARCHAR(24), member_count INTEGER DEFAULT 0",
+    ),
+    (
+        "mv_explorer_member_by_subcounty_employment",
+        "id VARCHAR(64) PRIMARY KEY, refreshed_at DATETIME, "
+        "sub_region_code VARCHAR(32), district_code VARCHAR(32), "
+        "sub_county_code VARCHAR(32), sector_code VARCHAR(24), "
+        "employment_status VARCHAR(32), age_band VARCHAR(16), "
+        "member_count INTEGER DEFAULT 0",
+    ),
+    (
+        "mv_explorer_household_shocks_subregion",
+        "id VARCHAR(64) PRIMARY KEY, refreshed_at DATETIME, "
+        "sub_region_code VARCHAR(32), shock_type VARCHAR(32), "
+        "severity VARCHAR(16), event_year INTEGER, "
+        "household_count INTEGER DEFAULT 0",
+    ),
+    (
+        "mv_explorer_referrals_subcounty",
+        "id VARCHAR(64) PRIMARY KEY, refreshed_at DATETIME, "
+        "sub_region_code VARCHAR(32), district_code VARCHAR(32), "
+        "sub_county_code VARCHAR(32), programme_code VARCHAR(32), "
+        "referral_status VARCHAR(24), referral_count INTEGER DEFAULT 0",
+    ),
+    (
+        "mv_explorer_grievances_subcounty",
+        "id VARCHAR(64) PRIMARY KEY, refreshed_at DATETIME, "
+        "sub_region_code VARCHAR(32), district_code VARCHAR(32), "
+        "sub_county_code VARCHAR(32), category VARCHAR(32), "
+        "status VARCHAR(24), grievance_count INTEGER DEFAULT 0",
+    ),
+    (
+        "mv_explorer_health_chronic_subregion",
+        "id VARCHAR(64) PRIMARY KEY, refreshed_at DATETIME, "
+        "sub_region_code VARCHAR(32), chronic_illness_code VARCHAR(32), "
+        "sex_code VARCHAR(8), age_band VARCHAR(16), "
+        "member_count INTEGER DEFAULT 0",
+    ),
+]
+
+
+def _apply_sqlite_shadow(apps, schema_editor):
+    if schema_editor.connection.vendor == "postgresql":
+        return
+    with schema_editor.connection.cursor() as cur:
+        for name, cols in _SQLITE_SHADOW:
+            cur.execute(f'CREATE TABLE IF NOT EXISTS "{name}" ({cols});')
+
+
+def _drop_sqlite_shadow(apps, schema_editor):
+    if schema_editor.connection.vendor == "postgresql":
+        return
+    with schema_editor.connection.cursor() as cur:
+        for name, _ in _SQLITE_SHADOW:
+            cur.execute(f'DROP TABLE IF EXISTS "{name}";')
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -132,4 +216,7 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.RunPython(_apply_postgres, reverse_code=_drop_postgres),
+        migrations.RunPython(
+            _apply_sqlite_shadow, reverse_code=_drop_sqlite_shadow,
+        ),
     ]

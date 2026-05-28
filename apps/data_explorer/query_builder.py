@@ -80,8 +80,21 @@ def _apply_geographic_scope(qs, scope: dict):
     return qs.filter(**{f"{column}__in": codes})
 
 
-def _apply_filters(qs, filter_vars, filters: dict):
+def _apply_filters(qs, filter_vars, filters):
     by_code = {v.code: v for v in filter_vars}
+    if isinstance(filters, list):
+        normalised = {}
+        for f in filters:
+            if not isinstance(f, dict):
+                continue
+            code = f.get("variable") or f.get("code")
+            if code is None:
+                continue
+            if "values" in f:
+                normalised[code] = f["values"]
+            elif "value" in f:
+                normalised[code] = f["value"]
+        filters = normalised
     for code, value in (filters or {}).items():
         var = by_code.get(code)
         if var is None:

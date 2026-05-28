@@ -115,14 +115,16 @@ class MetadataCatalog:
         )
 
     @classmethod
-    def get_variable(cls, variable_id: str):
-        from .models import Variable
-        return (
+    def get_variable(cls, variable_id: str, *, include_inactive: bool = False):
+        from .models import Variable, VariableStatus
+        qs = (
             Variable.objects
             .select_related("dataset", "privacy_class")
             .filter(id=variable_id)
-            .first()
         )
+        if not include_inactive:
+            qs = qs.filter(status=VariableStatus.ACTIVE)
+        return qs.first()
 
     @classmethod
     def list_privacy_classes(cls):

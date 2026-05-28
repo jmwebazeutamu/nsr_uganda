@@ -9,6 +9,16 @@
 
 const { useState: useStateDIH, useMemo: useMemoDIH, useEffect: useEffectDIH, useRef: useRefDIH } = React;
 
+const dihDownloadCsv = (filename, rows) => {
+  const csv = rows.map(row => row.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+};
 
 // Reads Django's csrftoken cookie — required for session-auth POSTs
 // against the DRF endpoints. The Django admin login flow sets this
@@ -171,6 +181,7 @@ const DIHScreen = () => {
   const [filterChannel, setFilterChannel] = useStateDIH("");
   const [filterDqa, setFilterDqa] = useStateDIH("");
   const [filterIdv, setFilterIdv] = useStateDIH("");
+  const [density, setDensity] = useStateDIH(() => localStorage.getItem("nsr.dih.table.density") || "comfortable");
   // US-S11-041 — Bulk Promote / Bulk Clear IDV modal state. Each
   // modal lists the actionable subset of the current selection.
   const [bulkPromoteOpen, setBulkPromoteOpen] = useStateDIH(false);
@@ -337,6 +348,19 @@ const DIHScreen = () => {
     () => visibleRows.find(r => r.id === selectedRow) || rows.find(r => r.id === selectedRow),
     [visibleRows, rows, selectedRow],
   );
+  const exportVisibleRows = () => {
+    dihDownloadCsv("dih-review-queue.csv", [
+      ["stage_id", "head", "household_members", "region", "parish", "source", "channel", "dqa_blocking", "dqa_warnings", "dqa_info", "idv", "ddup_score", "age", "sla", "state"],
+      ...visibleRows.map(r => [r.id, r.head, r.hh, r.region, r.parish, r.source, r.channel, r.dqa?.b || 0, r.dqa?.w || 0, r.dqa?.i || 0, r.idv, r.ddup ?? "", r.ageH, r.sla, r.state]),
+    ]);
+    setToast(`Exported ${visibleRows.length} DIH row(s).`);
+  };
+  const toggleDensity = () => {
+    const next = density === "comfortable" ? "compact" : "comfortable";
+    setDensity(next);
+    localStorage.setItem("nsr.dih.table.density", next);
+    setToast(`Table density set to ${next}.`);
+  };
 
   // Detail rail sits BELOW the queue table (not beside it) — clicking
   // a row scrolls it into view so operators don't have to hunt for it.
@@ -455,7 +479,7 @@ const DIHScreen = () => {
         sub="Promote, promote-as-merge, hold, or reject. Walk-in SLA = 24 hours from capture."
         right={<>
           <button className="btn" onClick={() => setAuditOpen(true)}><Icon name="history"/> Audit chain</button>
-          <button className="btn"><Icon name="download"/> Export CSV</button>
+          <button className="btn" onClick={exportVisibleRows}><Icon name="download"/> Export CSV</button>
         </>}
       />
 
@@ -690,10 +714,12 @@ const DIHScreen = () => {
               </span>
             </>;
           })()}
-          <button className="btn btn-sm btn-ghost"><Icon name="sliders" size={14}/> Density</button>
+          <button className="btn btn-sm btn-ghost" onClick={toggleDensity} title={`Current density: ${density}`}>
+            <Icon name="sliders" size={14}/> Density
+          </button>
         </div>
-        <div style={{maxHeight:280, overflowY:'auto'}}>
-          <table className="tbl">
+        <div style={{maxHeight: density === "compact" ? 220 : 280, overflowY:'auto'}}>
+          <table className="tbl" style={density === "compact" ? { fontSize: 12 } : undefined}>
             <thead>
               <tr>
                 <th style={{width:36}}></th>

@@ -227,6 +227,8 @@ const PmtConfigurationScreen = ({ onBack }) => {
   const [notice, setNotice] = useStatePCfg("");
   const [addModalOpen, setAddModalOpen] = useStatePCfg(false);
   const [variablePickSearch, setVariablePickSearch] = useStatePCfg("");
+  const [simulating, setSimulating] = useStatePCfg(false);
+  const [simulation, setSimulation] = useStatePCfg(null);
   const fileInputRef = useRefPCfg(null);
 
   const fetchVersions = async (preferredId = selectedId) => {
@@ -314,6 +316,36 @@ const PmtConfigurationScreen = ({ onBack }) => {
       return haystack.includes(q);
     });
   }, [databaseVariableCatalog, variablePickSearch]);
+
+  const runSimulation = async () => {
+    const api = typeof window !== "undefined" ? window.nsrApi : null;
+    if (!api || !selected?.id) return;
+    setSimulating(true);
+    setNotice("");
+    setError("");
+    try {
+      const result = await api.post(`${PCFG_API_ROOT}${selected.id}/simulate/`, {
+        features: {
+          household: {
+            member_count: 6,
+            dwelling_rooms: 2,
+            floor_material: "earth",
+            roof_material: "metal",
+            electricity: false,
+            open_defecation: true,
+          },
+          assets: { motorcycle: false, television: false, cellphone: true },
+          head: { education_level: "primary_completed" },
+        },
+      });
+      setSimulation(result);
+      setNotice(`Simulation complete: score ${pcfgNum(result.score).toFixed(2)}.`);
+    } catch (err) {
+      setError(err?.body?.detail || err?.message || "Could not run PMT simulation.");
+    } finally {
+      setSimulating(false);
+    }
+  };
 
   const patchSelected = async (body, successMessage) => {
     const api = typeof window !== "undefined" ? window.nsrApi : null;
@@ -1102,7 +1134,9 @@ const PmtConfigurationScreen = ({ onBack }) => {
                       </label>
                     ))}
                   </div>
-                  <button className="btn btn-primary mt-3"><Icon name="play" size={13}/> Recompute</button>
+                  <button className="btn btn-primary mt-3" onClick={runSimulation} disabled={simulating}>
+                    <Icon name="play" size={13}/> {simulating ? "Recomputing..." : "Recompute"}
+                  </button>
                 </div>
 
                 <div style={{
@@ -1112,7 +1146,9 @@ const PmtConfigurationScreen = ({ onBack }) => {
                   background: 'var(--neutral-0)',
                 }}>
                   <div className="t-cap" style={{ color: 'var(--accent-eligibility)', fontWeight: 600 }}>SIMULATED SCORE</div>
-                  <div style={{ fontSize: 36, fontWeight: 700, marginTop: 6 }}>2.84</div>
+                  <div style={{ fontSize: 36, fontWeight: 700, marginTop: 6 }}>
+                    {simulation ? pcfgNum(simulation.score).toFixed(2) : "2.84"}
+                  </div>
                   <div className="row gap-2 mt-2">
                     <BandChip band="extreme_poverty"/>
                     <span className="t-cap">band at percentile 8.2%</span>
@@ -1134,6 +1170,17 @@ const PmtConfigurationScreen = ({ onBack }) => {
                     ))}
                   </div>
                   <div className="t-cap mt-3">Simulator is sandboxed — it does not write a PMTResult row.</div>
+                  {simulation?.contributing_variables?.length > 0 && (
+                    <div className="mt-3">
+                      <div className="t-cap" style={{ fontWeight: 600 }}>TOP CONTRIBUTIONS</div>
+                      {simulation.contributing_variables.slice(0, 5).map((row, i) => (
+                        <div key={`${row.name}-${i}`} className="t-bodysm" style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 4 }}>
+                          <span>{row.name || "variable"}</span>
+                          <span className="t-num">{pcfgNum(row.contribution).toFixed(3)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

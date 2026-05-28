@@ -353,6 +353,12 @@ class CoverageSnapshot(models.Model):
             models.Index(fields=["dataset", "captured_at"]),
         ]
 
+    def __str__(self) -> str:
+        return (
+            f"{self.dataset_id} {self.geo_level}={self.geo_code} "
+            f"{self.completeness_pct}%"
+        )
+
 
 class AggregateQueryLog(models.Model):
     """One row per aggregate query executed (including suppressed ones).
@@ -420,6 +426,9 @@ class QueryThrottleCounter(models.Model):
             ),
         ]
 
+    def __str__(self) -> str:
+        return f"{self.actor}/{self.privacy_class_id}@{self.date_utc} = {self.count}"
+
 
 class ExplorerSession(models.Model):
     """A handoff anchor — created when an aggregate run feeds the
@@ -441,3 +450,6 @@ class ExplorerSession(models.Model):
     class Meta:
         verbose_name = "Explorer session"
         indexes = [models.Index(fields=["actor", "started_at"])]
+
+    def __str__(self) -> str:
+        return f"ExplorerSession({self.actor} @ {self.started_at})"

@@ -25,7 +25,6 @@ from collections import Counter
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
-from django.test import override_settings
 from rest_framework.test import APIClient
 
 from apps.security.models import AuditEvent
@@ -34,6 +33,7 @@ pytestmark = [
     pytest.mark.django_db,
     pytest.mark.slow,
     pytest.mark.risk_probe,
+    pytest.mark.postgres,
 ]
 
 
@@ -237,7 +237,7 @@ class TestRiskProbe:
                 # Pair up cells — same index treated as same group key
                 # for the probe (the seed designs filter overlap so
                 # this is the worst-case attacker model).
-                for ca, cb in zip(counts_a, counts_b):
+                for ca, cb in zip(counts_a, counts_b, strict=False):
                     if ca is None or cb is None:
                         # The "differencing on a suppressed cell"
                         # contract: result must be untyped None,

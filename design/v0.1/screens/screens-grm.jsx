@@ -8,6 +8,17 @@
 
 const { useState: useStateGrm, useMemo: useMemoGrm, useEffect: useEffectGrm } = React;
 
+const _grmDownloadCsv = (filename, rows) => {
+  const csv = rows.map(row => row.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
 // CSRF cookie reader — required for DRF session-auth POSTs. Same
 // pattern as screens-dih + screens-dedup. The Django admin login
 // flow sets the cookie; file:// previews don't have it (the action
@@ -378,6 +389,14 @@ const GRMScreen = ({ onNavigate }) => {
     return def ? allRows.filter(def.predicate) : allRows;
   }, [allRows, quickFilter]);
 
+  const exportCsv = () => {
+    _grmDownloadCsv("grievances.csv", [
+      ["id", "category", "tier", "status", "household_id", "member_id", "reporter", "relationship", "assigned_to", "opened_at", "hours_to_breach"],
+      ...rows.map(r => [r.id, GRM_CATEGORIES[r.category] || r.category, GRM_TIERS[r.tier]?.label || r.tier, GRM_STATUSES[r.status]?.label || r.status, r.household_id, r.member_id, r.reporter_name, r.relationship, r.assigned_to, r.opened_at, r.hours_to_breach ?? ""]),
+    ]);
+    setToast(`Exported ${rows.length} grievance row(s).`);
+  };
+
   const current = useMemoGrm(
     () => allRows.find(r => r.id === selectedRow),
     [allRows, selectedRow],
@@ -514,7 +533,7 @@ const GRMScreen = ({ onNavigate }) => {
           <button className="btn" onClick={() => refresh()} disabled={busy}>
             <Icon name="refreshCw"/> {busy ? "…" : "Refresh"}
           </button>
-          <button className="btn"><Icon name="download"/> Export CSV</button>
+          <button className="btn" onClick={exportCsv}><Icon name="download"/> Export CSV</button>
           {me.is_officer && (
             <button className="btn primary" onClick={() => setModal("open_grievance")}>
               <Icon name="plus"/> Open grievance

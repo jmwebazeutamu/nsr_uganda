@@ -11,6 +11,29 @@
 
 const { useState: useStateReg } = React;
 
+const REG_HH_COLUMNS = [
+  { id: "registry", label: "Registry ID" },
+  { id: "head", label: "Head of household" },
+  { id: "hh", label: "HH" },
+  { id: "location", label: "Location" },
+  { id: "pmt", label: "PMT band" },
+  { id: "source", label: "Source" },
+  { id: "lastUpdate", label: "Last update" },
+  { id: "status", label: "Status" },
+  { id: "programmes", label: "Programmes" },
+  { id: "actions", label: "" },
+];
+const _regDownloadCsv = (filename, rows) => {
+  const csv = rows.map(row => row.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
 // ────────────────────────────────────────────────────────────────
 // Live-data helpers for the Households browse (US-005).
 // Filters round-trip through query params on
@@ -95,7 +118,7 @@ const _projectHousehold = (h) => {
 /* ============================================================
    REGISTRY SCREEN
    ============================================================ */
-const RegistryScreen = ({ onOpen, onOpenMember, initialView = "households" }) => {
+const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "households" }) => {
   // Top-level entity toggle — registry is two-headed (households + members).
   // initialView lets a route or nav link land you on the Members tab from
   // outside; default is the household list (the original screen).
@@ -110,6 +133,11 @@ const RegistryScreen = ({ onOpen, onOpenMember, initialView = "households" }) =>
   const [prog, setProg] = useStateReg("");
   const [sortBy, setSortBy] = useStateReg("lastUpdate");
   const [page, setPage] = useStateReg(0);
+  const [columnsOpen, setColumnsOpen] = useStateReg(false);
+  const [hiddenColumns, setHiddenColumns] = useStateReg(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("nsr.registry.households.columns.hidden") || "[]")); }
+    catch (e) { return new Set(); }
+  });
   const pageSize = 12;
 
   const _hhFilters = {
@@ -159,6 +187,22 @@ const RegistryScreen = ({ onOpen, onOpenMember, initialView = "households" }) =>
     ? listResp.count
     : liveRows.length;
   const totalPages = Math.max(1, Math.ceil(liveCount / pageSize));
+  const showCol = (id) => !hiddenColumns.has(id);
+  const visibleColSpan = REG_HH_COLUMNS.filter(c => showCol(c.id)).length;
+  const toggleColumn = (id) => {
+    const next = new Set(hiddenColumns);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    if (["head", "actions"].every(required => !next.has(required))) {
+      setHiddenColumns(next);
+      localStorage.setItem("nsr.registry.households.columns.hidden", JSON.stringify([...next]));
+    }
+  };
+  const exportCsv = () => {
+    _regDownloadCsv("registry-households.csv", [
+      ["registry_id", "head", "hh_size", "sub_region", "district", "parish", "village", "pmt_score", "pmt_band", "source", "status", "programmes"],
+      ...liveRows.map(h => [h.rid, h.head, h.hh, h.subreg, h.district, h.parish, h.village, h.pmt ?? "", h.band, h.source, h.status, h.programmes.join("; ")]),
+    ]);
+  };
 
   const subregs = (subregResp && subregResp.results) || subregResp || [];
 
@@ -182,8 +226,8 @@ const RegistryScreen = ({ onOpen, onOpenMember, initialView = "households" }) =>
           ? "Search and browse individuals across every household. Read-only — edits go through the household's UPD workflow."
           : "Search, browse, and open any household. Read-only — edits go through the UPD workflow."}
         right={<>
-          <button className="btn"><Icon name="download" size={14}/> Export CSV</button>
-          <button className="btn btn-primary"><Icon name="plus" size={14}/> Start capture</button>
+          <button className="btn" onClick={exportCsv}><Icon name="download" size={14}/> Export CSV</button>
+          <button className="btn btn-primary" onClick={() => onNavigate?.("capture")}><Icon name="plus" size={14}/> Start capture</button>
         </>}
       />
 
@@ -324,7 +368,19 @@ const RegistryScreen = ({ onOpen, onOpenMember, initialView = "households" }) =>
             {listMeta.loading ? "Loading…" : `Page ${page+1} of ${totalPages} · click any row to open`}
           </span>
           <div style={{flex:1}}/>
-          <button className="btn btn-sm btn-ghost"><Icon name="sliders" size={14}/> Columns</button>
+          <div style={{ position: "relative" }}>
+            <button className="btn btn-sm btn-ghost" onClick={() => setColumnsOpen(v => !v)}><Icon name="sliders" size={14}/> Columns</button>
+            {columnsOpen && (
+              <div className="card" style={{ position: "absolute", right: 0, top: 34, zIndex: 5, width: 230, padding: 10 }}>
+                {REG_HH_COLUMNS.filter(c => c.label).map(c => (
+                  <label key={c.id} className="t-bodysm" style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px" }}>
+                    <input type="checkbox" checked={showCol(c.id)} disabled={c.id === "head"} onChange={() => toggleColumn(c.id)}/>
+                    {c.label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         {listMeta.error && (
           <div style={{padding:'12px 16px', color:'var(--accent-danger)'}} className="t-bodysm">
@@ -334,28 +390,28 @@ const RegistryScreen = ({ onOpen, onOpenMember, initialView = "households" }) =>
         <table className="tbl">
           <thead>
             <tr>
-              <th>Registry ID</th>
-              <th>Head of household</th>
-              <th>HH</th>
-              <th>Location</th>
-              <th>PMT band</th>
-              <th>Source</th>
-              <th>Last update</th>
-              <th>Status</th>
-              <th>Programmes</th>
-              <th className="col-actions"></th>
+              {showCol("registry") && <th>Registry ID</th>}
+              {showCol("head") && <th>Head of household</th>}
+              {showCol("hh") && <th>HH</th>}
+              {showCol("location") && <th>Location</th>}
+              {showCol("pmt") && <th>PMT band</th>}
+              {showCol("source") && <th>Source</th>}
+              {showCol("lastUpdate") && <th>Last update</th>}
+              {showCol("status") && <th>Status</th>}
+              {showCol("programmes") && <th>Programmes</th>}
+              {showCol("actions") && <th className="col-actions"></th>}
             </tr>
           </thead>
           <tbody>
             {liveRows.length === 0 && !listMeta.loading && (
-              <tr><td colSpan={10} style={{padding:'20px', textAlign:'center'}} className="muted t-bodysm">
+              <tr><td colSpan={visibleColSpan} style={{padding:'20px', textAlign:'center'}} className="muted t-bodysm">
                 No households match the current filters.
               </td></tr>
             )}
             {liveRows.map(h => (
               <tr key={h.rid} onClick={() => onOpen?.(h.rid)} style={{cursor:'pointer'}}>
-                <td className="col-id">{h.rid.slice(0, 20)}…</td>
-                <td>
+                {showCol("registry") && <td className="col-id">{h.rid.slice(0, 20)}…</td>}
+                {showCol("head") && <td>
                   <div className="row gap-3">
                     <div style={{width:28, height:28, borderRadius:'50%', background:'var(--primary-100)', color:'var(--primary-900)', display:'grid', placeItems:'center', fontSize:11, fontWeight:600}}>
                       {h.head !== "—" ? h.head.split(' ').map(w => w[0]).slice(0,2).join('') : "—"}
@@ -365,29 +421,29 @@ const RegistryScreen = ({ onOpen, onOpenMember, initialView = "households" }) =>
                       <div className="t-cap">{h.sex === 'F' ? 'Female' : h.sex === 'M' ? 'Male' : '—'}-headed</div>
                     </div>
                   </div>
-                </td>
-                <td className="t-num">{h.hh}</td>
-                <td>
+                </td>}
+                {showCol("hh") && <td className="t-num">{h.hh}</td>}
+                {showCol("location") && <td>
                   <div>{h.parish || "—"} · {h.district || "—"}</div>
                   <div className="t-cap">{h.subreg || "—"} · {h.village || "—"}</div>
-                </td>
-                <td>
+                </td>}
+                {showCol("pmt") && <td>
                   {h.band
                     ? <Chip size="sm" tone="eligibility">{h.band}</Chip>
                     : <span className="muted t-cap">—</span>}
                   <div className="t-cap t-mono mt-1" style={{marginTop:2}}>
                     {h.pmt != null ? `score ${h.pmt.toFixed(2)}` : "no score"}
                   </div>
-                </td>
-                <td className="t-bodysm">{h.source || "—"}</td>
-                <td className="t-cap" style={{whiteSpace:'nowrap'}}>{h.lastUpdate || "—"}</td>
-                <td><Chip size="sm">{h.status}</Chip></td>
-                <td>
+                </td>}
+                {showCol("source") && <td className="t-bodysm">{h.source || "—"}</td>}
+                {showCol("lastUpdate") && <td className="t-cap" style={{whiteSpace:'nowrap'}}>{h.lastUpdate || "—"}</td>}
+                {showCol("status") && <td><Chip size="sm">{h.status}</Chip></td>}
+                {showCol("programmes") && <td>
                   {h.programmes.length === 0
                     ? <span className="muted t-cap">—</span>
                     : <div className="row-wrap">{h.programmes.map(p => <Chip key={p} size="sm" tone="programme">{p}</Chip>)}</div>}
-                </td>
-                <td className="col-actions"><Icon name="chevronRight" size={16} color="var(--neutral-500)"/></td>
+                </td>}
+                {showCol("actions") && <td className="col-actions"><Icon name="chevronRight" size={16} color="var(--neutral-500)"/></td>}
               </tr>
             ))}
           </tbody>

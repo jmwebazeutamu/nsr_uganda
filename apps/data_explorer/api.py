@@ -117,8 +117,15 @@ def _emit(action: str, *, actor: str, entity_type: str = "data_explorer",
 
 
 def _actor(request) -> str:
+    """Return the audit actor id. We use the Django user PK so the
+    AuditEvent.actor_id column joins on `auth_user.id`; the username
+    is captured separately in reason when useful. Falls back to
+    "anonymous" for unauthenticated requests (which the permission
+    layer should already block, but defensively)."""
     u = getattr(request, "user", None)
-    return getattr(u, "username", "") or "anonymous"
+    if u is None or not getattr(u, "is_authenticated", False):
+        return "anonymous"
+    return str(getattr(u, "id", "") or getattr(u, "pk", "") or "anonymous")
 
 
 def _org_code(request) -> str:
@@ -145,19 +152,27 @@ class DatasetViewSet(viewsets.ViewSet):
         rows = MetadataCatalog.list_datasets(user=request.user)
         data = [_serialise_dataset(d) for d in rows]
         _emit("data_explorer.catalogue.browsed",
-              actor=_actor(request), entity_type="dataset_catalogue",
-              reason=f"count={len(data)}", request=request)
+              actor=_actor(request), entity_type="Dataset",
+              reason=f"count={len(data)}",
+              field_changes={"result_count": len(data)},
+              request=request)
         return Response({"results": data, "count": len(data)})
 
     def retrieve(self, request, pk: str | None = None):
         ds = MetadataCatalog.get_dataset(pk)
         if ds is None:
             _emit("data_explorer.dataset.read", actor=_actor(request),
-                  entity_id=pk or "", reason="not_found", request=request)
+                  entity_type="Dataset",
+                  entity_id=pk or "", reason="not_found",
+                  field_changes={"dataset_code": pk or ""},
+                  request=request)
             return Response({"detail": "not found"},
                             status=status.HTTP_404_NOT_FOUND)
         _emit("data_explorer.dataset.read", actor=_actor(request),
-              entity_id=str(ds.id), reason=ds.code, request=request)
+              entity_type="Dataset",
+              entity_id=str(ds.id), reason=ds.code,
+              field_changes={"dataset_code": ds.code},
+              request=request)
         return Response(_serialise_dataset(ds))
 
     @action(detail=True, methods=["get"], url_path="variables")
@@ -217,10 +232,18 @@ class VariableViewSet(viewsets.ViewSet):
         return Response({"results": data, "count": len(data)})
 
     def retrieve(self, request, pk: str | None = None):
-        v = MetadataCatalog.get_variable(pk)
+        # Inactive variables 404 — the catalogue is read-only and
+        # INACTIVE rows haven't been dual-approved yet.
+        include_inactive = request.query_params.get(
+            "include_inactive", "0",
+        ) in ("1", "true", "yes")
+        v = MetadataCatalog.get_variable(pk, include_inactive=include_inactive)
         if v is None:
             _emit("data_explorer.variable.read", actor=_actor(request),
-                  entity_id=pk or "", reason="not_found", request=request)
+                  entity_type="Variable",
+                  entity_id=pk or "", reason="not_found",
+                  field_changes={"variable_code": pk or ""},
+                  request=request)
             return Response({"detail": "not found"},
                             status=status.HTTP_404_NOT_FOUND)
         out = _serialise_variable(v)
@@ -242,8 +265,10 @@ class VariableViewSet(viewsets.ViewSet):
             for r in related if r.id != v.id and r.privacy_class_id == v.privacy_class_id
         ][:10]
         _emit("data_explorer.variable.read",
-              actor=_actor(request), entity_id=str(v.id),
-              reason=v.code, request=request)
+              actor=_actor(request), entity_type="Variable",
+              entity_id=str(v.id), reason=v.code,
+              field_changes={"variable_code": v.code},
+              request=request)
         return Response(out)
 
 
@@ -255,10 +280,47 @@ class PrivacyClassListView(APIView):
         data = [_serialise_privacy_class(pc) for pc in rows]
         _emit("data_explorer.privacy_classes.read",
               actor=_actor(request),
-              entity_type="privacy_class_catalogue",
+              entity_type="PrivacyClass",
               reason=f"count={len(data)}",
+              field_changes={"result_count": len(data)},
               request=request)
-        return Response({"results": data, "count": len(data)})
+        # ADR-0023 §D8: the `Aggregated-only` badge maps to the system
+        # accent token (catalogue cards whose PrivacyClass disallows
+        # record-level discovery from the Explorer). Shipped on the
+        # /privacy-classes payload so the UI has zero hardcoded
+        # labels / colours.
+        return Response({
+            "results": data,
+            "count": len(data),
+            "aggregated_only_badge": {
+                "code": "aggregated_only",
+                "label": "Aggregated-only",
+                "token_fg": "var(--accent-system)",
+                "token_bg": "var(--accent-system-bg)",
+            },
+        })
+
+
+class SuppressionVocabularyView(APIView):
+    """ADR-0023 §D8: the `Suppressed` cell badge maps to the neutral
+    token. Lives on its own endpoint so the aggregate-builder can
+    fetch it once at mount without conflating it with the
+    PrivacyClass catalogue."""
+
+    permission_classes = [IsExplorerRoleAndFlagEnabled]
+
+    def get(self, request):
+        return Response({
+            "suppressed": {
+                "code": "suppressed",
+                "label": "Suppressed",
+                "token_fg": "var(--neutral-700)",
+                "token_bg": "var(--neutral-100)",
+                "tooltip": (
+                    "Count below privacy floor — see ADR-0023 for details."
+                ),
+            },
+        })
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +336,29 @@ class AggregateView(APIView):
         try:
             validated = validate(payload)
         except ValidationError as e:
+            # Look up the dataset so the audit + response can carry
+            # the dataset entity_id even on geographic-floor refusals.
+            ds_code = payload.get("dataset") or payload.get("dataset_code")
+            ds_id = ""
+            if ds_code:
+                from .models import Dataset
+                ds_row = Dataset.objects.filter(code=ds_code).first()
+                if ds_row is not None:
+                    ds_id = str(ds_row.id)
+
+            geo = payload.get("geographic_scope") or {}
+            extras = dict(e.extras or {})
+            if e.code == "geographic_floor_violation":
+                # UI needs the original intent so it can render the
+                # "Request record-level data — <scope_label> → <level>" CTA.
+                extras.setdefault("requested_level", geo.get("level"))
+                extras.setdefault("requested_codes", geo.get("codes") or [])
+                extras.setdefault(
+                    "scope_label",
+                    ",".join(geo.get("codes") or []) or geo.get("level", ""),
+                )
+                extras.setdefault("handoff", "/api/v1/data-requests/draft/")
+
             _emit(
                 action=(
                     "data_explorer.aggregate.refused_below_floor"
@@ -281,12 +366,17 @@ class AggregateView(APIView):
                     "data_explorer.aggregate.rejected"
                 ),
                 actor=actor,
-                entity_type="aggregate_query",
+                entity_type="Dataset",
+                entity_id=ds_id,
                 reason=f"{e.code}: {e.detail}",
-                field_changes={"code": e.code, **e.extras},
+                field_changes={
+                    "code": e.code,
+                    "dataset_code": ds_code or "",
+                    **extras,
+                },
                 request=request,
             )
-            body = {"error": e.code, "detail": e.detail, **e.extras}
+            body = {"error": e.code, "detail": e.detail, **extras}
             return Response(body, status=status.HTTP_422_UNPROCESSABLE_ENTITY)
 
         # Stash the filter payload so the query builder can apply it
@@ -294,8 +384,9 @@ class AggregateView(APIView):
         validated.filter_payload = payload.get("filters") or {}
 
         # Throttle gate — only after validation so we don't burn quota
-        # on a malformed payload. Decision struct is only inspected on
-        # the Throttled exception path; the success path proceeds.
+        # on a malformed payload. The throttle service emits
+        # `data_explorer.throttle.exceeded` itself with entity_type=User,
+        # so we don't double-audit here.
         try:
             PrivacyClassThrottle.check_and_increment(
                 actor=actor, org_code=org_code,
@@ -304,19 +395,6 @@ class AggregateView(APIView):
             )
         except Throttled as t:
             d = t.decision
-            _emit(
-                "data_explorer.throttle.exceeded",
-                actor=actor, entity_type="aggregate_query",
-                reason=d.reason,
-                field_changes={
-                    "user_count_before": d.user_count_before,
-                    "user_cap": d.user_cap,
-                    "org_count_before": d.org_count_before,
-                    "org_cap": d.org_cap,
-                    "privacy_class": validated.strictest_class.code,
-                },
-                request=request,
-            )
             resp = Response(
                 {
                     "error": "throttled",
@@ -337,11 +415,16 @@ class AggregateView(APIView):
             _emit(
                 "data_explorer.matview.stale",
                 actor=actor,
-                entity_type="aggregate_query",
+                entity_type="Dataset",
+                entity_id=str(validated.dataset.id),
                 reason=str(e),
                 field_changes={
                     "matview": e.matview,
+                    "refreshed_at": (
+                        e.refreshed_at.isoformat() if e.refreshed_at else None
+                    ),
                     "staleness_seconds": e.staleness_seconds,
+                    "cadence": e.max_seconds,
                     "max_seconds": e.max_seconds,
                 },
                 request=request,
@@ -367,8 +450,8 @@ class AggregateView(APIView):
         _emit(
             "data_explorer.aggregate.executed",
             actor=actor,
-            entity_type="aggregate_query",
-            entity_id=result.query_hash[:26],
+            entity_type="Dataset",
+            entity_id=str(validated.dataset.id),
             reason=(
                 f"dataset={validated.dataset.code} "
                 f"rows={result.total_cell_count} "
@@ -377,9 +460,13 @@ class AggregateView(APIView):
             field_changes={
                 "dataset": validated.dataset.code,
                 "matview": result.matview,
+                "refreshed_at": (
+                    result.refreshed_at.isoformat()
+                    if getattr(result, "refreshed_at", None) else None
+                ),
                 "strictest_class": result.strictest_class,
                 "rows": result.total_cell_count,
-                "suppressed": result.suppressed_cell_count,
+                "suppressed_cell_count": result.suppressed_cell_count,
                 "query_hash": result.query_hash,
                 "filter_hash": result.filter_hash,
             },
@@ -496,19 +583,29 @@ class SyntheticSampleView(APIView):
 class HandoffView(APIView):
     permission_classes = [IsExplorerRoleAndFlagEnabled]
 
-    REQUIRED = (
-        "dsa_id", "purpose_of_use", "requested_entity", "requested_fields",
-    )
+    # purpose_of_use + requested_entity are always required.
+    # dsa_id is required UNLESS the call rides on an explorer session
+    # whose prior aggregate already carries the DSA context.
+    BASE_REQUIRED = ("purpose_of_use", "requested_entity")
 
     def post(self, request):
         payload = request.data or {}
         actor = _actor(request)
-        missing = [k for k in self.REQUIRED if not payload.get(k)]
+        # Session-driven handoff (Tester contract): accept `session_id`
+        # and pull aggregate context off the ExplorerSession row.
+        session_id = (
+            payload.get("session_id")
+            or payload.get("explorer_session_id")
+        )
+        missing = [k for k in self.BASE_REQUIRED if not payload.get(k)]
+        if not session_id and not payload.get("dsa_id"):
+            missing.append("dsa_id_or_session_id")
         if missing:
             _emit(
                 "data_explorer.handoff.rejected",
-                actor=actor, entity_type="data_request_draft",
+                actor=actor, entity_type="DataRequest", entity_id="",
                 reason=f"missing={missing}", request=request,
+                field_changes={"missing": missing},
             )
             return Response(
                 {"error": "bad_payload", "missing": missing},
@@ -517,7 +614,7 @@ class HandoffView(APIView):
         try:
             res = perform_handoff(
                 actor=actor,
-                dsa_id=payload["dsa_id"],
+                dsa_id=payload.get("dsa_id") or "",
                 purpose_of_use=payload["purpose_of_use"],
                 requested_entity=payload["requested_entity"],
                 requested_fields=payload.get("requested_fields") or [],
@@ -527,29 +624,43 @@ class HandoffView(APIView):
                     payload.get("estimated_row_count") or 0,
                 ),
                 source_query_hash=payload.get("source_query_hash") or "",
-                explorer_session_id=payload.get("explorer_session_id"),
+                explorer_session_id=session_id,
                 requester_note=payload.get("requester_note") or "",
             )
         except Exception as exc:  # noqa: BLE001 — surface as 422
             _emit(
                 "data_explorer.handoff.rejected",
-                actor=actor, entity_type="data_request_draft",
+                actor=actor, entity_type="DataRequest", entity_id="",
                 reason=str(exc), request=request,
+                field_changes={"detail": str(exc)},
             )
             return Response(
                 {"error": "handoff_failed", "detail": str(exc)},
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
+        # source_query_hash may come from the payload OR from the
+        # ExplorerSession (the wizard binds it on first aggregate).
+        # Resolve fresh after handoff so the audit row has it
+        # regardless of which side carried it.
+        resolved_query_hash = payload.get("source_query_hash") or ""
+        if not resolved_query_hash and res.explorer_session_id:
+            from .models import ExplorerSession
+            _s = ExplorerSession.objects.filter(
+                id=res.explorer_session_id,
+            ).first()
+            if _s is not None:
+                resolved_query_hash = _s.last_query_hash or ""
         _emit(
             "data_explorer.handoff.created",
             actor=actor,
-            entity_type="data_request",
+            entity_type="DataRequest",
             entity_id=res.data_request_id,
             reason=f"session={res.explorer_session_id}",
             field_changes={
                 "data_request_id": res.data_request_id,
                 "explorer_session_id": res.explorer_session_id,
+                "source_query_hash": resolved_query_hash,
                 "purpose_of_use": payload["purpose_of_use"][:255],
             },
             request=request,
@@ -557,6 +668,10 @@ class HandoffView(APIView):
         return Response(
             {
                 "data_request_id": res.data_request_id,
+                # UI expects `redirect` per ADR §sequence-c; the URL
+                # form is preserved as `redirect_url` for any older
+                # caller that already wires it.
+                "redirect": res.redirect_url,
                 "redirect_url": res.redirect_url,
                 "explorer_session_id": res.explorer_session_id,
             },

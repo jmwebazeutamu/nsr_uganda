@@ -18,6 +18,27 @@
 const { useState: useStatePL } = React;
 
 const _PROG_API_BASE = "/api/v1/programmes/";
+const PROG_COLUMNS = [
+  { id: "identity", label: "Code · Name" },
+  { id: "partner", label: "Partner" },
+  { id: "kind", label: "Kind" },
+  { id: "unit", label: "Unit" },
+  { id: "status", label: "Status" },
+  { id: "enrolled", label: "Enrolled / target" },
+  { id: "perCycle", label: "Per cycle" },
+  { id: "dsa", label: "DSA" },
+  { id: "actions", label: "" },
+];
+const _progDownloadCsv = (filename, rows) => {
+  const csv = rows.map(row => row.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+};
 
 const _progQS = (params) => {
   const qs = new URLSearchParams();
@@ -291,6 +312,11 @@ const ProgrammesScreen = ({ onOpen, onRegister }) => {
   const [statusCode, setStatusCode] = useStatePL("");
   const [sortBy, setSortBy] = useStatePL("lastEvent");
   const [page, setPage] = useStatePL(0);
+  const [columnsOpen, setColumnsOpen] = useStatePL(false);
+  const [hiddenColumns, setHiddenColumns] = useStatePL(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("nsr.programmes.columns.hidden") || "[]")); }
+    catch (e) { return new Set(); }
+  });
   const pageSize = 25;
 
   const _orderingMap = {
@@ -343,6 +369,22 @@ const ProgrammesScreen = ({ onOpen, onRegister }) => {
   const liveCount = (listResp && typeof listResp.count === "number")
     ? listResp.count
     : filtered.length;
+  const showCol = (id) => !hiddenColumns.has(id);
+  const visibleColSpan = PROG_COLUMNS.filter(c => showCol(c.id)).length;
+  const toggleColumn = (id) => {
+    const next = new Set(hiddenColumns);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    if (["identity", "actions"].every(required => !next.has(required))) {
+      setHiddenColumns(next);
+      localStorage.setItem("nsr.programmes.columns.hidden", JSON.stringify([...next]));
+    }
+  };
+  const exportCsv = () => {
+    _progDownloadCsv("programmes.csv", [
+      ["code", "name", "partner", "kind", "unit", "status", "enrolled", "target", "per_cycle_ugx", "dsa"],
+      ...filtered.map(p => [p.code, p.name, p.partner, p.kindLabel || p.kind, p.unitLabel || p.unit, p.status, p.enrolled, p.cohortTarget, p.perCycleUgx, p.dsa]),
+    ]);
+  };
 
   return (
     <div className="page">
@@ -351,7 +393,7 @@ const ProgrammesScreen = ({ onOpen, onRegister }) => {
         title="Programmes"
         sub="Partner-run programmes registered against an active DSA. Each row is the source of truth for eligibility rules and lifecycle webhooks for that programme."
         right={<>
-          <button className="btn"><Icon name="download" size={14}/> Export CSV</button>
+          <button className="btn" onClick={exportCsv}><Icon name="download" size={14}/> Export CSV</button>
           <button className="btn btn-primary" onClick={onRegister}><Icon name="plus" size={14}/> Register programme</button>
         </>}
       />
@@ -437,7 +479,19 @@ const ProgrammesScreen = ({ onOpen, onRegister }) => {
             {listMeta.loading ? "Loading…" : "click a row to open the programme record"}
           </span>
           <div style={{flex:1}}/>
-          <button className="btn btn-sm btn-ghost"><Icon name="sliders" size={14}/> Columns</button>
+          <div style={{ position: "relative" }}>
+            <button className="btn btn-sm btn-ghost" onClick={() => setColumnsOpen(v => !v)}><Icon name="sliders" size={14}/> Columns</button>
+            {columnsOpen && (
+              <div className="card" style={{ position: "absolute", right: 0, top: 34, zIndex: 5, width: 220, padding: 10 }}>
+                {PROG_COLUMNS.filter(c => c.label).map(c => (
+                  <label key={c.id} className="t-bodysm" style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px" }}>
+                    <input type="checkbox" checked={showCol(c.id)} disabled={c.id === "identity"} onChange={() => toggleColumn(c.id)}/>
+                    {c.label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         {listMeta.error && (
           <div style={{padding:'12px 16px', color:'var(--accent-danger)'}} className="t-bodysm">
@@ -447,20 +501,20 @@ const ProgrammesScreen = ({ onOpen, onRegister }) => {
         <table className="tbl">
           <thead>
             <tr>
-              <th>Code · Name</th>
-              <th>Partner</th>
-              <th>Kind</th>
-              <th>Unit</th>
-              <th>Status</th>
-              <th>Enrolled / target</th>
-              <th>Per cycle</th>
-              <th>DSA</th>
-              <th className="col-actions"></th>
+              {showCol("identity") && <th>Code · Name</th>}
+              {showCol("partner") && <th>Partner</th>}
+              {showCol("kind") && <th>Kind</th>}
+              {showCol("unit") && <th>Unit</th>}
+              {showCol("status") && <th>Status</th>}
+              {showCol("enrolled") && <th>Enrolled / target</th>}
+              {showCol("perCycle") && <th>Per cycle</th>}
+              {showCol("dsa") && <th>DSA</th>}
+              {showCol("actions") && <th className="col-actions"></th>}
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 && !listMeta.loading && (
-              <tr><td colSpan={9} style={{padding:'20px', textAlign:'center'}} className="muted t-bodysm">
+              <tr><td colSpan={visibleColSpan} style={{padding:'20px', textAlign:'center'}} className="muted t-bodysm">
                 No programmes match the current filters.
               </td></tr>
             )}
@@ -469,7 +523,7 @@ const ProgrammesScreen = ({ onOpen, onRegister }) => {
               const tone = KIND_TONE[p.kind] || "data";
               return (
                 <tr key={p.id} onClick={() => onOpen?.(p.id)} style={{cursor:'pointer'}}>
-                  <td>
+                  {showCol("identity") && <td>
                     <div className="row gap-3">
                       <div style={{
                         width:32, height:32, borderRadius:6,
@@ -483,14 +537,14 @@ const ProgrammesScreen = ({ onOpen, onRegister }) => {
                         <div className="t-cap t-mono">{p.code || "—"}</div>
                       </div>
                     </div>
-                  </td>
-                  <td className="t-bodysm">{p.partner}</td>
-                  <td><Chip size="sm" tone={tone}>{p.kindLabel || KIND_LABEL[p.kind] || "—"}</Chip></td>
-                  <td>{p.unitLabel
+                  </td>}
+                  {showCol("partner") && <td className="t-bodysm">{p.partner}</td>}
+                  {showCol("kind") && <td><Chip size="sm" tone={tone}>{p.kindLabel || KIND_LABEL[p.kind] || "—"}</Chip></td>}
+                  {showCol("unit") && <td>{p.unitLabel
                     ? <Chip size="sm">{p.unitLabel}</Chip>
-                    : <span className="muted t-cap">—</span>}</td>
-                  <td><Chip size="sm" tone={STATUS_TONE[p.status] || "neutral"}>{p.status}</Chip></td>
-                  <td>
+                    : <span className="muted t-cap">—</span>}</td>}
+                  {showCol("status") && <td><Chip size="sm" tone={STATUS_TONE[p.status] || "neutral"}>{p.status}</Chip></td>}
+                  {showCol("enrolled") && <td>
                     {p.cohortTarget > 0 ? (
                       <>
                         <div className="t-num" style={{fontWeight:500}}>{num(p.enrolled)}</div>
@@ -507,14 +561,14 @@ const ProgrammesScreen = ({ onOpen, onRegister }) => {
                         <div className="t-cap mt-1">{pct}% of {num(p.cohortTarget)}</div>
                       </>
                     ) : <span className="muted t-cap">—</span>}
-                  </td>
-                  <td className="t-num t-bodysm">{p.perCycleUgx ? ugx(p.perCycleUgx) : <span className="muted">—</span>}</td>
-                  <td>
+                  </td>}
+                  {showCol("perCycle") && <td className="t-num t-bodysm">{p.perCycleUgx ? ugx(p.perCycleUgx) : <span className="muted">—</span>}</td>}
+                  {showCol("dsa") && <td>
                     <div className="t-mono t-cap" style={{whiteSpace:'nowrap'}}>
                       {p.dsa ? `${p.dsa.slice(0, 18)}${p.dsa.length > 18 ? '…' : ''}` : <span className="muted">—</span>}
                     </div>
-                  </td>
-                  <td className="col-actions"><Icon name="chevronRight" size={16} color="var(--neutral-500)"/></td>
+                  </td>}
+                  {showCol("actions") && <td className="col-actions"><Icon name="chevronRight" size={16} color="var(--neutral-500)"/></td>}
                 </tr>
               );
             })}

@@ -153,6 +153,22 @@ def me(request):
                 "reason": request.session.get("_impersonator_reason", ""),
             }
 
+    # US-DATA-EXP-001: Data Explorer sidebar gate reads `roles` (list of
+    # Keycloak realm-role codes) + `feature_flags.data_explorer_enabled`.
+    # Roles surface from Django Groups for now; once Keycloak realm
+    # roles sync (ADR-0006), this becomes a token-claim passthrough.
+    roles = list(u.groups.values_list("name", flat=True))
+    # Superusers implicitly hold every role so the dev/staging Tweaks
+    # switcher works without a manual group assignment.
+    if u.is_superuser and "EXPLORER" not in roles:
+        roles.append("EXPLORER")
+    feature_flags = {
+        "data_explorer_enabled": bool(
+            getattr(__import__("django.conf", fromlist=["settings"]).settings,
+                    "DATA_EXPLORER_ENABLED", False),
+        ),
+    }
+
     return Response({
         "username": u.username,
         "display_name": (u.get_full_name() or u.username) if u.is_authenticated else "",
@@ -160,8 +176,10 @@ def me(request):
         "is_superuser": bool(u.is_superuser),
         "is_staff": bool(u.is_staff),
         "role": role,
+        "roles": roles,
         "partner": partner_payload,
         "impersonator": impersonator_payload,
+        "feature_flags": feature_flags,
     })
 
 

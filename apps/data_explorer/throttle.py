@@ -41,7 +41,7 @@ class ThrottleDecision:
         return getattr(self, key)
 
 
-class Throttled(Exception):
+class Throttled(Exception):  # noqa: N818 — matches DRF's rest_framework.exceptions.Throttled
     def __init__(self, decision: ThrottleDecision):
         super().__init__(decision.reason or "throttled")
         self.decision = decision

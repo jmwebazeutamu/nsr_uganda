@@ -14,6 +14,17 @@
 
 const { useState: useStateAUD, useMemo: useMemoAUD } = React;
 
+const audDownloadCsv = (filename, rows) => {
+  const csv = rows.map(row => row.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
 const AUD_ACTIONS = ["create","read","update","soft_delete","hard_delete","merge","unmerge","promote","reject"];
 const AUD_ENTITY_TYPES = ["household","member","pmt_model_version","pmt_result","dqa_rule","ddup_match_pair","change_request","choice_list","partner","programme","data_request"];
 
@@ -41,6 +52,8 @@ const AdminAuditScreen = () => {
   const [actionFilter, setActionFilter] = useStateAUD("");
   const [entityFilter, setEntityFilter] = useStateAUD("");
   const [selected, setSelected] = useStateAUD(null);
+  const [verifying, setVerifying] = useStateAUD(false);
+  const [verifyResult, setVerifyResult] = useStateAUD(null);
 
   const events = useMemoAUD(() => AUD_EVENTS.filter(e => {
     if (q && !(e.actor.includes(q.toLowerCase()) || e.entityId.toLowerCase().includes(q.toLowerCase()) || (e.reason || "").toLowerCase().includes(q.toLowerCase()))) return false;
@@ -55,6 +68,29 @@ const AdminAuditScreen = () => {
   const piiReveals7d = 38;
   const chainHead = AUD_EVENTS[0];
 
+  const verifyChain = async () => {
+    setVerifying(true);
+    setVerifyResult(null);
+    try {
+      const api = window.nsrApi;
+      const result = api
+        ? await api.post("/api/v1/security/audit-events/verify-chain/", {})
+        : { ok: true, mode: "preview", rows_scanned: AUD_EVENTS.length, breaks: [] };
+      setVerifyResult(result);
+    } catch (err) {
+      setVerifyResult({ ok: false, mode: "error", detail: err?.body?.detail || err?.message || String(err) });
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const exportWindow = () => {
+    audDownloadCsv("audit-window.csv", [
+      ["id", "occurred", "actor", "actor_kind", "action", "entity_type", "entity_id", "reason", "ip", "chain_ok"],
+      ...events.map(e => [e.id, e.occurred, e.actor, e.actorKind, e.action, e.entityType, e.entityId, e.reason, e.ip, e.chainOk ? "yes" : "no"]),
+    ]);
+  };
+
   if (selected) {
     const e = AUD_EVENTS.find(x => x.id === selected);
     return <AuditEventDetail event={e} onBack={() => setSelected(null)}/>;
@@ -67,10 +103,25 @@ const AdminAuditScreen = () => {
         title="Audit chain"
         sub="Append-only, hash-chained. The chain is computed by a database trigger so application bugs cannot break it. 10-year retention (SAD §8.4)."
         right={<>
-          <button className="btn"><Icon name="shield" size={14}/> Verify chain</button>
-          <button className="btn"><Icon name="download" size={14}/> Export window</button>
+          <button className="btn" onClick={verifyChain} disabled={verifying}>
+            <Icon name="shield" size={14}/> {verifying ? "Verifying..." : "Verify chain"}
+          </button>
+          <button className="btn" onClick={exportWindow}><Icon name="download" size={14}/> Export window</button>
         </>}
       />
+
+      {verifyResult && (
+        <div className={verifyResult.ok ? "tint-data mb-3" : "tint-danger mb-3"} style={{ padding: 10, borderRadius: 4 }}>
+          <strong className="t-bodysm">
+            {verifyResult.ok ? "Audit chain verified" : "Audit chain verification failed"}
+          </strong>
+          <div className="t-cap mt-1">
+            mode {verifyResult.mode || "unknown"} · rows scanned {verifyResult.rows_scanned ?? "—"}
+            {verifyResult.detail ? ` · ${verifyResult.detail}` : ""}
+            {verifyResult.breaks?.length ? ` · ${verifyResult.breaks.length} break(s)` : ""}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-4">
         <KPI title="Events in chain" value={totalEvents} foot="Since 04 Jan 2026 · 10-year retention"/>

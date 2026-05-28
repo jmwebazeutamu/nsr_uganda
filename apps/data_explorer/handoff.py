@@ -119,14 +119,19 @@ def perform_handoff(*, actor: str, dsa_id: str,
     )
     drs_payload["requested_entity"] = requested_entity
 
+    # Positional-dict form — works with both the production
+    # create_draft + contract-test monkeypatches that accept
+    # (payload, *, requester).
     req = create_draft(
-        dsa_id=dsa_id,
+        {
+            "dsa_id": dsa_id,
+            "requester_note": requester_note,
+            "request_payload": drs_payload,
+            "source_module": "data_explorer",
+            "explorer_session_id": str(session.id),
+            "source_query_hash": source_query_hash,
+        },
         requester=actor,
-        requester_note=requester_note,
-        request_payload=drs_payload,
-        source_module="data_explorer",
-        explorer_session_id=str(session.id),
-        source_query_hash=source_query_hash,
     )
 
     session.handoff_status = HandoffStatus.SUBMITTED
@@ -140,6 +145,11 @@ def perform_handoff(*, actor: str, dsa_id: str,
 
     return HandoffResult(
         data_request_id=str(req.id),
-        redirect_url=f"/api/v1/drs/requests/{req.id}/",
+        # UI deep-link convention (ADR §sequence-c): `/data-requests/<id>`.
+        # The DRS API endpoint lives at `/api/v1/drs/requests/<id>/`,
+        # but the operator console mounts the DRS workbench at
+        # `/data-requests/` so we hand the operator a console URL,
+        # not an API URL.
+        redirect_url=f"/data-requests/{req.id}/",
         explorer_session_id=str(session.id),
     )

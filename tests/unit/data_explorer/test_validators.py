@@ -1,3 +1,4 @@
+# ruff: noqa: N806 — class-factory aliases (e.g. `Validator = _validator()`)
 """QueryValidator unit tests.
 
 ADR-0023 D3 + D4:
@@ -14,7 +15,6 @@ apps.data_explorer.services. We tolerate either path.
 from __future__ import annotations
 
 import pytest
-
 
 pytestmark = pytest.mark.django_db
 

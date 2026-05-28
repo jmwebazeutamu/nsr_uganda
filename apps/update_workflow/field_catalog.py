@@ -28,7 +28,6 @@ from apps.data_management.models import (
 )
 from apps.reference_data.models import GeographicUnit
 
-
 EXCLUDED_FIELDS = {
     "id",
     "created_at",

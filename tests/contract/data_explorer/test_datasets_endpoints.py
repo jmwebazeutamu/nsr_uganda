@@ -16,11 +16,8 @@ The Coder's URL prefix is /api/v1/data-explorer/ per ADR-0023.
 from __future__ import annotations
 
 import pytest
-from django.test import override_settings
-from rest_framework.test import APIClient
-
 from apps.security.models import AuditEvent
-
+from rest_framework.test import APIClient
 
 pytestmark = pytest.mark.django_db
 
@@ -61,7 +58,12 @@ class TestDatasetsAuthAndFlag:
         r = client_explorer.get(DATASETS_URL)
         assert r.status_code == 200
 
-    @pytest.mark.skip(reason="flag-off branch — re-enable when override_settings can apply at method level outside SimpleTestCase")
+    @pytest.mark.skip(
+        reason=(
+            "flag-off branch — re-enable when override_settings can apply "
+            "at method level outside SimpleTestCase"
+        ),
+    )
     def test_flag_off_returns_503(self, client_explorer, dataset):
         r = client_explorer.get(DATASETS_URL)
         assert r.status_code == 503

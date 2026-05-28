@@ -24,6 +24,7 @@ from .api import (
     DatasetViewSet,
     HandoffView,
     PrivacyClassListView,
+    SuppressionVocabularyView,
     SyntheticSampleView,
     VariableViewSet,
 )
@@ -36,6 +37,8 @@ router.register(r"variables", VariableViewSet, basename="data-explorer-variable"
 urlpatterns = [
     path("privacy-classes/", PrivacyClassListView.as_view(),
          name="data-explorer-privacy-classes"),
+    path("suppression-vocabulary/", SuppressionVocabularyView.as_view(),
+         name="data-explorer-suppression-vocab"),
     path("aggregate/", AggregateView.as_view(),
          name="data-explorer-aggregate"),
     path("coverage/<str:dataset_id>/", CoverageView.as_view(),

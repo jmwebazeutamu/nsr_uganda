@@ -1,3 +1,4 @@
+# ruff: noqa: N806 — class-factory aliases (e.g. `Suppressor = _suppressor()`)
 """DATA-EXP model-layer tests.
 
 Anchored to ADR-0023:
@@ -16,9 +17,9 @@ internal helper signatures.
 from __future__ import annotations
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Index
-
 
 pytestmark = pytest.mark.django_db
 
@@ -39,10 +40,9 @@ def test_privacy_class_code_unique(privacy_classes):
 
 def test_privacy_class_k_floor_non_negative(privacy_classes):
     """k_floor is PositiveSmallIntegerField — DB / Django rejects < 0."""
-    PrivacyClass = _model("PrivacyClass")
     cls = privacy_classes["internal"]
     cls.k_floor = -1
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         cls.full_clean()
 
 
@@ -82,7 +82,7 @@ def test_dataset_privacy_class_protect(dataset, privacy_classes):
 def test_variable_requires_privacy_class(dataset):
     """The FK is NOT NULL — every Variable must have a PrivacyClass."""
     Variable = _model("Variable")
-    with pytest.raises(Exception):
+    with pytest.raises((IntegrityError, ValueError)):
         with transaction.atomic():
             Variable.objects.create(
                 dataset=dataset,

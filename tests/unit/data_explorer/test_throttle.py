@@ -1,3 +1,4 @@
+# ruff: noqa: N806 — class-factory aliases (e.g. `Throttle = _throttle()`)
 """PrivacyClassThrottle unit tests.
 
 The throttle enforces ADR-0023 D6:
@@ -13,11 +14,10 @@ the audit event `data_explorer.throttle.exceeded`.
 
 from __future__ import annotations
 
-import pytest
 from datetime import date
 
+import pytest
 from apps.security.models import AuditEvent
-
 
 pytestmark = pytest.mark.django_db
 

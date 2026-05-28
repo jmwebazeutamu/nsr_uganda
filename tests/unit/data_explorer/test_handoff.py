@@ -1,3 +1,4 @@
+# ruff: noqa: N806 — class-factory aliases (e.g. `Validator = _validator()`)
 """DataRequestDraft serialiser + handoff service unit tests.
 
 ADR-0023 D1: when the user clicks 'Request record-level data' on an
@@ -17,11 +18,7 @@ The handoff:
 
 from __future__ import annotations
 
-import hashlib
-import json
-
 import pytest
-
 
 pytestmark = pytest.mark.django_db
 
@@ -146,7 +143,7 @@ class TestHandoffServiceIntegration:
             last_query_hash="a" * 64,
         )
 
-        result = create_handoff(
+        create_handoff(
             session_id=sess.id,
             actor=str(explorer_user.id),
             purpose_of_use="x",

@@ -279,6 +279,24 @@ class TestAuditChainVerifier:
         tasks = {entry["task"] for entry in app.conf.beat_schedule.values()}
         assert "apps.security.tasks.verify_audit_chain_task" in tasks
 
+    def test_verify_chain_endpoint_returns_report(self, db, django_user_model):
+        from rest_framework.test import APIClient
+
+        from apps.security.models import AuditEvent
+
+        AuditEvent.objects.all().delete()
+        user = django_user_model.objects.create_user(username="audit-admin")
+        client = APIClient()
+        client.force_authenticate(user)
+
+        resp = client.post("/api/v1/security/audit-events/verify-chain/", {}, format="json")
+
+        assert resp.status_code == 200
+        assert resp.data["ok"] is True
+        assert resp.data["mode"] == "empty"
+        assert resp.data["rows_scanned"] == 0
+        assert resp.data["breaks"] == []
+
 
 class TestChainBreakAlerts:
     """US-S18-004 — on chain_integrity_break, the task notifies the DPO

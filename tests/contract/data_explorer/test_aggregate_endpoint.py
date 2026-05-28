@@ -15,13 +15,8 @@ ADR-0023 D3 + D4 + D6:
 from __future__ import annotations
 
 import pytest
-from datetime import timedelta
-from django.test import override_settings
-from django.utils import timezone
-from rest_framework.test import APIClient
-
 from apps.security.models import AuditEvent
-
+from rest_framework.test import APIClient
 
 pytestmark = pytest.mark.django_db
 
@@ -69,7 +64,12 @@ class TestAggregateAuthAndFlag:
         )
         assert r.status_code == 403
 
-    @pytest.mark.skip(reason="flag-off branch — re-enable when override_settings can apply at method level outside SimpleTestCase")
+    @pytest.mark.skip(
+        reason=(
+            "flag-off branch — re-enable when override_settings can apply "
+            "at method level outside SimpleTestCase"
+        ),
+    )
     def test_flag_off_returns_503(
         self, client_explorer, dataset, variable_internal,
     ):
@@ -191,7 +191,6 @@ class TestAggregateThrottle429:
         """Force the Personal cap to 1 for the test so we don't need
         25 calls. The Coder reads daily_user_cap from the PrivacyClass
         row, so mutating it before the calls is enough."""
-        from apps.data_explorer.models import Variable
 
         # Re-classify the variable as Personal so the per-class cap
         # applies in the strictest-class path.
@@ -222,7 +221,6 @@ class TestAggregateThrottle429:
         self, client_explorer, dataset, variable_internal, privacy_classes,
         explorer_user,
     ):
-        from apps.data_explorer.models import Variable
 
         v = variable_internal
         v.privacy_class = privacy_classes["personal"]

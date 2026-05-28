@@ -6,6 +6,17 @@
 
 const { useState: useStateSEC, useMemo: useMemoSEC } = React;
 
+const secDownloadCsv = (filename, rows) => {
+  const csv = rows.map(row => row.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
 const SEC_ROLES = [
   { id: "parish_coordinator", label: "Parish Coordinator", category: "operator", users: 1218, desc: "First-level review of UPDs and intakes within their parish.", screens: ["console.registry", "console.upd"], adminConsole: false },
   { id: "cdo", label: "Community Dev't Officer", category: "operator", users: 412, desc: "Sub-county-level review; can approve PMT-relevant changes.", screens: ["console.registry", "console.upd", "console.programmes"], adminConsole: false },
@@ -42,12 +53,93 @@ const PERMISSION_SCREENS = [
   "console.registry", "console.upd", "console.programmes", "console.audit", "console.partners",
   "console.drs", "admin.pmt", "admin.refdata", "admin.security", "admin.audit", "admin.*", "console.*",
 ];
+const OPERATOR_SCOPE_OPTIONS = {
+  region: [
+    { code: "R-NORTHERN", name: "Northern Region" },
+    { code: "R-EASTERN", name: "Eastern Region" },
+    { code: "R-CENTRAL", name: "Central Region" },
+    { code: "R-WESTERN", name: "Western Region" },
+  ],
+  sub_region: [
+    { code: "SR-KARAMOJA", name: "Karamoja" },
+    { code: "SR-ACHOLI", name: "Acholi" },
+    { code: "SR-LANGO", name: "Lango" },
+    { code: "SR-WEST-NILE", name: "West Nile" },
+    { code: "SR-BUGANDA-SOUTH", name: "Buganda South" },
+    { code: "SR-BUGANDA-NORTH", name: "Buganda North" },
+    { code: "SR-TESO", name: "Teso" },
+    { code: "SR-BUKEDI", name: "Bukedi" },
+    { code: "SR-ANKOLE", name: "Ankole" },
+    { code: "SR-KIGEZI", name: "Kigezi" },
+    { code: "SR-BUNYORO", name: "Bunyoro" },
+    { code: "SR-RWENZORI", name: "Rwenzori" },
+  ],
+  district: [
+    { code: "DST-MOROTO", name: "Moroto" },
+    { code: "DST-NAPAK", name: "Napak" },
+    { code: "DST-NAKAPIRIPIRIT", name: "Nakapiripirit" },
+    { code: "DST-KOTIDO", name: "Kotido" },
+    { code: "DST-KAABONG", name: "Kaabong" },
+    { code: "DST-ABIM", name: "Abim" },
+    { code: "DST-AMUDAT", name: "Amudat" },
+    { code: "DST-KARENGA", name: "Karenga" },
+    { code: "DST-NABILATUK", name: "Nabilatuk" },
+    { code: "DST-GULU", name: "Gulu" },
+    { code: "DST-ARUA", name: "Arua" },
+    { code: "DST-LYANTONDE", name: "Lyantonde" },
+    { code: "DST-LIRA", name: "Lira" },
+    { code: "DST-KAMPALA", name: "Kampala" },
+    { code: "DST-MUKONO", name: "Mukono" },
+    { code: "DST-MBARARA", name: "Mbarara" },
+    { code: "DST-KABALE", name: "Kabale" },
+    { code: "DST-HOIMA", name: "Hoima" },
+    { code: "DST-KASESE", name: "Kasese" },
+    { code: "DST-SOROTI", name: "Soroti" },
+    { code: "DST-TORORO", name: "Tororo" },
+  ],
+  sub_county: [
+    { code: "SC-TAPAC", name: "Tapac" },
+    { code: "SC-RUPA", name: "Rupa" },
+    { code: "SC-LOKOPO", name: "Lokopo" },
+    { code: "SC-KATIKEKILE", name: "Katikekile" },
+    { code: "SC-LYANTONDE-TC", name: "Lyantonde Town Council" },
+  ],
+  parish: [
+    { code: "PAR-NAKILORO", name: "Nakiloro" },
+    { code: "PAR-KIBALINGA", name: "Kibalinga" },
+    { code: "PAR-PAGEYA", name: "Pageya" },
+    { code: "PAR-LOKOPO", name: "Lokopo" },
+    { code: "PAR-ADEKOKWOK", name: "Adekokwok" },
+  ],
+  village: [
+    { code: "VLG-NAKILORO-A", name: "Nakiloro A" },
+    { code: "VLG-LOPUWAPUWA-A", name: "Lopuwapuwa A" },
+    { code: "VLG-KAKINGOL", name: "Kakingol" },
+    { code: "VLG-OKELLO", name: "Okello Village" },
+    { code: "VLG-AYWEE", name: "Aywee" },
+  ],
+  partner: [
+    { code: "OPM", name: "Office of the Prime Minister" },
+    { code: "WFP", name: "World Food Programme" },
+    { code: "NUSAF", name: "NUSAF" },
+    { code: "PDM", name: "Parish Development Model" },
+  ],
+};
 
 const secInitials = (name) => String(name || "?").split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
 const secClone = (value) => JSON.parse(JSON.stringify(value));
 const secSlug = (value) => String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 const secRoleLabel = (roles, id) => roles.find(r => r.id === id)?.label || id;
 const secScopeLabel = (scope) => scope.level === "national" ? "national" : `${scope.level}:${scope.code || "*"}`;
+const secScopeOptions = (level) => OPERATOR_SCOPE_OPTIONS[level] || [];
+const secScopeName = (scope) => secScopeOptions(scope.level).find(opt => opt.code === scope.code)?.name || "";
+const secDefaultScopeCode = (level) => level === "national" ? "" : (secScopeOptions(level)[0]?.code || "");
+const secFilteredScopeOptions = (scope) => {
+  const query = String(scope.search || "").trim().toLowerCase();
+  const options = secScopeOptions(scope.level);
+  if (!query) return options;
+  return options.filter(opt => `${opt.name} ${opt.code}`.toLowerCase().includes(query));
+};
 const secRoleCounts = (users) => users.reduce((acc, user) => {
   user.groups.forEach(group => { acc[group] = (acc[group] || 0) + 1; });
   return acc;
@@ -64,7 +156,7 @@ const secBlankUser = (roles) => ({
   mfa: false,
   mfaMethod: "",
   groups: roles[0] ? [roles[0].id] : [],
-  scopes: [{ level: "parish", code: "", active: true, note: "" }],
+  scopes: [{ level: "parish", code: secDefaultScopeCode("parish"), active: true, note: "" }],
   onboardedAt: "26 May 2026",
   lastPasswordReset: "Never",
   sessionCount24h: 0,
@@ -116,13 +208,24 @@ const SEC_COMPACT_FIELD_GRID = {
 };
 const SEC_SCOPE_EDITOR_STYLE = {
   display: "grid",
-  gridTemplateColumns: "minmax(120px, 0.9fr) minmax(130px, 1fr) 86px 34px",
+  gridTemplateColumns: "minmax(120px, 0.9fr) 86px 34px",
   gap: 8,
   alignItems: "center",
   padding: 10,
   border: "1px solid var(--neutral-200)",
   borderRadius: 4,
   background: "var(--neutral-0)",
+};
+const SEC_SCOPE_SEARCH_LIST_STYLE = {
+  gridColumn: "1 / -1",
+  border: "1px solid var(--neutral-200)",
+  borderRadius: 4,
+  background: "var(--neutral-50)",
+  maxHeight: 180,
+  overflowY: "auto",
+  padding: 6,
+  display: "grid",
+  gap: 4,
 };
 
 const AdminSecurityRolesScreen = () => {
@@ -198,7 +301,7 @@ const AdminSecurityRolesScreen = () => {
       phone: draft.phone.trim(),
       scopes: draft.scopes.map(s => ({
         level: s.level,
-        code: s.level === "national" ? "" : String(s.code || "").trim(),
+        code: s.level === "national" ? "" : String(s.code || secDefaultScopeCode(s.level) || "").trim(),
         active: s.active !== false,
         note: String(s.note || "").trim(),
       })),
@@ -269,8 +372,15 @@ const AdminSecurityRolesScreen = () => {
       scopes: draft.scopes.map((scope, i) => i === index ? { ...scope, ...patch } : scope),
     });
   };
-  const addUserScope = () => setDraft({ ...draft, scopes: [...draft.scopes, { level: "parish", code: "", active: true, note: "" }] });
+  const addUserScope = () => setDraft({ ...draft, scopes: [...draft.scopes, { level: "parish", code: secDefaultScopeCode("parish"), active: true, note: "" }] });
   const removeUserScope = (index) => setDraft({ ...draft, scopes: draft.scopes.filter((_, i) => i !== index) });
+  const changeUserScopeLevel = (index, level) => {
+    updateUserScope(index, {
+      level,
+      code: secDefaultScopeCode(level),
+      search: "",
+    });
+  };
   const toggleUserRole = (roleId) => {
     const groups = draft.groups.includes(roleId)
       ? draft.groups.filter(id => id !== roleId)
@@ -375,15 +485,68 @@ const AdminSecurityRolesScreen = () => {
                 <div style={{ display: "grid", gap: 8 }}>
                   {u.scopes.map((scope, index) => (
                     <div key={index} style={SEC_SCOPE_EDITOR_STYLE}>
-                      <select className="field-select" value={scope.level} onChange={e => updateUserScope(index, { level: e.target.value, code: e.target.value === "national" ? "" : scope.code })}>
+                      <select className="field-select" value={scope.level} onChange={e => changeUserScopeLevel(index, e.target.value)}>
                         {SCOPE_LEVELS.map(level => <option key={level} value={level}>{level}</option>)}
                       </select>
-                      <input className="field-input t-mono" value={scope.code} disabled={scope.level === "national"} onChange={e => updateUserScope(index, { code: e.target.value })} placeholder={scope.level === "national" ? "wildcard" : "scope code"}/>
                       <select className="field-select" value={scope.active === false ? "false" : "true"} onChange={e => updateUserScope(index, { active: e.target.value === "true" })}>
                         <option value="true">active</option>
                         <option value="false">inactive</option>
                       </select>
                       <button className="icon-btn" title="Remove scope" onClick={() => removeUserScope(index)}><Icon name="trash" size={12}/></button>
+                      {scope.level === "national" ? (
+                        <div className="tint-update" style={{ gridColumn: "1 / -1", padding: 10, borderRadius: 4 }}>
+                          <div className="t-bodysm" style={{ fontWeight: 600 }}>All Uganda</div>
+                          <div className="t-cap">National wildcard scope; no geographic code is stored.</div>
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ gridColumn: "1 / -1" }}>
+                            <div className="row gap-2" style={{ marginBottom: 6 }}>
+                              <Chip size="sm" tone={scope.level === "partner" ? "programme" : "data"}>
+                                Selected {SCOPE_LEVEL_LABEL[scope.level] || scope.level}
+                              </Chip>
+                              <span className="t-mono t-cap">{scope.code || secDefaultScopeCode(scope.level)}</span>
+                              <span className="t-cap">{secScopeName(scope)}</span>
+                            </div>
+                            <div className="search" style={{ height: 34, background: "var(--neutral-0)", maxWidth: "100%" }}>
+                              <Icon name="search" size={15} color="var(--neutral-500)"/>
+                              <input
+                                value={scope.search || ""}
+                                onChange={e => updateUserScope(index, { search: e.target.value })}
+                                placeholder={`Search ${SCOPE_LEVEL_LABEL[scope.level] || scope.level} by name or code`}
+                              />
+                            </div>
+                          </div>
+                          <div style={SEC_SCOPE_SEARCH_LIST_STYLE}>
+                            {secFilteredScopeOptions(scope).slice(0, 40).map(opt => {
+                              const picked = (scope.code || secDefaultScopeCode(scope.level)) === opt.code;
+                              return (
+                                <button key={opt.code} type="button" onClick={() => updateUserScope(index, { code: opt.code, search: "" })} style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "1fr auto",
+                                  gap: 8,
+                                  alignItems: "center",
+                                  textAlign: "left",
+                                  border: picked ? "1px solid var(--primary-700)" : "1px solid transparent",
+                                  borderRadius: 4,
+                                  padding: "7px 8px",
+                                  background: picked ? "var(--primary-50, var(--neutral-0))" : "var(--neutral-0)",
+                                  cursor: "pointer",
+                                }}>
+                                  <span>
+                                    <span className="t-bodysm" style={{ fontWeight: 600 }}>{opt.name}</span>
+                                    <span className="t-cap t-mono" style={{ display: "block" }}>{opt.code}</span>
+                                  </span>
+                                  {picked && <Icon name="check" size={13} color="var(--accent-data)"/>}
+                                </button>
+                              );
+                            })}
+                            {secFilteredScopeOptions(scope).length === 0 && (
+                              <div className="muted t-cap" style={{ padding: 8 }}>No matching scope options.</div>
+                            )}
+                          </div>
+                        </>
+                      )}
                       <input className="field-input" value={scope.note || ""} onChange={e => updateUserScope(index, { note: e.target.value })} placeholder="note" style={{ gridColumn: "1 / -1" }}/>
                     </div>
                   ))}
@@ -415,7 +578,10 @@ const AdminSecurityRolesScreen = () => {
                     {u.scopes.map((scope, index) => (
                       <tr key={index}>
                         <td><Chip size="sm" tone={scope.level === "national" ? "danger" : scope.level === "partner" ? "programme" : "data"}>{SCOPE_LEVEL_LABEL[scope.level] || scope.level}</Chip></td>
-                        <td className="t-mono">{scope.code || "*"}</td>
+                        <td>
+                          <div className="t-mono">{scope.code || "*"}</div>
+                          {secScopeName(scope) && <div className="t-cap">{secScopeName(scope)}</div>}
+                        </td>
                         <td>{scope.active === false ? <Chip size="sm" tone="quality">inactive</Chip> : <Chip size="sm" tone="data">active</Chip>}</td>
                         <td className="t-bodysm">{scope.note || <span className="muted">-</span>}</td>
                       </tr>
@@ -533,6 +699,24 @@ const AdminSecurityRolesScreen = () => {
     );
   };
 
+  const exportUsers = () => {
+    const rows = usersState.map(user => [
+      user.username,
+      user.name,
+      user.email,
+      user.status,
+      user.groups.map(g => rolesState.find(r => r.id === g)?.label || g).join("; "),
+      user.scopes.map(s => `${s.level}:${s.code || "*"}`).join("; "),
+      user.mfa ? "yes" : "no",
+      user.lastLogin,
+    ]);
+    secDownloadCsv("security-users-roles-scopes.csv", [
+      ["username", "name", "email", "status", "roles", "scopes", "mfa", "last_login"],
+      ...rows,
+    ]);
+    setToast(`Exported ${rows.length} user row(s).`);
+  };
+
   return (
     <div className="page">
       <PageHeader
@@ -540,7 +724,7 @@ const AdminSecurityRolesScreen = () => {
         title="Roles & scopes"
         sub="Who can see what. ROLE controls which screens; SCOPE controls which records within a screen."
         right={<>
-          <button className="btn"><Icon name="download" size={14}/> Export users</button>
+          <button className="btn" onClick={exportUsers}><Icon name="download" size={14}/> Export users</button>
           <button className="btn" onClick={startCreateRole}><Icon name="plus" size={14}/> Add role</button>
           <button className="btn btn-primary" onClick={startCreateUser}><Icon name="plus" size={14}/> Add user</button>
         </>}

@@ -25,6 +25,25 @@
 
 const { useState: useStateBen, useMemo: useMemoBen } = React;
 
+const BEN_COLUMNS = [
+  { id: "enrolment", label: "Enrolment" },
+  { id: "beneficiary", label: "Beneficiary" },
+  { id: "programme", label: "Programme · Cohort" },
+  { id: "location", label: "Location" },
+  { id: "status", label: "Status" },
+  { id: "actions", label: "" },
+];
+const _benDownloadCsv = (filename, rows) => {
+  const csv = rows.map(row => row.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
 /* ============================================================
    UI tone maps — presentation only, NOT code lists.
    The codes themselves come from the ChoiceLists; these maps
@@ -177,6 +196,11 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
   const [sortBy, setSortBy]       = useStateBen("recent");
   const [page, setPage]           = useStateBen(0);
   const [toast, setToast]         = useStateBen("");
+  const [columnsOpen, setColumnsOpen] = useStateBen(false);
+  const [hiddenColumns, setHiddenColumns] = useStateBen(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("nsr.beneficiaries.columns.hidden") || "[]")); }
+    catch (e) { return new Set(); }
+  });
   const pageSize = 10;
 
   const [t, setTweak] = (typeof useTweaks === 'function' ? useTweaks(BEN_TWEAK_DEFAULTS) : [BEN_TWEAK_DEFAULTS, () => {}]);
@@ -271,6 +295,23 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
 
   const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
   const visible = rows.slice(page * pageSize, page * pageSize + pageSize);
+  const showCol = (id) => !hiddenColumns.has(id);
+  const visibleColSpan = BEN_COLUMNS.filter(c => showCol(c.id)).length + 3;
+  const toggleColumn = (id) => {
+    const next = new Set(hiddenColumns);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    if (["beneficiary", "actions"].every(required => !next.has(required))) {
+      setHiddenColumns(next);
+      localStorage.setItem("nsr.beneficiaries.columns.hidden", JSON.stringify([...next]));
+    }
+  };
+  const exportCsv = () => {
+    _benDownloadCsv("beneficiaries.csv", [
+      ["enrolment_id", "registry_id", "beneficiary", "programme", "cohort", "sub_region", "district", "parish", "status", "unit", "total_paid"],
+      ...rows.map(b => [b.id, b.rid, b.entity, b.progCode, b.cohort, b.subreg, b.district, b.parish, b.status, b.unit, b.totalPaid || ""]),
+    ]);
+    setToast(`Exported ${rows.length} beneficiary row(s).`);
+  };
 
   const reset = () => { setQ(""); setProgCode(""); setSubreg(""); setUnit(""); setCohort(""); setExitCode(""); setPage(0); };
 
@@ -293,8 +334,8 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
         title="Beneficiaries"
         sub={<>Per-programme enrolment ledger — one row = one <span className="t-mono">ProgrammeEnrolment</span>. Status reads <span className="t-mono">programme_enrolment_status</span>; pending shows in-flight <span className="t-mono">Referrals</span>.</>}
         right={<>
-          <button className="btn"><Icon name="download" size={14}/> Export CSV</button>
-          <button className="btn"><Icon name="arrowUp" size={14}/> Import enrolment list</button>
+          <button className="btn" onClick={exportCsv}><Icon name="download" size={14}/> Export CSV</button>
+          <button className="btn" onClick={() => setToast("Import enrolment list is routed through the Programmes API import job once enabled.")}><Icon name="arrowUp" size={14}/> Import enrolment list</button>
           <button className="btn" onClick={onNewProgramme}><Icon name="book" size={14}/> Add programme</button>
           <button className="btn btn-primary" onClick={() => setToast("Enrolment endpoint lands with OI-S25-4 (Sprint 26).")}><Icon name="plus" size={14}/> Enrol household</button>
         </>}
@@ -464,26 +505,38 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
           <strong className="t-bodysm">{rows.length.toLocaleString()} {labelOf(statusOpts, statusTab, statusTab).toLowerCase()} enrolment{rows.length === 1 ? '' : 's'}</strong>
           <span className="t-cap">Page {page+1} of {totalPages} · click any row to open the household</span>
           <div style={{flex:1}}/>
-          <button className="btn btn-sm btn-ghost"><Icon name="sliders" size={14}/> Columns</button>
+          <div style={{ position: "relative" }}>
+            <button className="btn btn-sm btn-ghost" onClick={() => setColumnsOpen(v => !v)}><Icon name="sliders" size={14}/> Columns</button>
+            {columnsOpen && (
+              <div className="card" style={{ position: "absolute", right: 0, top: 34, zIndex: 5, width: 230, padding: 10 }}>
+                {BEN_COLUMNS.filter(c => c.label).map(c => (
+                  <label key={c.id} className="t-bodysm" style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px" }}>
+                    <input type="checkbox" checked={showCol(c.id)} disabled={c.id === "beneficiary"} onChange={() => toggleColumn(c.id)}/>
+                    {c.label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         <table className="tbl">
           <thead>
             <tr>
-              <th>Enrolment</th>
-              <th>Beneficiary</th>
-              <th>Programme · Cohort</th>
-              <th>Location</th>
+              {showCol("enrolment") && <th>Enrolment</th>}
+              {showCol("beneficiary") && <th>Beneficiary</th>}
+              {showCol("programme") && <th>Programme · Cohort</th>}
+              {showCol("location") && <th>Location</th>}
               {statusTab === "active"    && <><th>Months in</th><th style={{textAlign:'right'}}>Last paid</th><th>Next pay</th></>}
               {statusTab === "suspended" && <><th>Suspended on</th><th>Hold reason</th><th>Months in</th></>}
               {statusTab === "pending"   && <><th>Awaiting</th><th>Channel / blocker</th><th>Enrolled</th></>}
               {statusTab === "exited"    && <><th>Exited on</th><th>Reason</th><th style={{textAlign:'right'}}>Total paid</th></>}
-              <th>Status</th>
-              <th className="col-actions"></th>
+              {showCol("status") && <th>Status</th>}
+              {showCol("actions") && <th className="col-actions"></th>}
             </tr>
           </thead>
           <tbody>
             {visible.length === 0 && (
-              <tr><td colSpan="9">
+              <tr><td colSpan={visibleColSpan}>
                 <div className="center" style={{padding:48, flexDirection:'column', gap:8, color:'var(--neutral-500)'}}>
                   <Icon name="inbox" size={28} color="var(--neutral-300)"/>
                   <strong className="t-body">No {labelOf(statusOpts, statusTab, statusTab).toLowerCase()} enrolments match these filters.</strong>
@@ -497,11 +550,11 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
               const exitTone = EXIT_TONE[b.exitCode] || "neutral";
               return (
                 <tr key={b.id} onClick={() => onOpenHousehold?.(b.rid)} style={{cursor:'pointer'}}>
-                  <td>
+                  {showCol("enrolment") && <td>
                     <div className="col-id">{b.id}</div>
                     <div className="t-cap t-mono" style={{fontSize:11}}>{b.rid.slice(0,16)}…</div>
-                  </td>
-                  <td>
+                  </td>}
+                  {showCol("beneficiary") && <td>
                     <div className="row gap-3">
                       <div style={{width:28, height:28, borderRadius:'50%', background:'var(--primary-100)', color:'var(--primary-900)', display:'grid', placeItems:'center', fontSize:11, fontWeight:600}}>
                         {b.entity.split(' ').filter(w => /^[A-Za-z]/.test(w)).slice(0,2).map(w => w[0]).join('')}
@@ -511,17 +564,17 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
                         <div className="t-cap">{labelOf(unitOpts, b.unit, b.unit)} · HH {b.hh}{b.sex ? ` · ${b.sex}` : ''}{b.age != null ? ` · age ${b.age}` : ''}</div>
                       </div>
                     </div>
-                  </td>
-                  <td>
+                  </td>}
+                  {showCol("programme") && <td>
                     <div className="row gap-2">
                       <Chip size="sm" tone={progMeta?.tone || 'programme'}>{b.progCode}</Chip>
                     </div>
                     <div className="t-cap mt-1" style={{marginTop:2}}>{b.cohort}</div>
-                  </td>
-                  <td>
+                  </td>}
+                  {showCol("location") && <td>
                     <div className="t-bodysm">{b.parish} · {b.district}</div>
                     <div className="t-cap">{b.subreg}</div>
-                  </td>
+                  </td>}
 
                   {/* status-specific columns */}
                   {statusTab === "active" && (
@@ -572,12 +625,12 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
                     </>
                   )}
 
-                  <td>
+                  {showCol("status") && <td>
                     <StatusChip code={b.status} statusOpts={statusOpts}/>
-                  </td>
-                  <td className="col-actions">
+                  </td>}
+                  {showCol("actions") && <td className="col-actions">
                     <Icon name="chevronRight" size={16} color="var(--neutral-500)"/>
-                  </td>
+                  </td>}
                 </tr>
               );
             })}

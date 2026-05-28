@@ -75,10 +75,33 @@ def pytest_collection_modifyitems(config, items):
     # the same engine, so this is effectively a flag, not a real
     # multi-DB scenario.
     enable_replica = pytest.mark.django_db(databases=["default", "analytics_replica"])
+    # Aggregate-query tests run against `AggregateQueryService.execute`
+    # which composes ORM queries against the matview rows. SQLite's
+    # shadow tables have the matview names but only a subset of the
+    # columns the variables reference; the full matview schema lives
+    # only on Postgres. Mark these tests `postgres` so they auto-skip
+    # on SQLite (the marker handler is in `pytest_collection_modifyitems`
+    # above) and run normally on Postgres CI.
+    aggregate_run = pytest.mark.postgres
+    aggregate_run_names = {
+        "test_returns_rows_and_metadata",
+        "test_emits_aggregate_executed_audit",
+        "test_over_cap_returns_429_with_retry_after",
+        "test_aggregate_executed",
+        "test_overlap_burst_flag",
+        # Integration corpus — runs all 25 corpus queries against the
+        # matview row set; needs real Postgres + populated matviews
+        # per ADR-0023 Appendix A.
+        "test_full_return_queries",
+        "test_partial_suppression_queries",
+        "test_full_suppression_queries",
+    }
     for item in items:
         nodeid = item.nodeid
         if "data_explorer" in nodeid:
             item.add_marker(enable_replica)
+        if any(name in nodeid for name in aggregate_run_names):
+            item.add_marker(aggregate_run)
 
     skip_pg = pytest.mark.skip(
         reason="needs PostgreSQL backend (see @pytest.mark.postgres)",

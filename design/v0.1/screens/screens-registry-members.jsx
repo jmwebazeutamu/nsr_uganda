@@ -41,6 +41,20 @@ const _buildMemberAggregatesUrl = (filters) => {
   return s ? `${_MEM_API_BASE}aggregates/?${s}` : `${_MEM_API_BASE}aggregates/`;
 };
 
+const MEM_COLUMNS = [
+  { id: "member", label: "Member ID" },
+  { id: "name", label: "Name" },
+  { id: "sex", label: "Sex" },
+  { id: "age", label: "Age" },
+  { id: "relationship", label: "Relationship" },
+  { id: "nin", label: "NIN" },
+  { id: "disability", label: "Disability" },
+  { id: "household", label: "Household" },
+  { id: "location", label: "Location" },
+  { id: "programmes", label: "Programmes (HH)" },
+  { id: "actions", label: "" },
+];
+
 // Backend stores Disability flag per domain on the Disability one-
 // to-one (seeing/hearing/walking/memory/selfcare/communication). The
 // row projection picks the FIRST domain with a code of 03/04 ("a
@@ -236,6 +250,11 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
   const [prog, setProg] = useStateMem("");
   const [sortBy, setSortBy] = useStateMem("lastUpdate");
   const [page, setPage] = useStateMem(0);
+  const [columnsOpen, setColumnsOpen] = useStateMem(false);
+  const [hiddenColumns, setHiddenColumns] = useStateMem(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("nsr.members.columns.hidden") || "[]")); }
+    catch (e) { return new Set(); }
+  });
   const pageSize = 12;
 
   const _filters = {
@@ -280,6 +299,16 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
     ? listResp.count
     : liveRows.length;
   const totalPages = Math.max(1, Math.ceil(liveCount / pageSize));
+  const showCol = (id) => !hiddenColumns.has(id);
+  const visibleColSpan = MEM_COLUMNS.filter(c => showCol(c.id)).length;
+  const toggleColumn = (id) => {
+    const next = new Set(hiddenColumns);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    if (["name", "actions"].every(required => !next.has(required))) {
+      setHiddenColumns(next);
+      localStorage.setItem("nsr.members.columns.hidden", JSON.stringify([...next]));
+    }
+  };
 
   const subregs = (subregResp && subregResp.results) || subregResp || [];
 
@@ -446,7 +475,21 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
             <Icon name="check" size={11} color="var(--accent-data)"/>
             {ninVer} NIN-verified {total ? `(${Math.round(ninVer/total*100)}%)` : ""}
           </span>
-          <button className="btn btn-sm btn-ghost"><Icon name="sliders" size={14}/> Columns</button>
+          <div style={{ position: "relative" }}>
+            <button className="btn btn-sm btn-ghost" onClick={() => setColumnsOpen(v => !v)}>
+              <Icon name="sliders" size={14}/> Columns
+            </button>
+            {columnsOpen && (
+              <div className="card" style={{ position: "absolute", right: 0, top: 34, zIndex: 5, width: 220, padding: 10 }}>
+                {MEM_COLUMNS.filter(c => c.label).map(c => (
+                  <label key={c.id} className="t-bodysm" style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px" }}>
+                    <input type="checkbox" checked={showCol(c.id)} disabled={c.id === "name"} onChange={() => toggleColumn(c.id)}/>
+                    {c.label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
         {listMeta.error && (
           <div style={{padding:'12px 16px', color:'var(--accent-danger)'}} className="t-bodysm">
@@ -456,29 +499,29 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
         <table className="tbl">
           <thead>
             <tr>
-              <th>Member ID</th>
-              <th>Name</th>
-              <th>Sex</th>
-              <th>Age</th>
-              <th>Relationship</th>
-              <th>NIN</th>
-              <th>Disability</th>
-              <th>Household</th>
-              <th>Location</th>
-              <th>Programmes (HH)</th>
-              <th className="col-actions"></th>
+              {showCol("member") && <th>Member ID</th>}
+              {showCol("name") && <th>Name</th>}
+              {showCol("sex") && <th>Sex</th>}
+              {showCol("age") && <th>Age</th>}
+              {showCol("relationship") && <th>Relationship</th>}
+              {showCol("nin") && <th>NIN</th>}
+              {showCol("disability") && <th>Disability</th>}
+              {showCol("household") && <th>Household</th>}
+              {showCol("location") && <th>Location</th>}
+              {showCol("programmes") && <th>Programmes (HH)</th>}
+              {showCol("actions") && <th className="col-actions"></th>}
             </tr>
           </thead>
           <tbody>
             {liveRows.length === 0 && !listMeta.loading && (
-              <tr><td colSpan={11} style={{padding:'20px', textAlign:'center'}} className="muted t-bodysm">
+              <tr><td colSpan={visibleColSpan} style={{padding:'20px', textAlign:'center'}} className="muted t-bodysm">
                 No members match the current filters.
               </td></tr>
             )}
             {liveRows.map(m => (
               <tr key={m.id} style={{cursor:'pointer'}} onClick={() => onOpenMember?.(m.id)}>
-                <td className="col-id">{m.id.slice(0, 16)}…</td>
-                <td>
+                {showCol("member") && <td className="col-id">{m.id.slice(0, 16)}…</td>}
+                {showCol("name") && <td>
                   <div className="row gap-3">
                     <div style={{
                       width:28, height:28, borderRadius:'50%',
@@ -496,34 +539,34 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
                       <div className="t-cap">line {m.line} · {m.status}</div>
                     </div>
                   </div>
-                </td>
-                <td><Chip size="sm">{m.sex === "2" ? "F" : m.sex === "1" ? "M" : "—"}</Chip></td>
-                <td>
+                </td>}
+                {showCol("sex") && <td><Chip size="sm">{m.sex === "2" ? "F" : m.sex === "1" ? "M" : "—"}</Chip></td>}
+                {showCol("age") && <td>
                   <div className="t-num" style={{fontWeight:500}}>{m.age != null ? m.age : "—"}</div>
                   <div className="t-cap">{m.ageBand}</div>
-                </td>
-                <td className="t-bodysm">{m.relLabel}</td>
-                <td><NinPill status={m.ninStatus} label={
+                </td>}
+                {showCol("relationship") && <td className="t-bodysm">{m.relLabel}</td>}
+                {showCol("nin") && <td><NinPill status={m.ninStatus} label={
                   ninOptions.find(o => o.code === m.ninStatus)?.label
-                } ninLast4={m.ninLast4}/></td>
-                <td><DisabilityPill kind={m.disability}/></td>
-                <td onClick={(e) => { e.stopPropagation(); onOpenHousehold?.(m.householdId); }}
+                } ninLast4={m.ninLast4}/></td>}
+                {showCol("disability") && <td><DisabilityPill kind={m.disability}/></td>}
+                {showCol("household") && <td onClick={(e) => { e.stopPropagation(); onOpenHousehold?.(m.householdId); }}
                     style={{cursor:'pointer'}} title="Open household detail">
                   <div className="t-mono" style={{fontSize:11, color:'var(--accent-system, var(--primary-900))', whiteSpace:'nowrap'}}>
                     {m.householdId ? `${m.householdId.slice(0, 16)}…` : "—"}
                   </div>
                   <div className="t-cap">{m.pmtBand || "—"}</div>
-                </td>
-                <td>
+                </td>}
+                {showCol("location") && <td>
                   <div className="t-bodysm" style={{whiteSpace:'nowrap'}}>{m.parish || "—"} · {m.district || "—"}</div>
                   <div className="t-cap">{m.subreg || "—"} · {m.village || "—"}</div>
-                </td>
-                <td>
+                </td>}
+                {showCol("programmes") && <td>
                   {m.programmes.length === 0
                     ? <span className="muted t-cap">—</span>
                     : <div className="row-wrap">{m.programmes.map(p => <Chip key={p} size="sm" tone="programme">{p}</Chip>)}</div>}
-                </td>
-                <td className="col-actions"><Icon name="chevronRight" size={16} color="var(--neutral-500)"/></td>
+                </td>}
+                {showCol("actions") && <td className="col-actions"><Icon name="chevronRight" size={16} color="var(--neutral-500)"/></td>}
               </tr>
             ))}
           </tbody>

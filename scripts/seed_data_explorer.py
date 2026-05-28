@@ -46,7 +46,6 @@ from apps.data_explorer.seeds.privacy_class_defaults import (  # noqa: E402
     REFRESH_CADENCE_DEFAULTS,
 )
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CATALOGUE_SEED_YAML = REPO_ROOT / "scripts" / "data_explorer" / "catalogue_seed.yaml"
 

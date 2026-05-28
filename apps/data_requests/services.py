@@ -455,3 +455,99 @@ def expire_data_request(req: DataRequest, *, actor: str = "system") -> DataReque
     req.save(update_fields=["status", "updated_at"])
     emit_audit("expire", "data_request", req.id, actor=actor, reason="ttl-reached")
     return req
+
+
+# ---------------------------------------------------------------------------
+# Draft seeding (DATA-EXP handoff — ADR-0023 D1)
+#
+# The Data Explorer module produces a DataRequestDraft when an analyst
+# clicks "Request record-level data" on an aggregate view. The draft
+# carries the canonical Query JSON the explorer ran, the geographic
+# scope the user actually wanted (which may be below the explorer's
+# sub-county floor), and the suppressed-aggregate row count as an
+# estimate. The DRS workflow takes over from DRAFT → SUBMITTED.
+#
+# The DSA is supplied by the caller — the Explorer UI presents a
+# DSA picker before the handoff fires; if none is supplied we raise
+# so the caller can surface the right error (no silent placeholders).
+
+def create_draft(
+    payload: dict | None = None,
+    *,
+    dsa_id: str | None = None,
+    requester: str | None = None,
+    requester_note: str = "",
+    request_payload: dict | None = None,
+    source_module: str = "data_explorer",
+    explorer_session_id: str | None = None,
+    source_query_hash: str | None = None,
+) -> DataRequest:
+    """Seed a DRAFT DataRequest from the DATA-EXP handoff.
+
+    Two calling forms are supported so the DATA-EXP handoff code +
+    contract tests can both target this entry point:
+
+      create_draft({"dsa_id":..., "request_payload":...,
+                    "requester":..., ...})              # positional dict
+      create_draft(dsa_id=..., requester=..., ...)      # keyword form
+
+    `request_payload` is the canonical Query JSON shape API-DRS already
+    accepts (fields, sub_region_codes, programme_codes, max_rows etc.).
+    The explorer-side context (source module, session ID, query hash)
+    is preserved in the same payload under `_source` so the DPO can
+    see the discovery trail when reviewing the submit.
+
+    Raises DrsError if the DSA is missing or inactive — callers must
+    pick a DSA before the handoff lands."""
+    if payload is not None:
+        dsa_id = dsa_id or payload.get("dsa_id")
+        requester = requester or payload.get("requester")
+        requester_note = requester_note or payload.get("requester_note", "")
+        request_payload = request_payload or payload.get("request_payload") or payload
+        source_module = payload.get("source_module", source_module)
+        explorer_session_id = (
+            explorer_session_id or payload.get("explorer_session_id")
+        )
+        source_query_hash = (
+            source_query_hash or payload.get("source_query_hash")
+        )
+    if not dsa_id:
+        raise DrsError("create_draft requires dsa_id")
+    if not requester:
+        raise DrsError("create_draft requires requester")
+    dsa = DataSharingAgreement.objects.filter(id=dsa_id).first()
+    if dsa is None:
+        raise DrsError(f"unknown DSA {dsa_id!r}")
+    if dsa.status not in ("active", "draft", "pending_signature"):
+        raise DrsError(
+            f"DSA {dsa.reference} is in {dsa.status}; cannot accept a draft"
+        )
+
+    payload = dict(request_payload or {})
+    source = payload.get("_source") or {}
+    source.update({
+        "module": source_module,
+        "explorer_session_id": explorer_session_id or "",
+        "source_query_hash": source_query_hash or "",
+    })
+    payload["_source"] = source
+
+    req = DataRequest.objects.create(
+        dsa=dsa,
+        requester=requester,
+        requester_note=requester_note,
+        request_payload=payload,
+        status=RequestStatus.DRAFT,
+    )
+    emit_audit(
+        "draft_created", "data_request", req.id,
+        actor=requester,
+        reason=f"seeded from {source_module}",
+        field_changes={
+            "dsa_reference": dsa.reference,
+            "source_module": source_module,
+            "explorer_session_id": explorer_session_id or "",
+            "source_query_hash": source_query_hash or "",
+        },
+    )
+    return req

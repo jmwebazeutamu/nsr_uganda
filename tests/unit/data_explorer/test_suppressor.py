@@ -1,3 +1,4 @@
+# ruff: noqa: N806 — class-factory aliases (e.g. `Suppressor = _suppressor()`)
 """Suppressor unit tests — the *only* path that turns raw matview rows
 into a user-visible response. Every assertion here is load-bearing
 against the differencing-attack defence in ADR-0023 R2.
@@ -23,7 +24,6 @@ end-to-end.
 from __future__ import annotations
 
 import pytest
-
 
 pytestmark = pytest.mark.django_db
 
