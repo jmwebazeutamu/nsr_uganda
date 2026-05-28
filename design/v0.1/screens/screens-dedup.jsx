@@ -437,7 +437,32 @@ const DedupScreen = () => {
                 const _name = (m) => m ? `${m.first_name || ''} ${m.surname || ''}`.trim() || '—' : '…';
                 const _idShort = (id) => (id || '').slice(0, 12) + '…';
                 const isSel = p.id === selectedPairId;
-                const score = typeof p.composite_score === 'number' ? p.composite_score.toFixed(2) : '—';
+                // Friendly reason label. tier-1 NIN-exact matches are
+                // deterministic so they don't carry a composite_score
+                // in the DB — display the implicit "1.00 · exact"
+                // instead of a dash. Tier-2+ pairs carry an actual
+                // numeric composite_score; we show that with two
+                // decimals. Anything else falls back to the raw
+                // match_reason or "—".
+                const reasonLabel = (
+                  p.match_reason === 'nin'           ? 'NIN exact' :
+                  p.match_reason === 'nin_last4'     ? 'NIN suffix' :
+                  p.match_reason === 'name_phonetic' ? 'Name phonetic' :
+                  p.match_reason === 'name_dob_geo'  ? 'Name + DOB + geo' :
+                  (p.match_reason || '—')
+                );
+                const isDeterministicTier1 = (p.tier === 1);
+                const scoreText = (
+                  typeof p.composite_score === 'number'
+                    ? p.composite_score.toFixed(2)
+                    : isDeterministicTier1 ? '1.00' : '—'
+                );
+                const scoreTone = (
+                  isDeterministicTier1 ? 'danger' :
+                  typeof p.composite_score === 'number' && p.composite_score >= 0.90 ? 'danger' :
+                  typeof p.composite_score === 'number' && p.composite_score >= 0.75 ? 'quality' :
+                  'neutral'
+                );
                 const raised = (p.created_at || '').slice(0, 10) || '—';
                 return (
                   <tr
@@ -461,8 +486,13 @@ const DedupScreen = () => {
                       <div className="t-cap t-mono">{_idShort(p.record_b_id)}</div>
                     </td>
                     <td><Chip size="sm">{`tier ${p.tier}`}</Chip></td>
-                    <td className="t-cap">{p.match_reason || '—'}</td>
-                    <td className="t-num">{score}</td>
+                    <td className="t-bodysm">{reasonLabel}</td>
+                    <td>
+                      <Chip size="sm" tone={scoreTone}>{scoreText}</Chip>
+                      {isDeterministicTier1 && (
+                        <span className="t-cap" style={{marginLeft:6}}>exact</span>
+                      )}
+                    </td>
                     <td className="t-cap">{raised}</td>
                   </tr>
                 );
