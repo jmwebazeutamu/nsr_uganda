@@ -46,6 +46,10 @@ urlpatterns = [
     # US-CHB-001 — chatbot assistant (ADR-0021). Router is empty
     # at scaffold time; viewsets register in CHB-004.
     path("api/v1/chatbot/", include("apps.chatbot.urls")),
+    # US-DATA-EXP-001 — Data Explorer (ADR-0023). Every endpoint
+    # gated by DATA_EXPLORER_ENABLED + the EXPLORER role; returns
+    # 503 when the flag is off.
+    path("api/v1/data-explorer/", include("apps.data_explorer.urls")),
     # US-S23-008 — partners module (ADR-0011). Mounted at the bare
     # /api/v1/ prefix because the router itself owns "partners/".
     path("api/v1/", include("apps.partners.urls")),

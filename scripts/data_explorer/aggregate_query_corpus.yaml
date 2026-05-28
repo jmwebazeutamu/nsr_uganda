@@ -1,0 +1,442 @@
+# DATA-EXP aggregate query corpus — 25 scenarios for the Suppressor.
+#
+# Authority: ADR-0023 §D3 (k-anonymity), Appendix A risk-probe spec.
+# Consumer: tests/ — Tester loads this YAML and asserts each scenario
+# returns the expected_outcome.
+#
+# Distribution:
+#   * 15 queries → returns          (every cell ≥ k_floor)
+#   * 5  queries → partial_suppression (some cells null+suppressed:true)
+#   * 5  queries → full_suppression / refused at validation
+#
+# Partial-suppression coverage:
+#   * 3 Internal (k_floor=5) — partial-suppression cases
+#   * 2 Personal (k_floor=10) — partial-suppression cases
+#
+# Full-suppression / refused-at-validation coverage:
+#   * 1 Sensitive (chronic illness types) → refused at validation
+#   * 1 Sensitive (NIN value)             → refused at validation
+#   * 1 geographic floor violation (parish) → refused at validation
+#   * 2 small-population sub-counties where every cell suppresses
+#
+# Locked k-floors (ADR-0023 §D3):
+#   Public = 0, Internal = 5, Personal = 10, Sensitive = blocked.
+#
+# Geographic codes below are placeholders the Tester resolves against
+# the staging matview snapshot. Real codes come from
+# reference_data/seeds/ubos_geography_v1.json at test setup time.
+
+queries:
+
+  # =========================================================================
+  # 1-15: returns cleanly (populous geography, broad bands)
+  # =========================================================================
+
+  - name: "Q01_household_count_by_subregion_and_head_sex"
+    query:
+      dataset: "household"
+      projection:
+        - "household.sub_region_code"
+        - "household.head_sex"
+      filters: []
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_region"
+        codes: ["CENTRAL", "EASTERN", "NORTHERN", "WESTERN"]
+    expected_outcome: "returns"
+    expected_notes: "All four sub-regions × 2 sexes = 8 cells, each populous; strictest class Internal (k=5)."
+
+  - name: "Q02_household_count_by_district_head_age_band"
+    query:
+      dataset: "household"
+      projection:
+        - "household.district_code"
+        - "household.head_age_band"
+      filters:
+        - field: "household.head_age_band"
+          op: "in"
+          value: ["30-44", "45-59"]
+      aggregate: "count"
+      geographic_scope:
+        level: "district"
+        codes: ["KAMPALA"]
+    expected_outcome: "returns"
+    expected_notes: "Kampala × two large age bands; cells ≫ k_floor=5."
+
+  - name: "Q03_dwelling_type_by_sub_county_urban_rural"
+    query:
+      dataset: "dwelling"
+      projection:
+        - "household.urban_rural"
+        - "dwelling.dwelling_type"
+      filters: []
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_county"
+        codes: ["KAMPALA_CENTRAL_NAKASERO"]
+    expected_outcome: "returns"
+    expected_notes: "Single populous urban sub-county; dwelling_type Internal."
+
+  - name: "Q04_pmt_band_distribution_by_district"
+    query:
+      dataset: "pmt"
+      projection:
+        - "household.district_code"
+        - "pmt.band"
+      filters: []
+      aggregate: "count"
+      geographic_scope:
+        level: "district"
+        codes: ["WAKISO", "MUKONO", "JINJA"]
+    expected_outcome: "returns"
+    expected_notes: "Three large districts × 4 bands = 12 cells; each ≫ k_floor=5."
+
+  - name: "Q05_roof_material_by_sub_region"
+    query:
+      dataset: "dwelling"
+      projection:
+        - "household.sub_region_code"
+        - "dwelling.roof_material"
+      filters: []
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_region"
+        codes: ["BUGANDA"]
+    expected_outcome: "returns"
+    expected_notes: "Single populous sub-region; roof_material Internal."
+
+  - name: "Q06_cooking_fuel_by_district_urban"
+    query:
+      dataset: "utilities"
+      projection:
+        - "household.district_code"
+        - "utilities.cooking_fuel"
+      filters:
+        - field: "household.urban_rural"
+          op: "eq"
+          value: "1"
+      aggregate: "count"
+      geographic_scope:
+        level: "district"
+        codes: ["KAMPALA", "WAKISO"]
+    expected_outcome: "returns"
+    expected_notes: "Urban Kampala+Wakiso; cooking_fuel × district = 24 cells, populous."
+
+  - name: "Q07_referrals_by_programme_status_subregion"
+    query:
+      dataset: "referral"
+      projection:
+        - "household.sub_region_code"
+        - "referral.programme_code"
+        - "referral.status"
+      filters: []
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_region"
+        codes: ["KARAMOJA", "WEST_NILE"]
+    expected_outcome: "returns"
+    expected_notes: "Referrals are Public (programme_code) + Internal (status); high-coverage in Karamoja/West-Nile due to NUSAF/SEGOP saturation."
+
+  - name: "Q08_shock_type_by_sub_region_year"
+    query:
+      dataset: "shock"
+      projection:
+        - "household.sub_region_code"
+        - "shock.shock_type"
+        - "shock.event_year"
+      filters:
+        - field: "shock.event_year"
+          op: "in"
+          value: [2024, 2025]
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_region"
+        codes: ["KARAMOJA", "TESO", "BUKEDI"]
+    expected_outcome: "returns"
+    expected_notes: "Shocks are Public; drought/flood prevalence in Karamoja+Teso means cells ≫ k_floor=0."
+
+  - name: "Q09_food_security_fies_band_by_district"
+    query:
+      dataset: "food_security"
+      projection:
+        - "household.district_code"
+        - "food_security.fies_raw_score"
+      filters:
+        - field: "food_security.fies_raw_score"
+          op: "gte"
+          value: 4
+      aggregate: "count"
+      geographic_scope:
+        level: "district"
+        codes: ["KOTIDO", "MOROTO", "NAPAK"]
+    expected_outcome: "returns"
+    expected_notes: "Moderate-severe FIES in Karamoja districts; well above k_floor=5."
+
+  - name: "Q10_asset_motor_vehicle_flag_by_district_urban"
+    query:
+      dataset: "asset_ownership"
+      projection:
+        - "household.district_code"
+        - "asset_ownership.motor_vehicle_flag"
+      filters: []
+      aggregate: "count"
+      geographic_scope:
+        level: "district"
+        codes: ["KAMPALA", "WAKISO", "MUKONO"]
+    expected_outcome: "returns"
+    expected_notes: "Boolean projection × 3 large districts = 6 cells; populous."
+
+  - name: "Q11_pmt_band_by_sub_county_buganda"
+    query:
+      dataset: "pmt"
+      projection:
+        - "household.sub_county_code"
+        - "pmt.band"
+      filters: []
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_county"
+        codes: ["WAKISO_NABWERU", "WAKISO_KIRA", "WAKISO_NAMA"]
+    expected_outcome: "returns"
+    expected_notes: "Three populous Wakiso sub-counties × 4 bands. Internal class, k=5."
+
+  - name: "Q12_employment_sector_by_sub_region"
+    query:
+      dataset: "employment"
+      projection:
+        - "household.sub_region_code"
+        - "employment.sector"
+      filters:
+        - field: "employment.employment_status"
+          op: "neq"
+          value: ""
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_region"
+        codes: ["BUGANDA", "BUSOGA"]
+    expected_outcome: "returns"
+    expected_notes: "Personal class (member-level employment) aggregated at sub_region; k_floor=10. Buganda+Busoga populations satisfy floor for every ISIC sector."
+
+  - name: "Q13_education_highest_grade_by_subregion_age_band"
+    query:
+      dataset: "education"
+      projection:
+        - "household.sub_region_code"
+        - "education.highest_grade"
+      filters:
+        - field: "member.age_band"
+          op: "in"
+          value: ["18-29", "30-44"]
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_region"
+        codes: ["BUGANDA", "BUSOGA", "ANKOLE"]
+    expected_outcome: "returns"
+    expected_notes: "Personal-class education × age band, k=10; large catchments yield non-suppressed cells."
+
+  - name: "Q14_dwelling_floor_by_district_rural"
+    query:
+      dataset: "dwelling"
+      projection:
+        - "household.district_code"
+        - "dwelling.floor_material"
+      filters:
+        - field: "household.urban_rural"
+          op: "eq"
+          value: "2"
+      aggregate: "count"
+      geographic_scope:
+        level: "district"
+        codes: ["MASAKA", "MBALE", "GULU", "MBARARA"]
+    expected_outcome: "returns"
+    expected_notes: "Rural × 4 districts × ~9 floor materials = ~36 cells; cells ≫ k_floor=5."
+
+  - name: "Q15_programme_enrolment_status_by_subregion"
+    query:
+      dataset: "programme_enrolment"
+      projection:
+        - "household.sub_region_code"
+        - "programme_enrolment.status"
+      filters: []
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_region"
+        codes: ["KARAMOJA", "WEST_NILE", "ACHOLI", "LANGO"]
+    expected_outcome: "returns"
+    expected_notes: "Enrolment status (Internal, k=5) at sub-region; well above k_floor across all four."
+
+  # =========================================================================
+  # 16-20: partial suppression — some cells below k_floor
+  # =========================================================================
+
+  - name: "Q16_pmt_band_by_sub_county_karamoja_internal_k5"
+    query:
+      dataset: "pmt"
+      projection:
+        - "household.sub_county_code"
+        - "pmt.band"
+      filters: []
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_county"
+        codes: ["KARAMOJA_TAPAC", "KARAMOJA_LOROO", "KARAMOJA_KATIKEKILE"]
+    expected_outcome: "partial_suppression"
+    expected_notes: "Internal class (k=5). Small Karamoja sub-counties × 4 bands; `not_poor` cells are typically <5 in these sub-counties → null+suppressed:true. Other bands return."
+
+  - name: "Q17_dwelling_uncommon_roof_by_sub_county_internal_k5"
+    query:
+      dataset: "dwelling"
+      projection:
+        - "household.sub_county_code"
+        - "dwelling.roof_material"
+      filters:
+        - field: "dwelling.roof_material"
+          op: "in"
+          value: ["12", "13", "14"]
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_county"
+        codes: ["MOROTO_NADUNGET", "AMUDAT_KARITA"]
+    expected_outcome: "partial_suppression"
+    expected_notes: "Internal (k=5). Tile/asbestos/concrete roofs are very rare in rural Karamoja sub-counties → most cells suppressed; iron-sheet returns."
+
+  - name: "Q18_food_security_fies_high_by_district_internal_k5"
+    query:
+      dataset: "food_security"
+      projection:
+        - "household.district_code"
+        - "food_security.fies_raw_score"
+      filters:
+        - field: "food_security.fies_raw_score"
+          op: "eq"
+          value: 8
+      aggregate: "count"
+      geographic_scope:
+        level: "district"
+        codes: ["KALANGALA", "BUVUMA"]
+    expected_outcome: "partial_suppression"
+    expected_notes: "Internal (k=5). Small island districts; severe-FIES (score=8) is rare; some cells <5 → suppressed."
+
+  - name: "Q19_member_marital_status_by_sub_region_personal_k10"
+    query:
+      dataset: "member"
+      projection:
+        - "household.sub_region_code"
+        - "member.marital_status"
+      filters:
+        - field: "member.marital_status"
+          op: "in"
+          value: ["14", "13"]
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_region"
+        codes: ["KARAMOJA", "BUKEDI"]
+    expected_outcome: "partial_suppression"
+    expected_notes: "Personal class (k=10). Hindu (14) + civil (13) marriages are sparse in Karamoja/Bukedi → several cells <10 → suppressed."
+
+  - name: "Q20_employment_sector_uncommon_by_subregion_personal_k10"
+    query:
+      dataset: "employment"
+      projection:
+        - "household.sub_region_code"
+        - "employment.sector"
+      filters:
+        - field: "employment.sector"
+          op: "in"
+          value: ["D", "E", "K", "L", "U"]
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_region"
+        codes: ["KARAMOJA", "TESO"]
+    expected_outcome: "partial_suppression"
+    expected_notes: "Personal class (k=10). Utilities/finance/real-estate/extraterritorial sectors are rare outside urban centres → most cells suppressed; some pass for Teso."
+
+  # =========================================================================
+  # 21-25: full suppression / refused at validation
+  # =========================================================================
+
+  - name: "Q21_chronic_illness_types_refused_sensitive"
+    query:
+      dataset: "health"
+      projection:
+        - "household.sub_region_code"
+        - "health.chronic_illness_types"
+      filters: []
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_region"
+        codes: ["BUGANDA"]
+    expected_outcome: "full_suppression"
+    expected_notes: "Sensitive class — chronic illness specific types (HIV/TB/...). REFUSED AT VALIDATION with HTTP 422. Catalogue dictionary entry exists but variable is not projectable."
+
+  - name: "Q22_nin_value_refused_sensitive"
+    query:
+      dataset: "member"
+      projection:
+        - "household.sub_region_code"
+        - "member.nin_value"
+      filters: []
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_region"
+        codes: ["BUGANDA"]
+    expected_outcome: "full_suppression"
+    expected_notes: "Sensitive — encrypted NIN value. REFUSED AT VALIDATION with HTTP 422. Never projectable."
+
+  - name: "Q23_parish_level_refused_floor_violation"
+    query:
+      dataset: "household"
+      projection:
+        - "geography.parish_code"
+        - "household.head_sex"
+      filters: []
+      aggregate: "count"
+      geographic_scope:
+        level: "parish"
+        codes: ["KAMPALA_CENTRAL_NAKASERO_KISENYI_I"]
+    expected_outcome: "full_suppression"
+    expected_notes: "Geographic floor violation. ADR-0023 §D4: parish + village are refused on the discovery path. HTTP 422 with `geographic_floor_violation` and a DRS handoff URL."
+
+  - name: "Q24_tiny_subcounty_full_suppression_internal_k5"
+    query:
+      dataset: "pmt"
+      projection:
+        - "household.sub_county_code"
+        - "pmt.band"
+        - "household.head_sex"
+        - "household.head_age_band"
+      filters: []
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_county"
+        codes: ["AMUDAT_KARITA"]
+    expected_outcome: "full_suppression"
+    expected_notes: "Internal (k=5). Tiny sparsely-populated sub-county × 4 bands × 2 sexes × 6 age bands = 48 cells; every cell <5 → all suppressed. suppressed_cell_count = result_row_count."
+
+  - name: "Q25_personal_disability_by_sub_county_personal_k10"
+    query:
+      dataset: "disability"
+      projection:
+        - "household.sub_county_code"
+        - "disability.wg_disability_flag"
+        - "member.age_band"
+      filters:
+        - field: "member.age_band"
+          op: "in"
+          value: ["75+"]
+      aggregate: "count"
+      geographic_scope:
+        level: "sub_region"
+        codes: ["KARAMOJA"]
+    expected_outcome: "full_suppression"
+    expected_notes: "Personal class (k=10). 75+ disability members by sub-county in Karamoja; very small absolute counts → every cell <10 → all suppressed. Also confirms sub_county aggregation against Personal-class matview reshapes to sub_region in the matview definition (D2)."
+
+# End of aggregate_query_corpus.yaml. 25 scenarios.
+# Distribution: 15 returns, 5 partial_suppression, 5 full_suppression.
+# PrivacyClass coverage of partial_suppression cases:
+#   Internal (k=5): Q16, Q17, Q18
+#   Personal (k=10): Q19, Q20
+# Sensitive / floor / full-suppression coverage:
+#   Sensitive: Q21 (chronic illness), Q22 (NIN value)
+#   Floor:     Q23 (parish)
+#   Tiny pop:  Q24 (Internal), Q25 (Personal)

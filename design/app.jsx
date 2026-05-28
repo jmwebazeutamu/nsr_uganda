@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, ProgrammesScreen, ProgrammeDetailScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, MemberDetailScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts, ErrorBoundary */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, ProgrammesScreen, ProgrammeDetailScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, MemberDetailScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, CatalogueScreen, DatasetDetailScreen, VariableDetailScreen, AggregateBuilderScreen, HandoffConfirmScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts, ErrorBoundary */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -37,6 +37,12 @@ const NAV = [
   { id: "programmes",       label: "Programmes",      icon: "book",  screen: true },
   { id: "beneficiaries",    label: "Beneficiaries",   icon: "book",  screen: true },
   { id: "drs",     label: "Data Requests", icon: "download",  count: 9 },
+  // Data Explorer — discovery + aggregate surface (ADR-0023,
+  // US-DATA-EXP-001). Gated on the data_explorer.enabled feature
+  // flag AND the user's EXPLORER realm role; hidden (not greyed)
+  // when either fails, per design brief §6.
+  { id: "data-explorer", label: "Data Explorer", icon: "database", indent: 1,
+    featureFlag: "data_explorer_enabled", requireRole: "EXPLORER" },
   { id: "partner-drs", label: "My requests", icon: "download", count: 5 },
   // Partner self-service surfaces — visible only when role is
   // partner-analyst (see role-filter below). Read-only views of the
@@ -133,11 +139,24 @@ function App() {
       if (role === "partner-analyst" && n.section === "PARTNERS") return false;
       return true;
     }
+    // Feature-flag gating — for nav entries that declare a flag,
+    // the entry only renders if window.__featureFlags[flag] is true.
+    // Per ADR-0023 §D9: hidden when off, not greyed (design brief §6).
+    if (n.featureFlag) {
+      const flags = (typeof window !== "undefined" && window.__featureFlags) || {};
+      if (!flags[n.featureFlag]) return false;
+    }
+    // Realm-role gating — same hidden-not-greyed rule. me.roles is
+    // populated from /api/v1/security/users/me/ (Keycloak realm roles).
+    if (n.requireRole) {
+      const roles = (me && Array.isArray(me.roles)) ? me.roles : [];
+      if (!roles.includes(n.requireRole)) return false;
+    }
     // The partner self-service tiles only make sense for the
     // partner-analyst role — operator-side roles never use them.
     const PARTNER_ONLY = new Set(["partner-drs", "my-dsa", "my-programmes"]);
     if (role !== "partner-analyst" && PARTNER_ONLY.has(n.id)) return false;
-    if (role === "parish" && ["dih","drs","dedup","partners","beneficiaries"].includes(n.id)) return false;
+    if (role === "parish" && ["dih","drs","dedup","partners","beneficiaries","data-explorer"].includes(n.id)) return false;
     if (role === "dpo"    && ["capture","upd","dedup","grm","receipt"].includes(n.id)) return false;
     if (role === "cdo"    && ["dih","drs","partners"].includes(n.id)) return false;
     if (role === "partner-analyst" && !["home","partner-drs","my-dsa","my-programmes","kit"].includes(n.id)) return false;
@@ -289,6 +308,79 @@ function App() {
         {screen === "dedup"   && <DedupScreen/>}
         {screen === "upd"     && <UPDScreen changeRequestId={screenPayload?.changeRequestId} onNavigate={navigate}/>}
         {screen === "drs"     && <DRSScreen onNavigate={navigate}/>}
+        {/* Data Explorer sub-screens — routed by screenPayload.dxView
+            so the single sidebar entry can land on the catalogue and
+            internally navigate to dataset/variable/aggregate/handoff
+            without polluting the top-level NAV array.
+            ADR-0023 §D1 (module boundary), US-DATA-EXP-001. */}
+        {screen === "data-explorer" && (() => {
+          const dxView = screenPayload?.dxView || "catalogue";
+          if (dxView === "dataset" && DatasetDetailScreen) {
+            return <DatasetDetailScreen
+              datasetId={screenPayload?.datasetId}
+              onBack={() => navigate("data-explorer")}
+              onOpenVariable={(dsId, varCode) => navigate("data-explorer", {
+                dxView: "variable", datasetId: dsId, variableCode: varCode,
+              })}
+              onOpenAggregate={(dsId) => navigate("data-explorer", {
+                dxView: "aggregate", datasetId: dsId,
+              })}
+              onRequestRecords={(dataset) => navigate("data-explorer", {
+                dxView: "handoff",
+                aggregateContext: {
+                  dataset_id: dataset.id,
+                  dataset_title: dataset.title,
+                  projection_variables: [],
+                  filters: [],
+                  geographic_scope: { level: "sub_county" },
+                  privacy_classes_spanned: [dataset.privacy_class],
+                  estimated_row_count: null,
+                },
+              })}
+            />;
+          }
+          if (dxView === "variable" && VariableDetailScreen) {
+            return <VariableDetailScreen
+              datasetId={screenPayload?.datasetId}
+              variableCode={screenPayload?.variableCode}
+              onBack={() => navigate("data-explorer", {
+                dxView: "dataset", datasetId: screenPayload?.datasetId,
+              })}
+              onOpenVariable={(dsId, varCode) => navigate("data-explorer", {
+                dxView: "variable", datasetId: dsId, variableCode: varCode,
+              })}
+              onOpenAggregate={(dsId, varCode) => navigate("data-explorer", {
+                dxView: "aggregate", datasetId: dsId, initialProjectionVariable: varCode,
+              })}
+            />;
+          }
+          if (dxView === "aggregate" && AggregateBuilderScreen) {
+            return <AggregateBuilderScreen
+              initialDatasetId={screenPayload?.datasetId}
+              initialProjectionVariable={screenPayload?.initialProjectionVariable}
+              onRequestRecords={(ctx) => navigate("data-explorer", {
+                dxView: "handoff", aggregateContext: ctx,
+              })}
+            />;
+          }
+          if (dxView === "handoff" && HandoffConfirmScreen) {
+            return <HandoffConfirmScreen
+              aggregateContext={screenPayload?.aggregateContext}
+              onBack={() => navigate("data-explorer", {
+                dxView: "aggregate",
+                datasetId: screenPayload?.aggregateContext?.dataset_id,
+              })}
+              onRedirect={(url) => {
+                if (typeof window !== "undefined" && url) window.location.assign(url);
+              }}
+            />;
+          }
+          return CatalogueScreen ? <CatalogueScreen
+            onOpenDataset={(datasetId) => navigate("data-explorer", {
+              dxView: "dataset", datasetId,
+            })}
+          /> : null;
+        })()}
         {screen === "grm"     && <GRMScreen onNavigate={navigate}/>}
         {screen === "partner-drs" && <PartnerDRSScreen/>}
         {screen === "my-dsa" && <MyDsaScreen/>}

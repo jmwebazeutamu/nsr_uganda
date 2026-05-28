@@ -67,6 +67,19 @@ def _upd_evidence_storage_isolation():
 
 def pytest_collection_modifyitems(config, items):
     vendor = connection.vendor
+    # DATA-EXP (US-DATA-EXP-001) — the AnalyticsReplicaRouter routes
+    # apps.data_explorer.* reads to the `analytics_replica` alias.
+    # pytest-django creates a separate test DB per alias and blocks
+    # cross-alias reads by default. Mark every data_explorer test so
+    # pytest-django seeds both. In dev/test the two aliases point at
+    # the same engine, so this is effectively a flag, not a real
+    # multi-DB scenario.
+    enable_replica = pytest.mark.django_db(databases=["default", "analytics_replica"])
+    for item in items:
+        nodeid = item.nodeid
+        if "data_explorer" in nodeid:
+            item.add_marker(enable_replica)
+
     skip_pg = pytest.mark.skip(
         reason="needs PostgreSQL backend (see @pytest.mark.postgres)",
     )

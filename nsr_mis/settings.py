@@ -62,6 +62,8 @@ INSTALLED_APPS = [
     "apps.admin_console",
     # Chatbot Assistant — RAG over user manuals (ADR-0021).
     "apps.chatbot",
+    # Data Explorer — discovery + aggregate-preview surface (ADR-0023).
+    "apps.data_explorer",
 ]
 
 # US-S23 — gate the partners-module UI surfaces and write endpoints
@@ -138,7 +140,26 @@ DATABASES = {
         "DATABASE_URL",
         default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
     ),
+    # US-DATA-EXP-001 — analytics replica routed by
+    # apps.data_explorer.db_router.AnalyticsReplicaRouter. In dev/test
+    # the alias points at the same database as `default` so the router
+    # is a no-op; staging/prod override DATABASE_URL_ANALYTICS to point
+    # at the actual Postgres read replica (per ADR-0023 D2).
+    "analytics_replica": env.db_url(
+        "DATABASE_URL_ANALYTICS",
+        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+    ),
 }
+
+# In tests, point `analytics_replica` at the same TEST database Django
+# created for `default`. Without this pytest-django spins up a second
+# empty test DB for the replica alias and DATA-EXP reads can't see
+# any seeded rows (NoSuchTable on data_requests_*, etc.).
+DATABASES["analytics_replica"]["TEST"] = {"MIRROR": "default"}
+
+# US-DATA-EXP-001 — router gates DATA-EXP reads to analytics_replica
+# and forbids writes against the matview-backed unmanaged models.
+DATABASE_ROUTERS = ["apps.data_explorer.db_router.AnalyticsReplicaRouter"]
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
@@ -279,3 +300,9 @@ SERVER_EMAIL = env("SERVER_EMAIL", default=DEFAULT_FROM_EMAIL)
 # so the rollout has an explicit env switch. Mirrors the DQA Rule
 # Editor flag (US-076).
 QUESTIONNAIRE_EDITOR_V2 = env.bool("QUESTIONNAIRE_EDITOR_V2", default=DEBUG)
+
+# US-DATA-EXP-001 — feature flag for the Data Explorer (DATA-EXP) module
+# (catalogue + k-anonymity-enforced aggregate API). Per ADR-0023 D9 the
+# default is False; dev/staging set it True. When the flag is False
+# every DATA-EXP endpoint returns 503 and the sidebar link is hidden.
+DATA_EXPLORER_ENABLED = env.bool("DATA_EXPLORER_ENABLED", default=DEBUG)

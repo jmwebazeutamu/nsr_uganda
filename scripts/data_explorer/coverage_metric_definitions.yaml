@@ -1,0 +1,247 @@
+# DATA-EXP coverage metric definitions.
+#
+# Authority: ADR-0023 §D2 (matview list — 8 matviews), §D5 (catalogue
+# completeness baseline). Consumers:
+#   * apps.data_explorer.metadata_loader — surfaces completeness % in
+#     the catalogue card.
+#   * apps.reporting (RPT) — operational coverage dashboards consume the
+#     same metric definitions to stay in lockstep with the discovery
+#     surface.
+#
+# Numerator + denominator are written as pseudo-SQL against the
+# data_management ORM. The Coder's seed script converts these into
+# Django ORM `Count(...)` calls; we do not write raw SQL here.
+#
+# Refresh cadence mirrors the matview cadence in ADR-0023 §D2:
+#   daily   02:00 EAT — household + PMT + referrals + grievances
+#   weekly  Sun 03:00 EAT — member + education + employment
+#   weekly  Sun 04:00 EAT — shocks
+#   weekly  Sun 04:30 EAT — health/chronic (Personal class, sub_region)
+#
+# Geographic break is the coarsest level at which the metric is
+# publishable on the discovery surface — Public/Internal at
+# sub_county; Personal at sub_region.
+
+metrics:
+
+  # =========================================================================
+  # Matview-aligned coverage metrics (8 matviews from ADR-0023 §D2)
+  # =========================================================================
+
+  - dataset: "household"
+    metric: "household_count_active"
+    label: "Active households"
+    definition: >
+      Count of Household rows where is_deleted=False. Excludes
+      provisional / draft rows still in DIH staging.
+    numerator: "count(Household where is_deleted=false)"
+    denominator: null
+    matview: "mv_explorer_household_by_subcounty_demographics"
+    refresh_cadence: "daily"
+    geographic_break: "sub_county"
+    privacy_class: "Public"
+    is_count: true
+
+  - dataset: "household"
+    metric: "pct_household_with_pmt_band"
+    label: "% households with a PMT band"
+    definition: >
+      Share of active households whose Household.current_vulnerability_band
+      is non-empty. PMT coverage proxy at the household grain.
+    numerator: "count(Household where is_deleted=false AND current_vulnerability_band != '')"
+    denominator: "count(Household where is_deleted=false)"
+    matview: "mv_explorer_household_by_subcounty_pmt"
+    refresh_cadence: "daily"
+    geographic_break: "sub_county"
+    privacy_class: "Internal"
+
+  - dataset: "household"
+    metric: "pct_household_with_gps"
+    label: "% households with GPS captured"
+    definition: >
+      Share of active households with both gps_lat and gps_lng
+      non-null. Field-ops coverage proxy.
+    numerator: "count(Household where is_deleted=false AND gps_lat IS NOT NULL AND gps_lng IS NOT NULL)"
+    denominator: "count(Household where is_deleted=false)"
+    matview: "mv_explorer_household_by_subcounty_demographics"
+    refresh_cadence: "daily"
+    geographic_break: "sub_county"
+    privacy_class: "Internal"
+
+  - dataset: "member"
+    metric: "pct_member_with_verified_nin"
+    label: "% members with verified NIN"
+    definition: >
+      Share of non-deleted members whose nin_status='1' (has card)
+      AND nin_hash is non-null. Identity-verification coverage proxy.
+    numerator: "count(Member where is_deleted=false AND nin_status='1' AND nin_hash IS NOT NULL)"
+    denominator: "count(Member where is_deleted=false)"
+    matview: "mv_explorer_member_by_subcounty_demographics"
+    refresh_cadence: "weekly"
+    geographic_break: "sub_region"
+    privacy_class: "Personal"
+
+  - dataset: "education"
+    metric: "pct_member_with_education_record"
+    label: "% members 3+ years with an education record"
+    definition: >
+      Share of members aged 3+ with a non-null Education row attached.
+    numerator: "count(Member with Education where Member.age_years >= 3)"
+    denominator: "count(Member where age_years >= 3 and is_deleted=false)"
+    matview: "mv_explorer_member_by_subcounty_education"
+    refresh_cadence: "weekly"
+    geographic_break: "sub_region"
+    privacy_class: "Personal"
+
+  - dataset: "employment"
+    metric: "pct_member_with_employment_record"
+    label: "% members 7+ years with an employment record"
+    definition: >
+      Share of members aged 7+ with a non-null Employment row attached.
+    numerator: "count(Member with Employment where Member.age_years >= 7)"
+    denominator: "count(Member where age_years >= 7 and is_deleted=false)"
+    matview: "mv_explorer_member_by_subcounty_employment"
+    refresh_cadence: "weekly"
+    geographic_break: "sub_region"
+    privacy_class: "Personal"
+
+  - dataset: "shock"
+    metric: "pct_household_with_shock_last_12m"
+    label: "% households reporting a shock in last 12 months"
+    definition: >
+      Share of active households with at least one Shock row whose
+      event_date is within the last 365 days.
+    numerator: "count(Household with Shock where Shock.event_date >= now()-365d)"
+    denominator: "count(Household where is_deleted=false)"
+    matview: "mv_explorer_household_shocks_subregion"
+    refresh_cadence: "weekly"
+    geographic_break: "sub_region"
+    privacy_class: "Public"
+
+  - dataset: "referral"
+    metric: "pct_household_with_active_referral"
+    label: "% households with an active referral"
+    definition: >
+      Share of active households with at least one Referral whose
+      status is in (sent, accepted, enrolled).
+    numerator: "count(Household with Referral where Referral.status in ('sent','accepted','enrolled'))"
+    denominator: "count(Household where is_deleted=false)"
+    matview: "mv_explorer_referrals_subcounty"
+    refresh_cadence: "daily"
+    geographic_break: "sub_county"
+    privacy_class: "Internal"
+
+  - dataset: "grievance"
+    metric: "pct_household_with_open_grievance"
+    label: "% households with an open grievance"
+    definition: >
+      Share of active households with at least one Grievance whose
+      status is not in (resolved, closed).
+    numerator: "count(Household with Grievance where Grievance.status not in ('resolved','closed'))"
+    denominator: "count(Household where is_deleted=false)"
+    matview: "mv_explorer_grievances_subcounty"
+    refresh_cadence: "daily"
+    geographic_break: "sub_county"
+    privacy_class: "Internal"
+
+  - dataset: "health"
+    metric: "pct_member_with_chronic_flag_recorded"
+    label: "% members 2+ years with chronic-illness flag recorded"
+    definition: >
+      Share of members aged 2+ with a non-empty chronic_illness_flag
+      (i.e. the question was answered, regardless of yes/no). Coverage
+      proxy only; the typed list itself is Sensitive and never
+      surfaced as a coverage %.
+    numerator: "count(Health where chronic_illness_flag != '' and Member.age_years >= 2)"
+    denominator: "count(Member where age_years >= 2 and is_deleted=false)"
+    matview: "mv_explorer_health_chronic_subregion"
+    refresh_cadence: "weekly"
+    geographic_break: "sub_region"
+    privacy_class: "Personal"
+
+  # =========================================================================
+  # Cross-cutting coverage metrics (not bound to a single matview)
+  # =========================================================================
+
+  - dataset: "household"
+    metric: "pct_household_with_complete_dwelling"
+    label: "% households with a complete dwelling record"
+    definition: >
+      Share of active households where every concrete Dwelling field
+      (tenure, dwelling_type, total_rooms, sleeping_rooms,
+      roof/wall/floor material) is non-empty.
+    numerator: "count(Household with Dwelling where all dwelling fields non-empty)"
+    denominator: "count(Household where is_deleted=false)"
+    matview: "mv_explorer_household_by_subcounty_demographics"
+    refresh_cadence: "daily"
+    geographic_break: "sub_county"
+    privacy_class: "Internal"
+
+  - dataset: "household"
+    metric: "pct_household_with_food_security_record"
+    label: "% households with an FIES record"
+    definition: >
+      Share of active households with a non-null FoodSecurity row
+      attached.
+    numerator: "count(Household with FoodSecurity)"
+    denominator: "count(Household where is_deleted=false)"
+    matview: null
+    refresh_cadence: "weekly"
+    geographic_break: "sub_county"
+    privacy_class: "Internal"
+
+  - dataset: "household"
+    metric: "pct_household_with_food_consumption_record"
+    label: "% households with an FCS record"
+    definition: >
+      Share of active households with a non-null FoodConsumption row
+      attached.
+    numerator: "count(Household with FoodConsumption)"
+    denominator: "count(Household where is_deleted=false)"
+    matview: null
+    refresh_cadence: "weekly"
+    geographic_break: "sub_county"
+    privacy_class: "Internal"
+
+  - dataset: "member"
+    metric: "pct_member_with_age_recorded"
+    label: "% members with age in years recorded"
+    definition: >
+      Share of non-deleted members whose age_years is non-null. Basic
+      demographic-completeness proxy.
+    numerator: "count(Member where age_years IS NOT NULL and is_deleted=false)"
+    denominator: "count(Member where is_deleted=false)"
+    matview: null
+    refresh_cadence: "weekly"
+    geographic_break: "sub_region"
+    privacy_class: "Personal"
+
+  - dataset: "programme_enrolment"
+    metric: "pct_household_currently_enrolled_any_programme"
+    label: "% households currently enrolled in any programme"
+    definition: >
+      Share of active households with at least one
+      ProgrammeEnrolment whose status='active'. Programme-coverage
+      proxy at the household grain.
+    numerator: "count(Household with ProgrammeEnrolment where status='active')"
+    denominator: "count(Household where is_deleted=false)"
+    matview: "mv_explorer_referrals_subcounty"
+    refresh_cadence: "daily"
+    geographic_break: "sub_county"
+    privacy_class: "Internal"
+
+  - dataset: "disability"
+    metric: "pct_member_with_wg_disability_record"
+    label: "% members 2+ years with a Washington Group record"
+    definition: >
+      Share of members aged 2+ with a non-null Disability row where
+      at least one of the six WG-SS dimensions is recorded.
+    numerator: "count(Disability where any of seeing/hearing/walking/memory/selfcare/communication != '')"
+    denominator: "count(Member where age_years >= 2 and is_deleted=false)"
+    matview: null
+    refresh_cadence: "weekly"
+    geographic_break: "sub_region"
+    privacy_class: "Personal"
+
+# End of coverage_metric_definitions.yaml.
+# 8 matview-aligned metrics + 6 cross-cutting = 14 total.

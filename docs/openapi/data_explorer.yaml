@@ -1,0 +1,442 @@
+openapi: 3.1.0
+info:
+  title: NSR MIS — Data Explorer (DATA-EXP)
+  version: "0.1.0"
+  description: |
+    Discovery + aggregate-preview surface. Read-only.
+
+    Gated by the `DATA_EXPLORER_ENABLED` feature flag — every endpoint
+    returns `503` when the flag is off. All endpoints require an
+    authenticated user with the EXPLORER Keycloak realm role (or, in
+    dev, the EXPLORER Django group / superuser).
+
+    Aggregates are routed through a single `Suppressor` service that
+    enforces k-anonymity per the variable's PrivacyClass:
+      - `public`    — k=0  (unlimited)
+      - `internal`  — k=5  (100 user/day, 5,000 org/day)
+      - `personal`  — k=10 (25 user/day, 500 org/day; sub-region floor)
+      - `sensitive` — refused at validation (422)
+
+    Geographic floor is sub-county. Aggregates below the floor are
+    refused with HTTP 422 + a handoff hint to API-DRS.
+
+    See ADR-0023 for the architectural context and ADR-0023 Appendix
+    A for the cell-reconstruction risk probe.
+
+servers:
+  - url: /api/v1/data-explorer
+
+components:
+  securitySchemes:
+    sessionAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid
+    basicAuth:
+      type: http
+      scheme: basic
+  schemas:
+    PrivacyClass:
+      type: object
+      properties:
+        id: { type: string, minLength: 26, maxLength: 26 }
+        code: { type: string, enum: [public, internal, personal, sensitive] }
+        label: { type: string }
+        description: { type: string }
+        k_floor: { type: integer, minimum: 0 }
+        daily_user_cap: { type: [integer, "null"], minimum: 0 }
+        daily_org_cap:  { type: [integer, "null"], minimum: 0 }
+        blocks_aggregate: { type: boolean }
+    RefreshCadence:
+      type: object
+      properties:
+        code: { type: string, enum: [manual, hourly, daily, weekly, monthly] }
+        label: { type: string }
+        interval_seconds: { type: integer, minimum: 0 }
+    Dataset:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string }
+        label: { type: string }
+        description: { type: string }
+        source_matview: { type: string }
+        geographic_floor: { type: string, enum: [region, sub_region, district, sub_county] }
+        has_coverage_baseline: { type: boolean }
+        has_synthetic_sample: { type: boolean }
+        privacy_class: { $ref: "#/components/schemas/PrivacyClass" }
+        refresh_cadence: { $ref: "#/components/schemas/RefreshCadence" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Variable:
+      type: object
+      properties:
+        id: { type: string }
+        code: { type: string }
+        label: { type: string }
+        description: { type: string }
+        dataset:
+          type: object
+          properties:
+            id: { type: string }
+            code: { type: string }
+            label: { type: string }
+        data_type:
+          type: string
+          enum: [text, number, boolean, date, select, geo]
+        source_model: { type: string }
+        source_field: { type: string }
+        choice_list: { type: string }
+        choice_kind: { type: string }
+        privacy_class: { $ref: "#/components/schemas/PrivacyClass" }
+        status: { type: string, enum: [inactive, active, deprecated] }
+        questionnaire_section: { type: string }
+        has_completeness_baseline: { type: boolean }
+        synonyms: { type: array, items: { type: string } }
+        version: { type: integer }
+    AggregateRequest:
+      type: object
+      required: [dataset]
+      properties:
+        dataset:
+          type: string
+          description: "Dataset.code (not id) — e.g. 'household_core'."
+        projection:
+          type: array
+          description: "Variable codes to group by."
+          items: { type: string }
+        filters:
+          type: object
+          additionalProperties: true
+          description: "{ variable_code: value | [values] }"
+        geographic_scope:
+          type: object
+          properties:
+            level: { type: string, enum: [region, sub_region, district, sub_county, parish, village] }
+            codes: { type: array, items: { type: string } }
+    AggregateRow:
+      type: object
+      properties:
+        count: { type: [integer, "null"] }
+        suppressed: { type: boolean }
+      additionalProperties: true
+    AggregateResponse:
+      type: object
+      properties:
+        rows:
+          type: array
+          items: { $ref: "#/components/schemas/AggregateRow" }
+        metadata:
+          type: object
+          properties:
+            matview: { type: string }
+            refreshed_at: { type: [string, "null"], format: date-time }
+            staleness_seconds: { type: integer }
+            suppressed_cell_count: { type: integer }
+            total_cell_count: { type: integer }
+            k_floor: { type: integer }
+            strictest_privacy_class: { type: string }
+            query_hash: { type: string }
+            filter_hash: { type: string }
+    HandoffRequest:
+      type: object
+      required: [dsa_id, purpose_of_use, requested_entity, requested_fields]
+      properties:
+        dsa_id: { type: string, minLength: 26, maxLength: 26 }
+        purpose_of_use: { type: string, minLength: 1 }
+        requested_entity: { type: string, enum: [Household, Member] }
+        requested_fields: { type: array, items: { type: string } }
+        geographic_scope:
+          type: object
+          properties:
+            level: { type: string }
+            codes: { type: array, items: { type: string } }
+        filter_expression: { type: object, additionalProperties: true }
+        estimated_row_count: { type: integer, minimum: 0 }
+        source_query_hash: { type: string }
+        explorer_session_id: { type: string }
+        requester_note: { type: string }
+    HandoffResponse:
+      type: object
+      properties:
+        data_request_id: { type: string, minLength: 26, maxLength: 26 }
+        redirect_url: { type: string, format: uri-reference }
+        explorer_session_id: { type: string, minLength: 26, maxLength: 26 }
+    Error422:
+      type: object
+      properties:
+        error: { type: string }
+        detail: { type: string }
+        floor: { type: string }
+        requested: { type: string }
+        handoff: { type: string }
+    Error429:
+      type: object
+      properties:
+        error: { type: string, enum: [throttled] }
+        detail: { type: string }
+        retry_after_seconds: { type: integer, minimum: 1 }
+        privacy_class: { type: string }
+    Error503:
+      type: object
+      properties:
+        error: { type: string, enum: [matview_stale, data_explorer_disabled] }
+        matview: { type: string }
+        refreshed_at: { type: [string, "null"], format: date-time }
+        staleness_seconds: { type: integer }
+        max_seconds: { type: integer }
+
+security:
+  - sessionAuth: []
+  - basicAuth: []
+
+paths:
+  /datasets/:
+    get:
+      tags: [data-explorer]
+      summary: List datasets (ABAC-scoped)
+      responses:
+        "200":
+          description: Catalogue page
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  results:
+                    type: array
+                    items: { $ref: "#/components/schemas/Dataset" }
+        "503": { description: "data_explorer_disabled", content: { application/json: { schema: { $ref: "#/components/schemas/Error503" }}}}
+  /datasets/{id}/:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    get:
+      tags: [data-explorer]
+      summary: Get one dataset
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Dataset" }
+        "404": { description: Not found }
+        "503": { description: "data_explorer_disabled" }
+  /datasets/{id}/variables/:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+      - in: query
+        name: include_inactive
+        schema: { type: string, enum: ["0", "1"] }
+    get:
+      tags: [data-explorer]
+      summary: List variables in a dataset (active by default)
+      responses:
+        "200": { description: OK }
+        "404": { description: Not found }
+        "503": { description: "data_explorer_disabled" }
+  /variables/:
+    get:
+      tags: [data-explorer]
+      summary: Faceted search across all variables
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string }
+        - in: query
+          name: privacy_class
+          schema: { type: string, enum: [public, internal, personal, sensitive] }
+        - in: query
+          name: dataset
+          schema: { type: string }
+        - in: query
+          name: has_completeness_baseline
+          schema: { type: string, enum: ["0", "1", "true", "false"] }
+      responses:
+        "200": { description: OK }
+        "503": { description: "data_explorer_disabled" }
+  /variables/{id}/:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: string }
+    get:
+      tags: [data-explorer]
+      summary: Variable detail with lineage stub + related variables
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Variable"
+                  - type: object
+                    properties:
+                      lineage:
+                        type: object
+                        properties:
+                          questionnaire_section: { type: string }
+                          source_model: { type: string }
+                          source_field: { type: string }
+                          choice_list: { type: string }
+                      related:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id: { type: string }
+                            code: { type: string }
+                            label: { type: string }
+        "404": { description: Not found }
+        "503": { description: "data_explorer_disabled" }
+  /privacy-classes/:
+    get:
+      tags: [data-explorer]
+      summary: Locked PrivacyClass catalogue (the 4 rows)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  results:
+                    type: array
+                    items: { $ref: "#/components/schemas/PrivacyClass" }
+        "503": { description: "data_explorer_disabled" }
+  /aggregate/:
+    post:
+      tags: [data-explorer]
+      summary: k-anonymity-enforced aggregate query
+      description: |
+        Canonical Query JSON in / suppressed aggregate out. Every
+        response code (200/422/429/503) is audited.
+
+        Geographic floor: sub-county. Going below this triggers HTTP
+        422 with `error=geographic_floor_violation` and the handoff
+        hint to API-DRS.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AggregateRequest" }
+      responses:
+        "200":
+          description: Aggregate result with suppression metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AggregateResponse" }
+        "422":
+          description: Validation error (geographic floor, sensitive class, unknown variable)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error422" }
+        "429":
+          description: Throttle exceeded (per-user or per-org daily cap)
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error429" }
+        "503":
+          description: Matview stale or feature flag off
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error503" }
+  /coverage/{dataset_id}/:
+    parameters:
+      - in: path
+        name: dataset_id
+        required: true
+        schema: { type: string }
+    get:
+      tags: [data-explorer]
+      summary: Coverage by sub-region / district / sub-county
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dataset: { $ref: "#/components/schemas/Dataset" }
+                  count: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        geo_level: { type: string }
+                        geo_code: { type: string }
+                        geo_label: { type: string }
+                        completeness_pct: { type: number }
+                        row_count: { type: integer }
+                        captured_at: { type: string, format: date-time }
+        "404": { description: Not found }
+        "503": { description: "data_explorer_disabled" }
+  /synthetic-sample/{dataset_id}/:
+    parameters:
+      - in: path
+        name: dataset_id
+        required: true
+        schema: { type: string }
+    get:
+      tags: [data-explorer]
+      summary: Synthetic UI preview (NOT real records)
+      responses:
+        "200":
+          description: Synthetic sample rows for UI preview
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dataset: { $ref: "#/components/schemas/Dataset" }
+                  rows:
+                    type: array
+                    items: { type: object, additionalProperties: true }
+                  warning: { type: string }
+        "404": { description: Not found }
+        "503": { description: "data_explorer_disabled" }
+  /handoff/:
+    post:
+      tags: [data-explorer]
+      summary: Hand off to API-DRS as a draft DataRequest
+      description: |
+        Translates the explorer-side Query JSON to the canonical
+        DRS payload, calls
+        `apps.data_requests.services.create_draft(...)`, and returns
+        the new DataRequest id + redirect URL.
+
+        Per ADR-0023 OPEN-6 the DPO sees abandoned drafts too; this
+        endpoint records the ExplorerSession that anchors the
+        discovery trail.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HandoffRequest" }
+      responses:
+        "201":
+          description: Draft created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HandoffResponse" }
+        "422":
+          description: Validation error (missing fields, bad DSA, DSA inactive)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error422" }
+        "503": { description: "data_explorer_disabled" }

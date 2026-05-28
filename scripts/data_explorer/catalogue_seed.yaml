@@ -1,0 +1,2024 @@
+# DATA-EXP catalogue seed — Datasets + Variables for US-DATA-EXP-001.
+#
+# Authority: ADR-0023 §D5 (metadata-driven catalogue, seeded INACTIVE,
+# dual-approval activation). Loader: apps.data_explorer.metadata_loader.
+#
+# Every variable below traces to one of:
+#   * an existing field on apps.data_management.models (concrete column);
+#   * an existing apps.reference_data ChoiceList (value_domain);
+#   * an explicit derived_from computation (PMT band, completeness %, ...);
+#   * the apps.partners / apps.referral models (programme/referral).
+#
+# PrivacyClass defaults (ADR-0023 §D3, locked):
+#   Public    k=0   → geographic codes + administrative attributes
+#   Internal  k=5   → household composition counts, dwelling chars, asset ownership
+#   Personal  k=10  → member-level demographic/education/employment/health-status indicators
+#   Sensitive  —    → NIN, biometrics, GPS point, encrypted chronic-illness types
+#
+# Geographic floor (ADR-0023 §D4): sub_county for Public/Internal,
+# sub_region for Personal, blocked for Sensitive. Parish + village
+# carry `aggregated_only: false` + `requires_drs_handoff: true`.
+#
+# DPO override at activation time is expected — these defaults are the
+# starting position, not the final assignment.
+
+datasets:
+
+  - code: "household"
+    label: "Household"
+    description: >
+      One row per registered household, current state. Source of
+      truth for household-level composition, geography, dwelling,
+      utilities, livelihood, food security, food consumption and
+      PMT score.
+    source_module: "data_management"
+    source_model: "Household"
+    primary_grain: "household"
+    default_refresh_cadence: "daily"
+    questionnaire_sections: ["A", "B", "G", "H", "I"]
+    notes: >
+      `mv_explorer_household_by_subcounty_demographics` and
+      `mv_explorer_household_by_subcounty_pmt` aggregate against
+      this dataset.
+
+  - code: "member"
+    label: "Household member"
+    description: >
+      One row per individual member of a registered household, current
+      state. Demographic identity, NIN-status, marital status,
+      relationship-to-head, telephone presence flags.
+    source_module: "data_management"
+    source_model: "Member"
+    primary_grain: "member"
+    default_refresh_cadence: "weekly"
+    questionnaire_sections: ["C", "D", "E", "F"]
+    notes: >
+      Personal-class variables aggregate at sub-region only
+      (`mv_explorer_member_by_subcounty_*` reshape to sub_region in
+      the matview definition).
+
+  - code: "dwelling"
+    label: "Dwelling unit"
+    description: >
+      One row per household-dwelling pairing. Tenure, type, room
+      counts, roof / wall / floor materials.
+    source_module: "data_management"
+    source_model: "Dwelling"
+    primary_grain: "household"
+    default_refresh_cadence: "daily"
+    questionnaire_sections: ["G1-G7"]
+
+  - code: "utilities"
+    label: "Utilities & services"
+    description: >
+      One row per household. Cooking fuel, lighting energy,
+      drinking water source, toilet facility, waste disposal.
+    source_module: "data_management"
+    source_model: "Utilities"
+    primary_grain: "household"
+    default_refresh_cadence: "daily"
+    questionnaire_sections: ["G8-G14"]
+
+  - code: "livelihood"
+    label: "Livelihood & agriculture"
+    description: >
+      One row per household. Main livelihood source, agricultural
+      zone, land ownership and title.
+    source_module: "data_management"
+    source_model: "Livelihood"
+    primary_grain: "household"
+    default_refresh_cadence: "weekly"
+    questionnaire_sections: ["G16", "H"]
+
+  - code: "food_security"
+    label: "Food security (FIES)"
+    description: >
+      WFP-aligned Food Insecurity Experience Scale per household,
+      and the eight-item raw score (0-8).
+    source_module: "data_management"
+    source_model: "FoodSecurity"
+    primary_grain: "household"
+    default_refresh_cadence: "weekly"
+    questionnaire_sections: ["I1-I8"]
+
+  - code: "food_consumption"
+    label: "Food consumption (FCS)"
+    description: >
+      WFP Food Consumption Score per household, with days-eaten and
+      source per food group.
+    source_module: "data_management"
+    source_model: "FoodConsumption"
+    primary_grain: "household"
+    default_refresh_cadence: "weekly"
+    questionnaire_sections: ["I9-I17"]
+
+  - code: "health"
+    label: "Health (chronic illness)"
+    description: >
+      One row per member 2+ years. Chronic illness presence flag and
+      (encrypted) typed list.
+    source_module: "data_management"
+    source_model: "Health"
+    primary_grain: "member"
+    default_refresh_cadence: "weekly"
+    questionnaire_sections: ["D1-D2"]
+
+  - code: "disability"
+    label: "Disability (Washington Group)"
+    description: >
+      One row per member 2+ years. Six WG-SS dimensions plus the
+      derived `wg_disability_flag` (true when any dimension is
+      'a lot of difficulty' or 'cannot do').
+    source_module: "data_management"
+    source_model: "Disability"
+    primary_grain: "member"
+    default_refresh_cadence: "weekly"
+    questionnaire_sections: ["D3-D8"]
+
+  - code: "education"
+    label: "Education"
+    description: >
+      One row per member 3+ years. Literacy, attendance, highest
+      grade, why-stopped reasons.
+    source_module: "data_management"
+    source_model: "Education"
+    primary_grain: "member"
+    default_refresh_cadence: "weekly"
+    questionnaire_sections: ["E"]
+
+  - code: "employment"
+    label: "Employment"
+    description: >
+      One row per member 7+ years. Main activity, sector, status,
+      government-programme history, savings.
+    source_module: "data_management"
+    source_model: "Employment"
+    primary_grain: "member"
+    default_refresh_cadence: "weekly"
+    questionnaire_sections: ["F"]
+
+  - code: "asset_ownership"
+    label: "Asset ownership"
+    description: >
+      Repeat-group. One row per asset-type per household. Count
+      capped at 9 per questionnaire G15.
+    source_module: "data_management"
+    source_model: "AssetOwnership"
+    primary_grain: "household_asset"
+    default_refresh_cadence: "weekly"
+    questionnaire_sections: ["G15"]
+
+  - code: "shock"
+    label: "Shock event"
+    description: >
+      Repeat-group. One row per shock event per household with type,
+      severity, livelihoods affected, event date.
+    source_module: "data_management"
+    source_model: "Shock"
+    primary_grain: "household_shock"
+    default_refresh_cadence: "weekly"
+    questionnaire_sections: ["K1-K4"]
+
+  - code: "coping_strategy"
+    label: "Coping strategy"
+    description: >
+      Repeat-group. One row per (household, strategy_type, category)
+      covering livelihood-coping (L01) and food-coping (L02).
+    source_module: "data_management"
+    source_model: "CopingStrategy"
+    primary_grain: "household_strategy"
+    default_refresh_cadence: "weekly"
+    questionnaire_sections: ["L1", "L2"]
+
+  - code: "pmt"
+    label: "PMT scoring"
+    description: >
+      Latest PMT result per household — score, band, vulnerability
+      tier, computation timestamp. Derived from apps.pmt.PMTResult.
+    source_module: "pmt"
+    source_model: "PMTResult"
+    primary_grain: "household"
+    default_refresh_cadence: "daily"
+    questionnaire_sections: []
+    notes: >
+      Driven by `mv_explorer_household_by_subcounty_pmt`. PMT band
+      itself is `derived_from` the active PMTModelVersion's
+      `band_cutoffs`.
+
+  - code: "referral"
+    label: "Programme referrals"
+    description: >
+      One row per referral of a household to a partner programme.
+      Status, eligibility-rule version, lifecycle timestamps.
+    source_module: "referral"
+    source_model: "Referral"
+    primary_grain: "household_referral"
+    default_refresh_cadence: "daily"
+    questionnaire_sections: []
+
+  - code: "programme_enrolment"
+    label: "Programme enrolment"
+    description: >
+      One row per programme-side enrolment event for a household.
+      Status, effective date, exit reason.
+    source_module: "referral"
+    source_model: "ProgrammeEnrolment"
+    primary_grain: "household_enrolment"
+    default_refresh_cadence: "daily"
+    questionnaire_sections: []
+
+  - code: "geography"
+    label: "Geographic frame (UBOS)"
+    description: >
+      The UBOS GeographicUnit hierarchy used for projection +
+      filtering. Read-only; variables here describe the *frame*,
+      not household data.
+    source_module: "reference_data"
+    source_model: "GeographicUnit"
+    primary_grain: "geographic_unit"
+    default_refresh_cadence: "manual"
+    questionnaire_sections: ["A1-A6"]
+
+
+# =============================================================================
+# Variables
+# =============================================================================
+
+variables:
+
+  # ---- Geography (UBOS frame) -----------------------------------------------
+
+  - code: "geography.sub_region_code"
+    label: "Sub-region (UBOS code)"
+    definition: "One of the nine UBOS statistical sub-regions used as the PostgreSQL partition key and the Personal-class aggregation floor."
+    unit: ""
+    source_module: "reference_data"
+    source_model: "GeographicUnit"
+    source_field: "code"
+    source_questionnaire_path: "A.1"
+    privacy_class: "Public"
+    refresh_cadence: "manual"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "ubos_sub_region_codes"
+    notes: "Always required on every household; cannot be null at promotion."
+
+  - code: "geography.district_code"
+    label: "District / City (UBOS code)"
+    definition: "UBOS administrative district or city. There are ~146 districts/cities at v2 of the frame."
+    unit: ""
+    source_module: "reference_data"
+    source_model: "GeographicUnit"
+    source_field: "code"
+    source_questionnaire_path: "A.2"
+    privacy_class: "Public"
+    refresh_cadence: "manual"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "district"
+    value_domain: "ubos_district_codes"
+
+  - code: "geography.county_code"
+    label: "County / Municipality (UBOS code)"
+    definition: "UBOS county or municipality."
+    unit: ""
+    source_module: "reference_data"
+    source_model: "GeographicUnit"
+    source_field: "code"
+    source_questionnaire_path: "A.3"
+    privacy_class: "Public"
+    refresh_cadence: "manual"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "district"
+
+  - code: "geography.sub_county_code"
+    label: "Sub-county / Division (UBOS code)"
+    definition: "UBOS sub-county, division or town council. This is the discovery floor — aggregates below this level are refused."
+    unit: ""
+    source_module: "reference_data"
+    source_model: "GeographicUnit"
+    source_field: "code"
+    source_questionnaire_path: "A.4"
+    privacy_class: "Public"
+    refresh_cadence: "manual"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "ubos_sub_county_codes"
+
+  - code: "geography.parish_code"
+    label: "Parish / Ward (UBOS code)"
+    definition: "UBOS parish or ward. NOT available on the discovery path — record-level handoff to API-DRS required."
+    unit: ""
+    source_module: "reference_data"
+    source_model: "GeographicUnit"
+    source_field: "code"
+    source_questionnaire_path: "A.5"
+    privacy_class: "Personal"
+    refresh_cadence: "manual"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_county"
+    aggregated_only: false
+    requires_drs_handoff: true
+    notes: "Below the discovery floor. Catalogue lists it; query builder disables it; aggregate endpoint 422s. See ADR-0023 §D4."
+
+  - code: "geography.village_code"
+    label: "LC1 / Village / Cell (UBOS code)"
+    definition: "Optional UBOS village or cell. Often unknown at parish-walk-in capture."
+    unit: ""
+    source_module: "reference_data"
+    source_model: "GeographicUnit"
+    source_field: "code"
+    source_questionnaire_path: "A.6"
+    privacy_class: "Personal"
+    refresh_cadence: "manual"
+    expected_completeness_baseline: 35.0
+    geographic_minimum_level: "sub_county"
+    aggregated_only: false
+    requires_drs_handoff: true
+    notes: "Only ~19 of 10,872 parishes carry seeded village rows in the UBOS v2 frame. Sparse."
+
+  # ---- Household — geography + administrative -------------------------------
+
+  - code: "household.sub_region_code"
+    label: "Household sub-region"
+    definition: "Sub-region the household is administratively assigned to (denormalised partition key)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: "sub_region_code"
+    source_questionnaire_path: "A.1"
+    privacy_class: "Public"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_region"
+
+  - code: "household.district_code"
+    label: "Household district"
+    definition: "District the household is administratively assigned to."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: "district"
+    source_questionnaire_path: "A.2"
+    privacy_class: "Public"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "district"
+
+  - code: "household.sub_county_code"
+    label: "Household sub-county"
+    definition: "Sub-county the household is administratively assigned to (UBOS code)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: "sub_county"
+    source_questionnaire_path: "A.4"
+    privacy_class: "Public"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_county"
+
+  - code: "household.urban_rural"
+    label: "Urban / rural"
+    definition: "Whether the household is administratively classified urban or rural."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: "urban_rural"
+    source_questionnaire_path: "A.7"
+    privacy_class: "Public"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "rural_urban"
+
+  - code: "household.enumeration_area"
+    label: "Enumeration area"
+    definition: "UBOS enumeration area code the household was captured in."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: "enumeration_area"
+    source_questionnaire_path: "A.8"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_county"
+
+  # ---- Household — composition + status -------------------------------------
+
+  - code: "household.reported_household_size"
+    label: "Reported household size"
+    definition: "Operator-reported household size at intake (canonical_payload.interview.hh_size)."
+    unit: "members"
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: "reported_household_size"
+    source_questionnaire_path: "B"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 98.0
+    geographic_minimum_level: "sub_county"
+
+  - code: "household.member_count_actual"
+    label: "Member count (roster)"
+    definition: "Count of non-deleted Member rows attached to this household. Derived; not stored."
+    unit: "members"
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: null
+    source_questionnaire_path: "C"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "count(member where household=this and is_deleted=false)"
+
+  - code: "household.head_sex"
+    label: "Head-of-household sex"
+    definition: "Sex of the member designated as household head (relationship_to_head='01')."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: null
+    source_questionnaire_path: "C.4"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 99.5
+    geographic_minimum_level: "sub_county"
+    value_domain: "sex"
+    derived_from: "Member.sex where head_member_id = household.head_member_id"
+
+  - code: "household.head_age_band"
+    label: "Head-of-household age band"
+    definition: "Age band of the household head. Bands: <15, 15-29, 30-44, 45-59, 60-74, 75+."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: null
+    source_questionnaire_path: "C.7"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 99.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "age_bands_v1"
+    derived_from: "band(Member.age_years) where head_member_id"
+
+  - code: "household.residence_status"
+    label: "Residence status"
+    definition: "Whether the household is resident, displaced, asylum-seeker, refugee, returnee or repatriated."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: "residence_status"
+    source_questionnaire_path: "C.11"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 90.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "residency_status"
+
+  - code: "household.current_consent_state"
+    label: "Consent state"
+    definition: "Latest DPPA-2019 consent state (granted, withdrawn, pending)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: "current_consent_state"
+    source_questionnaire_path: "Consent statement"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 99.0
+    geographic_minimum_level: "sub_county"
+
+  - code: "household.current_intake_source"
+    label: "Intake source"
+    definition: "Channel that originally captured the household (capi / web / kobo / partner / ubos / walk_in)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: "current_intake_source"
+    source_questionnaire_path: "B"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_county"
+
+  - code: "household.gps_present_flag"
+    label: "GPS captured (yes/no)"
+    definition: "Whether the household has any GPS coordinate captured. Boolean derived from gps_lat IS NOT NULL."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: null
+    source_questionnaire_path: "A.11-A.12"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "Household.gps_lat IS NOT NULL"
+    notes: "The presence flag is Internal; the lat/lng point itself is Sensitive and has no aggregate variable."
+
+  - code: "household.gps_accuracy_m"
+    label: "GPS accuracy (metres)"
+    definition: "Reported GPS-fix accuracy in metres. Lower is better."
+    unit: "metres"
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: "gps_accuracy_m"
+    source_questionnaire_path: "A.11-A.12"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 80.0
+    geographic_minimum_level: "sub_county"
+    notes: "Accuracy is Internal; the underlying lat/lng pair is Sensitive."
+
+  # ---- Member ---------------------------------------------------------------
+
+  - code: "member.sex"
+    label: "Member sex"
+    definition: "Member sex per questionnaire C.4."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "sex"
+    source_questionnaire_path: "C.4"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "sex"
+
+  - code: "member.age_band"
+    label: "Member age band"
+    definition: "Member age band. Bands: 0-4, 5-9, 10-14, 15-17, 18-29, 30-44, 45-59, 60-74, 75+."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: null
+    source_questionnaire_path: "C.7"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 99.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "age_bands_v1"
+    derived_from: "band(Member.age_years)"
+
+  - code: "member.age_years"
+    label: "Member age (years)"
+    definition: "Member age in completed years, capped at 95. Aggregated as count by band on the discovery path; raw age available only via DRS."
+    unit: "years"
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "age_years"
+    source_questionnaire_path: "C.7"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 99.0
+    geographic_minimum_level: "sub_region"
+    notes: "Discovery aggregates use member.age_band; raw age_years projection is refused below sub_region."
+
+  - code: "member.date_of_birth"
+    label: "Date of birth"
+    definition: "Member date of birth, full date. Sensitive — never discoverable; aggregate use forbidden."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "date_of_birth"
+    source_questionnaire_path: "C.6"
+    privacy_class: "Sensitive"
+    refresh_cadence: "manual"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_region"
+    aggregated_only: false
+    requires_drs_handoff: true
+    notes: "Catalogue exposes the dictionary entry only — never the value."
+
+  - code: "member.relationship_to_head"
+    label: "Relationship to head"
+    definition: "Coded relationship of member to head of household."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "relationship_to_head"
+    source_questionnaire_path: "C.3"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "relationship"
+
+  - code: "member.marital_status"
+    label: "Marital status"
+    definition: "Member marital status (12+ yrs) per questionnaire C.5."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "marital_status"
+    source_questionnaire_path: "C.5"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "marital_status"
+
+  - code: "member.nationality"
+    label: "Nationality"
+    definition: "Member nationality per questionnaire C.10."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "nationality"
+    source_questionnaire_path: "C.10"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 98.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "nationality"
+
+  - code: "member.residency_status"
+    label: "Member residency status"
+    definition: "Resident / IDP / asylum-seeker / refugee / returnee / repatriated."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "residency_status"
+    source_questionnaire_path: "C.11"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 90.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "residency_status"
+
+  - code: "member.birth_certificate_status"
+    label: "Birth-certificate status"
+    definition: "Whether the member has a long/short birth certificate, VHT registration, or none."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "birth_certificate_status"
+    source_questionnaire_path: "C.8"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "birth_certificate"
+
+  - code: "member.nin_status"
+    label: "NIN status"
+    definition: "Whether the member has a NIN card, lost it, was not issued, or doesn't have one."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "nin_status"
+    source_questionnaire_path: "C.9"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 99.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "nin_status"
+
+  - code: "member.nin_value"
+    label: "National Identification Number"
+    definition: "The actual NIN string. Encrypted at rest (AES-256) per ADR-0002. Sensitive — never discoverable."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "nin_value"
+    source_questionnaire_path: "C.9"
+    privacy_class: "Sensitive"
+    refresh_cadence: "manual"
+    expected_completeness_baseline: 75.0
+    geographic_minimum_level: "sub_region"
+    aggregated_only: false
+    requires_drs_handoff: true
+    notes: "Catalogue exposes the dictionary entry only. NEVER projectable."
+
+  - code: "member.nin_hash"
+    label: "NIN join hash"
+    definition: "SHA-256 hash of the NIN used as a join key (ADR-0002). Sensitive — discoverable as 'present/absent' flag only."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "nin_hash"
+    source_questionnaire_path: "C.9"
+    privacy_class: "Sensitive"
+    refresh_cadence: "manual"
+    expected_completeness_baseline: 75.0
+    geographic_minimum_level: "sub_region"
+    aggregated_only: false
+    requires_drs_handoff: true
+
+  - code: "member.nin_verified_flag"
+    label: "NIN verified (yes/no)"
+    definition: "Boolean: NIN has been verified against NIRA sandbox / live. Derived from nin_status='1' AND nin_hash IS NOT NULL."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: null
+    source_questionnaire_path: "C.9"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 70.0
+    geographic_minimum_level: "sub_region"
+    derived_from: "nin_status='1' AND nin_hash IS NOT NULL"
+
+  - code: "member.telephone_present_flag"
+    label: "Member has telephone"
+    definition: "Whether the member has at least one telephone number recorded."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: null
+    source_questionnaire_path: "C.17-C.20"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 80.0
+    geographic_minimum_level: "sub_region"
+    derived_from: "telephone_1 != '' OR telephone_2 != ''"
+
+  - code: "member.mobile_money_flag"
+    label: "Mobile money active"
+    definition: "Whether the member's number is registered in their name and mobile-money-activated (C.21)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "mobile_money_flag"
+    source_questionnaire_path: "C.21"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 75.0
+    geographic_minimum_level: "sub_region"
+
+  - code: "member.orphan_flag"
+    label: "Orphan flag"
+    definition: "Under-18 member with both parents marked deceased (per AC-ORPHAN-FLAG)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "orphan_flag"
+    source_questionnaire_path: "C.12-C.13"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 60.0
+    geographic_minimum_level: "sub_region"
+
+  - code: "member.mother_alive_flag"
+    label: "Mother alive (yes/no)"
+    definition: "Whether the member's biological mother is alive (C.12)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "mother_alive_flag"
+    source_questionnaire_path: "C.12"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "yes_no_dk"
+
+  - code: "member.father_alive_flag"
+    label: "Father alive (yes/no)"
+    definition: "Whether the member's biological father is alive (C.13)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Member"
+    source_field: "father_alive_flag"
+    source_questionnaire_path: "C.13"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "yes_no_dk"
+
+  # ---- Dwelling -------------------------------------------------------------
+
+  - code: "dwelling.tenure"
+    label: "Tenure of dwelling"
+    definition: "Owner-occupied / free / subsidised / rented (public or private)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Dwelling"
+    source_field: "tenure"
+    source_questionnaire_path: "G.1"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "tenure"
+
+  - code: "dwelling.dwelling_type"
+    label: "Dwelling type"
+    definition: "Detached / semi-detached / apartment / hut / muzigo / uniport / multi-storey etc."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Dwelling"
+    source_field: "dwelling_type"
+    source_questionnaire_path: "G.2"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "dwelling_type"
+
+  - code: "dwelling.total_rooms"
+    label: "Total rooms"
+    definition: "Total number of rooms in the dwelling."
+    unit: "rooms"
+    source_module: "data_management"
+    source_model: "Dwelling"
+    source_field: "total_rooms"
+    source_questionnaire_path: "G.3"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 90.0
+    geographic_minimum_level: "sub_county"
+
+  - code: "dwelling.sleeping_rooms"
+    label: "Rooms used for sleeping"
+    definition: "Rooms used for sleeping. Crowding indicator: total_rooms - sleeping_rooms."
+    unit: "rooms"
+    source_module: "data_management"
+    source_model: "Dwelling"
+    source_field: "sleeping_rooms"
+    source_questionnaire_path: "G.4"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 90.0
+    geographic_minimum_level: "sub_county"
+
+  - code: "dwelling.roof_material"
+    label: "Roof material"
+    definition: "Main material used for the roof (iron sheets, tiles, asbestos, concrete, tarpaulin, thatch, ...)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Dwelling"
+    source_field: "roof_material"
+    source_questionnaire_path: "G.5"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "roof_material"
+
+  - code: "dwelling.wall_material"
+    label: "Wall material"
+    definition: "Main material used for the walls."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Dwelling"
+    source_field: "wall_material"
+    source_questionnaire_path: "G.6"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "wall_material"
+
+  - code: "dwelling.floor_material"
+    label: "Floor material"
+    definition: "Main material used for the floor."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Dwelling"
+    source_field: "floor_material"
+    source_questionnaire_path: "G.7"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "floor_material"
+
+  # ---- Utilities ------------------------------------------------------------
+
+  - code: "utilities.cooking_fuel"
+    label: "Cooking fuel"
+    definition: "Main cooking fuel — electric / LPG / biogas / firewood / charcoal / three-stone-stove etc."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Utilities"
+    source_field: "cooking_fuel"
+    source_questionnaire_path: "G.8"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "cooking_fuel"
+
+  - code: "utilities.lighting_energy"
+    label: "Lighting energy source"
+    definition: "Main lighting source — electricity grid / solar / kerosene / candle / open fire etc."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Utilities"
+    source_field: "lighting_energy"
+    source_questionnaire_path: "G.9"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "lighting_source"
+
+  - code: "utilities.drinking_water_source"
+    label: "Drinking water source"
+    definition: "Main drinking water source — piped / borehole / protected well / river / tanker etc."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Utilities"
+    source_field: "drinking_water_source"
+    source_questionnaire_path: "G.10"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "water_source"
+
+  - code: "utilities.toilet_facility"
+    label: "Toilet facility"
+    definition: "Main toilet facility — flush / VIP latrine / covered pit / uncovered pit / ecosan / none."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Utilities"
+    source_field: "toilet_facility"
+    source_questionnaire_path: "G.11"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "toilet_type"
+
+  - code: "utilities.toilet_shared"
+    label: "Toilet shared (yes/no)"
+    definition: "Whether the household shares this toilet with other households."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Utilities"
+    source_field: "toilet_shared"
+    source_questionnaire_path: "G.12"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 90.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "yes_no"
+
+  - code: "utilities.households_sharing_toilet"
+    label: "Households sharing toilet"
+    definition: "Number of other households sharing the same toilet, capped at 10 per questionnaire G13."
+    unit: "households"
+    source_module: "data_management"
+    source_model: "Utilities"
+    source_field: "households_sharing_toilet"
+    source_questionnaire_path: "G.13"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 70.0
+    geographic_minimum_level: "sub_county"
+
+  - code: "utilities.waste_disposal"
+    label: "Waste disposal method"
+    definition: "Most-commonly used method of solid-waste disposal — pit, vendor, dump, burn, bury, into river, bush, etc."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Utilities"
+    source_field: "waste_disposal"
+    source_questionnaire_path: "G.14"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 90.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "waste_disposal"
+
+  # ---- Livelihood -----------------------------------------------------------
+
+  - code: "livelihood.main_livelihood"
+    label: "Main household livelihood"
+    definition: "Main household livelihood in the last 12 months — subsistence farming, commercial farming, salaried employment, cottage industry, transfers, etc."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Livelihood"
+    source_field: "main_livelihood"
+    source_questionnaire_path: "G.16"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "livelihood_source"
+
+  - code: "livelihood.crop_production_zone"
+    label: "Crop production zone"
+    definition: "Where the household practises crop production — within EA, within parish, outside parish but within district, outside district, or none (H.1)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Livelihood"
+    source_field: "crop_production_zone"
+    source_questionnaire_path: "H.1"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "ag_activity"
+
+  - code: "livelihood.livestock_zone"
+    label: "Livestock-rearing zone"
+    definition: "Where the household keeps livestock (H.2)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Livelihood"
+    source_field: "livestock_zone"
+    source_questionnaire_path: "H.2"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 80.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "ag_activity"
+
+  - code: "livelihood.agricultural_purpose"
+    label: "Agricultural purpose"
+    definition: "Main purpose of agricultural production — sale / consumption / mixed (H.4)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Livelihood"
+    source_field: "agricultural_purpose"
+    source_questionnaire_path: "H.4"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 80.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "ag_purpose"
+
+  - code: "livelihood.land_ownership"
+    label: "Land ownership"
+    definition: "Whether the household owns land (alone / jointly / both / doesn't own) per H.6."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Livelihood"
+    source_field: "land_ownership"
+    source_questionnaire_path: "H.6"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "land_ownership"
+
+  - code: "livelihood.land_hectares"
+    label: "Land area (hectares)"
+    definition: "Hectares of land owned by the household (H.7). Aggregated as count by band on the discovery path."
+    unit: "hectares"
+    source_module: "data_management"
+    source_model: "Livelihood"
+    source_field: "land_hectares"
+    source_questionnaire_path: "H.7"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 60.0
+    geographic_minimum_level: "sub_county"
+
+  - code: "livelihood.land_title"
+    label: "Land title status"
+    definition: "Whether the household has title deed / certificate of ownership / hereditary acquisition / lease / rental (H.8)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Livelihood"
+    source_field: "land_title"
+    source_questionnaire_path: "H.8"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 70.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "title_deed"
+
+  # ---- Food security (FIES) ------------------------------------------------
+
+  - code: "food_security.fies_raw_score"
+    label: "FIES raw score (0-8)"
+    definition: "Food Insecurity Experience Scale eight-item raw score. Sum of yes-coded responses across the eight FIES items."
+    unit: "score"
+    source_module: "data_management"
+    source_model: "FoodSecurity"
+    source_field: "fies_raw_score"
+    source_questionnaire_path: "I.1-I.8"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 90.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "sum(1 for v in fies items if v=='1')"
+
+  - code: "food_security.worried_food"
+    label: "FIES: worried about food"
+    definition: "Worried about not having food due to lack of money in last 12 months."
+    unit: ""
+    source_module: "data_management"
+    source_model: "FoodSecurity"
+    source_field: "worried_food"
+    source_questionnaire_path: "I.1"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 90.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "yes_no_dk_ref"
+
+  - code: "food_security.skipped_meal"
+    label: "FIES: skipped a meal"
+    definition: "Ever had to skip a meal because not enough money or other resources in last 12 months."
+    unit: ""
+    source_module: "data_management"
+    source_model: "FoodSecurity"
+    source_field: "skipped_meal"
+    source_questionnaire_path: "I.4"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 90.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "yes_no_dk_ref"
+
+  - code: "food_security.whole_day_no_eat"
+    label: "FIES: whole day without eating"
+    definition: "Whole day without eating due to lack of money in last 12 months. Severe-end FIES indicator."
+    unit: ""
+    source_module: "data_management"
+    source_model: "FoodSecurity"
+    source_field: "whole_day_no_eat"
+    source_questionnaire_path: "I.8"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 90.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "yes_no_dk_ref"
+
+  # ---- Food consumption (FCS) ----------------------------------------------
+
+  - code: "food_consumption.fcs_score"
+    label: "FCS score (0-112)"
+    definition: "WFP Food Consumption Score, weighted total. Bands: poor (≤21), borderline (22-35), acceptable (>35)."
+    unit: "score"
+    source_module: "data_management"
+    source_model: "FoodConsumption"
+    source_field: "fcs_score"
+    source_questionnaire_path: "I.9-I.17"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "sum(days[group] * fcs_weight[group]) for 9 food groups"
+
+  - code: "food_consumption.fcs_band"
+    label: "FCS band"
+    definition: "FCS band — poor / borderline / acceptable — derived from fcs_score using WFP thresholds."
+    unit: ""
+    source_module: "data_management"
+    source_model: "FoodConsumption"
+    source_field: null
+    source_questionnaire_path: "I.9-I.17"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "WFP-FCS thresholds 21/35"
+
+  - code: "food_consumption.staples_days"
+    label: "Days eating staples (last 7)"
+    definition: "Days household ate staples (rice/maize/cassava/sweet potato/...) in the last 7 days."
+    unit: "days"
+    source_module: "data_management"
+    source_model: "FoodConsumption"
+    source_field: "staples_days"
+    source_questionnaire_path: "I.9"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_county"
+
+  - code: "food_consumption.meat_days"
+    label: "Days eating meat/fish/eggs (last 7)"
+    definition: "Days household ate meat, fish or eggs in the last 7 days."
+    unit: "days"
+    source_module: "data_management"
+    source_model: "FoodConsumption"
+    source_field: "meat_days"
+    source_questionnaire_path: "I.12"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_county"
+
+  - code: "food_consumption.dairy_days"
+    label: "Days consuming dairy (last 7)"
+    definition: "Days household consumed milk or dairy products in the last 7 days."
+    unit: "days"
+    source_module: "data_management"
+    source_model: "FoodConsumption"
+    source_field: "dairy_days"
+    source_questionnaire_path: "I.11"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_county"
+
+  # ---- Health ---------------------------------------------------------------
+
+  - code: "health.chronic_illness_flag"
+    label: "Chronic illness (yes/no)"
+    definition: "Whether the member suffers from any chronic illness (D.1). Binary aggregate; specific illness codes are Sensitive."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Health"
+    source_field: "chronic_illness_flag"
+    source_questionnaire_path: "D.1"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 80.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "yes_no_dk"
+
+  - code: "health.chronic_illness_types"
+    label: "Chronic illness types"
+    definition: "Specific chronic illness codes (TB, HIV/AIDS, hypertension, diabetes, cancer, hepatitis, schistosomiasis, respiratory). Stored encrypted (ADR-0021) — special-category data under DPPA-2019."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Health"
+    source_field: "chronic_illness_types_encrypted"
+    source_questionnaire_path: "D.2"
+    privacy_class: "Sensitive"
+    refresh_cadence: "manual"
+    expected_completeness_baseline: 40.0
+    geographic_minimum_level: "sub_region"
+    aggregated_only: false
+    requires_drs_handoff: true
+    notes: "Catalogue entry only. NEVER projectable, NEVER filterable on the discovery path. Record-level access requires explicit DPO clearance per ADR-0019."
+
+  # ---- Disability (Washington Group) ---------------------------------------
+
+  - code: "disability.wg_disability_flag"
+    label: "Washington Group disability flag"
+    definition: "True when any WG-SS dimension is 'a lot of difficulty' (03) or 'cannot do at all' (04). Derived on save."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Disability"
+    source_field: "wg_disability_flag"
+    source_questionnaire_path: "D.3-D.8"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 75.0
+    geographic_minimum_level: "sub_region"
+    derived_from: "any(seeing|hearing|walking|memory|selfcare|communication in {'03','04'})"
+
+  - code: "disability.seeing"
+    label: "Difficulty seeing"
+    definition: "Washington Group seeing difficulty (D.3). 01=no, 02=some, 03=a lot, 04=cannot do."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Disability"
+    source_field: "seeing"
+    source_questionnaire_path: "D.3"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 75.0
+    geographic_minimum_level: "sub_region"
+
+  - code: "disability.hearing"
+    label: "Difficulty hearing"
+    definition: "Washington Group hearing difficulty (D.4)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Disability"
+    source_field: "hearing"
+    source_questionnaire_path: "D.4"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 75.0
+    geographic_minimum_level: "sub_region"
+
+  - code: "disability.walking"
+    label: "Difficulty walking"
+    definition: "Washington Group walking difficulty (D.5)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Disability"
+    source_field: "walking"
+    source_questionnaire_path: "D.5"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 75.0
+    geographic_minimum_level: "sub_region"
+
+  - code: "disability.memory"
+    label: "Difficulty remembering"
+    definition: "Washington Group memory / cognition difficulty (D.6)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Disability"
+    source_field: "memory"
+    source_questionnaire_path: "D.6"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 75.0
+    geographic_minimum_level: "sub_region"
+
+  - code: "disability.selfcare"
+    label: "Difficulty self-care"
+    definition: "Washington Group self-care difficulty (D.7)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Disability"
+    source_field: "selfcare"
+    source_questionnaire_path: "D.7"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 75.0
+    geographic_minimum_level: "sub_region"
+
+  - code: "disability.communication"
+    label: "Difficulty communicating"
+    definition: "Washington Group communication difficulty (D.8)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Disability"
+    source_field: "communication"
+    source_questionnaire_path: "D.8"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 75.0
+    geographic_minimum_level: "sub_region"
+
+  # ---- Education ------------------------------------------------------------
+
+  - code: "education.literacy_status"
+    label: "Literacy status"
+    definition: "Member literacy status (15+ yrs): unable to read/write, able to read only, able to read and write, uses Braille."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Education"
+    source_field: "literacy_status"
+    source_questionnaire_path: "E.1"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 80.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "literacy"
+
+  - code: "education.ever_attended"
+    label: "Ever attended school (yes/no)"
+    definition: "Has the member ever attended formal school or any early childhood education programme (E.2)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Education"
+    source_field: "ever_attended"
+    source_questionnaire_path: "E.2"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "yes_no"
+
+  - code: "education.never_attended_reason"
+    label: "Reason never attended school"
+    definition: "Reason member never attended school (E.3): work, expensive, too far, not useful, married, religious, disabled, ..."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Education"
+    source_field: "never_attended_reason"
+    source_questionnaire_path: "E.3"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 30.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "never_school_reason"
+
+  - code: "education.highest_grade"
+    label: "Highest grade completed"
+    definition: "Highest grade or class of formal education completed by the member (E.4)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Education"
+    source_field: "highest_grade"
+    source_questionnaire_path: "E.4"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 80.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "education_level"
+
+  - code: "education.currently_attending"
+    label: "Currently attending (yes/no)"
+    definition: "Is the member (3-24 yrs) currently attending school (E.5)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Education"
+    source_field: "currently_attending"
+    source_questionnaire_path: "E.5"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 70.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "yes_no"
+
+  - code: "education.why_stopped"
+    label: "Reason stopped attending"
+    definition: "Why the member stopped going to school (E.6) — financial, distance, illness, pregnancy, marriage, completed, ..."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Education"
+    source_field: "why_stopped"
+    source_questionnaire_path: "E.6"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 50.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "stopped_school_reason"
+
+  # ---- Employment -----------------------------------------------------------
+
+  - code: "employment.main_activity_last_30d"
+    label: "Main activity last 30 days"
+    definition: "Member's main job or activity in the last 30 days (F.1)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Employment"
+    source_field: "main_activity_last_30d"
+    source_questionnaire_path: "F.1"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 80.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "main_job"
+
+  - code: "employment.work_frequency"
+    label: "Work frequency"
+    definition: "How frequently the member has been working — full/part-time, permanent/seasonal, occasional (F.2)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Employment"
+    source_field: "work_frequency"
+    source_questionnaire_path: "F.2"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 60.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "work_frequency"
+
+  - code: "employment.sector"
+    label: "Employment sector (ISIC-aligned)"
+    definition: "Main sector of work — agriculture, mining, manufacturing, services, public administration, etc. (F.3)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Employment"
+    source_field: "sector"
+    source_questionnaire_path: "F.3"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 60.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "work_sector"
+
+  - code: "employment.employment_status"
+    label: "Employment status"
+    definition: "Member's employment status (F.4): employer, own-account, permanent employee, fixed-term, casual, family worker."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Employment"
+    source_field: "employment_status"
+    source_questionnaire_path: "F.4"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 60.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "work_status"
+
+  - code: "employment.not_working_reason"
+    label: "Reason not working"
+    definition: "If not working, the reason (F.5): no job available, age, student, illness, disability, not looking, skills mismatch."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Employment"
+    source_field: "not_working_reason"
+    source_questionnaire_path: "F.5"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 40.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "not_working_reason"
+
+  - code: "employment.is_govt_programme_beneficiary"
+    label: "Ever benefited from government programme"
+    definition: "Has the member ever been a beneficiary of a government programme (F.6)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Employment"
+    source_field: "is_govt_programme_beneficiary"
+    source_questionnaire_path: "F.6"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 80.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "yes_no"
+
+  - code: "employment.currently_benefiting"
+    label: "Currently benefiting from programme"
+    definition: "Is the member currently benefiting from the programme (F.8)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Employment"
+    source_field: "currently_benefiting"
+    source_questionnaire_path: "F.8"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 30.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "yes_no"
+
+  - code: "employment.made_savings"
+    label: "Made savings (yes/no)"
+    definition: "Did the member make any savings (F.9)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Employment"
+    source_field: "made_savings"
+    source_questionnaire_path: "F.9"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 60.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "yes_no"
+
+  - code: "employment.savings_location"
+    label: "Savings location"
+    definition: "Where the member saves money (F.10): commercial bank, microfinance, SACCO, mobile wallet, home, other."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Employment"
+    source_field: "savings_location"
+    source_questionnaire_path: "F.10"
+    privacy_class: "Personal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 30.0
+    geographic_minimum_level: "sub_region"
+    value_domain: "savings_place"
+
+  # ---- Assets, crops, livestock --------------------------------------------
+
+  - code: "asset_ownership.asset_type"
+    label: "Asset type"
+    definition: "Type of household asset (G.15): motorcycle, bicycle, wheelchair, canoe/boat, TV, radio, fixed phone, computer, generator, motor engine, truck, saloon car, minibus, bus."
+    unit: ""
+    source_module: "data_management"
+    source_model: "AssetOwnership"
+    source_field: "asset_type"
+    source_questionnaire_path: "G.15"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 90.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "asset_type"
+
+  - code: "asset_ownership.count"
+    label: "Asset count"
+    definition: "Number of this asset owned by the household, capped at 9 per G.15."
+    unit: "items"
+    source_module: "data_management"
+    source_model: "AssetOwnership"
+    source_field: "count"
+    source_questionnaire_path: "G.15"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 90.0
+    geographic_minimum_level: "sub_county"
+
+  - code: "asset_ownership.motor_vehicle_flag"
+    label: "Owns motor vehicle (yes/no)"
+    definition: "Derived. True when AssetOwnership has any of: motor_vehicle_truck, motor_vehicle_saloon, motor_vehicle_minibus, motor_vehicle_bus with count >= 1."
+    unit: ""
+    source_module: "data_management"
+    source_model: "AssetOwnership"
+    source_field: null
+    source_questionnaire_path: "G.15"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 90.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "any(asset_type in {L,M,N,O} and count>=1)"
+
+  - code: "asset_ownership.communication_asset_flag"
+    label: "Owns radio/TV/phone (yes/no)"
+    definition: "Derived. True when AssetOwnership has any of: radio, TV, fixed phone, computer with count >= 1."
+    unit: ""
+    source_module: "data_management"
+    source_model: "AssetOwnership"
+    source_field: null
+    source_questionnaire_path: "G.15"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 90.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "any(asset_type in {F,G,H,I} and count>=1)"
+
+  # ---- Shock ----------------------------------------------------------------
+
+  - code: "shock.shock_type"
+    label: "Shock type"
+    definition: "Type of shock affecting the household (K.3): pest, rain storm, drought, wind storm, flood, fire, high food prices, loss of income, loss of breadwinner, other."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Shock"
+    source_field: "shock_type"
+    source_questionnaire_path: "K.3"
+    privacy_class: "Public"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 70.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "shock_type"
+
+  - code: "shock.severity"
+    label: "Shock severity"
+    definition: "Household-judged severity of losses caused by the shock (K.4): very severe / severe / mild-moderate."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Shock"
+    source_field: "severity"
+    source_questionnaire_path: "K.4"
+    privacy_class: "Public"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 70.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "severity"
+
+  - code: "shock.event_year"
+    label: "Shock event year"
+    definition: "Year the shock event was experienced. Derived from event_date."
+    unit: "year"
+    source_module: "data_management"
+    source_model: "Shock"
+    source_field: null
+    source_questionnaire_path: "K.1"
+    privacy_class: "Public"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 50.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "EXTRACT(YEAR FROM event_date)"
+
+  - code: "shock.recovery_status"
+    label: "Shock recovery status"
+    definition: "Derived. Whether the household has recovered from the shock. Heuristic: max(severity_score) by household over the last 12 months vs current FCS/FIES band."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Shock"
+    source_field: null
+    source_questionnaire_path: "K.4"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 40.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "shock.severity x FoodSecurity.fies_raw_score change over 12m"
+
+  - code: "shock.crops_severity_score"
+    label: "Shock — crops severity score"
+    definition: "Score 1-10 of how badly crops were affected by the shock (K.4.a)."
+    unit: "score"
+    source_module: "data_management"
+    source_model: "Shock"
+    source_field: "crops_severity_score"
+    source_questionnaire_path: "K.4.a"
+    privacy_class: "Public"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 40.0
+    geographic_minimum_level: "sub_county"
+
+  - code: "shock.livestock_severity_score"
+    label: "Shock — livestock severity score"
+    definition: "Score 1-10 of how badly livestock were affected by the shock (K.4.b)."
+    unit: "score"
+    source_module: "data_management"
+    source_model: "Shock"
+    source_field: "livestock_severity_score"
+    source_questionnaire_path: "K.4.b"
+    privacy_class: "Public"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 30.0
+    geographic_minimum_level: "sub_county"
+
+  # ---- Coping ---------------------------------------------------------------
+
+  - code: "coping_strategy.strategy_type"
+    label: "Coping strategy type"
+    definition: "Coded strategy from the L01/L02 combined ChoiceList (engage casual labour, sell assets, borrow, seek assistance, eat less, skip meals, ...)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "CopingStrategy"
+    source_field: "strategy_type"
+    source_questionnaire_path: "L.1, L.2"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 60.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "coping_strategy_type"
+
+  - code: "coping_strategy.frequency"
+    label: "Coping strategy frequency"
+    definition: "How often the household resorted to the strategy: yes-frequently / only-during-dry-period / occasionally / never."
+    unit: ""
+    source_module: "data_management"
+    source_model: "CopingStrategy"
+    source_field: "frequency"
+    source_questionnaire_path: "L.1, L.2"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 60.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "coping_frequency"
+
+  - code: "coping_strategy.category"
+    label: "Coping strategy category"
+    definition: "Either L01 (livelihood-coping) or L02 (food-coping)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "CopingStrategy"
+    source_field: "category"
+    source_questionnaire_path: "L.1, L.2"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 60.0
+    geographic_minimum_level: "sub_county"
+
+  # ---- PMT ------------------------------------------------------------------
+
+  - code: "pmt.band"
+    label: "PMT band"
+    definition: "Vulnerability band assigned to the household by the active PMT model: extreme_poverty / poverty / vulnerable / not_poor."
+    unit: ""
+    source_module: "pmt"
+    source_model: "PMTResult"
+    source_field: "band"
+    source_questionnaire_path: null
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "PMTModelVersion.band_cutoffs applied to PMTResult.score"
+    value_domain: "pmt_band"
+
+  - code: "pmt.score"
+    label: "PMT score"
+    definition: "Raw PMT score from the active model version. Discovery aggregates use band; raw score available only via DRS."
+    unit: "score"
+    source_module: "pmt"
+    source_model: "PMTResult"
+    source_field: "score"
+    source_questionnaire_path: null
+    privacy_class: "Personal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_region"
+    notes: "Discovery aggregates use pmt.band; raw score projection is refused below sub_region."
+
+  - code: "pmt.vulnerability_tier"
+    label: "Vulnerability tier"
+    definition: "Operational tier label used by the registry's referral engine (poorest_10pct, poorest_20pct, poorest_40pct, vulnerable_60pct, not_poor)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: "current_vulnerability_band"
+    source_questionnaire_path: null
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "Household.current_vulnerability_band (denorm of PMT band)"
+
+  - code: "pmt.computed_at_date"
+    label: "PMT last computed (date)"
+    definition: "Date the latest PMT result was computed for the household. Date precision only."
+    unit: "date"
+    source_module: "pmt"
+    source_model: "PMTResult"
+    source_field: "computed_at"
+    source_questionnaire_path: null
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "DATE(PMTResult.computed_at)"
+
+  - code: "pmt.model_version"
+    label: "PMT model version"
+    definition: "Active PMT model version code that produced the latest score (e.g. v1 UNHS 2023/24)."
+    unit: ""
+    source_module: "pmt"
+    source_model: "PMTModelVersion"
+    source_field: "version"
+    source_questionnaire_path: null
+    privacy_class: "Public"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 85.0
+    geographic_minimum_level: "sub_county"
+
+  # ---- Referrals + enrolments ----------------------------------------------
+
+  - code: "referral.programme_code"
+    label: "Programme code"
+    definition: "Partner programme code (PDM, OWC, YLP, UWEP, NUSAF, NAADS, SEGOP, ...)."
+    unit: ""
+    source_module: "referral"
+    source_model: "Referral"
+    source_field: "programme"
+    source_questionnaire_path: "F.7"
+    privacy_class: "Public"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "partner_programme_codes"
+
+  - code: "referral.status"
+    label: "Referral status"
+    definition: "Lifecycle status: sent / accepted / enrolled / rejected / exited."
+    unit: ""
+    source_module: "referral"
+    source_model: "Referral"
+    source_field: "status"
+    source_questionnaire_path: null
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "referral_status"
+
+  - code: "referral.eligibility_rule_version"
+    label: "Eligibility rule version"
+    definition: "Version of the eligibility rule that produced the referral."
+    unit: ""
+    source_module: "referral"
+    source_model: "Referral"
+    source_field: "eligibility_rule_version"
+    source_questionnaire_path: null
+    privacy_class: "Public"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_county"
+
+  - code: "programme_enrolment.status"
+    label: "Enrolment status"
+    definition: "Programme-side enrolment status: active / suspended / pending / exited."
+    unit: ""
+    source_module: "referral"
+    source_model: "ProgrammeEnrolment"
+    source_field: "status"
+    source_questionnaire_path: null
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_county"
+    value_domain: "programme_enrolment_status"
+
+  - code: "programme_enrolment.exit_reason"
+    label: "Enrolment exit reason"
+    definition: "Free-text exit reason recorded by the programme side. Aggregated as a banded count (graduated / non-compliance / death / relocation / other)."
+    unit: ""
+    source_module: "referral"
+    source_model: "ProgrammeEnrolment"
+    source_field: "exit_reason"
+    source_questionnaire_path: null
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 60.0
+    geographic_minimum_level: "sub_county"
+
+  - code: "programme_enrolment.effective_year"
+    label: "Enrolment effective year"
+    definition: "Year the enrolment took effect. Derived from effective_date."
+    unit: "year"
+    source_module: "referral"
+    source_model: "ProgrammeEnrolment"
+    source_field: null
+    source_questionnaire_path: null
+    privacy_class: "Public"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 100.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "EXTRACT(YEAR FROM effective_date)"
+
+  # ---- Cross-cutting derived ------------------------------------------------
+
+  - code: "household.has_disability_member_flag"
+    label: "Has disability member (yes/no)"
+    definition: "Derived. True when any member has wg_disability_flag=true."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: null
+    source_questionnaire_path: "D.3-D.8"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 75.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "any(member.disability.wg_disability_flag where household=this)"
+
+  - code: "household.has_chronic_illness_member_flag"
+    label: "Has chronic-illness member (yes/no)"
+    definition: "Derived. True when any member has health.chronic_illness_flag='1' (binary only — specific illness types remain Sensitive)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: null
+    source_questionnaire_path: "D.1"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 75.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "any(member.health.chronic_illness_flag='1')"
+
+  - code: "household.has_elderly_member_flag"
+    label: "Has elderly member 60+ (yes/no)"
+    definition: "Derived. True when any member has age_years >= 60."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: null
+    source_questionnaire_path: "C.7"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "any(member.age_years >= 60)"
+
+  - code: "household.has_under5_member_flag"
+    label: "Has under-5 member (yes/no)"
+    definition: "Derived. True when any member has age_years < 5."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: null
+    source_questionnaire_path: "C.7"
+    privacy_class: "Internal"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 95.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "any(member.age_years < 5)"
+
+  - code: "household.female_headed_flag"
+    label: "Female-headed (yes/no)"
+    definition: "Derived. True when head_member.sex='2' (female)."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: null
+    source_questionnaire_path: "C.4"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 99.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "head_member.sex='2'"
+
+  - code: "household.child_headed_flag"
+    label: "Child-headed (yes/no)"
+    definition: "Derived. True when head_member.age_years < 18."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: null
+    source_questionnaire_path: "C.7"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 99.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "head_member.age_years < 18"
+
+  - code: "household.elderly_headed_flag"
+    label: "Elderly-headed (yes/no)"
+    definition: "Derived. True when head_member.age_years >= 60."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: null
+    source_questionnaire_path: "C.7"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 99.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "head_member.age_years >= 60"
+
+  - code: "household.crowding_index"
+    label: "Crowding index (members / sleeping room)"
+    definition: "Derived. member_count_actual / nullif(dwelling.sleeping_rooms, 0). UN-Habitat overcrowding threshold = 3."
+    unit: "members/room"
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: null
+    source_questionnaire_path: "G.4"
+    privacy_class: "Internal"
+    refresh_cadence: "daily"
+    expected_completeness_baseline: 80.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "member_count_actual / dwelling.sleeping_rooms"
+
+  - code: "household.shock_in_last_12m_flag"
+    label: "Shock in last 12 months (yes/no)"
+    definition: "Derived. True when at least one Shock row exists with event_date within the last 12 months."
+    unit: ""
+    source_module: "data_management"
+    source_model: "Household"
+    source_field: null
+    source_questionnaire_path: "K.1"
+    privacy_class: "Public"
+    refresh_cadence: "weekly"
+    expected_completeness_baseline: 70.0
+    geographic_minimum_level: "sub_county"
+    derived_from: "exists(Shock where household=this and event_date >= now()-365d)"
+
+# End of catalogue_seed.yaml. Variable count: ~108. Dataset count: 18.

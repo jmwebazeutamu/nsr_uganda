@@ -45,6 +45,14 @@
   <script type="text/babel" src="v0.1/screens/screens-drs-querybuilder.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-drs-fieldselector.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-drs.jsx"></script>
+  <!-- Data Explorer (US-DATA-EXP-001, ADR-0023). Load order: catalogue
+       first because it exports the shared PrivacyClassChip / facet
+       helpers the other three screens consume off the global. -->
+  <script type="text/babel" src="v0.1/screens/data-explorer/catalogue.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/data-explorer/dataset-detail.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/data-explorer/variable-detail.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/data-explorer/aggregate-builder.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/data-explorer/handoff-confirm.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-dpo.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-household.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-registry.jsx"></script>
