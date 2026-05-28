@@ -1567,3 +1567,90 @@ class TestThresholdCalibration:
             v5, delta=0.05, actor="dpo-bot", reason="x",
         )
         assert draft.version == 6
+
+
+@pytest.mark.django_db
+class TestMatchPairListFiltering:
+    """Regression: filterset_fields was silently a no-op (django-filter
+    not installed), so ?status=pending returned the whole queue. The
+    Dedup compare screen hit this — operators saw rejected pairs as
+    the next-pending. Filtering moved into get_queryset; this test
+    catches a regression if anyone re-adds it as filterset_fields."""
+
+    def _client(self, django_user_model, username):
+        from rest_framework.test import APIClient
+        u = django_user_model.objects.create_user(
+            username=username, password="p", is_superuser=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        return c
+
+    def _seed_pairs(self, household):
+        """Build 3 pending + 1 rejected member pair so the filters
+        have something distinctive to narrow."""
+        from apps.ddup.services import reject_pair
+        from apps.security.hashing import nin_hash as _nh
+        pairs = []
+        for i, raw in enumerate([
+            "CM1234567890AB", "CM2234567890AB", "CM3234567890AB",
+        ]):
+            h = _nh(raw)
+            Member.objects.create(
+                household=household, line_number=10 + 2 * i, surname=f"A{i}",
+                first_name="X", sex="1", nin_hash=h, nin_last4=raw[-4:],
+            )
+            Member.objects.create(
+                household=household, line_number=11 + 2 * i, surname=f"B{i}",
+                first_name="Y", sex="1", nin_hash=h, nin_last4=raw[-4:],
+            )
+        pairs.extend(discover_nin_pairs(actor="seed"))
+        # Reject one so we can prove the filter actually narrows.
+        reject_pair(
+            pairs[0], actor="rej-actor", reason="seed rejected",
+        )
+        return pairs
+
+    def test_status_pending_excludes_rejected(
+        self, household, active_model, django_user_model,
+    ):
+        self._seed_pairs(household)
+        c = self._client(django_user_model, "list-status-pending")
+        r = c.get("/api/v1/ddup/match-pairs/?status=pending&page_size=10")
+        assert r.status_code == 200
+        body = r.json()
+        statuses = [p["status"] for p in body["results"]]
+        assert statuses, "expected at least one pending row"
+        assert all(s == "pending" for s in statuses), statuses
+
+    def test_status_rejected_returns_only_rejected(
+        self, household, active_model, django_user_model,
+    ):
+        self._seed_pairs(household)
+        c = self._client(django_user_model, "list-status-rejected")
+        r = c.get("/api/v1/ddup/match-pairs/?status=rejected&page_size=10")
+        assert r.status_code == 200
+        body = r.json()
+        statuses = [p["status"] for p in body["results"]]
+        assert statuses == ["rejected"]
+
+    def test_no_filter_returns_everything(
+        self, household, active_model, django_user_model,
+    ):
+        pairs = self._seed_pairs(household)
+        c = self._client(django_user_model, "list-no-filter")
+        r = c.get("/api/v1/ddup/match-pairs/?page_size=10")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["count"] == len(pairs)
+
+    def test_tier_filter_casts_int(
+        self, household, active_model, django_user_model,
+    ):
+        self._seed_pairs(household)
+        c = self._client(django_user_model, "list-tier-1")
+        r = c.get("/api/v1/ddup/match-pairs/?tier=1&page_size=10")
+        assert r.status_code == 200
+        # All seeded pairs are tier1 NIN-exact.
+        body = r.json()
+        assert body["count"] >= 3

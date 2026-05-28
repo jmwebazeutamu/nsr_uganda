@@ -117,10 +117,36 @@ class MatchPairViewSet(
     audit_entity_type = "match_pair"
     queryset = MatchPair.objects.all().order_by("-created_at")
     serializer_class = MatchPairSerializer
-    filterset_fields = ["status", "tier", "record_type"]
+    # django-filter is not installed in this project — filterset_fields
+    # is silently a no-op. Filtering happens in get_queryset below so
+    # ?status=pending&tier=1&record_type=member actually narrows the
+    # result. The list of supported params is kept on the class so
+    # the OpenAPI generator and future django-filter wiring stay
+    # consistent.
+    _LIST_FILTERS = ["status", "tier", "record_type"]
     # Read-only + custom actions — DRF wires the @action endpoints
     # without enabling create/update/delete on the base resource.
     http_method_names = ["get", "post", "head", "options"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        # Only honour filters on the list view; detail / @action calls
+        # operate on a single pk and shouldn't be silently narrowed.
+        if getattr(self, "action", None) != "list":
+            return qs
+        params = getattr(self.request, "query_params", None) or {}
+        for f in self._LIST_FILTERS:
+            v = params.get(f)
+            if v:
+                # tier is an integer column — cast so 'tier=1' doesn't
+                # become a string mismatch on Postgres.
+                if f == "tier":
+                    try:
+                        v = int(v)
+                    except ValueError:
+                        continue
+                qs = qs.filter(**{f: v})
+        return qs
 
     @extend_schema(
         tags=["ddup"],
