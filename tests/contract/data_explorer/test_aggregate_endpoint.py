@@ -64,15 +64,11 @@ class TestAggregateAuthAndFlag:
         )
         assert r.status_code == 403
 
-    @pytest.mark.skip(
-        reason=(
-            "flag-off branch — re-enable when override_settings can apply "
-            "at method level outside SimpleTestCase"
-        ),
-    )
     def test_flag_off_returns_503(
-        self, client_explorer, dataset, variable_internal,
+        self, client_explorer, dataset, variable_internal, settings,
     ):
+        # ADR-0023 D9 kill-switch: flag off → 503 before role check.
+        settings.DATA_EXPLORER_ENABLED = False
         r = client_explorer.post(
             AGGREGATE_URL, _aggregate_payload(dataset, variable_internal),
             format="json",

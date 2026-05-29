@@ -58,13 +58,11 @@ class TestDatasetsAuthAndFlag:
         r = client_explorer.get(DATASETS_URL)
         assert r.status_code == 200
 
-    @pytest.mark.skip(
-        reason=(
-            "flag-off branch — re-enable when override_settings can apply "
-            "at method level outside SimpleTestCase"
-        ),
-    )
-    def test_flag_off_returns_503(self, client_explorer, dataset):
+    def test_flag_off_returns_503(self, client_explorer, dataset, settings):
+        # ADR-0023 D9 kill-switch: flag off → 503 from every endpoint,
+        # checked before role membership so the response can't be used
+        # to enumerate EXPLORER membership.
+        settings.DATA_EXPLORER_ENABLED = False
         r = client_explorer.get(DATASETS_URL)
         assert r.status_code == 503
 

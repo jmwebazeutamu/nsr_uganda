@@ -144,20 +144,26 @@ class AggregateQueryService:
         against the matview, with the dataset's count column folded
         into the aggregation (Sum over the precomputed counts).
         """
+        from . import services
+
         dataset = validated_query.dataset
         matview_model = validated_query.matview_model
         cadence_seconds = dataset.refresh_cadence.interval_seconds
-        # Stale matview fallback — 2x cadence.
-        refreshed_at, staleness_seconds = _matview_freshness(
+        # Stale matview fallback — 2x cadence. Staleness flows through
+        # the services seam so the 503 branch is forceable in tests
+        # without a populated matview; the freshness query for the
+        # not-stale path runs only once we know we'll serve the result.
+        staleness_seconds = services.compute_staleness_seconds(
             matview_model, cadence_seconds,
         )
         if cadence_seconds and staleness_seconds > 2 * cadence_seconds:
             raise StaleMatviewError(
                 matview=dataset.source_matview,
-                refreshed_at=refreshed_at,
+                refreshed_at=None,
                 staleness_seconds=staleness_seconds,
                 max_seconds=2 * cadence_seconds,
             )
+        refreshed_at, _ = _matview_freshness(matview_model, cadence_seconds)
 
         qs = matview_model.objects.all()
         qs = _apply_geographic_scope(qs, validated_query.geographic_scope)
