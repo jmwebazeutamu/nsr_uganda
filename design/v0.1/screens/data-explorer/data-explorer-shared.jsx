@@ -260,7 +260,21 @@ const PrivacyChip = ({ klass, size = "md", showFloor = false }) => {
 /* ================================================================
    DEShell — top bar + screen tabs + matview-freshness indicator
    ================================================================ */
-const DEShell = ({ active, refreshed_at, children, right }) => (
+const DEShell = ({ active, refreshed_at, children, right }) => {
+  // Drive the role chip + avatar from the live gate so the header
+  // never claims a signed-in EXPLORER while the body is showing mock
+  // data. `live` means a reachable API AND an EXPLORER session AND the
+  // flag on — the same condition RoleGateBanner uses to stay hidden.
+  const gate = useDeMe();
+  const live = !gate.loading && gate.hasRole && gate.flagOn && !!gate.me;
+  const _initials = () => {
+    if (!live) return "·";
+    const n = (gate.me.display_name || gate.me.username || "").trim();
+    const parts = n.split(/\s+/).filter(Boolean);
+    if (!parts.length) return "?";
+    return (parts[0][0] + (parts[1] ? parts[1][0] : "")).toUpperCase();
+  };
+  return (
   <div style={{minHeight:"100vh", background:"var(--neutral-100)"}}>
     {/* Topbar */}
     <header style={{
@@ -298,14 +312,21 @@ const DEShell = ({ active, refreshed_at, children, right }) => (
           <span style={{width:6, height:6, borderRadius:"50%", background:"var(--accent-data)"}}/>
           Last matview refresh: <strong style={{color:"var(--neutral-900)"}}>{refreshed_at}</strong>
         </div>
-        <div className="role-chip" style={{margin:0}}>
-          <span>Role:</span><strong>EXPLORER</strong>
-        </div>
+        {live ? (
+          <div className="role-chip" style={{margin:0}}>
+            <span>Role:</span><strong>EXPLORER</strong>
+          </div>
+        ) : (
+          <div className="role-chip" style={{margin:0, opacity:0.6}}
+               title="Not a live EXPLORER session — showing mock data">
+            <span>Preview</span><strong>mock</strong>
+          </div>
+        )}
         <div style={{
           width:32, height:32, borderRadius:"50%",
-          background:"var(--primary-700)", color:"#fff",
+          background: live ? "var(--primary-700)" : "var(--neutral-400)", color:"#fff",
           display:"grid", placeItems:"center", fontSize:12, fontWeight:600,
-        }}>AO</div>
+        }} title={live ? (gate.me.display_name || gate.me.username || "") : "No authenticated session"}>{_initials()}</div>
       </div>
       {/* Tabs */}
       <div style={{
@@ -341,7 +362,8 @@ const DEShell = ({ active, refreshed_at, children, right }) => (
       padding: "20px 24px 40px",
     }}>{children}</main>
   </div>
-);
+  );
+};
 
 /* ================================================================
    ScopeTweak — every screen's Tweaks panel uses this so the user
@@ -815,9 +837,18 @@ const RoleGateBanner = ({ me }) => {
   if (me.hasRole && me.flagOn) return null;
   let label, tone, detail;
   if (me.error || !me.me) {
-    label = "Preview mode";
+    // A 401/403 means the API is reachable but the browser has no
+    // authenticated session — a different fix from a true network
+    // failure, so say which one it is.
+    const unauth = /\b(401|403)\b/.test(String(me.error || ""));
     tone = "info";
-    detail = "Showing the in-bundle mock data — the API is unreachable. Sign in to a Django session with the EXPLORER realm role and feature flag DATA_EXPLORER_ENABLED to see live data.";
+    if (unauth) {
+      label = "Not signed in";
+      detail = "The API is reachable but this browser has no authenticated EXPLORER session. Open this page through the Django console (same origin, /console/…) and sign in; showing mock data meanwhile.";
+    } else {
+      label = "Preview mode";
+      detail = "Showing the in-bundle mock data — the API is unreachable. Serve this page same-origin from Django (/console/…) with DATA_EXPLORER_ENABLED on and an EXPLORER session to see live data.";
+    }
   } else if (!me.flagOn) {
     label = "Feature flag off";
     tone = "warn";
