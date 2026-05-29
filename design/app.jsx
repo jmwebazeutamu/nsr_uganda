@@ -157,7 +157,12 @@ function App() {
     // Mirror the feature-flag pattern: keep the entry visible until
     // /me/ resolves so the initial render doesn't race the fetch.
     if (n.requireRole) {
-      if (me && Array.isArray(me.roles) && !me.roles.includes(n.requireRole)) {
+      // The "Render as" persona overrides the live session for preview:
+      // selecting the EXPLORER analyst surfaces EXPLORER-gated entries
+      // even when the authenticated /me/ lacks the realm role.
+      const previewGrantsRole = role === "explorer" && n.requireRole === "EXPLORER";
+      if (!previewGrantsRole && me && Array.isArray(me.roles)
+          && !me.roles.includes(n.requireRole)) {
         return false;
       }
     }
@@ -435,6 +440,7 @@ function App() {
               { value: "parish",          label: "Parish Chief" },
               { value: "cdo",             label: "Community Development Officer" },
               { value: "dpo",             label: "Data Protection Officer" },
+              { value: "explorer",        label: "Data Explorer Analyst (EXPLORER)" },
               { value: "partner-analyst", label: "Partner Analyst" + (me?.partner ? ` · ${me.partner.code}` : "") },
             ]}/>
           <div className="t-cap" style={{color: "var(--neutral-600)", marginTop: 6, lineHeight: 1.4}}>

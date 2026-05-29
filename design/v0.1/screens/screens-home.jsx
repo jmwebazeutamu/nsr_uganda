@@ -275,6 +275,31 @@ const ROLE_CONTENT = {
       ]},
     ],
   },
+  // Data Explorer Analyst — the EXPLORER realm role (ADR-0023,
+  // US-DATA-EXP-001). Discovery + aggregate-preview surface; no
+  // record-level access except via the DRS handoff. KPIs mirror the
+  // suppression / throttle / handoff signals the analyst lives with.
+  "explorer": {
+    name: "Data Explorer Analyst",
+    person: "Atim Brenda",
+    org: "MGLSD · NSR Unit · Analytics",
+    kpis: [
+      { title: "Aggregate queries today", value: "37", trend: "up", trendValue: "+9 vs. yesterday", foot: "Internal cap 100/user/day", spark: [12,18,21,25,29,33,37] },
+      { title: "Cells suppressed (k-floor)", value: "14", trend: "flat", trendValue: "—", foot: "k=10 personal · k=5 internal", spark: [9,11,10,12,13,12,14] },
+      { title: "Record-level handoffs to DRS", value: "2", trend: "up", trendValue: "+1 wk", foot: "Below-floor scopes → DSA draft", spark: [0,1,1,1,2,1,2] },
+      { title: "Active datasets", value: "8", trend: "flat", trendValue: "—", foot: "matview-backed · dual-approved vars", spark: [6,6,7,7,8,8,8] },
+    ],
+    queues: [
+      { title: "Recent aggregate runs", icon: "database", count: 3, _target: "data-explorer", items: [
+        { id: "Household × PMT by sub-county", who: "dwelling_type × sub_county", note: "412 cells · 6 suppressed · k=5", chip: "Executed", age: "18m" },
+        { id: "Member education by sub-county", who: "highest_grade × sub_county", note: "Karamoja · 0 suppressed", chip: "Executed", age: "1h" },
+        { id: "Household shocks by sub-region", who: "shock_type × sub_region", note: "blocked below floor → handoff drafted", chip: "Handoff", age: "2h" },
+      ]},
+      { title: "Drafts handed to DRS", icon: "download", count: 2, _target: "drs", items: [
+        { id: "01DRS2026052900014", who: "Karamoja elderly-headed HH study", note: "parish scope · awaits DSA scope check", chip: "Draft", age: "2h" },
+      ]},
+    ],
+  },
 };
 
 const ROLES = Object.keys(ROLE_CONTENT);
