@@ -1,0 +1,163 @@
+openapi: 3.1.0
+info:
+  title: NSR MIS — Consent Management (SEC)
+  version: "0.1.0"
+  description: |
+    Per-member, per-purpose consent — purpose catalogue, statement versioning,
+    intake capture, citizen dashboard, withdrawal workflow, and the DPO queue.
+    Gated by CONSENT_MODULE_ENABLED; every endpoint returns 503 when the flag
+    is off. The DRF auto-generated schema at /api/schema/ is the deploy-time
+    spec; this file is the human-readable contract.
+
+    See ADR-0024 for the design context (US-CONSENT-01..18) and DPIA §14 for
+    the lawful-basis matrix.
+
+servers:
+  - url: /api/v1/consent
+
+tags:
+  - name: consent
+
+paths:
+  /purposes/:
+    get:
+      tags: [consent]
+      summary: List consent purposes (US-CONSENT-01)
+      responses:
+        "200": { description: Purpose catalogue }
+        "503": { description: Module disabled }
+    post:
+      tags: [consent]
+      summary: Create a DRAFT purpose (author set to caller)
+      responses:
+        "201": { description: Created }
+  /purposes/{code}/:
+    parameters:
+      - { name: code, in: path, required: true, schema: { type: string } }
+    get: { tags: [consent], summary: Retrieve a purpose, responses: { "200": { description: OK } } }
+    put: { tags: [consent], summary: Update a DRAFT purpose, responses: { "200": { description: OK } } }
+    delete: { tags: [consent], summary: Delete a DRAFT purpose, responses: { "204": { description: Deleted } } }
+  /purposes/{code}/submit/:
+    parameters: [{ name: code, in: path, required: true, schema: { type: string } }]
+    post: { tags: [consent], summary: Submit DRAFT → PENDING_APPROVAL, responses: { "200": { description: OK } } }
+  /purposes/{code}/activate/:
+    parameters: [{ name: code, in: path, required: true, schema: { type: string } }]
+    post:
+      tags: [consent]
+      summary: Activate (author ≠ approver, note required)
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { note: { type: string } } } } }
+      responses:
+        "200": { description: Activated }
+        "400": { description: Self-approval or missing note }
+  /purposes/{code}/reject/:
+    parameters: [{ name: code, in: path, required: true, schema: { type: string } }]
+    post: { tags: [consent], summary: Reject PENDING_APPROVAL, responses: { "200": { description: OK }, "400": { description: Invalid } } }
+  /purposes/{code}/retire/:
+    parameters: [{ name: code, in: path, required: true, schema: { type: string } }]
+    post: { tags: [consent], summary: Retire an ACTIVE purpose, responses: { "200": { description: OK } } }
+
+  /statements/:
+    get: { tags: [consent], summary: List statement versions (US-CONSENT-02), responses: { "200": { description: OK } } }
+    post: { tags: [consent], summary: Create a DRAFT statement version, responses: { "201": { description: Created } } }
+  /statements/{id}/:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    get: { tags: [consent], summary: Retrieve a statement version, responses: { "200": { description: OK } } }
+  /statements/{id}/reconsent_count/:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [consent]
+      summary: Pre-commit count of GRANTED records a material activation would flag (CR2)
+      responses: { "200": { description: "{ count }" } }
+  /statements/{id}/submit/:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post: { tags: [consent], summary: Submit DRAFT → PENDING_APPROVAL, responses: { "200": { description: OK } } }
+  /statements/{id}/activate/:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      tags: [consent]
+      summary: Activate (supersedes prior ACTIVE; material → flags re-consent)
+      responses: { "200": { description: Activated }, "400": { description: Self-approval or missing note } }
+
+  /members/{member_id}:
+    parameters: [{ name: member_id, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [consent]
+      summary: Member consent matrix (US-CONSENT-05, -08)
+      responses:
+        "200": { description: Per-purpose matrix }
+        "404": { description: Member not found }
+        "503": { description: Module disabled }
+  /members/{member_id}/capture:
+    parameters: [{ name: member_id, in: path, required: true, schema: { type: string } }]
+    post:
+      tags: [consent]
+      summary: Capture consent (US-CONSENT-03); runs AC-CONSENT-* hooks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [purpose_code, state]
+              properties:
+                purpose_code: { type: string }
+                state: { type: string, enum: [GRANTED, REFUSED, WITHDRAWN, PENDING_REVIEW, PENDING_RE_CONSENT] }
+                capture_method: { type: string, enum: [SIGNATURE, THUMBPRINT, VERBAL_WITNESSED, DIGITAL] }
+                proxy_member_id: { type: string }
+                proxy_relationship: { type: string }
+                witness_name: { type: string }
+                witness_role: { type: string }
+                reason: { type: string }
+      responses:
+        "201": { description: Captured }
+        "400": { description: "DQA hook failure: { errors: [{code, message}] }" }
+  /members/{member_id}/withdraw:
+    parameters: [{ name: member_id, in: path, required: true, schema: { type: string } }]
+    post:
+      tags: [consent]
+      summary: Open a withdrawal request (US-CONSENT-06); idempotent per day
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [purpose_code]
+              properties:
+                purpose_code: { type: string }
+                reason_code: { type: string }
+                reason_note: { type: string }
+      responses:
+        "201": { description: "{ ticket_id, sla_deadline, next_step }" }
+        "400": { description: Purpose not withdrawable }
+
+  /withdrawal-tickets/:
+    get:
+      tags: [consent]
+      summary: DPO withdrawal queue (US-CONSENT-07)
+      parameters:
+        - { name: state, in: query, schema: { type: string } }
+        - { name: purpose_code, in: query, schema: { type: string } }
+      responses: { "200": { description: Ticket list } }
+  /withdrawal-tickets/{id}/:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    get: { tags: [consent], summary: Retrieve a ticket, responses: { "200": { description: OK } } }
+  /withdrawal-tickets/{id}/decide/:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      tags: [consent]
+      summary: Record a DPO decision (Confirm / Override / Clarify / Hold)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decision, rationale]
+              properties:
+                decision: { type: string, enum: [CONFIRM, OVERRIDE_PUBLIC_TASK, REQUEST_CLARIFICATION, HOLD] }
+                rationale: { type: string }
+                second_approver: { type: string }
+      responses:
+        "200": { description: Decided }
+        "400": { description: Missing rationale }

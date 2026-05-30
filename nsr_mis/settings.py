@@ -64,6 +64,9 @@ INSTALLED_APPS = [
     "apps.chatbot",
     # Data Explorer — discovery + aggregate-preview surface (ADR-0023).
     "apps.data_explorer",
+    # Consent Management — per-member per-purpose consent (Epic 19,
+    # ADR-0024). Gated by CONSENT_MODULE_ENABLED.
+    "apps.consent",
 ]
 
 # US-S23 — gate the partners-module UI surfaces and write endpoints
@@ -99,6 +102,23 @@ PARTNERS_DOCUSIGN_ENABLED = False
 # tests with it ON.
 DQA_INTRA_HOUSEHOLD_ENABLED = env(
     "DQA_INTRA_HOUSEHOLD_ENABLED", default=DEBUG,
+)
+
+# US-CONSENT (Epic 19, ADR-0024) — gate the Consent Management module:
+# all /api/v1/consent/ endpoints, the admin/portal screens, and every
+# downstream consent gate (PMT/REF/DRS/DDUP/UPD/DIH/INT). Defaults OFF in
+# production until DPO sign-off lands (purpose catalogue, SLA, DPA scopes).
+# When off, every consent gate short-circuits to "transparent allow" so
+# existing functionality is unchanged. CI runs the consent suite with it ON.
+CONSENT_MODULE_ENABLED = env("CONSENT_MODULE_ENABLED", default=DEBUG)
+# Withdrawal SLA in days (CONSENT-O-03; DPPA §29 + Regs 2021). 30 days.
+CONSENT_WITHDRAWAL_SLA_DAYS = env.int("CONSENT_WITHDRAWAL_SLA_DAYS", default=30)
+# MinIO object-store prefix for consent evidence (signatures / thumbprints /
+# witness statements / DPA documents). The asset bytes live in MinIO; the
+# object key is recorded on ConsentEvidence.
+CONSENT_EVIDENCE_STORAGE = env("CONSENT_EVIDENCE_STORAGE", default="file")
+CONSENT_EVIDENCE_DIR = env(
+    "CONSENT_EVIDENCE_DIR", default=str(BASE_DIR / ".consent-evidence"),
 )
 
 MIDDLEWARE = [

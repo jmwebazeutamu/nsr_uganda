@@ -50,6 +50,9 @@ urlpatterns = [
     # gated by DATA_EXPLORER_ENABLED + the EXPLORER role; returns
     # 503 when the flag is off.
     path("api/v1/data-explorer/", include("apps.data_explorer.urls")),
+    # US-CONSENT (Epic 19, ADR-0024) — Consent Management. Every endpoint
+    # gated by CONSENT_MODULE_ENABLED; returns 503 when the flag is off.
+    path("api/v1/consent/", include("apps.consent.urls")),
     # US-S23-008 — partners module (ADR-0011). Mounted at the bare
     # /api/v1/ prefix because the router itself owns "partners/".
     path("api/v1/", include("apps.partners.urls")),
