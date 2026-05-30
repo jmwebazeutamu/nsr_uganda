@@ -25,6 +25,20 @@ class FeatureFlagOff(APIException):
     default_code = "data_explorer_disabled"
 
 
+class FlagEnabledPublic(BasePermission):
+    """Flag gate WITHOUT a role requirement — for the public
+    questionnaire-transparency catalogue (ADR-0023 public-discovery
+    extension). Anyone may read the metadata-only data dictionary, but
+    the DATA_EXPLORER_ENABLED kill-switch still applies (off → 503) so
+    the surface can be pulled in an incident exactly like the gated
+    endpoints. No record data or cell counts are served through it."""
+
+    def has_permission(self, request, view) -> bool:
+        if not data_explorer_enabled(request):
+            raise FeatureFlagOff()
+        return True
+
+
 class IsExplorerRoleAndFlagEnabled(BasePermission):
     """Combined flag + role gate. Order matters — the flag check runs
     first so a flag-off response cannot be used to enumerate role

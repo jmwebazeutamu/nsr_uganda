@@ -7,6 +7,7 @@ ADR-0023 API surface:
   GET  /variables                      → VariableViewSet.list
   GET  /variables/{id}                 → VariableViewSet.retrieve
   GET  /privacy-classes                → PrivacyClassListView
+  GET  /catalogue/public               → PublicCatalogueView (anonymous)
   POST /aggregate                      → AggregateView
   GET  /coverage/{dataset_id}          → CoverageView
   GET  /synthetic-sample/{dataset_id}  → SyntheticSampleView
@@ -24,6 +25,7 @@ from .api import (
     DatasetViewSet,
     HandoffView,
     PrivacyClassListView,
+    PublicCatalogueView,
     SuppressionVocabularyView,
     SyntheticSampleView,
     VariableViewSet,
@@ -37,6 +39,8 @@ router.register(r"variables", VariableViewSet, basename="data-explorer-variable"
 urlpatterns = [
     path("privacy-classes/", PrivacyClassListView.as_view(),
          name="data-explorer-privacy-classes"),
+    path("catalogue/public/", PublicCatalogueView.as_view(),
+         name="data-explorer-public-catalogue"),
     path("suppression-vocabulary/", SuppressionVocabularyView.as_view(),
          name="data-explorer-suppression-vocab"),
     path("aggregate/", AggregateView.as_view(),

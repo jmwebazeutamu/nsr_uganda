@@ -19,7 +19,7 @@ from apps.security.audit_views import _client_ip
 
 from .catalogue import MetadataCatalog
 from .handoff import perform_handoff
-from .permissions import IsExplorerRoleAndFlagEnabled
+from .permissions import FlagEnabledPublic, IsExplorerRoleAndFlagEnabled
 from .query_builder import (
     AggregateQueryService,
     StaleMatviewError,
@@ -679,12 +679,45 @@ class HandoffView(APIView):
         )
 
 
+# ---------------------------------------------------------------------------
+# Public questionnaire-transparency catalogue
+
+class PublicCatalogueView(APIView):
+    """GET /api/v1/data-explorer/catalogue/public/ — anonymous, read-only
+    data dictionary of the ENTIRE questionnaire so the public can see
+    what the registry captures (ADR-0023 public-discovery extension).
+
+    Metadata only: field id, label, type, questionnaire section, privacy
+    class, and whether the field is ever aggregatable. No household
+    records, no cell counts. Still subject to the DATA_EXPLORER_ENABLED
+    kill-switch (off → 503), but no role/auth is required."""
+
+    permission_classes = [FlagEnabledPublic]
+
+    def get(self, request):
+        from . import public_catalogue
+
+        body = public_catalogue.build()
+        _emit(
+            "data_explorer.public_catalogue.browsed",
+            actor=_actor(request),
+            entity_type="questionnaire_catalogue",
+            reason=(
+                f"sections={body['totals']['sections']} "
+                f"fields={body['totals']['fields']}"
+            ),
+            request=request,
+        )
+        return Response(body)
+
+
 __all__ = [
     "AggregateView",
     "CoverageView",
     "DatasetViewSet",
     "HandoffView",
     "PrivacyClassListView",
+    "PublicCatalogueView",
     "SyntheticSampleView",
     "VariableViewSet",
 ]

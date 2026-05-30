@@ -25,41 +25,57 @@ SENSITIVE = "sensitive"
 DEFAULT_CLASS = INTERNAL
 
 
-# Personal identifiers and direct identity columns. Catalogue surfaces
-# the dictionary entry but the aggregate endpoint refuses any query
-# that projects or filters on these.
+# Special-category and direct-identity columns (DPPA 2019). The
+# catalogue surfaces the dictionary entry but the aggregate endpoint
+# refuses any query that projects or filters on these.
+#
+# NOTE: these pairs are (field_catalog section key, model field name) and
+# MUST track the live model field names — when the models are renamed or
+# extended this map needs updating, or fields silently fall through to
+# the INTERNAL default. This is the *default* classification only; the
+# DPO confirms/overrides it via the dual-approval flow (ADR-0023 D5).
 SENSITIVE_FIELDS: set[tuple[str, str]] = {
-    ("member", "nin_value"),
-    ("member", "nin_hash"),
-    ("member", "nin_last4"),
-    ("health", "chronic_illness_present"),
-    ("health", "hiv_status"),
-    ("health", "mental_health_status"),
-    ("disability", "disability_certificate_no"),
+    # Health — special-category data.
+    ("health", "chronic_illness_flag"),
+    ("health", "chronic_illness_types_encrypted"),
+    # Identity documents collected against the member.
+    ("member", "identification_documents"),
 }
 
 
-# Personal — aggregates allowed at sub_region floor (k=10).
+# Personal — direct identifiers / fine-grained location. Aggregates
+# allowed at the sub_region floor (k=10).
 PERSONAL_FIELDS: set[tuple[str, str]] = {
-    ("member", "date_of_birth"),
+    ("member", "surname"),
     ("member", "first_name"),
-    ("member", "middle_name"),
-    ("member", "last_name"),
-    ("member", "phone"),
-    ("member", "alt_phone"),
+    ("member", "other_name"),
+    ("member", "date_of_birth"),
+    ("member", "telephone_1"),
+    ("member", "telephone_2"),
     ("household", "address_narrative"),
     ("household", "gps_lat"),
     ("household", "gps_lng"),
-    ("disability", "disability_type"),
-    ("disability", "disability_severity"),
-    ("health", "long_term_illness"),
+    ("household", "gps_accuracy_m"),
+    # Washington Group disability items — sensitive in nature, kept at
+    # the Personal floor so disability-prevalence aggregates remain
+    # possible at sub_region (DPO may tighten to Sensitive).
+    ("disability", "seeing"),
+    ("disability", "hearing"),
+    ("disability", "walking"),
+    ("disability", "memory"),
+    ("disability", "selfcare"),
+    ("disability", "communication"),
+    ("disability", "wg_disability_flag"),
 }
 
 
-# Public — geographic counts, shock prevalence, programme coverage.
+# Public — coarse geography only (at/above sub-county). Parish/village
+# stay INTERNAL so fine-grained location is never k=0.
 PUBLIC_FIELDS: set[tuple[str, str]] = {
+    ("household", "region"),
     ("household", "sub_region"),
     ("household", "district"),
+    ("household", "county"),
     ("household", "sub_county"),
     ("household", "urban_rural"),
 }
