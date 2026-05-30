@@ -249,7 +249,10 @@ const DatasetDetail = ({ ds, vars, searchActive }) => {
             <button className="btn btn-primary" onClick={() => location.href="Data Explorer - Aggregate Builder.html"}>
               <Icon name="sliders" size={14}/> Use in builder
             </button>
-            <button className="btn"><Icon name="database" size={14}/> Synthetic sample</button>
+            <button className="btn"
+              onClick={() => location.href=`Data Explorer - Synthetic Sample.html?dataset=${encodeURIComponent(ds.id)}`}>
+              <Icon name="database" size={14}/> Synthetic sample
+            </button>
           </div>
           {isQuestionnaire ? (
             <div style={{display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:16, marginTop:18}}>

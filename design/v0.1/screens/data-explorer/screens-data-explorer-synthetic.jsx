@@ -26,9 +26,20 @@ const COLUMNS = [
   { key: "pmt_band",       label: "PMT band",         chip: true },
 ];
 
+// Deep-link support: the Catalogue's "Synthetic sample" button lands
+// here with ?dataset=<section/dataset id> so the right one is selected.
+const _initialDataset = () => {
+  try {
+    const p = new URLSearchParams(window.location.search).get("dataset");
+    return p || "ds_hh_profile";
+  } catch (e) {
+    return "ds_hh_profile";
+  }
+};
+
 const SyntheticScreen = () => {
   const [t, setTweak] = useTweaks({ screen: "synthetic" });
-  const [datasetId, setDatasetId] = useSyn("ds_hh_profile");
+  const [datasetId, setDatasetId] = useSyn(_initialDataset);
   const [rowCount, setRowCount] = useSyn(10);
   const [seed, setSeed] = useSyn("ug-nsr-2026-05-28");
 
