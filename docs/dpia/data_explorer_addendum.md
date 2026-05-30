@@ -85,6 +85,50 @@ Until both are in place, the Explorer is dev/staging-only. The new Keycloak real
 - **PrivacyClass override workflow**: dual approval, with DPO mandatory on every change (OPEN-7). This is enforced in code by the `VariableApproval` model but not yet wired through the admin UI.
 - **Query log retention**: assumed 10 years to match the parent DPIA's audit retention. If DPO wants a shorter window for Explorer-specific logs, the `AggregateQueryLog` rows can age separately.
 
+## Addendum 2 — Public questionnaire-transparency catalogue (2026-05-30)
+
+- **Status**: Initial assessment — DPO review pending
+- **Change**: New anonymous endpoint `GET /api/v1/data-explorer/catalogue/public/` + a repair to the default field privacy classification.
+- **Decision record**: product owner directed a public transparency surface ("the public should know what information is captured in the registry, so they can request access eventually"); access tier = anonymous, sensitive fields shown.
+
+### What it exposes
+
+A **metadata-only data dictionary of the entire questionnaire** — every section and field (11 sections, ~114 fields), each badged with its privacy class and whether it is ever aggregatable. It is built directly from the model-introspected field catalogue (`apps.update_workflow.field_catalog`), not from the `Variable` table, so it shows the full instrument regardless of aggregate-activation state.
+
+| Data class processed | Read? | Write? | Notes |
+|---|---|---|---|
+| Field/questionnaire metadata | yes | no | Field id, label, type, questionnaire section, privacy class, aggregatable flag. **No** household records, **no** cell counts, **no** aggregate values. |
+| Audit events | no | yes (1 per hit) | `data_explorer.public_catalogue.browsed`, actor `anonymous`, carries section/field counts only — no PII. |
+
+### Why anonymous is assessed acceptable
+
+- The questionnaire instrument (`/docs/06_questionnaire.docx`) is itself a public document; the field list is not secret.
+- The endpoint returns **no personal data and no counts** — there is no data subject whose data is processed by a read, so the re-identification surface of Addendum 1 does not apply here.
+- The `DATA_EXPLORER_ENABLED` kill-switch still gates it (off → 503), so it can be pulled in an incident like every other endpoint.
+- Transparency directly serves DPPA 2019 §3 (lawful, fair, **transparent**) and the data-subject right to be informed.
+
+### Default privacy reclassification (DPO must confirm)
+
+The `(section, field) → privacy class` default map (`apps/data_explorer/seeds/privacy_class_defaults.py`) had drifted: it referenced field names that no longer exist after the detail-entity expansion (US-S22-DE), so **every field silently defaulted to `internal`** — including encrypted health data. It has been remapped to the live field names with these defaults:
+
+- **Sensitive**: `health.chronic_illness_flag`, `health.chronic_illness_types_encrypted`, `member.identification_documents`.
+- **Personal**: member names, `date_of_birth`, telephones; `household.address_narrative` + GPS; the 7 Washington-Group disability items.
+- **Public**: coarse geography at/above sub-county + `urban_rural`.
+- **Internal**: everything else (default).
+
+This is the **default** classification surfaced for the DPO. Per ADR-0023 D5 the DPO confirms or overrides each field's class via the dual-approval flow; the override is audited. **The public catalogue renders whatever class is in force**, so an under-classification would be publicly visible — making DPO confirmation a release pre-condition.
+
+### Residual risk
+
+- **Inference from absence/presence**: knowing the registry captures e.g. HIV-adjacent health fields is itself signalling. Assessed low (the questionnaire is public) but flagged for DPO.
+- **Misclassification visibility**: if a field's default class is wrong, the public sees the wrong protection level. Mitigation: DPO sign-off on the classification before the flag flips; the map is the single source and is unit-tested.
+
+### Open items for DPO review (Addendum 2)
+
+- Confirm the per-field privacy classification above (or override via dual approval) **before** `DATA_EXPLORER_ENABLED` flips in production.
+- Confirm anonymous (unauthenticated) access to the catalogue is acceptable, vs. requiring any authenticated session.
+- Confirm sensitive-class field **names** may appear in the public catalogue (current decision: yes, badged "Sensitive", never aggregatable).
+
 ## Signed off by
 
 - Data Protection Officer: ____________________ Date: __________

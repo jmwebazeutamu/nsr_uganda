@@ -23,6 +23,12 @@ info:
     See ADR-0023 for the architectural context and ADR-0023 Appendix
     A for the cell-reconstruction risk probe.
 
+    EXCEPTION — `GET /catalogue/public/` is the citizen-facing
+    transparency catalogue: it requires NO authentication and NO role
+    (still flag-gated), and returns metadata only — the full
+    questionnaire data dictionary with each field's privacy class. It
+    never returns household records or cell counts.
+
 servers:
   - url: /api/v1/data-explorer
 
@@ -47,6 +53,53 @@ components:
         daily_user_cap: { type: [integer, "null"], minimum: 0 }
         daily_org_cap:  { type: [integer, "null"], minimum: 0 }
         blocks_aggregate: { type: boolean }
+    PublicCatalogueField:
+      type: object
+      description: One questionnaire field, metadata only.
+      properties:
+        field_id: { type: string, description: "Dotted code, e.g. household.dwelling_type" }
+        label: { type: string }
+        type: { type: string, enum: [text, number, boolean, date, select, geo] }
+        privacy_class: { type: string, enum: [public, internal, personal, sensitive] }
+        privacy_label: { type: string }
+        aggregatable:
+          type: boolean
+          description: False for sensitive fields (never queryable; record-level via DSA).
+        k_floor: { type: integer, minimum: 0 }
+        pmt_relevant: { type: boolean }
+        choice_list: { type: string, description: "Present when the field is coded." }
+    PublicCatalogueSection:
+      type: object
+      properties:
+        key: { type: string }
+        label: { type: string }
+        entity: { type: string, enum: [household, member] }
+        questionnaire_section: { type: string }
+        field_count: { type: integer, minimum: 0 }
+        privacy_summary:
+          type: object
+          additionalProperties: { type: integer }
+        fields:
+          type: array
+          items: { $ref: "#/components/schemas/PublicCatalogueField" }
+    PublicCatalogue:
+      type: object
+      properties:
+        sections:
+          type: array
+          items: { $ref: "#/components/schemas/PublicCatalogueSection" }
+        totals:
+          type: object
+          properties:
+            sections: { type: integer }
+            fields: { type: integer }
+            by_privacy:
+              type: object
+              additionalProperties: { type: integer }
+        privacy_classes:
+          type: array
+          items: { $ref: "#/components/schemas/PrivacyClass" }
+        notice: { type: string }
     RefreshCadence:
       type: object
       properties:
@@ -314,6 +367,26 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/PrivacyClass" }
         "503": { description: "data_explorer_disabled" }
+  /catalogue/public/:
+    get:
+      tags: [data-explorer]
+      summary: Public questionnaire-transparency catalogue (anonymous, metadata only)
+      description: |
+        Citizen-facing data dictionary of the ENTIRE questionnaire — every
+        section and field, badged by privacy class — so the public can see
+        what the registry captures and decide to request access via a DSA.
+
+        No authentication and no role required (still flag-gated). Metadata
+        only: no household records and no cell counts. Sensitive fields are
+        listed but flagged `aggregatable: false`.
+      security: []
+      responses:
+        "200":
+          description: The full questionnaire data dictionary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicCatalogue" }
+        "503": { description: "data_explorer_disabled (feature flag off)" }
   /aggregate/:
     post:
       tags: [data-explorer]
