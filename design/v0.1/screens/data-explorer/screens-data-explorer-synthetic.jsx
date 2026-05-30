@@ -27,25 +27,33 @@ const COLUMNS = [
 ];
 
 // Deep-link support: the Catalogue's "Synthetic sample" button lands
-// here with ?dataset=<section/dataset id> so the right one is selected.
-const _initialDataset = () => {
+// here with ?dataset=<section/dataset id>.
+const _datasetParam = () => {
   try {
-    const p = new URLSearchParams(window.location.search).get("dataset");
-    return p || "ds_hh_profile";
+    return new URLSearchParams(window.location.search).get("dataset") || "";
   } catch (e) {
-    return "ds_hh_profile";
+    return "";
   }
 };
 
 const SyntheticScreen = () => {
   const [t, setTweak] = useTweaks({ screen: "synthetic" });
-  const [datasetId, setDatasetId] = useSyn(_initialDataset);
+  const [datasetId, setDatasetId] = useSyn(() => _datasetParam() || "ds_hh_profile");
+  const [requestedParam] = useSyn(_datasetParam);   // remembered deep-link target
   const [rowCount, setRowCount] = useSyn(10);
   const [seed, setSeed] = useSyn("ug-nsr-2026-05-28");
 
   const me = useDeMe();
   const [datasets] = useDeCatalogue();
-  const ds = datasets.find(d => d.id === datasetId || d.code === datasetId) || DE_DATASETS.find(d => d.id === datasetId);
+  const list = (datasets && datasets.length) ? datasets : DE_DATASETS;
+  // Never let ds be undefined. A deep-link to a questionnaire section
+  // this screen can't render yet (the household-shaped sample is per
+  // aggregate dataset — per-section samples are US-DATA-EXP-002) falls
+  // back to the first serveable dataset instead of blanking the page.
+  const ds = list.find(d => d.id === datasetId || d.code === datasetId)
+    || list[0] || DE_DATASETS[0];
+  const deepLinkMissing = !!requestedParam
+    && !list.some(d => d.id === requestedParam || d.code === requestedParam);
   const [rows] = useDeSynthetic(ds?.id || ds?.code || datasetId);
   const visible = rows.slice(0, rowCount);
 
@@ -61,6 +69,22 @@ const SyntheticScreen = () => {
           <button className="btn"><Icon name="download" size={14}/> Export CSV</button>
         </>}
       />
+
+      {deepLinkMissing && (
+        <div style={{
+          background:"var(--accent-update-bg)",
+          border:"1px solid var(--accent-update)",
+          borderRadius:6, padding:"10px 16px", marginBottom:16,
+          display:"flex", alignItems:"center", gap:10, fontSize:12.5,
+        }}>
+          <Icon name="info" size={14} color="var(--accent-update)"/>
+          <span style={{color:"var(--neutral-800)"}}>
+            A synthetic sample for the <strong>{requestedParam}</strong> questionnaire
+            section isn't available yet (tracked as US-DATA-EXP-002). Showing{" "}
+            <strong>{ds.label}</strong> instead — pick another dataset below.
+          </span>
+        </div>
+      )}
 
       {/* The big banner — required by spec */}
       <div style={{
@@ -103,7 +127,7 @@ const SyntheticScreen = () => {
           <div className="t-cap">DATASET</div>
           <div style={{display:"flex", alignItems:"center", gap:10, marginTop:4}}>
             <select className="field-select" style={{maxWidth:320}}
-              value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
+              value={ds.id} onChange={(e) => setDatasetId(e.target.value)}>
               {datasets.filter(d => d.privacy !== "sensitive").map(d =>
                 <option key={d.id} value={d.id}>{d.code} — {d.label}</option>
               )}
