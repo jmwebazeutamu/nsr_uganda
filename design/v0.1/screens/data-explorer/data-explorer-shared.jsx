@@ -668,6 +668,34 @@ const useDeDataset = (datasetId) => {
           { loading: false, error: meta.error || pubMeta.error, isLive: false }];
 };
 
+const useDePublicCatalogue = () => {
+  /* The transparency catalogue source for the Browse screen — ALWAYS
+     the full questionnaire (every section + field), for every visitor,
+     regardless of EXPLORER role. This is deliberately NOT the gated
+     /datasets/ cascade (which exposes only the 8 matview-backed
+     aggregate slices and is the right source for the Aggregate Builder).
+
+     Returns [datasets, meta, varsBySection] where datasets carry their
+     fields inline and varsBySection maps section key → variable rows. */
+  const useApi = (typeof window !== "undefined" && window.useApi) || null;
+  if (!useApi) return [DE_DATASETS, { loading: false, error: null, isLive: false, isPublic: false }, {}];
+  const [resp, meta] = useApi(_DE_PUBLIC_URL);
+  const sections = (resp && resp.sections) || null;
+  if (!meta.loading && !meta.error && Array.isArray(sections) && sections.length) {
+    const datasets = sections.map(s => ({ ..._sectionToDataset(s), _fields: s.fields }));
+    const varsBySection = {};
+    sections.forEach(s => {
+      varsBySection[s.key] = s.fields.map(f => _fieldToVar(f, s.key));
+    });
+    return [datasets, { loading: false, error: null, isLive: true, isPublic: true }, varsBySection];
+  }
+  if (meta.loading) {
+    return [DE_DATASETS, { loading: true, error: null, isLive: false, isPublic: false }, {}];
+  }
+  // Flag off / unreachable → the in-bundle mock so the harness still renders.
+  return [DE_DATASETS, { loading: false, error: meta.error, isLive: false, isPublic: false }, {}];
+};
+
 const useDeCoverage = (datasetId) => {
   const useApi = (typeof window !== "undefined" && window.useApi) || null;
   if (!useApi || !datasetId) return [DE_COVERAGE_ROWS, { loading: false, error: null, isLive: false }];
@@ -952,7 +980,7 @@ Object.assign(window, {
   PrivacyChip, DEShell, ScreenJumpTweak,
   strictestClass, SuppressedCell, FloorViolationBanner,
   // Live-data wiring (US-DATA-EXP-001):
-  useDeCatalogue, useDeDataset, useDeCoverage, useDeSynthetic,
+  useDeCatalogue, useDeDataset, useDePublicCatalogue, useDeCoverage, useDeSynthetic,
   useDeMe, submitAggregate, submitHandoff,
   RoleGateBanner, HandoffPrompt,
 });

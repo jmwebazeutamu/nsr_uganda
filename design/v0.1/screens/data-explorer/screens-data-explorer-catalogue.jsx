@@ -2,7 +2,7 @@
    Icon, Chip, PageHeader,
    DE_DATASETS, DE_VARIABLES_BY_DATASET, DE_PRIVACY, DE_PRIVACY_ORDER,
    PrivacyChip, DEShell, ScreenJumpTweak,
-   useDeCatalogue, useDeDataset, useDeMe, RoleGateBanner,
+   useDePublicCatalogue, useDeMe, RoleGateBanner,
    TweaksPanel, useTweaks, TweakSection */
 
 // NSR MIS — Data Explorer · Catalogue browse (screen 1 of 5)
@@ -20,12 +20,15 @@ const CatalogueScreen = () => {
   const [activeId, setActiveId] = useCat("ds_hh_profile");
 
   const me = useDeMe();
-  const [datasets, dsMeta] = useDeCatalogue();
-  const [{ variables: liveVars }] = useDeDataset(activeId);
+  // Browse is the transparency dictionary: always the full questionnaire
+  // (all sections + fields), for everyone — not the gated aggregate
+  // slices. Aggregatable fields are flagged for the Builder.
+  const [datasets, dsMeta, varsBySection] = useDePublicCatalogue();
+  const liveVars = varsBySection[activeId] || [];
 
-  // Keep a valid selection: the hardcoded default id won't match live
-  // datasets (gated) or public sections, so snap to the first available
-  // once the catalogue resolves.
+  // Keep a valid selection: the hardcoded default id won't match the
+  // section keys, so snap to the first available once the catalogue
+  // resolves.
   React.useEffect(() => {
     if (datasets.length && !datasets.some(d => d.id === activeId || d.code === activeId)) {
       setActiveId(datasets[0].id);
@@ -70,7 +73,7 @@ const CatalogueScreen = () => {
       <PageHeader
         eyebrow="DATA EXPLORER · CATALOGUE BROWSE"
         title="Browse datasets & variables"
-        sub={<>Aggregate-only surface — record-level access happens in the DRS console. Privacy class is shown on every row.</>}
+        sub={<>The full questionnaire data dictionary — every field the registry captures, with its privacy class on each row. Aggregatable fields preview in the builder; record-level access happens in the DRS console.</>}
         right={<>
           <button className="btn"><Icon name="download" size={14}/> Export catalogue</button>
           <button className="btn btn-primary" onClick={() => location.href="Data Explorer - Aggregate Builder.html"}>
@@ -325,10 +328,11 @@ const PublicCatalogueBanner = () => (
     <Icon name="info" size={14} color="var(--accent-update)"/>
     <strong style={{color: "var(--accent-update)"}}>Public catalogue.</strong>
     <span style={{color: "var(--neutral-700)"}}>
-      This is the live data dictionary — every field the National Social
-      Registry captures, with its privacy class. It holds no household
-      records or counts. Aggregate statistics need an EXPLORER session;
-      record-level data is granted only under a Data Sharing Agreement.
+      The full questionnaire data dictionary — every field the National
+      Social Registry captures, with its privacy class. It holds no
+      household records or counts. Aggregatable fields can be queried in
+      the Aggregate Builder; record-level data is granted only under a
+      Data Sharing Agreement.
     </span>
   </div>
 );
