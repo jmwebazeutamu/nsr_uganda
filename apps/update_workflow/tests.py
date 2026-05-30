@@ -955,26 +955,34 @@ class TestFieldCatalog:
 
     def test_catalog_has_every_required_category(self):
         from apps.update_workflow.field_catalog import category_keys
-        assert category_keys() == {"iden", "loc", "rost", "hd", "ed", "emp", "hous", "food"}
+        # One catalog section per questionnaire module (the catalog is
+        # model-introspected from CATALOG_MODELS).
+        assert category_keys() == {
+            "household", "member", "health", "disability", "education",
+            "employment", "dwelling", "utilities", "livelihood",
+            "food_security", "food_consumption",
+        }
 
-    def test_pmt_relevance_on_housing_fields(self):
+    def test_pmt_relevance_on_dwelling_fields(self):
         from apps.update_workflow.field_catalog import is_pmt_relevant
-        for f in ["roof", "wall", "floor", "water", "toilet", "fuel", "light",
-                  "tenure", "land_acres", "cattle", "goats", "radio", "tv",
-                  "phone_owned"]:
-            assert is_pmt_relevant("hous", f), f
+        # The whole dwelling section is PMT-relevant.
+        for f in ["tenure", "dwelling_type", "total_rooms", "sleeping_rooms",
+                  "roof_material", "wall_material", "floor_material"]:
+            assert is_pmt_relevant("dwelling", f), f
 
-    def test_pmt_relevance_negative_on_iden(self):
+    def test_pmt_relevance_negative_on_household(self):
         from apps.update_workflow.field_catalog import is_pmt_relevant
-        for f in ["phone", "email", "head_name", "head_nin", "lang"]:
-            assert not is_pmt_relevant("iden", f), f
+        # Core household identity/location fields are not PMT inputs.
+        for f in ["village", "urban_rural", "address_narrative",
+                  "reported_household_size"]:
+            assert not is_pmt_relevant("household", f), f
 
     def test_validate_row_raises_on_unknown(self):
         from apps.update_workflow.field_catalog import validate_row
         with pytest.raises(ValueError, match="unknown category"):
-            validate_row("nope", "roof")
+            validate_row("nope", "roof_material")
         with pytest.raises(ValueError, match="unknown field"):
-            validate_row("hous", "rooftop")
+            validate_row("dwelling", "rooftop")
 
 
 class TestBundleEndpoint:
@@ -1002,9 +1010,9 @@ class TestBundleEndpoint:
             "entity": "household",
             "change_type": "correction",
             "pmt_relevant": False,
-            "rows": [{"category": "iden", "field": "phone",
-                       "new_value": "+256 700 000 000"}],
-            "note": "Phone updated per field visit.",
+            "rows": [{"category": "household", "field": "address_narrative",
+                       "new_value": "Plot 14, Tapac trading centre"}],
+            "note": "Address corrected per field visit.",
         }
         base.update(over)
         return base
@@ -1019,15 +1027,19 @@ class TestBundleEndpoint:
         assert r.data["changes"] == 1
         # CR persisted with the changes JSON.
         cr = ChangeRequest.objects.get(pk=r.data["cr_id"])
-        assert cr.changes == {"phone": {"old": "", "new": "+256 700 000 000"}}
+        assert cr.changes == {
+            "household.address_narrative": {
+                "old": "Plot 1", "new": "Plot 14, Tapac trading centre",
+            },
+        }
         assert cr.status == ChangeStatus.PENDING_APPROVAL
 
     def test_auto_derives_pmt_relevant_from_rows(self, household, api_client):
         payload = self._payload(household, rows=[
-            {"category": "hous", "field": "roof", "new_value": "Tiles"},
+            {"category": "dwelling", "field": "roof_material", "new_value": "Tiles"},
         ])
         # pmt_relevant=False at the API layer; server auto-bumps to
-        # True because roof is PMT-relevant in the catalog.
+        # True because the dwelling section is PMT-relevant in the catalog.
         r = api_client.post("/api/v1/upd/change-requests/bundle/",
                              data=payload, format="json")
         assert r.status_code == 201, r.data
@@ -1045,7 +1057,7 @@ class TestBundleEndpoint:
 
     def test_address_move_label(self, household, api_client):
         payload = self._payload(household, change_type="address_move", rows=[
-            {"category": "loc", "field": "village", "new_value": "Lopuwapuwa B"},
+            {"category": "household", "field": "village", "new_value": "Lopuwapuwa B"},
         ])
         r = api_client.post("/api/v1/upd/change-requests/bundle/",
                              data=payload, format="json")
@@ -1066,7 +1078,7 @@ class TestBundleEndpoint:
 
     def test_rejects_unknown_field(self, household, api_client):
         payload = self._payload(household, rows=[
-            {"category": "hous", "field": "rooftop", "new_value": "x"},
+            {"category": "dwelling", "field": "rooftop", "new_value": "x"},
         ])
         r = api_client.post("/api/v1/upd/change-requests/bundle/",
                              data=payload, format="json")
@@ -1074,8 +1086,8 @@ class TestBundleEndpoint:
 
     def test_rejects_duplicate_rows(self, household, api_client):
         payload = self._payload(household, rows=[
-            {"category": "iden", "field": "phone", "new_value": "+256 700 111 111"},
-            {"category": "iden", "field": "phone", "new_value": "+256 700 222 222"},
+            {"category": "household", "field": "address_narrative", "new_value": "Plot 11"},
+            {"category": "household", "field": "address_narrative", "new_value": "Plot 22"},
         ])
         r = api_client.post("/api/v1/upd/change-requests/bundle/",
                              data=payload, format="json")
@@ -1085,7 +1097,7 @@ class TestBundleEndpoint:
     def test_member_entity_requires_member_id(self, household, api_client):
         payload = self._payload(
             household, entity="member",
-            rows=[{"category": "hd", "field": "chronic", "new_value": "yes"}],
+            rows=[{"category": "health", "field": "chronic_illness_flag", "new_value": "1"}],
         )
         # member_id omitted
         r = api_client.post("/api/v1/upd/change-requests/bundle/",
@@ -1098,7 +1110,7 @@ class TestBundleEndpoint:
         bogus = "01HBOGUS00000000000000000Z"
         payload = self._payload(
             household, entity="member", member_id=bogus,
-            rows=[{"category": "hd", "field": "chronic", "new_value": "yes"}],
+            rows=[{"category": "health", "field": "chronic_illness_flag", "new_value": "1"}],
         )
         r = api_client.post("/api/v1/upd/change-requests/bundle/",
                              data=payload, format="json")
@@ -1108,8 +1120,8 @@ class TestBundleEndpoint:
     def test_member_entity_rejects_household_scope_fields(self, household, member, api_client):
         payload = self._payload(
             household, entity="member", member_id=member.id,
-            rows=[{"category": "iden", "field": "phone",
-                    "new_value": "+256 700 999 999"}],
+            rows=[{"category": "household", "field": "address_narrative",
+                    "new_value": "Plot 99"}],
         )
         r = api_client.post("/api/v1/upd/change-requests/bundle/",
                              data=payload, format="json")
@@ -1119,7 +1131,7 @@ class TestBundleEndpoint:
     def test_household_entity_rejects_member_scope_fields(self, household, api_client):
         payload = self._payload(
             household, entity="household",
-            rows=[{"category": "hd", "field": "chronic", "new_value": "yes"}],
+            rows=[{"category": "health", "field": "chronic_illness_flag", "new_value": "1"}],
         )
         r = api_client.post("/api/v1/upd/change-requests/bundle/",
                              data=payload, format="json")
@@ -1129,7 +1141,7 @@ class TestBundleEndpoint:
     def test_member_entity_creates_member_cr(self, household, member, api_client):
         payload = self._payload(
             household, entity="member", member_id=member.id,
-            rows=[{"category": "hd", "field": "chronic", "new_value": "yes"}],
+            rows=[{"category": "health", "field": "chronic_illness_flag", "new_value": "1"}],
             note="Diagnosed during clinic visit last week.",
         )
         r = api_client.post("/api/v1/upd/change-requests/bundle/",
@@ -1241,16 +1253,18 @@ class TestBundleEndpoint:
 
     def test_multi_row_multi_category_payload(self, household, api_client):
         payload = self._payload(household, change_type="correction", rows=[
-            {"category": "iden", "field": "phone",   "new_value": "+256 700 333 333"},
-            {"category": "loc",  "field": "village", "new_value": "Lopuwapuwa A"},
-            {"category": "hous", "field": "roof",    "new_value": "Tiles"},
+            {"category": "household", "field": "address_narrative", "new_value": "Plot 33"},
+            {"category": "household", "field": "village",           "new_value": "Lopuwapuwa A"},
+            {"category": "dwelling",  "field": "roof_material",     "new_value": "Tiles"},
         ])
         r = api_client.post("/api/v1/upd/change-requests/bundle/",
                              data=payload, format="json")
         assert r.status_code == 201
         assert r.data["changes"] == 3
         cr = ChangeRequest.objects.get(pk=r.data["cr_id"])
-        assert set(cr.changes.keys()) == {"phone", "village", "roof"}
+        assert set(cr.changes.keys()) == {
+            "household.address_narrative", "household.village", "dwelling.roof_material",
+        }
 
 
 class TestChangeRequestDisplayChanges:
@@ -1499,7 +1513,9 @@ class TestFieldCatalogEndpoint:
         r = api_client.get("/api/v1/upd/field-catalog/")
         assert r.status_code == 200
         returned_keys = {c["key"] for c in r.data["categories"]}
-        assert returned_keys == {c["key"] for c in CATEGORIES}
+        # Every introspected section plus the synthetic "assets" pseudo-
+        # category the endpoint appends for asset-ownership counts.
+        assert returned_keys == {c["key"] for c in CATEGORIES} | {"assets"}
 
     def test_select_field_with_choice_list_resolves_to_choicelist_labels(
         self, db, api_client,
@@ -1511,8 +1527,8 @@ class TestFieldCatalogEndpoint:
         clear_resolver_cache()
         r = api_client.get("/api/v1/upd/field-catalog/")
         assert r.status_code == 200
-        loc = next(c for c in r.data["categories"] if c["key"] == "loc")
-        urban_rural = next(f for f in loc["fields"] if f["key"] == "urban_rural")
+        hh = next(c for c in r.data["categories"] if c["key"] == "household")
+        urban_rural = next(f for f in hh["fields"] if f["key"] == "urban_rural")
         assert urban_rural["type"] == "select"
         assert urban_rural["choice_list"] == "rural_urban"
         assert urban_rural["options"] == [
@@ -1520,25 +1536,30 @@ class TestFieldCatalogEndpoint:
             {"code": "2", "label": "Rural"},
         ]
 
-    def test_select_field_without_choice_list_falls_back_to_hardcoded(
-        self, db, api_client,
-    ):
-        """Legacy select fields whose labels haven't been promoted to
-        a ChoiceList ship their hardcoded `options` array as {code,
-        label} pairs where code == label."""
+    def test_every_select_field_is_choicelist_backed(self, db, api_client):
+        """The catalog is model-introspected: a field is typed `select`
+        precisely because it's in a choice map, so every select field
+        carries a `choice_list` and resolves to {code, label} options.
+        (Replaces the old hardcoded-options fallback, which can no longer
+        occur — there are no untagged select fields.)"""
         r = api_client.get("/api/v1/upd/field-catalog/")
         assert r.status_code == 200
-        hous = next(c for c in r.data["categories"] if c["key"] == "hous")
-        roof = next(f for f in hous["fields"] if f["key"] == "roof")
-        assert roof["type"] == "select"
-        assert roof.get("choice_list") is None
-        assert roof["options"][0] == {"code": "Iron sheets", "label": "Iron sheets"}
+        selects = [
+            f for c in r.data["categories"] for f in c["fields"]
+            if f.get("type") == "select"
+        ]
+        assert selects, "expected at least one select field"
+        for f in selects:
+            assert f.get("choice_list"), f"select {f['key']} has no choice_list"
+            assert isinstance(f.get("options"), list) and f["options"]
+            assert {"code", "label"} <= set(f["options"][0])
 
-    def test_choice_list_retired_falls_back_to_hardcoded(self, db, api_client):
-        """If the rural_urban ChoiceList is retired (no active row),
-        the endpoint falls back to the field's hardcoded options.
-        Codes stay correct; labels equal codes — the modal still
-        renders something usable."""
+    def test_choice_list_retired_yields_no_options(self, db, api_client):
+        """If the rural_urban ChoiceList is retired (no active row), the
+        introspected catalog has no hardcoded fallback, so the field
+        still ships (typed select, choice_list tagged) but with an empty
+        options list — the modal renders no choices until the list is
+        restored, rather than inventing codes."""
         from apps.reference_data.models import ChoiceList, ChoiceListStatus
         from apps.reference_data.services import clear_resolver_cache
         ChoiceList.objects.filter(list_name="rural_urban").update(
@@ -1548,24 +1569,23 @@ class TestFieldCatalogEndpoint:
 
         r = api_client.get("/api/v1/upd/field-catalog/")
         assert r.status_code == 200
-        loc = next(c for c in r.data["categories"] if c["key"] == "loc")
-        urban_rural = next(f for f in loc["fields"] if f["key"] == "urban_rural")
-        assert urban_rural["options"] == [
-            {"code": "1", "label": "1"},
-            {"code": "2", "label": "2"},
-        ]
+        hh = next(c for c in r.data["categories"] if c["key"] == "household")
+        urban_rural = next(f for f in hh["fields"] if f["key"] == "urban_rural")
+        assert urban_rural["type"] == "select"
+        assert urban_rural["choice_list"] == "rural_urban"
+        assert urban_rural["options"] == []
 
     def test_member_entity_field_carries_entity_flag(self, db, api_client):
         r = api_client.get("/api/v1/upd/field-catalog/")
-        rost = next(c for c in r.data["categories"] if c["key"] == "rost")
-        sex = next(f for f in rost["fields"] if f["key"] == "member_sex")
+        member = next(c for c in r.data["categories"] if c["key"] == "member")
+        sex = next(f for f in member["fields"] if f["key"] == "sex")
         assert sex["entity"] == "member"
 
     def test_household_default_entity(self, db, api_client):
         r = api_client.get("/api/v1/upd/field-catalog/")
-        iden = next(c for c in r.data["categories"] if c["key"] == "iden")
-        phone = next(f for f in iden["fields"] if f["key"] == "phone")
-        assert phone["entity"] == "household"
+        hh = next(c for c in r.data["categories"] if c["key"] == "household")
+        addr = next(f for f in hh["fields"] if f["key"] == "address_narrative")
+        assert addr["entity"] == "household"
 
     def test_etag_cache_returns_304(self, db, api_client):
         r1 = api_client.get("/api/v1/upd/field-catalog/")
@@ -1592,8 +1612,8 @@ class TestFieldCatalogEndpoint:
         clear_resolver_cache()
 
         r = api_client.get("/api/v1/upd/field-catalog/?lang=lg")
-        loc = next(c for c in r.data["categories"] if c["key"] == "loc")
-        urban_rural = next(f for f in loc["fields"] if f["key"] == "urban_rural")
+        hh = next(c for c in r.data["categories"] if c["key"] == "household")
+        urban_rural = next(f for f in hh["fields"] if f["key"] == "urban_rural")
         assert urban_rural["options"] == [
             {"code": "1", "label": "Ekibuga"},
             {"code": "2", "label": "Bya kyalo"},
@@ -1605,36 +1625,36 @@ class TestFieldCatalogEndpoint:
         assert r.status_code in (401, 403)
 
     def test_numeric_field_carries_constraints(self, db, api_client):
-        """hh_size is constrained {min:1, max:30, step:1} per the
-        questionnaire. The endpoint must pass this through unchanged
-        so the modal's HTML5 number input can advertise them."""
+        """Bounded integer counts pass their {min, max, step} through so
+        the modal's HTML5 number input can advertise them. Asset counts
+        (e.g. motorcycle) are capped at a small max."""
         r = api_client.get("/api/v1/upd/field-catalog/")
-        rost = next(c for c in r.data["categories"] if c["key"] == "rost")
-        hh_size = next(f for f in rost["fields"] if f["key"] == "hh_size")
-        assert hh_size["constraints"] == {"min": 1, "max": 30, "step": 1}
+        assets = next(c for c in r.data["categories"] if c["key"] == "assets")
+        motorcycle = next(f for f in assets["fields"] if f["key"] == "motorcycle")
+        assert motorcycle["constraints"] == {"min": 0, "max": 9, "step": 1}
 
     def test_decimal_step_passes_through(self, db, api_client):
-        """land_acres allows fractional acres — step=0.1 must come
-        through as a number, not coerced to an int."""
+        """land_hectares allows fractional hectares — a decimal step must
+        come through as a float, not coerced to an int."""
         r = api_client.get("/api/v1/upd/field-catalog/")
-        hous = next(c for c in r.data["categories"] if c["key"] == "hous")
-        land = next(f for f in hous["fields"] if f["key"] == "land_acres")
-        assert land["constraints"] == {"min": 0, "step": 0.1}
+        livelihood = next(c for c in r.data["categories"] if c["key"] == "livelihood")
+        land = next(f for f in livelihood["fields"] if f["key"] == "land_hectares")
+        assert land["constraints"] == {"step": 0.001}
 
     def test_date_field_max_today_sentinel(self, db, api_client):
-        """member_dob declares max_today=True so the modal computes
+        """date_of_birth declares max_today=True so the modal computes
         today's date dynamically — birthdays can't be in the future.
         The wire shape preserves the sentinel; the modal resolves it."""
         r = api_client.get("/api/v1/upd/field-catalog/")
-        rost = next(c for c in r.data["categories"] if c["key"] == "rost")
-        dob = next(f for f in rost["fields"] if f["key"] == "member_dob")
-        assert dob["constraints"] == {"min": "1900-01-01", "max_today": True}
+        member = next(c for c in r.data["categories"] if c["key"] == "member")
+        dob = next(f for f in member["fields"] if f["key"] == "date_of_birth")
+        assert dob["constraints"] == {"max_today": True}
 
     def test_unconstrained_field_has_no_constraints_key(self, db, api_client):
         """Fields that don't define constraints (most text / select)
         ship without the key — modal RowInput treats missing
         constraints as unconstrained."""
         r = api_client.get("/api/v1/upd/field-catalog/")
-        iden = next(c for c in r.data["categories"] if c["key"] == "iden")
-        phone = next(f for f in iden["fields"] if f["key"] == "phone")
+        member = next(c for c in r.data["categories"] if c["key"] == "member")
+        phone = next(f for f in member["fields"] if f["key"] == "telephone_1")
         assert "constraints" not in phone
