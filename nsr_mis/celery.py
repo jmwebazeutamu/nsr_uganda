@@ -58,6 +58,14 @@ app.conf.beat_schedule = {
         # builds in real time.
         "schedule": crontab(minute="*/15"),
     },
+    "consent-withdrawal-sla-sweep": {
+        "task": "apps.consent.tasks.scan_withdrawal_sla_breaches",
+        # Hourly — withdrawal SLA is 30 days (CONSENT-O-03); an hourly
+        # sweep gives the DPO ~24 reminders of head-room before breach
+        # and emits consent.withdrawal.sla_breached once per ticket
+        # (US-CONSENT-07).
+        "schedule": crontab(minute=30),
+    },
     "auto-merge-high-confidence-pairs": {
         "task": "apps.ddup.tasks.auto_merge_high_confidence_pairs_task",
         # Hourly — high-confidence tier-3 pairs are rare; we don't
