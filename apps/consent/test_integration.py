@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from django.utils import timezone
 
 from apps.security.models import AuditEvent
 
@@ -200,3 +201,50 @@ def test_head_change_noop_when_already_granted(geo):
         member=head, purpose=_purpose("REGISTRATION"), state=ConsentState.GRANTED,
         captured_via="WEB_INTAKE", captured_by="op1")
     assert services.require_head_registration_consent(head_member=head, actor="chief1") is False
+
+
+# ---------------------------------------------------------------------------
+# US-CONSENT-11 — DIH fast-track synthetic consent
+# ---------------------------------------------------------------------------
+
+
+def _source_system_with_dpa(*, ratified=True, consent_purposes=("REGISTRATION", "ELIGIBILITY")):
+    from apps.ingestion_hub.models import DataProvisionAgreement, SourceSystem
+    src = SourceSystem.objects.create(code="UBOS", name="UBOS", kind="ubos")
+    DataProvisionAgreement.objects.create(
+        source_system=src, reference="DPA-UBOS-2026-001",
+        scope={"consent_purposes": list(consent_purposes),
+               "dpa_document_key": "minio://dpa/ubos-2026.pdf"},
+        valid_from=date(2026, 1, 1), valid_to=date(2027, 1, 1),
+        signed_at=timezone.now() if ratified else None,
+        approved_by="dpo1" if ratified else "")
+    return src
+
+
+@pytest.mark.django_db
+def test_fast_track_writes_synthetic_consent_when_ratified(geo):
+    hh, head = _household_with_head(geo)
+    src = _source_system_with_dpa()
+    out = services.fast_track_dpa_consent(household=hh, source_system=src, actor="dih")
+    assert out["written"] == 2
+    rec = ConsentRecord.objects.get(member=head, purpose__code="REGISTRATION")
+    assert rec.state == ConsentState.GRANTED
+    assert rec.captured_via == "DIH_FAST_TRACK" and rec.capture_method == "DIGITAL"
+    assert rec.evidence.filter(evidence_type="DPA_DOCUMENT").exists()
+
+
+@pytest.mark.django_db
+def test_fast_track_held_when_dpa_not_ratified(geo):
+    hh, _head = _household_with_head(geo)
+    src = _source_system_with_dpa(ratified=False)
+    with pytest.raises(services.ConsentError) as exc:
+        services.fast_track_dpa_consent(household=hh, source_system=src, actor="dih")
+    assert services.PROMOTION_BLOCKED_DPA_NOT_RATIFIED in str(exc.value)
+
+
+@pytest.mark.django_db
+def test_fast_track_noop_when_no_consent_purposes(geo):
+    hh, _head = _household_with_head(geo)
+    src = _source_system_with_dpa(consent_purposes=())
+    out = services.fast_track_dpa_consent(household=hh, source_system=src, actor="dih")
+    assert out["written"] == 0

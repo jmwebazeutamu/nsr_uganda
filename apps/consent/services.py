@@ -32,6 +32,7 @@ from .models import (
     ConsentState,
     ConsentStatementVersion,
     ConsentWithdrawalTicket,
+    EvidenceType,
     LifecycleStatus,
     StatementStatus,
     TicketState,
@@ -634,3 +635,81 @@ def require_head_registration_consent(*, head_member, actor: str = "") -> bool:
           field_changes={"member_id": head_member.id,
                          "purpose_code": "REGISTRATION", "route_to": "parish_chief"})
     return True
+
+
+# ---------------------------------------------------------------------------
+# DIH fast-track synthetic consent (US-CONSENT-11)
+# ---------------------------------------------------------------------------
+
+PROMOTION_BLOCKED_DPA_NOT_RATIFIED = "PROMOTION_BLOCKED_DPA_NOT_RATIFIED"
+
+
+def _dpa_is_ratified(dpa) -> bool:
+    """A DPA is ratified for fast-track when it has been signed + approved and
+    is within its validity window (CONSENT-O-08: ratified once at activation)."""
+    from django.utils import timezone as _tz
+    today = _tz.now().date()
+    if not dpa.approved_by or dpa.signed_at is None:
+        return False
+    if dpa.valid_from and dpa.valid_from > today:
+        return False
+    if dpa.valid_to and dpa.valid_to < today:
+        return False
+    return True
+
+
+@transaction.atomic
+def fast_track_dpa_consent(*, household, source_system, actor: str = "") -> dict:
+    """Write synthetic ConsentRecords for the household head per the consent
+    purposes declared in the source DPA's scope (US-CONSENT-11).
+
+    - Inert when the module flag is off, or when the DPA scope declares no
+      ``consent_purposes`` (so ordinary DIH promotion is unaffected).
+    - Requires the covering DPA to be Ratified; otherwise raises ConsentError
+      with PROMOTION_BLOCKED_DPA_NOT_RATIFIED, which rolls back the enclosing
+      promotion so it is held for DPO ratification.
+    - captured_via = DIH_FAST_TRACK, capture_method = DIGITAL; the DPA document
+      object key (scope['dpa_document_key']) is recorded as evidence.
+    """
+    if not module_enabled() or source_system is None:
+        return {"written": 0}
+
+    from apps.ingestion_hub.models import DataProvisionAgreement
+
+    dpa = (
+        DataProvisionAgreement.objects
+        .filter(source_system=source_system)
+        .order_by("-valid_from").first()
+    )
+    if dpa is None:
+        return {"written": 0}
+    purpose_codes = list((dpa.scope or {}).get("consent_purposes", []))
+    if not purpose_codes:
+        return {"written": 0}
+
+    if not _dpa_is_ratified(dpa):
+        raise ConsentError(
+            f"{PROMOTION_BLOCKED_DPA_NOT_RATIFIED}: DPA {dpa.reference} declares "
+            f"consent purposes {purpose_codes} but is not ratified")
+
+    head = household.head_member
+    if head is None:
+        return {"written": 0}
+
+    doc_key = (dpa.scope or {}).get("dpa_document_key", "")
+    written = 0
+    for code in purpose_codes:
+        try:
+            purpose = ConsentPurpose.objects.get(code=code)
+        except ConsentPurpose.DoesNotExist:
+            continue
+        rec = capture_consent(
+            member=head, purpose=purpose, state=ConsentState.GRANTED,
+            captured_via="DIH_FAST_TRACK", capture_method="DIGITAL",
+            captured_by=actor or "dih-fast-track",
+            reason=f"dpa_fast_track:{dpa.reference}")
+        if doc_key:
+            attach_evidence(record=rec, evidence_type=EvidenceType.DPA_DOCUMENT,
+                            object_key=doc_key)
+        written += 1
+    return {"written": written, "dpa_reference": dpa.reference}

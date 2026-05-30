@@ -376,3 +376,16 @@ def test_api_capture_verbal_without_witness_rejected(api_client, member):
     assert resp.status_code == 400
     assert any(e["code"] == "AC-CONSENT-METHOD-VALID"
                for e in resp.json()["errors"])
+
+
+@pytest.mark.django_db
+def test_api_coverage_dashboard(api_client, member):
+    services.capture_consent(
+        member=member, purpose=ConsentPurpose.objects.get(code="REGISTRATION"),
+        state=ConsentState.GRANTED, captured_via="WEB_INTAKE", captured_by="op1")
+    resp = api_client.get("/api/v1/consent/coverage")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["active_purposes"] >= 9
+    assert body["consent_records_by_state"].get("GRANTED") == 1
+    assert "open_withdrawal_tickets" in body and "sla_breached" in body

@@ -27,6 +27,7 @@ from .models import (
     ConsentState,
     ConsentStatementVersion,
     ConsentWithdrawalTicket,
+    TicketState,
     WithdrawalDecisionType,
 )
 
@@ -337,6 +338,42 @@ class MemberWithdrawView(APIView):
                 "Your request has been logged. The Data Protection Office will "
                 "review it within 30 days. You will be notified of the outcome."),
         }, status=status.HTTP_201_CREATED)
+
+
+# ---------------------------------------------------------------------------
+# DPO coverage dashboard (US-CONSENT-17 — stub)
+# ---------------------------------------------------------------------------
+
+
+class ConsentCoverageView(APIView):
+    """DPO coverage dashboard KPIs (US-CONSENT-17 — stub). KPI cards are wired
+    to live counts; production charting is deferred. Reuses the data_requests
+    DPO-console read-only pattern."""
+
+    permission_classes = [permissions.IsAuthenticated, ConsentModuleEnabled]
+
+    def get(self, request):
+        from django.db.models import Count
+        from django.utils import timezone
+
+        from .models import LifecycleStatus
+
+        by_state = {
+            row["state"]: row["n"]
+            for row in ConsentRecord.objects.values("state").annotate(n=Count("id"))
+        }
+        now = timezone.now()
+        open_states = [TicketState.OPEN, TicketState.IN_DPO_REVIEW,
+                       TicketState.CLARIFICATION_REQUESTED]
+        open_tickets = ConsentWithdrawalTicket.objects.filter(state__in=open_states)
+        return Response({
+            "active_purposes": ConsentPurpose.objects.filter(
+                status=LifecycleStatus.ACTIVE).count(),
+            "consent_records_by_state": by_state,
+            "open_withdrawal_tickets": open_tickets.count(),
+            "sla_breached": open_tickets.filter(sla_deadline__lt=now).count(),
+            "charts": "deferred",  # US-CONSENT-17 stub — production charting later
+        })
 
 
 # ---------------------------------------------------------------------------

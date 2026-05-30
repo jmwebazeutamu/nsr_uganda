@@ -2,6 +2,7 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from .api import (
+    ConsentCoverageView,
     ConsentPurposeViewSet,
     ConsentStatementVersionViewSet,
     MemberCaptureView,
@@ -24,4 +25,5 @@ urlpatterns = router.urls + [
          name="consent-member-capture"),
     path("members/<str:member_id>/withdraw", MemberWithdrawView.as_view(),
          name="consent-member-withdraw"),
+    path("coverage", ConsentCoverageView.as_view(), name="consent-coverage"),
 ]
