@@ -97,6 +97,35 @@ def is_granted(member_id: str, purpose_code: str) -> bool:
     return state in (TRANSPARENT_ALLOW, ConsentState.GRANTED)
 
 
+# States that actively block a consent-gated action. PENDING_REVIEW
+# (un-captured) is deliberately NOT blocking, so downstream gates stay inert
+# until a citizen actively withholds consent — existing single-MIS flows keep
+# working before consent is captured for a purpose.
+_BLOCKING_STATES = (ConsentState.WITHDRAWN, ConsentState.REFUSED)
+
+
+def is_blocked(member_id: str, purpose_code: str) -> bool:
+    """True only when consent for (member, purpose) is explicitly WITHDRAWN or
+    REFUSED. Un-captured records and the flag-off case both return False."""
+    if not module_enabled():
+        return False
+    return consent_state(member_id, purpose_code) in _BLOCKING_STATES
+
+
+def blocked_member_ids(purpose_code: str):
+    """Return a queryset of member ids whose consent for ``purpose_code`` is
+    WITHDRAWN or REFUSED. Intended as a SQL-layer exclude clause for
+    candidate-list / extract queries (US-CONSENT-13/14) so an application-layer
+    bug cannot leak un-consented rows. Empty when the flag is off."""
+    if not module_enabled():
+        return ConsentRecord.objects.none().values_list("member_id", flat=True)
+    return (
+        ConsentRecord.objects
+        .filter(purpose__code=purpose_code, state__in=_BLOCKING_STATES)
+        .values_list("member_id", flat=True)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Audit + version helpers
 # ---------------------------------------------------------------------------
@@ -499,3 +528,109 @@ def decide_withdrawal(ticket: ConsentWithdrawalTicket, *, decision: str,
                          "rationale": dec.rationale,
                          "second_approver": second_approver})
     return dec
+
+
+# ---------------------------------------------------------------------------
+# DDUP merge reconciliation (US-CONSENT-15)
+# ---------------------------------------------------------------------------
+
+
+@transaction.atomic
+def reconcile_consent_on_merge(*, surviving, loser, actor: str = "") -> dict:
+    """Reconcile the consent records of two members being merged (DDUP).
+
+    - Union of GRANTED per purpose.
+    - Any WITHDRAWN on either side makes the survivor WITHDRAWN for that purpose.
+    - A conflict (one side GRANTED, the other REFUSED) raises ConsentError,
+      which rolls back the enclosing merge transaction so the dedup review
+      queue can surface it for manual reconciliation.
+
+    Inert (no-op) when the module flag is off — there are no consent records
+    to reconcile, so existing DDUP behaviour is unchanged.
+    """
+    if not module_enabled():
+        return {"reconciled": 0}
+
+    loser_recs = {
+        r.purpose_id: r for r in
+        ConsentRecord.objects.filter(member=loser).select_related("purpose")
+    }
+    surv_recs = {
+        r.purpose_id: r for r in
+        ConsentRecord.objects.filter(member=surviving).select_related("purpose")
+    }
+    reconciled = 0
+    for pid in set(loser_recs) | set(surv_recs):
+        ls = loser_recs.get(pid)
+        ss = surv_recs.get(pid)
+        present = [x for x in (ls, ss) if x]
+        states = {x.state for x in present}
+        purpose = present[0].purpose
+
+        if ConsentState.GRANTED in states and ConsentState.REFUSED in states:
+            raise ConsentError(
+                f"consent conflict on purpose {purpose.code}: one side GRANTED, "
+                f"the other REFUSED — resolve before merging members "
+                f"{surviving.id}/{loser.id}")
+
+        if ConsentState.WITHDRAWN in states:
+            target = ConsentState.WITHDRAWN
+        elif ConsentState.GRANTED in states:
+            target = ConsentState.GRANTED
+        else:
+            target = present[0].state
+
+        if ss is None:
+            ss = ConsentRecord.objects.create(
+                member=surviving, purpose=purpose, state=target,
+                captured_via=ls.captured_via, capture_method=ls.capture_method,
+                captured_by=actor, statement_version=ls.statement_version)
+            state_from = ""
+        elif ss.state != target:
+            state_from = ss.state
+            ss.state = target
+            ss.save(update_fields=["state", "updated_at"])
+        else:
+            continue
+
+        aid = _emit("consent.merge.reconciled", ENTITY_RECORD, ss.id, actor=actor,
+                    field_changes={"purpose_code": purpose.code, "after": target,
+                                   "surviving": surviving.id, "loser": loser.id})
+        _write_version(ss, state_from=state_from,
+                       reason=f"ddup_merge:{loser.id}", audit_event_id=aid)
+        reconciled += 1
+    return {"reconciled": reconciled}
+
+
+# ---------------------------------------------------------------------------
+# UPD head-change re-consent (US-CONSENT-16)
+# ---------------------------------------------------------------------------
+
+
+@transaction.atomic
+def require_head_registration_consent(*, head_member, actor: str = "") -> bool:
+    """When a household's head changes, the new head must carry active
+    REGISTRATION consent. If they do not, set their REGISTRATION record to
+    PENDING_RE_CONSENT (the re-capture sub-task) and emit a routing event for
+    the Parish Chief. Returns True if a re-capture was opened.
+
+    Inert (returns False) when the module flag is off.
+    """
+    if not module_enabled():
+        return False
+    if consent_state(head_member.id, "REGISTRATION") == ConsentState.GRANTED:
+        return False
+    try:
+        purpose = ConsentPurpose.objects.get(code="REGISTRATION")
+    except ConsentPurpose.DoesNotExist:
+        return False
+    capture_consent(
+        member=head_member, purpose=purpose,
+        state=ConsentState.PENDING_RE_CONSENT,
+        captured_via="UPD_RECAPTURE", captured_by=actor,
+        reason="upd_head_change_recapture")
+    _emit("consent.upd.recapture_required", ENTITY_RECORD, head_member.id,
+          actor=actor,
+          field_changes={"member_id": head_member.id,
+                         "purpose_code": "REGISTRATION", "route_to": "parish_chief"})
+    return True

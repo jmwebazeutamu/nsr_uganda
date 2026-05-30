@@ -62,6 +62,15 @@ def send_referral(*, programme: Programme, household, actor: str,
         raise ReferralError(
             f"programme {programme.code} is not active (status={programme.status})"
         )
+    # US-CONSENT-13 — REFERRAL consent gate. A household head who has withdrawn
+    # or refused REFERRAL consent blocks new referrals. Inert until a citizen
+    # actively withholds consent (un-captured / flag-off both allow).
+    from apps.consent import services as consent_services
+    head_id = getattr(household, "head_member_id", None)
+    if head_id and consent_services.is_blocked(head_id, "REFERRAL"):
+        raise ReferralError(
+            f"REFERRAL consent is withdrawn/refused for household {household.id}; "
+            "cannot send referral")
     referral = Referral.objects.create(
         programme=programme, household=household,
         eligibility_rule_version=eligibility_rule_version,
