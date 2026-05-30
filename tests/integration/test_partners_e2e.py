@@ -139,8 +139,11 @@ class TestPartnerWizardE2E:
         assert "envelope_sent" in action_seq
         assert action_seq.count("sign") == 3       # one per signature
         assert "activate" in action_seq            # DSA closing event
-        # The activate event must be LAST.
-        assert action_seq[-1] == "activate"
+        # Activation emits a follow-on notification, so the terminal
+        # event is `dsa.activation.notified`; `activate` immediately
+        # precedes it.
+        assert action_seq[-1] == "dsa.activation.notified"
+        assert action_seq.index("activate") < action_seq.index("dsa.activation.notified")
 
 
 @pytest.mark.django_db
