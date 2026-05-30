@@ -587,6 +587,9 @@ const _sectionStrictest = (fields) =>
 
 const _sectionToDataset = (s) => ({
   id: s.key, code: s.key, label: s.label,
+  // entity drives the Browse rail grouping (Household vs Roster member).
+  entity: s.entity || "household",
+  questionnaire_section: s.questionnaire_section || "",
   desc: `${s.field_count} field${s.field_count === 1 ? "" : "s"} captured in the `
     + `${s.label} section`
     + (s.questionnaire_section ? ` · questionnaire ${s.questionnaire_section}` : "")
@@ -601,6 +604,7 @@ const _sectionToDataset = (s) => ({
 const _fieldToVar = (f, sectionKey) => ({
   code: f.field_id, label: f.label, type: f.type,
   privacy: f.privacy_class, domain: sectionKey,
+  aggregatable: !!f.aggregatable,
   desc: f.aggregatable
     ? "Aggregatable — counts only, with k-anonymity suppression."
     : "Sensitive — record-level only, via a Data Sharing Agreement.",

@@ -13,6 +13,13 @@
 
 const { useState: useCat, useMemo: useCatM } = React;
 
+// Rail grouping for the transparency catalogue — by questionnaire
+// entity. "Roster member" collects every member-level section.
+const ENTITY_GROUPS = [
+  { key: "household", label: "Household", icon: "home" },
+  { key: "member", label: "Roster member", icon: "users" },
+];
+
 const CatalogueScreen = () => {
   const [t, setTweak] = useTweaks({ screen: "catalogue" });
   const [q, setQ] = useCat("");
@@ -44,9 +51,15 @@ const CatalogueScreen = () => {
       || (d.desc || "").toLowerCase().includes(needle);
   }), [q, activePrivacy, datasets]);
 
+  // Group the rail by questionnaire entity so the roster's sections
+  // (member, health, disability, education, employment) sit together
+  // instead of scattering across privacy buckets.
   const grouped = useCatM(() => {
-    const g = Object.fromEntries(DE_PRIVACY_ORDER.map(k => [k, []]));
-    filteredDs.forEach(d => g[d.privacy] && g[d.privacy].push(d));
+    const g = Object.fromEntries(ENTITY_GROUPS.map(grp => [grp.key, []]));
+    filteredDs.forEach(d => {
+      const key = g[d.entity] ? d.entity : ENTITY_GROUPS[0].key;
+      g[key].push(d);
+    });
     return g;
   }, [filteredDs]);
 
@@ -114,16 +127,16 @@ const CatalogueScreen = () => {
         {/* Left rail — datasets grouped by privacy */}
         <div className="card" style={{padding:0, position:"sticky", top:120, maxHeight:"calc(100vh - 140px)", overflowY:"auto"}}>
           <div className="card-toolbar">
-            <strong className="t-bodysm">Datasets</strong>
+            <strong className="t-bodysm">Questionnaire sections</strong>
             <div style={{flex:1}}/>
-            <span className="t-cap">grouped by privacy</span>
+            <span className="t-cap">grouped by section</span>
           </div>
-          {DE_PRIVACY_ORDER.map(k => {
-            const list = grouped[k];
+          {ENTITY_GROUPS.map(grp => {
+            const list = grouped[grp.key] || [];
             if (!list.length) return null;
-            const cfg = DE_PRIVACY[k];
+            const fieldTotal = list.reduce((n, d) => n + (Number(d.variables) || 0), 0);
             return (
-              <div key={k}>
+              <div key={grp.key}>
                 <div style={{
                   padding:"8px 14px",
                   display:"flex", alignItems:"center", gap:8,
@@ -131,14 +144,14 @@ const CatalogueScreen = () => {
                   borderTop:"1px solid var(--neutral-200)",
                   borderBottom:"1px solid var(--neutral-200)",
                 }}>
-                  <span style={{width:8, height:8, borderRadius:"50%", background: cfg.accent}}/>
-                  <strong className="t-cap" style={{color: cfg.accent, fontWeight:600, letterSpacing:"0.04em"}}>{cfg.label.toUpperCase()}</strong>
-                  <span className="t-cap">k≥{cfg.k_floor ?? "—"} · floor {cfg.geo_floor}</span>
+                  <Icon name={grp.icon} size={13} color="var(--neutral-600)"/>
+                  <strong className="t-cap" style={{color:"var(--neutral-800)", fontWeight:600, letterSpacing:"0.04em"}}>{grp.label.toUpperCase()}</strong>
                   <div style={{flex:1}}/>
-                  <span className="t-cap">{list.length}</span>
+                  <span className="t-cap">{list.length} sections · {fieldTotal} fields</span>
                 </div>
                 {list.map(d => {
                   const isActive = d.id === activeId;
+                  const accent = (DE_PRIVACY[d.privacy] || {}).accent || "var(--primary-700)";
                   return (
                     <button key={d.id} onClick={() => setActiveId(d.id)} style={{
                       display:"block", width:"100%", textAlign:"left",
@@ -146,7 +159,7 @@ const CatalogueScreen = () => {
                       border:0, borderBottom:"1px solid var(--neutral-200)",
                       background: isActive ? "var(--primary-100)" : "transparent",
                       cursor:"pointer",
-                      borderLeft: isActive ? `3px solid ${cfg.accent}` : "3px solid transparent",
+                      borderLeft: isActive ? `3px solid ${accent}` : "3px solid transparent",
                     }}>
                       <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:4}}>
                         <span className="t-mono" style={{fontSize:11.5, color:"var(--neutral-700)"}}>{d.code}</span>
@@ -155,7 +168,7 @@ const CatalogueScreen = () => {
                         <PrivacyChip klass={d.privacy} size="sm"/>
                       </div>
                       <div style={{fontWeight:500, fontSize:13.5, color:"var(--neutral-900)"}}>{d.label}</div>
-                      <div className="t-cap mt-1">{d.rows} rows · {d.variables} variables · {d.refresh}</div>
+                      <div className="t-cap mt-1">{d.variables} fields</div>
                     </button>
                   );
                 })}
@@ -211,6 +224,13 @@ const DatasetDetail = ({ ds, vars, searchActive }) => {
   vars.forEach(v => { (domains[v.domain] = domains[v.domain] || []).push(v); });
   const domainKeys = Object.keys(domains);
 
+  // A questionnaire section (transparency catalogue) has no matview /
+  // rows / refresh — those are aggregate-dataset concepts. Show
+  // questionnaire-relevant facts instead of dead dashes.
+  const isQuestionnaire = !!ds._public;
+  const entityLabel = ds.entity === "member" ? "Roster member" : "Household";
+  const aggCount = vars.filter(v => v.aggregatable).length;
+
   return (
     <>
       {/* Header card */}
@@ -231,13 +251,24 @@ const DatasetDetail = ({ ds, vars, searchActive }) => {
             </button>
             <button className="btn"><Icon name="database" size={14}/> Synthetic sample</button>
           </div>
-          <div style={{display:"grid", gridTemplateColumns:"repeat(5, 1fr)", gap:16, marginTop:18}}>
-            <Fact label="Rows" big={ds.rows}/>
-            <Fact label="Variables" big={ds.variables}/>
-            <Fact label="Matview" big={<span className="t-mono" style={{fontSize:13}}>{ds.matview}</span>}/>
-            <Fact label="Refresh cadence" big={ds.refresh}/>
-            <Fact label="Refreshed" big={<span className="t-mono" style={{fontSize:12}}>{ds.refreshed_at}</span>}/>
-          </div>
+          {isQuestionnaire ? (
+            <div style={{display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:16, marginTop:18}}>
+              <Fact label="Fields" big={ds.variables}/>
+              <Fact label="Captured on" big={entityLabel}/>
+              <Fact label="Questionnaire" big={ds.questionnaire_section
+                ? <>Section <span className="t-mono">{ds.questionnaire_section}</span></>
+                : "—"}/>
+              <Fact label="Aggregatable" big={<>{aggCount} <span className="t-cap">of {ds.variables}</span></>}/>
+            </div>
+          ) : (
+            <div style={{display:"grid", gridTemplateColumns:"repeat(5, 1fr)", gap:16, marginTop:18}}>
+              <Fact label="Rows" big={ds.rows}/>
+              <Fact label="Variables" big={ds.variables}/>
+              <Fact label="Matview" big={<span className="t-mono" style={{fontSize:13}}>{ds.matview}</span>}/>
+              <Fact label="Refresh cadence" big={ds.refresh}/>
+              <Fact label="Refreshed" big={<span className="t-mono" style={{fontSize:12}}>{ds.refreshed_at}</span>}/>
+            </div>
+          )}
         </div>
 
         {/* Privacy rules card */}
