@@ -23,6 +23,15 @@ const CatalogueScreen = () => {
   const [datasets, dsMeta] = useDeCatalogue();
   const [{ variables: liveVars }] = useDeDataset(activeId);
 
+  // Keep a valid selection: the hardcoded default id won't match live
+  // datasets (gated) or public sections, so snap to the first available
+  // once the catalogue resolves.
+  React.useEffect(() => {
+    if (datasets.length && !datasets.some(d => d.id === activeId || d.code === activeId)) {
+      setActiveId(datasets[0].id);
+    }
+  }, [datasets]);
+
   const filteredDs = useCatM(() => datasets.filter(d => {
     if (activePrivacy && d.privacy !== activePrivacy) return false;
     if (!q) return true;
@@ -55,8 +64,9 @@ const CatalogueScreen = () => {
   }, [datasets]);
 
   return (
-    <DEShell active="catalogue" refreshed_at={ds?.refreshed_at || "28 May 2026 06:00 UTC"}>
-      <RoleGateBanner me={me}/>
+    <DEShell active="catalogue" refreshed_at={ds?.refreshed_at || "28 May 2026 06:00 UTC"}
+             publicLive={dsMeta.isPublic}>
+      {dsMeta.isPublic ? <PublicCatalogueBanner/> : <RoleGateBanner me={me}/>}
       <PageHeader
         eyebrow="DATA EXPLORER · CATALOGUE BROWSE"
         title="Browse datasets & variables"
@@ -300,6 +310,28 @@ const DatasetDetail = ({ ds, vars, searchActive }) => {
     </>
   );
 };
+
+/* Shown when the screen is rendering the live, anonymous public
+   questionnaire catalogue (metadata only) rather than the EXPLORER-gated
+   aggregate datasets. Frames the transparency purpose + the route to
+   actual access. */
+const PublicCatalogueBanner = () => (
+  <div style={{
+    background: "var(--accent-update-bg)",
+    borderBottom: "1px solid var(--accent-update)",
+    padding: "8px 24px",
+    display: "flex", alignItems: "center", gap: 10, fontSize: 12.5,
+  }}>
+    <Icon name="info" size={14} color="var(--accent-update)"/>
+    <strong style={{color: "var(--accent-update)"}}>Public catalogue.</strong>
+    <span style={{color: "var(--neutral-700)"}}>
+      This is the live data dictionary — every field the National Social
+      Registry captures, with its privacy class. It holds no household
+      records or counts. Aggregate statistics need an EXPLORER session;
+      record-level data is granted only under a Data Sharing Agreement.
+    </span>
+  </div>
+);
 
 const Fact = ({ label, big }) => (
   <div>

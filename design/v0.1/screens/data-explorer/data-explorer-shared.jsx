@@ -260,11 +260,13 @@ const PrivacyChip = ({ klass, size = "md", showFloor = false }) => {
 /* ================================================================
    DEShell — top bar + screen tabs + matview-freshness indicator
    ================================================================ */
-const DEShell = ({ active, refreshed_at, children, right }) => {
+const DEShell = ({ active, refreshed_at, children, right, publicLive }) => {
   // Drive the role chip + avatar from the live gate so the header
   // never claims a signed-in EXPLORER while the body is showing mock
   // data. `live` means a reachable API AND an EXPLORER session AND the
   // flag on — the same condition RoleGateBanner uses to stay hidden.
+  // `publicLive` (passed by the catalogue screen) means the body is
+  // showing the live anonymous transparency catalogue, not mock.
   const gate = useDeMe();
   const live = !gate.loading && gate.hasRole && gate.flagOn && !!gate.me;
   const _initials = () => {
@@ -315,6 +317,11 @@ const DEShell = ({ active, refreshed_at, children, right }) => {
         {live ? (
           <div className="role-chip" style={{margin:0}}>
             <span>Role:</span><strong>EXPLORER</strong>
+          </div>
+        ) : publicLive ? (
+          <div className="role-chip" style={{margin:0, opacity:0.85}}
+               title="Live public data dictionary — metadata only">
+            <span>Public</span><strong>catalogue</strong>
           </div>
         ) : (
           <div className="role-chip" style={{margin:0, opacity:0.6}}
@@ -564,24 +571,74 @@ const _normaliseDataset = (raw) => {
   return { ...raw, privacy, floor };
 };
 
+/* Public questionnaire catalogue (anonymous, metadata-only). Sections
+   map onto the dataset shape and fields onto the variable shape so the
+   catalogue screen renders the whole questionnaire with no changes. */
+const _DE_PUBLIC_URL = `${_DE_API_PREFIX}/catalogue/public/`;
+const _STRICTNESS = ["public", "internal", "personal", "sensitive"];
+
+const _sectionStrictest = (fields) =>
+  (fields || []).reduce(
+    (acc, f) =>
+      _STRICTNESS.indexOf(f.privacy_class) > _STRICTNESS.indexOf(acc)
+        ? f.privacy_class : acc,
+    "public",
+  );
+
+const _sectionToDataset = (s) => ({
+  id: s.key, code: s.key, label: s.label,
+  desc: `${s.field_count} field${s.field_count === 1 ? "" : "s"} captured in the `
+    + `${s.label} section`
+    + (s.questionnaire_section ? ` · questionnaire ${s.questionnaire_section}` : "")
+    + ".",
+  privacy: _sectionStrictest(s.fields),
+  // Metadata only — no counts/matview on the transparency surface.
+  rows: "—", variables: s.field_count,
+  refresh: "questionnaire", matview: "—", refreshed_at: "—",
+  _public: true,
+});
+
+const _fieldToVar = (f, sectionKey) => ({
+  code: f.field_id, label: f.label, type: f.type,
+  privacy: f.privacy_class, domain: sectionKey,
+  desc: f.aggregatable
+    ? "Aggregatable — counts only, with k-anonymity suppression."
+    : "Sensitive — record-level only, via a Data Sharing Agreement.",
+  values: f.choice_list ? `coded · ${f.choice_list}` : (f.pmt_relevant ? "PMT-relevant" : ""),
+});
+
 const useDeCatalogue = () => {
   const useApi = (typeof window !== "undefined" && window.useApi) || null;
-  if (!useApi) return [DE_DATASETS, { loading: false, error: null, isLive: false }];
+  if (!useApi) {
+    return [DE_DATASETS, { loading: false, error: null, isLive: false, isPublic: false }];
+  }
+  // Call both unconditionally so hook order is stable across renders.
   const [resp, meta] = useApi(`${_DE_API_PREFIX}/datasets/`);
+  const [pubResp, pubMeta] = useApi(_DE_PUBLIC_URL);
   const rows = (resp && (resp.datasets || resp.results || resp)) || null;
-  if (meta.loading) {
-    return [DE_DATASETS, { ...meta, isLive: false }];
+  // 1. EXPLORER-gated aggregate datasets win when reachable.
+  if (!meta.loading && !meta.error && Array.isArray(rows) && rows.length) {
+    const merged = _mergeMock(rows.map(_normaliseDataset), DE_DATASETS, d => d.code);
+    return [merged, { loading: false, error: null, isLive: true, isPublic: false }];
   }
-  if (meta.error || !Array.isArray(rows) || rows.length === 0) {
-    return [DE_DATASETS, { loading: false, error: meta.error, isLive: false }];
+  // 2. Public questionnaire catalogue — anonymous-readable transparency.
+  const sections = (pubResp && pubResp.sections) || null;
+  if (!pubMeta.loading && !pubMeta.error && Array.isArray(sections) && sections.length) {
+    return [sections.map(_sectionToDataset),
+            { loading: false, error: null, isLive: true, isPublic: true }];
   }
-  const merged = _mergeMock(rows.map(_normaliseDataset), DE_DATASETS, d => d.code);
-  return [merged, { loading: false, error: null, isLive: true }];
+  // 3. Still loading, or fully offline → mock.
+  if (meta.loading || pubMeta.loading) {
+    return [DE_DATASETS, { loading: true, error: null, isLive: false, isPublic: false }];
+  }
+  return [DE_DATASETS,
+          { loading: false, error: meta.error || pubMeta.error, isLive: false, isPublic: false }];
 };
 
 const useDeDataset = (datasetId) => {
   /* Returns the dataset detail (with variables[]) for the given id.
-     Falls back to the mock by id (or by code if id-lookup miss). */
+     Cascade mirrors useDeCatalogue: gated dataset → public section →
+     mock by id/code. */
   const useApi = (typeof window !== "undefined" && window.useApi) || null;
   const mockDs = DE_DATASETS.find(d => d.id === datasetId || d.code === datasetId);
   const mockVars = DE_VARIABLES_BY_DATASET[mockDs?.id] || [];
@@ -590,17 +647,25 @@ const useDeDataset = (datasetId) => {
             { loading: false, error: null, isLive: false }];
   }
   const [resp, meta] = useApi(`${_DE_API_PREFIX}/datasets/${datasetId}/`);
-  if (meta.loading) {
-    return [{ dataset: mockDs, variables: mockVars }, { ...meta, isLive: false }];
+  const [pubResp, pubMeta] = useApi(_DE_PUBLIC_URL);
+  if (!meta.loading && !meta.error && resp) {
+    return [{ dataset: _normaliseDataset(resp), variables: resp.variables || mockVars },
+            { loading: false, error: null, isLive: true }];
   }
-  if (meta.error || !resp) {
-    return [{ dataset: mockDs, variables: mockVars },
-            { loading: false, error: meta.error, isLive: false }];
+  const sections = (pubResp && pubResp.sections) || null;
+  if (!pubMeta.loading && !pubMeta.error && Array.isArray(sections)) {
+    const sec = sections.find(s => s.key === datasetId);
+    if (sec) {
+      return [{ dataset: _sectionToDataset(sec),
+                variables: sec.fields.map(f => _fieldToVar(f, sec.key)) },
+              { loading: false, error: null, isLive: true }];
+    }
   }
-  return [
-    { dataset: _normaliseDataset(resp), variables: resp.variables || mockVars },
-    { loading: false, error: null, isLive: true },
-  ];
+  if (meta.loading || pubMeta.loading) {
+    return [{ dataset: mockDs, variables: mockVars }, { loading: true, error: null, isLive: false }];
+  }
+  return [{ dataset: mockDs, variables: mockVars },
+          { loading: false, error: meta.error || pubMeta.error, isLive: false }];
 };
 
 const useDeCoverage = (datasetId) => {
