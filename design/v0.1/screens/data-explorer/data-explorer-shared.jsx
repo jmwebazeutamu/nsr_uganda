@@ -634,7 +634,10 @@ const useDeMe = () => {
      report flagOn=false so the UI shows a "preview mode" banner. */
   const useApi = (typeof window !== "undefined" && window.useApi) || null;
   if (!useApi) return { hasRole: false, flagOn: false, me: null, loading: false, error: null };
-  const [resp, meta] = useApi("/api/v1/users/me/");
+  // The identity endpoint lives under the security app's mount, not a
+  // bare /api/v1/users/. Calling the wrong path 404s, which the gate
+  // reports as "API unreachable" even on a healthy, signed-in session.
+  const [resp, meta] = useApi("/api/v1/security/users/me/");
   if (meta.loading) {
     return { hasRole: false, flagOn: false, me: null, loading: true, error: null };
   }
