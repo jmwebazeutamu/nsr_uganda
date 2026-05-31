@@ -104,3 +104,31 @@ describe("consent badge cluster (US-CONSENT-08)", () => {
     expect(projectConsentMatrix({ purposes: [] })).toEqual([]);
   });
 });
+
+describe("citizen portal screens load cleanly", () => {
+  beforeAll(async () => {
+    // Generous stubs so the screen modules evaluate under jsdom.
+    for (const name of [
+      "Icon", "Chip", "KPI", "Field", "Modal", "Toast", "PageHeader",
+      "AuditDrawer", "ActionBar", "ConsentStateChip", "TicketStateChip",
+      "BasisChip", "LifecycleChip", "Toggle", "ConsentSectionLabel", "StoryTag",
+    ]) {
+      globalThis[name] = () => null;
+    }
+    globalThis.ReactDOM = { createRoot: () => ({ render() {} }) };
+  });
+
+  it("intake capture + citizen dashboard export their screens", async () => {
+    await import("./screens-consent-capture.jsx");
+    await import("./screens-consent-citizen.jsx");
+    expect(typeof globalThis.ConsentIntakeScreen).toBe("function");
+    expect(typeof globalThis.CitizenConsentScreen).toBe("function");
+  });
+
+  it("portal shell exports the app + a stub auth context", async () => {
+    await import("./app-portal-consent.jsx");
+    expect(typeof globalThis.ConsentPortalApp).toBe("function");
+    expect(globalThis.CONSENT_AUTH).toMatchObject({ role: "citizen" });
+    expect(globalThis.CONSENT_AUTH.memberId).toBeTruthy();
+  });
+});

@@ -26,7 +26,6 @@
 
   <!-- Reusable composite components (load after shared, before screens) -->
   <script type="text/babel" src="v0.1/components/error-boundary.jsx"></script>
-  <script type="text/babel" src="v0.1/components/change-request-modal.jsx"></script>
   <script type="text/babel" src="v0.1/components/scope-edit-modal.jsx"></script>
 
   <!-- Data layer — API client + useChoiceList hook (US-S23-012). MUST load
@@ -42,6 +41,12 @@
   <script type="text/babel" src="v0.1/screens/screens-dih.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-dedup.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-upd.jsx"></script>
+  <!-- Open-CR submitter (US-S22-004) — full-page replacement for the
+       legacy change-request-modal. screens-change-request.jsx ships
+       the data/helpers/sub-components; app-change-request.jsx exposes
+       the ChangeRequestScreen component on window. -->
+  <script type="text/babel" src="v0.1/screens/change-request/screens-change-request.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/change-request/app-change-request.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-drs-querybuilder.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-drs-fieldselector.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-drs.jsx"></script>
@@ -65,6 +70,13 @@
   <script type="text/babel" src="v0.1/screens/screens-beneficiaries.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-reporting.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-admin.jsx"></script>
+
+  <!-- Consent Management (Epic 19 — ADR-0024). Powers the live consent-status
+       badge cluster + the "Manage / capture consent" action on the Household
+       detail Consent tab. consent-shared must load before its consumers. -->
+  <script type="text/babel" src="v0.1/screens/consent/consent-shared.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/consent/consent-badge-cluster.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/consent/screens-consent-citizen.jsx"></script>
 
   <!-- App shell -->
   <script type="text/babel" src="app.jsx"></script>
