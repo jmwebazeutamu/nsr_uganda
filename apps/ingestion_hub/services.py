@@ -748,9 +748,14 @@ def _first_member_nin(payload: dict) -> str | None:
 
 
 # Severity bucket classifier lives in apps.dqa.models alongside the
-# Severity enum; re-export under the local _bucket alias so the rest
-# of this file doesn't need to know where it's authored.
-from apps.dqa.models import severity_bucket as _bucket  # noqa: E402
+# Severity enum. Imported lazily (not at module top-level) to avoid a
+# circular-import cycle that surfaces when the app-import order shifts —
+# e.g. once apps.consent joined INSTALLED_APPS the eager import could fire
+# while apps.dqa.models was only partially loaded (ImportError on
+# severity_bucket). Deferring to call time breaks the cycle.
+def _bucket(severity):
+    from apps.dqa.models import severity_bucket
+    return severity_bucket(severity)
 
 
 def _evaluate_dqa(payload: dict, *, stage_id: str = "") -> dict:
