@@ -1320,6 +1320,17 @@ const TabConsent = ({ h, live }) => {
           {React.createElement(window.CitizenConsentScreen)}
         </Modal>
       )}
+      {/* US-CONSENT-08 detail — full per-purpose consent breakdown
+          (accepted / withdrawn / pending …) for the head member. Sits above
+          the original interview-evidence cards, which are left untouched. */}
+      {typeof window !== "undefined" && typeof window.ConsentStatusCard === "function" && headId && (
+        <div style={{padding:"16px 20px 0"}}>
+          {React.createElement(window.ConsentStatusCard, {
+            memberId: headId,
+            title: `Consent detail · per purpose · ${headMember && headMember.name ? headMember.name : "head of household"}`,
+          })}
+        </div>
+      )}
       <div style={{padding:20, display:"grid", gridTemplateColumns:"1.4fr 1fr", gap:16}}>
         <div className="tint-update" style={{padding:18, borderRadius:6,
               borderLeft:"3px solid var(--accent-update)"}}>
