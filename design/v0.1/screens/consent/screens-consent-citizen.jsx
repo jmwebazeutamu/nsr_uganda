@@ -121,6 +121,21 @@ const projectMatrix = (data) => {
   return out;
 };
 
+// Project the per-member consent history (ConsentRecordVersion rows from
+// GET …/history) into the AuditDrawer event shape.
+const _STATE_VERB = {
+  GRANTED: "granted", REFUSED: "refused", WITHDRAWN: "withdrew",
+  PENDING_RE_CONSENT: "flagged for re-consent", PENDING_REVIEW: "updated",
+};
+const fmtHistory = (events) => (events || []).map(e => ({
+  who: e.captured_by || "system",
+  action: `${_STATE_VERB[e.state] || "changed"} ${(PURPOSE_BY_CODE[e.purpose_code] || {}).name || e.purpose_code}`,
+  detail: [e.captured_via && `via ${e.captured_via}`, e.capture_method, e.reason]
+    .filter(Boolean).join(" · ") || "—",
+  time: (e.effective_from || "").slice(0, 10),
+  audit: e.audit_event_id || "—",
+}));
+
 /* ============================================================
    Withdrawal modal (Screen 3) — two steps
    ============================================================ */
@@ -261,6 +276,106 @@ const WithdrawalModal = ({ open, purposeCode, onClose, onComplete, live, memberI
 };
 
 /* ============================================================
+   Capture modal — operator records explicit per-purpose consent
+   (US-CONSENT-03 capture). POSTs to …/capture; surfaces AC-CONSENT-*
+   DQA errors (verbal needs witness, minor needs proxy).
+   ============================================================ */
+const CAPTURE_METHODS = [
+  ["DIGITAL", "Digital"], ["SIGNATURE", "Signature"],
+  ["THUMBPRINT", "Thumbprint"], ["VERBAL_WITNESSED", "Verbal (witnessed)"],
+];
+
+const CaptureModal = ({ open, purposeCode, memberId, live, onClose, onComplete }) => {
+  const [decision, setDecision] = useStateCD("Granted");
+  const [method, setMethod] = useStateCD("DIGITAL");
+  const [witnessName, setWitnessName] = useStateCD("");
+  const [witnessRole, setWitnessRole] = useStateCD("");
+  const [busy, setBusy] = useStateCD(false);
+  const [errors, setErrors] = useStateCD([]);
+
+  React.useEffect(() => {
+    if (open) {
+      setDecision("Granted"); setMethod("DIGITAL");
+      setWitnessName(""); setWitnessRole(""); setBusy(false); setErrors([]);
+    }
+  }, [open, purposeCode]);
+
+  if (!open || !purposeCode) return null;
+  const purpose = PURPOSE_BY_CODE[purposeCode] || { name: purposeCode };
+  const needWitness = method === "VERBAL_WITNESSED" && decision === "Granted";
+
+  const submit = () => {
+    setBusy(true); setErrors([]);
+    const body = {
+      purpose_code: purposeCode,
+      state: decision === "Granted" ? "GRANTED" : "REFUSED",
+      capture_method: method, witness_name: witnessName, witness_role: witnessRole,
+    };
+    const done = () => { setBusy(false); onComplete && onComplete(purposeCode, decision); onClose && onClose(); };
+    if (live && memberId && typeof window !== "undefined" && window.nsrApi) {
+      window.nsrApi.post(`/api/v1/consent/members/${memberId}/capture`, body)
+        .then(done)
+        .catch(err => {
+          setBusy(false);
+          const errs = err && err.body && err.body.errors;
+          setErrors(Array.isArray(errs) ? errs.map(e => e.message)
+            : ["Could not save consent. Please try again."]);
+        });
+    } else {
+      setTimeout(done, 500);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title={`Capture consent — ${purpose.name}`} width={520}
+      footer={<>
+        <button className="btn" onClick={onClose} disabled={busy}>Cancel</button>
+        <button className="btn btn-primary" onClick={submit} disabled={busy}>
+          {busy ? "Saving…" : "Save consent"}
+        </button>
+      </>}>
+      <div className="col gap-4">
+        {!!errors.length && (
+          <div style={{ padding: "10px 12px", background: "var(--accent-danger-bg)",
+            border: "1px solid rgba(169,50,38,0.25)", borderRadius: "var(--radius-default)" }}>
+            {errors.map((m, i) => <div key={i} className="t-bodysm" style={{ color: "var(--accent-danger)" }}>{m}</div>)}
+          </div>
+        )}
+        <div className="row gap-3" style={{ alignItems: "center" }}>
+          <div style={{ fontWeight: 600, fontSize: 15 }}>{purpose.name}</div>
+          <span className="t-mono t-cap">{purposeCode}</span>
+          <div style={{ flex: 1 }}/>
+          {purpose.basis && <BasisChip basis={purpose.basis}/>}
+        </div>
+        <Field label="Decision">
+          <select className="field-select" value={decision} onChange={e => setDecision(e.target.value)}>
+            <option>Granted</option><option>Refused</option>
+          </select>
+        </Field>
+        <Field label="Capture method">
+          <select className="field-select" value={method} onChange={e => setMethod(e.target.value)}>
+            {CAPTURE_METHODS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </Field>
+        {needWitness && (
+          <div className="row gap-3">
+            <Field label="Witness name" required>
+              <input className="field-input" value={witnessName} onChange={e => setWitnessName(e.target.value)}/>
+            </Field>
+            <Field label="Witness role" required>
+              <input className="field-input" value={witnessRole} onChange={e => setWitnessRole(e.target.value)}/>
+            </Field>
+          </div>
+        )}
+        <div className="t-cap row gap-2" style={{ color: "var(--neutral-500)" }}>
+          <Icon name="info" size={13}/> Verbal-witnessed consent requires a witness name and role (AC-CONSENT-METHOD-VALID).
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+/* ============================================================
    MAIN — Citizen consent dashboard
    ============================================================ */
 const CitizenConsentScreen = (props = {}) => {
@@ -277,19 +392,40 @@ const CitizenConsentScreen = (props = {}) => {
   const [records, setRecords] = useStateCD(liveMode ? {} : seedRecords);
   const [loading, setLoading] = useStateCD(liveMode);
   const [withdrawCode, setWithdrawCode] = useStateCD(null);
+  const [captureCode, setCaptureCode] = useStateCD(null);
   const [showAudit, setShowAudit] = useStateCD(false);
+  const [auditEvents, setAuditEvents] = useStateCD(null);
   const [toast, setToast] = useStateCD("");
+
+  const loadMatrix = (mid) => api.get(`/api/v1/consent/members/${mid}`)
+    .then(data => ({ mid, recs: projectMatrix(data) }));
 
   // Fetch the selected member's live consent matrix.
   React.useEffect(() => {
     if (!liveMode) return undefined;
     let alive = true;
     setLoading(true);
-    api.get(`/api/v1/consent/members/${memberId}`)
-      .then(data => { if (!alive) return; setRecords(prev => ({ ...prev, [memberId]: projectMatrix(data) })); setLoading(false); })
+    loadMatrix(memberId)
+      .then(({ recs }) => { if (!alive) return; setRecords(prev => ({ ...prev, [memberId]: recs })); setLoading(false); })
       .catch(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [memberId, liveMode]);
+
+  // Fetch the member's consent history when the drawer opens (live mode).
+  React.useEffect(() => {
+    if (!liveMode || !showAudit) return undefined;
+    let alive = true;
+    setAuditEvents(null);
+    api.get(`/api/v1/consent/members/${memberId}/history`)
+      .then(data => { if (alive) setAuditEvents(fmtHistory(data.events)); })
+      .catch(() => { if (alive) setAuditEvents([]); });
+    return () => { alive = false; };
+  }, [liveMode, showAudit, memberId]);
+
+  const refreshMember = () => {
+    if (!liveMode) return;
+    loadMatrix(memberId).then(({ recs }) => setRecords(prev => ({ ...prev, [memberId]: recs }))).catch(() => {});
+  };
 
   const member = house.members.find(m => m.id === memberId) || house.members[0] || { name: "", self: true };
   const head = house.members.find(m => m.self) || house.members[0] || { name: "—" };
@@ -304,6 +440,18 @@ const CitizenConsentScreen = (props = {}) => {
       [memberId]: { ...(r[memberId] || {}), [code]: { ...((r[memberId] || {})[code] || {}), state: "Pending review", last: "today", channel: "Web" } },
     }));
     setToast(`Withdrawal request submitted for ${(PURPOSE_BY_CODE[code] || {}).name || code}.`);
+  };
+
+  const onCaptureComplete = (code, dec) => {
+    if (liveMode) {
+      refreshMember();
+    } else {
+      setRecords(r => ({
+        ...r,
+        [memberId]: { ...(r[memberId] || {}), [code]: { state: dec, granted: dec === "Granted" ? "today" : "—", last: "today", channel: "Operator" } },
+      }));
+    }
+    setToast(`Consent ${dec === "Granted" ? "granted" : "recorded as refused"} for ${(PURPOSE_BY_CODE[code] || {}).name || code}.`);
   };
 
   return (
@@ -410,6 +558,11 @@ const CitizenConsentScreen = (props = {}) => {
                       <span title={p.basisNote} style={{ display: "inline-flex", alignItems: "center", gap: 5, cursor: "help", color: "var(--neutral-300)", fontSize: 13 }}>
                         <Icon name="lock" size={13} color="var(--neutral-300)"/> Withdraw
                       </span>
+                    ) : (p.basis === "Consent" && (rec.state === "Not captured" || rec.state === "Refused" || rec.state === "Withdrawn")) ? (
+                      <button className="btn btn-sm btn-ghost" style={{ color: "var(--accent-data)" }}
+                        onClick={() => setCaptureCode(p.code)}>
+                        {rec.state === "Not captured" ? "Capture" : "Re-grant"}
+                      </button>
                     ) : (
                       <span className="t-cap" style={{ color: "var(--neutral-300)" }}>—</span>
                     )}
@@ -434,8 +587,12 @@ const CitizenConsentScreen = (props = {}) => {
       <WithdrawalModal open={!!withdrawCode} purposeCode={withdrawCode}
         live={liveMode} memberId={memberId}
         onClose={() => setWithdrawCode(null)} onComplete={onWithdrawComplete}/>
+      <CaptureModal open={!!captureCode} purposeCode={captureCode}
+        live={liveMode} memberId={memberId}
+        onClose={() => setCaptureCode(null)} onComplete={onCaptureComplete}/>
       <AuditDrawer open={showAudit} onClose={() => setShowAudit(false)}
-        events={sampleAudit(member)} title={`${member.self ? "Your" : member.name} · consent history`}/>
+        events={liveMode ? (auditEvents || []) : sampleAudit(member)}
+        title={`${member.self ? "Your" : member.name} · consent history`}/>
       <Toast message={toast} onDone={() => setToast("")}/>
     </div>
   );

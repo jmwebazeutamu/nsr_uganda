@@ -130,6 +130,16 @@ paths:
       responses:
         "201": { description: "{ ticket_id, sla_deadline, next_step }" }
         "400": { description: Purpose not withdrawable }
+  /members/{member_id}/history:
+    parameters: [{ name: member_id, in: path, required: true, schema: { type: string } }]
+    get:
+      tags: [consent]
+      summary: Per-member consent history (US-CONSENT-08/10)
+      description: Append-only ConsentRecordVersion rows, newest first, each linked to its AuditEvent.
+      responses:
+        "200": { description: "{ member_id, events: [{ purpose_code, state, captured_by, captured_via, capture_method, effective_from, audit_event_id }] }" }
+        "404": { description: Member not found }
+        "503": { description: Module disabled }
 
   /withdrawal-tickets/:
     get:

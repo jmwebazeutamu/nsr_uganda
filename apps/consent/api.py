@@ -258,6 +258,35 @@ class MemberConsentView(APIView):
         return Response({"member_id": member.id, "purposes": matrix})
 
 
+class MemberConsentHistoryView(APIView):
+    """GET the append-only consent history for a member (US-CONSENT-08 /
+    -10) — one entry per ConsentRecordVersion, newest first, each linked to its
+    AuditEvent. Powers the per-member consent history drawer."""
+
+    permission_classes = [permissions.IsAuthenticated, ConsentModuleEnabled]
+
+    def get(self, request, member_id):
+        get_object_or_404(Member, pk=member_id)
+        from .models import ConsentRecordVersion
+        rows = (
+            ConsentRecordVersion.objects
+            .filter(member_id=member_id)
+            .order_by("-effective_from")[:200]
+        )
+        events = [{
+            "purpose_code": v.purpose_code,
+            "state": v.state,
+            "state_from": v.state_from,
+            "captured_by": v.captured_by,
+            "captured_via": v.captured_via,
+            "capture_method": v.capture_method,
+            "reason": v.reason,
+            "effective_from": v.effective_from,
+            "audit_event_id": v.audit_event_id,
+        } for v in rows]
+        return Response({"member_id": member_id, "events": events})
+
+
 class _CaptureRequest(serializers.Serializer):
     purpose_code = serializers.CharField()
     state = serializers.ChoiceField(choices=ConsentState.choices)

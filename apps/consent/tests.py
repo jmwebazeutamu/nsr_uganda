@@ -379,6 +379,22 @@ def test_api_capture_verbal_without_witness_rejected(api_client, member):
 
 
 @pytest.mark.django_db
+def test_api_member_history(api_client, member):
+    reg = ConsentPurpose.objects.get(code="REGISTRATION")
+    services.capture_consent(
+        member=member, purpose=reg, state=ConsentState.GRANTED,
+        captured_via="WEB_INTAKE", captured_by="op1")
+    resp = api_client.get(f"/api/v1/consent/members/{member.id}/history")
+    assert resp.status_code == 200
+    events = resp.json()["events"]
+    assert len(events) >= 1
+    first = events[0]
+    assert first["purpose_code"] == "REGISTRATION"
+    assert first["state"] == "GRANTED"
+    assert first["audit_event_id"]  # links to the emitted AuditEvent
+
+
+@pytest.mark.django_db
 def test_api_coverage_dashboard(api_client, member):
     services.capture_consent(
         member=member, purpose=ConsentPurpose.objects.get(code="REGISTRATION"),

@@ -6,6 +6,7 @@ from .api import (
     ConsentPurposeViewSet,
     ConsentStatementVersionViewSet,
     MemberCaptureView,
+    MemberConsentHistoryView,
     MemberConsentView,
     MemberWithdrawView,
     WithdrawalTicketViewSet,
@@ -25,5 +26,7 @@ urlpatterns = router.urls + [
          name="consent-member-capture"),
     path("members/<str:member_id>/withdraw", MemberWithdrawView.as_view(),
          name="consent-member-withdraw"),
+    path("members/<str:member_id>/history", MemberConsentHistoryView.as_view(),
+         name="consent-member-history"),
     path("coverage", ConsentCoverageView.as_view(), name="consent-coverage"),
 ]
