@@ -638,6 +638,27 @@ def promote_stage_record(
         hh.head_member = head_member
         hh.save(update_fields=["head_member", "updated_at"])
 
+    # US-CONSENT-11 — DIH fast-track synthetic consent. Writes GRANTED consent
+    # for the head per the source DPA's declared consent_purposes; holds the
+    # promotion (rolls back) with PROMOTION_BLOCKED_DPA_NOT_RATIFIED if the DPA
+    # is not ratified. Inert unless the DPA scope declares consent_purposes and
+    # CONSENT_MODULE_ENABLED is on.
+    _consent_src = (
+        stage.connector_run.connector.source_system
+        if stage.connector_run_id else None
+    )
+    from apps.consent import services as consent_services
+    consent_services.fast_track_dpa_consent(
+        household=hh, source_system=_consent_src, actor=actor)
+
+    # US-CONSENT-03 — capture the head's consent declared at intake (walk-in /
+    # web / CAPI). Inert unless the payload carries a consent decision; the DPA
+    # fast-track above covers bulk DIH sources, this covers the field channels.
+    _src_kind = _consent_src.kind if _consent_src else ""
+    consent_services.capture_intake_consent(
+        household=hh, payload=payload, actor=actor,
+        captured_via="CAPI" if _src_kind in ("capi_walkin", "kobo") else "WEB_INTAKE")
+
     # US-S22-DE-04: detail-entity fanout. Population order per build
     # prompt §3: Household → Members → per-household details →
     # per-member details → repeat groups. PMT recompute (below) stays
@@ -734,10 +755,22 @@ def _first_member_nin(payload: dict) -> str | None:
     return None
 
 
+# Severity bucket classifier lives in apps.dqa.models alongside the
+# Severity enum. Imported lazily (not at module top-level) to avoid a
+# circular-import cycle that surfaces when the app-import order shifts —
+# e.g. once apps.consent joined INSTALLED_APPS the eager import could fire
+# while apps.dqa.models was only partially loaded (ImportError on
+# severity_bucket). Deferring to call time breaks the cycle.
+def _bucket(severity):
+    from apps.dqa.models import severity_bucket
+    return severity_bucket(severity)
+
+
 def _evaluate_dqa(payload: dict, *, stage_id: str = "") -> dict:
     """Run all ACTIVE DQA rules against the household-level dict and against
-    each member dict. Returns a summary keyed by severity, suitable for
-    storing in StageRecord.dqa_summary.
+    each member dict. Returns a summary bucketed into
+    {blocking_failures, warnings, info, flagged}, suitable for storing
+    in StageRecord.dqa_summary.
 
     Side effect (US-082a): writes one DqaResult row per failed evaluation
     so the violations dashboard can aggregate. Passes are NOT persisted —
@@ -748,12 +781,22 @@ def _evaluate_dqa(payload: dict, *, stage_id: str = "") -> dict:
     empty, the function falls back to the old synthetic ids so the
     summary stays compatible with anything that doesn't have a stage
     (e.g. preview-style ad-hoc evaluations).
+
+    Side effect (FLAG audit): when any rule fails at `flag` severity
+    (or its legacy `warning` alias), one `dqa.household.flag`
+    AuditEvent is emitted with the list of flagged rule codes — the
+    same shape `apps.dqa.pipeline.run_household_gate` uses, so the UPD
+    reactor consumes both ingest paths uniformly.
     """
     from django.conf import settings as _settings
 
     from apps.dqa.models import DqaResult
 
-    summary: dict[str, list[dict]] = {"blocking": [], "warning": [], "info": []}
+    # Internal bucket-keyed accumulator: block / flag / info. The
+    # returned summary projects this back into the legacy keys
+    # (`blocking_failures` / `warnings` / `info`) plus a `flagged`
+    # alias for new-vocabulary readers.
+    summary: dict[str, list[dict]] = {"block": [], "flag": [], "info": []}
     payload = payload or {}
     members = payload.get("members") or []
     persist_info = bool(getattr(_settings, "DQA_PERSIST_INFO_FAILURES", False))
@@ -763,13 +806,15 @@ def _evaluate_dqa(payload: dict, *, stage_id: str = "") -> dict:
         for ev in evaluations:
             if ev.passed:
                 continue
-            summary.setdefault(ev.rule.severity, []).append({
+            bucket = _bucket(ev.rule.severity)
+            summary[bucket].append({
                 "rule_id": ev.rule.rule_id,
                 "rule_version": ev.rule.version,
                 "record_id": record_id,
                 "reason": ev.reason,
+                "severity": ev.rule.severity,
             })
-            if ev.rule.severity == "info" and not persist_info:
+            if bucket == "info" and not persist_info:
                 continue
             rows_to_write.append(DqaResult(
                 rule=ev.rule, record_type=record_type, record_id=record_id,
@@ -795,9 +840,28 @@ def _evaluate_dqa(payload: dict, *, stage_id: str = "") -> dict:
     if rows_to_write:
         DqaResult.objects.bulk_create(rows_to_write, batch_size=100)
 
+    # FLAG audit emission — mirrors the dqa.household.flag event the
+    # intra-household gate (apps.dqa.pipeline.run_household_gate) emits
+    # at the same stage. UPD reactor listens on this action across both
+    # ingest paths; without this emit, legacy-DSL FLAG rules went silent
+    # until manually queried out of DqaResult. One event per stage with
+    # the deduplicated list of flagged rule codes.
+    if summary["flag"] and stage_id:
+        flagged_codes = sorted({f["rule_id"] for f in summary["flag"]})
+        _emit_audit(
+            "dqa.household.flag", "household", stage_id,
+            actor="system",
+            reason="stage=dih_ingest legacy_path=true",
+            field_changes={
+                "stage": "dih_ingest",
+                "flagged_codes": flagged_codes,
+            },
+        )
+
     return {
-        "blocking_failures": summary["blocking"],
-        "warnings": summary["warning"],
+        "blocking_failures": summary["block"],
+        "warnings": summary["flag"],
+        "flagged": summary["flag"],
         "info": summary["info"],
     }
 
@@ -1413,12 +1477,21 @@ def edit_stage_record(
                 record_type="stage_record",
                 record_id=stage.id,
             )
-            blocking = [r.rule_id for r in results if not r.passed and r.severity == "blocking"]
-            warnings = [r.rule_id for r in results if not r.passed and r.severity == "warning"]
-            info = [r.rule_id for r in results if not r.passed and r.severity == "info"]
+            blocking, warnings, info = [], [], []
+            for r in results:
+                if r.passed:
+                    continue
+                b = _bucket(r.severity)
+                if b == "block":
+                    blocking.append(r.rule_id)
+                elif b == "flag":
+                    warnings.append(r.rule_id)
+                else:
+                    info.append(r.rule_id)
             stage.dqa_summary = {
                 "blocking_failures": blocking,
                 "warnings": warnings,
+                "flagged": warnings,
                 "info": info,
                 "rerun_after_edit": True,
             }

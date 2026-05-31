@@ -51,12 +51,23 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgres://nsr:nsr@localhost:5432/nsr
+      # The Data Explorer router (AnalyticsReplicaRouter) sends its reads to the
+      # `analytics_replica` alias. In CI there is no separate replica, so point
+      # it at the same Postgres instance — otherwise it defaults to an
+      # unmigrated SQLite file and every data_explorer query fails with
+      # "no such table". staging/prod still override this to a real replica.
+      DATABASE_URL_ANALYTICS: postgres://nsr:nsr@localhost:5432/nsr
       DJANGO_SECRET_KEY: ci-only-secret-not-for-production
       # apps.security.checks fails-closed against the dev defaults when
       # DEBUG=False, so CI must supply non-default values for the trio.
       NSR_NIN_PEPPER: ci-only-pepper-not-for-production
       NSR_DATA_KEY: pAcD3lqJ8s1XbN_zRq2VtFGm4uYwHcKeOfTjUiZsPkA=
       DEBUG: "False"
+      # Feature flags default to DEBUG (off under DEBUG=False); the test suites
+      # for these modules need the surfaces enabled.
+      DATA_EXPLORER_ENABLED: "True"
+      DQA_INTRA_HOUSEHOLD_ENABLED: "True"
+      CONSENT_MODULE_ENABLED: "True"
       ALLOWED_HOSTS: localhost,127.0.0.1
     steps:
       - uses: actions/checkout@v4

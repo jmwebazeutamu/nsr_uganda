@@ -8,6 +8,8 @@
    AdminChoiceListOptionEditScreen,
    AdminApprovalsScreen,
    ChatbotAssistantScreen,
+   ConsentPurposesScreen, ConsentStatementsScreen,
+   ConsentCoverageScreen, DpoWithdrawalQueueScreen,
    ErrorBoundary, Icon */
 // NSR MIS — Admin shell
 // =====================================================
@@ -57,6 +59,17 @@ const NAV_GROUPS = [
     items: [
       { id: "admin-security-roles", label: "Roles & scopes", icon: "lock" },
       { id: "admin-security-audit", label: "Audit chain",    icon: "file" },
+    ],
+  },
+  {
+    // US-CONSENT — Consent Management (SEC). Withdrawal queue is the built
+    // Screen 4; Purposes / Statement versions / Coverage are S27 stubs.
+    label: "Consent (SEC)",
+    items: [
+      { id: "consent-purposes",         label: "Purposes",           icon: "shield" },
+      { id: "consent-statements",       label: "Statement versions", icon: "file" },
+      { id: "consent-withdrawal-queue", label: "Withdrawal queue",   icon: "inbox" },
+      { id: "consent-coverage",         label: "Coverage dashboard", icon: "eligibility" },
     ],
   },
   {
@@ -174,6 +187,10 @@ const AdminApp = () => {
           {screen === "admin-workflow-ddup"        && <AdminDdupScreen/>}
           {screen === "admin-security-roles"       && <AdminSecurityRolesScreen/>}
           {screen === "admin-security-audit"       && <AdminAuditScreen/>}
+          {screen === "consent-purposes"           && <ConsentPurposesScreen/>}
+          {screen === "consent-statements"         && <ConsentStatementsScreen/>}
+          {screen === "consent-withdrawal-queue"   && <DpoWithdrawalQueueScreen/>}
+          {screen === "consent-coverage"           && <ConsentCoverageScreen/>}
           {screen === "chatbot-assistant"          && <ChatbotAssistantScreen/>}
 
           {/* Record detail / edit screens — opened from list rows */}

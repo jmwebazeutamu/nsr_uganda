@@ -210,4 +210,70 @@ No new lawful-basis claim or subject-rights process is needed. The DPO MUST appr
 
 ---
 
+## 14. Consent Management module addendum (US-CONSENT-01..18, ADR-0024)
+
+The Consent Management module (`apps/consent/`) implements the per-member, per-purpose `Consent` entity named in SAD §5 Appendix C and §1 of this DPIA. It is the operational mechanism by which the registry obtains, records, demonstrates, and honours the withdrawal of consent under DPPA 2019. The whole surface is gated behind `CONSENT_MODULE_ENABLED` and is dark in production until the sign-offs in §14.7.
+
+### 14.1 What changes
+
+Consent moves from a single, never-written `Household.current_consent_state` boolean to nine purpose-scoped, versioned, withdrawable records per member, each carrying its lawful basis, the statement version consented against, the capture method, and an append-only history hashed into the audit chain by reference.
+
+### 14.2 Lawful-basis matrix (per purpose)
+
+| Purpose | Lawful basis (DPPA 2019) | Withdrawable | Notes |
+|---|---|---|---|
+| REGISTRATION | Consent | Yes | Primary; hard gate to proceed with intake |
+| ELIGIBILITY | Consent | Yes | Gates PMT recompute (US-CONSENT-12) |
+| REFERRAL | Consent | Yes | Gates REF candidate list (US-CONSENT-13) |
+| PAYMENTS | Consent | Yes | |
+| COMMUNICATIONS_SMS | Consent | Yes | |
+| COMMUNICATIONS_USSD | Consent | Yes | |
+| RESEARCH | Consent | Yes | Maps to RESEARCH-scoped DSAs (US-CONSENT-14) |
+| GRIEVANCE_CONTACT | Consent | Yes | |
+| STATISTICS | Statistical exemption §7(2)(e) | **No** | Aggregate-only; no per-member withdrawal affordance |
+
+NIRA identity verification is **not** modelled as a consent purpose: it is a public-task activity under DPPA §7(2)(b) handled by IDV, consistent with §1. The withdrawal API refuses (`400`) any attempt to withdraw a non-withdrawable purpose.
+
+### 14.3 New persisted records
+
+| Table | Personal data referenced | Retention |
+|---|---|---|
+| `consent_consentrecord` | `member_id` (FK by id), purpose, state, capture metadata | Same retention as the linked Member per §7 |
+| `consent_consentrecordversion` | denormalised `member_id` + `purpose_code`, state transition, `audit_event_id` | Append-only; permanent (consent must be demonstrable) |
+| `consent_consentwithdrawalticket` | `member_id`, reason code/note, requester | Same retention as the Member |
+| `consent_withdrawaldecision` | DPO decision + rationale | Append-only |
+| `consent_consentevidence` | MinIO object key, witness name/role | Asset in MinIO; key + witness metadata here |
+| `security_auditevent` (existing) | One row per consent change; refers to member/purpose by id | Permanent (hash chain) |
+
+### 14.4 Data minimisation
+
+- `consent_state()` is the single read path; downstream modules receive only a state string, never the underlying capture metadata.
+- Evidence assets (signatures, thumbprints) live in MinIO; the registry stores only the object key and, for verbal-witnessed capture, the witness name and role (required by AC-CONSENT-METHOD-VALID, CR1).
+- Refusal and withdrawal reasons are controlled vocabularies; the optional free-text note is operator/citizen-supplied and audited as a decision, not as data about a third party.
+
+### 14.5 Security measures (delta from §8)
+
+- **Audit-on-everything**: 11 `consent.*` event types cover every state change; the version row names its AuditEvent so the integrity job can prove referential completeness.
+- **Audit chain**: `consent_record_version` is not independently hash-chained; integrity derives from the chained `security_auditevent` row each change emits (ADR-0024 D5).
+- **Feature flag**: the entire surface is gated on `CONSENT_MODULE_ENABLED`; gates short-circuit to transparent-allow when off.
+- **Dual-approval**: purpose + statement activation require author ≠ approver (`apps.consent.services` raises, API returns 400).
+- **SQL-layer consent gate for sharing**: the REF candidate filter (US-CONSENT-13) and DRS row gate (US-CONSENT-14) filter at the query layer, so an application-layer bug cannot leak un-consented rows (CR7).
+- **No "we'll fix it later" caches**: consent reads hit the record live (60s cache on the badge cluster only); the registry stays reconstructable from the audit chain.
+
+### 14.6 New residual risks
+
+| ID | Risk | Likelihood | Impact | Residual | Mitigation |
+|---|---|---|---|---|---|
+| CR1 | Operator coerces verbal consent | M | H | L | Witness mandatory (AC-CONSENT-METHOD-VALID); operator grant-ratio anomaly detection in RPT (S28) |
+| CR2 | Material statement supersession mass-invalidates records | L | H | L | `is_material` gates re-consent; activation surfaces the count first |
+| CR3 | Withdrawal SLA missed at scale | M | M | L | Hourly Celery alerter; DPO dashboard surfaces breach risk |
+| CR4 | DIH synthetic consent diverges from DPA scope | L | H | L | DPA must be `Ratified`; ratified once at activation (CONSENT-O-08) |
+| CR7 | DRS/REF leak data without a consent match | L | H | L | Filter at the SQL query layer; contract test per DSA scope |
+
+### 14.7 Sign-off impact
+
+The flag flips on in production only after the DPO signs off on (a) the seeded purpose catalogue and statement texts (CONSENT-O-01), (b) the 30-day withdrawal SLA (CONSENT-O-03), and (c) the DPA scopes for any DIH fast-track source (CONSENT-O-08); and after all Epic-19 contract tests are green and the extended audit-chain integrity job passes. A subject-access request for consent is served from `consent_record` + `consent_record_version` by member id, supporting the §10 subject-rights process.
+
+---
+
 End of DPIA initial draft v0.1 + US-S11-044 addendum.

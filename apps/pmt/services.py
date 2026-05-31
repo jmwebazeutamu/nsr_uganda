@@ -457,6 +457,28 @@ def recompute_for_household(
         )
         .get(pk=household.pk)
     )
+    # US-CONSENT-12 — ELIGIBILITY consent gate. The head member's ELIGIBILITY
+    # consent must not be WITHDRAWN or PENDING_RE_CONSENT, or the recompute is
+    # blocked and the existing band is frozen. consent_state() returns
+    # TRANSPARENT_ALLOW when CONSENT_MODULE_ENABLED is off, so this gate is
+    # inert until consent is live (no behaviour change for existing flows).
+    from apps.consent import services as consent_services
+
+    head_id = household.head_member_id
+    if head_id:
+        elig = consent_services.consent_state(head_id, "ELIGIBILITY")
+        if elig in ("WITHDRAWN", "PENDING_RE_CONSENT"):
+            action = (
+                "pmt.recompute.blocked.consent_withdrawn"
+                if elig == "WITHDRAWN"
+                else "pmt.recompute.blocked.pending_reconsent")
+            emit_audit(
+                action, "pmt", household.id, actor=actor,
+                reason=f"eligibility_consent={elig}",
+                field_changes={"head_member_id": head_id,
+                               "eligibility_consent": elig})
+            return None
+
     # US-S11-044 — intra-household DQA at REGISTRY_POST_PROMOTE.
     # Persist-only by stage policy (promotion already happened, so
     # the gate cannot abort). The evaluation row + AuditEvent give

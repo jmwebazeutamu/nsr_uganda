@@ -85,6 +85,15 @@ def submit_intake(
     stage = stage_from_landing(landing, canonical_payload=canonical_payload)
 
     now = timezone.now()
+
+    # US-CONSENT-03 — registration consent hard gate. A refused registration
+    # terminates the intake: the submission is recorded (REJECTED /
+    # declined_consent) but never promoted, so no registry Household/Member is
+    # created. Inert when the consent module is off or the payload carries no
+    # consent decision (legacy payloads proceed unchanged).
+    from apps.consent import services as consent_services
+    declined = consent_services.intake_consent_refused(canonical_payload)
+
     submission = Submission.objects.create(
         channel=channel,
         form_version=fv,
@@ -95,8 +104,8 @@ def submit_intake(
         gps_accuracy_m=canonical_payload.get("gps_accuracy_m"),
         started_at=started_at or now,
         finished_at=finished_at or now,
-        result=result,
-        state=SubmissionState.PENDING_QA,
+        result=SubmissionResult.DECLINED_CONSENT if declined else result,
+        state=SubmissionState.REJECTED if declined else SubmissionState.PENDING_QA,
         stage_record_id=stage.id,
         provisional_registry_id=stage.provisional_registry_id,
     )
@@ -110,6 +119,15 @@ def submit_intake(
             "form_version": fv.version,
         },
     )
+
+    if declined:
+        emit_audit(
+            action="consent.refused", entity_type="submission",
+            entity_id=submission.id, actor=actor or enumerator,
+            reason="registration consent refused at intake",
+            field_changes={"channel": channel, "outcome": "declined_consent"},
+        )
+        return submission  # terminal — do NOT promote
 
     if auto_process:
         process_stage_record(stage, actor=actor or enumerator)

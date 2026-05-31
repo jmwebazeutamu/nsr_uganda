@@ -295,8 +295,8 @@ class PrivacyClassListView(APIView):
             "aggregated_only_badge": {
                 "code": "aggregated_only",
                 "label": "Aggregated-only",
-                "token_fg": "var(--accent-system)",
-                "token_bg": "var(--accent-system-bg)",
+                "token_fg": "var(--accent-system)",  # nosec B105 - CSS design token, not a secret
+                "token_bg": "var(--accent-system-bg)",  # nosec B105 - CSS design token, not a secret
             },
         })
 
@@ -314,8 +314,8 @@ class SuppressionVocabularyView(APIView):
             "suppressed": {
                 "code": "suppressed",
                 "label": "Suppressed",
-                "token_fg": "var(--neutral-700)",
-                "token_bg": "var(--neutral-100)",
+                "token_fg": "var(--neutral-700)",  # nosec B105 - CSS design token, not a secret
+                "token_bg": "var(--neutral-100)",  # nosec B105 - CSS design token, not a secret
                 "tooltip": (
                     "Count below privacy floor — see ADR-0023 for details."
                 ),

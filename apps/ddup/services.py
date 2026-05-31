@@ -443,6 +443,13 @@ def merge_member_pair(
         },
     )
 
+    # US-CONSENT-15 — reconcile consent records between loser and survivor
+    # (union of grants; any withdrawal wins; GRANTED-vs-REFUSED conflicts raise
+    # and roll back the whole merge). Inert when CONSENT_MODULE_ENABLED is off.
+    from apps.consent import services as consent_services
+    consent_services.reconcile_consent_on_merge(
+        surviving=surviving, loser=loser, actor=actor)
+
     # AC-DDUP-AUDIT: emit audit chain entry.
     _emit_audit(
         action="merge", entity_type="member", entity_id=surviving.id,

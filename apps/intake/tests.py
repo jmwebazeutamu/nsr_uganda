@@ -130,6 +130,59 @@ class TestSubmitIntake:
         assert Household.objects.filter(pk=sub.provisional_registry_id).exists()
 
 
+class TestIntakeConsentGate:
+    """US-CONSENT-03 — registration consent hard gate in the intake runtime."""
+
+    @pytest.fixture(autouse=True)
+    def _flag_on(self, settings):
+        settings.CONSENT_MODULE_ENABLED = True
+
+    def test_refused_registration_terminates_intake(
+        self, db, web_source_with_connector, active_form_version, geo,
+    ):
+        from apps.security.models import AuditEvent
+        sub = submit_intake(
+            channel="web", enumerator="e1",
+            canonical_payload={**_payload(geo), "consent": "2"},
+            auto_process=True,
+        )
+        assert sub.result == SubmissionResult.DECLINED_CONSENT
+        assert sub.state == SubmissionState.REJECTED
+        # Terminal — never promoted, so no registry household exists.
+        assert not Household.objects.filter(pk=sub.provisional_registry_id).exists()
+        assert StageRecord.objects.get(pk=sub.stage_record_id).state != StageRecordState.PROMOTED
+        assert AuditEvent.objects.filter(action="consent.refused", entity_id=sub.id).exists()
+
+    def test_granted_registration_captures_head_consent_on_promotion(
+        self, db, web_source_with_connector, active_form_version, geo,
+    ):
+        from apps.consent.models import ConsentRecord, ConsentState
+        sub = submit_intake(
+            channel="web", enumerator="e1",
+            canonical_payload={**_payload(geo), "consent": "1"},
+            auto_process=True,
+        )
+        assert sub.result == SubmissionResult.COMPLETED
+        hh = Household.objects.get(pk=sub.provisional_registry_id)
+        recs = {r.purpose.code: r.state
+                for r in ConsentRecord.objects.filter(member=hh.head_member)}
+        assert recs.get("REGISTRATION") == ConsentState.GRANTED
+        assert recs.get("ELIGIBILITY") == ConsentState.GRANTED
+        assert recs.get("REFERRAL") == ConsentState.GRANTED
+        assert recs.get("REGISTRATION") == "GRANTED"
+
+    def test_missing_consent_proceeds_unchanged(
+        self, db, web_source_with_connector, active_form_version, geo,
+    ):
+        # Legacy payload with no consent field is NOT a refusal.
+        sub = submit_intake(
+            channel="web", enumerator="e1", canonical_payload=_payload(geo),
+            auto_process=True,
+        )
+        assert sub.result == SubmissionResult.COMPLETED
+        assert StageRecord.objects.get(pk=sub.stage_record_id).state == StageRecordState.PROMOTED
+
+
 # --- HTTP surface -----------------------------------------------------------
 
 class TestSubmitIntakeApi:

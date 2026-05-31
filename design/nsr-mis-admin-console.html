@@ -54,6 +54,13 @@
   <!-- Chatbot Assistant (sprint 23 — ADR-0021, US-CHB-005, preview) -->
   <script type="text/babel" src="v0.1/screens/screens-chatbot-assistant.jsx"></script>
 
+  <!-- Consent Management (Epic 19 — ADR-0024). consent-shared must load
+       before the screens that read its vocabulary. -->
+  <script type="text/babel" src="v0.1/screens/consent/consent-shared.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/consent/consent-badge-cluster.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/consent/screens-consent-dpo-queue.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/consent/screens-consent-admin-stubs.jsx"></script>
+
   <!-- Admin app shell — sidebar nav + routing -->
   <script type="text/babel" src="v0.1/screens/app-admin.jsx"></script>
 </body>

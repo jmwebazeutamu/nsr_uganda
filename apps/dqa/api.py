@@ -499,7 +499,7 @@ class SeverityVocabularyView(APIView):
     _VOCAB: list[dict] = [
         {
             "value": Severity.BLOCK.value, "label": "Block",
-            "token": "status-danger", "blocks_save": True,
+            "token": "status-danger", "blocks_save": True,  # nosec B105 - CSS design token, not a secret
             "description": (
                 "Hard stop. Save / promotion is refused until the "
                 "violation is resolved."
@@ -508,7 +508,7 @@ class SeverityVocabularyView(APIView):
         {
             "value": Severity.REJECT_WITH_OVERRIDE.value,
             "label": "Reject with override",
-            "token": "status-danger-soft", "blocks_save": True,
+            "token": "status-danger-soft", "blocks_save": True,  # nosec B105 - CSS design token, not a secret
             "description": (
                 "Refused by default. A supervisor can override with a "
                 "documented reason; the override is audited."
@@ -516,7 +516,7 @@ class SeverityVocabularyView(APIView):
         },
         {
             "value": Severity.FLAG.value, "label": "Flag",
-            "token": "status-warning", "blocks_save": False,
+            "token": "status-warning", "blocks_save": False,  # nosec B105 - CSS design token, not a secret
             "description": (
                 "Saves but opens an UPD review case. Enumerator sees the "
                 "warning inline; supervisor triages."
@@ -524,7 +524,7 @@ class SeverityVocabularyView(APIView):
         },
         {
             "value": Severity.INFO.value, "label": "Info",
-            "token": "status-info", "blocks_save": False,
+            "token": "status-info", "blocks_save": False,  # nosec B105 - CSS design token, not a secret
             "description": (
                 "Logged for analytics. Not surfaced to enumerator unless "
                 "the rule is also flagged for display."

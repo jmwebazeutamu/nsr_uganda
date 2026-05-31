@@ -34,15 +34,17 @@ const OPS_BY_TYPE = {
 /* ----------------------------------------------------------------
    Seed: pre-populate so the page looks real on first paint.
    ---------------------------------------------------------------- */
+// No hardcoded query. Variables/filters are backend-driven — the user
+// builds the query against the selected dataset's live variables. The
+// dataset itself is chosen by the snap effect once the catalogue loads.
+// scopeCodes empty = aggregate over all units at the chosen level (the
+// backend treats absent codes as "all", so no hardcoded geo units).
 const SEED = {
-  datasetId: "ds_hh_profile",
-  projection: ["subregion", "district", "roof_material", "water_source"],
-  filters: [
-    { var: "urban_rural", op: "eq", value: "Rural" },
-    { var: "pmt_band",    op: "in", value: ["Poorest 20%", "Poorest 40%"] },
-  ],
+  datasetId: "",
+  projection: [],
+  filters: [],
   scopeLevel: "district",
-  scopeCodes: ["Lyantonde", "Moroto", "Napak", "Arua", "Yumbe", "Gulu"],
+  scopeCodes: [],
 };
 
 const BuilderScreen = () => {
@@ -55,14 +57,46 @@ const BuilderScreen = () => {
   const [showVarPicker, setShowVarPicker] = useBld(false);
 
   const me = useDeMe();
-  const [datasets] = useDeCatalogue();
+  const [datasets, dsMeta] = useDeCatalogue();
   const [{ dataset: liveDs, variables: liveVars }] = useDeDataset(datasetId);
   const [runState, setRunState] = useBld({ pending: false, error: null });
   const [floorViolation, setFloorViolation] = useBld(null);
   const [handoffOpen, setHandoffOpen] = useBld(false);
 
-  const ds = liveDs || datasets.find(d => d.id === datasetId || d.code === datasetId);
-  const vars = (liveVars && liveVars.length) ? liveVars : (DE_VARIABLES_BY_DATASET[datasetId] || []);
+  // Switching dataset must clear the query: projection/filter codes are
+  // dataset-specific (each section has its own field_id namespace), so a
+  // carried-over selection would POST codes the new dataset doesn't have
+  // → variable_not_found. This also clears the mock seed when we snap
+  // onto a live dataset below.
+  const selectDataset = (id) => {
+    setDatasetId(id);
+    setProjection([]);
+    setFilters([]);
+    setScopeCodes([]);
+  };
+
+  // The seed default ("ds_hh_profile") is a mock id for the offline
+  // preview. Against the live catalogue it matches nothing, so `ds` would
+  // fall back to the mock and POST a mock code → dataset_not_found (and
+  // the seeded mock projection → variable_not_found). Snap to the first
+  // real dataset once the catalogue resolves; no-op offline, where the
+  // mock list still contains the seed id.
+  React.useEffect(() => {
+    if (datasets.length && !datasets.some(d => d.id === datasetId || d.code === datasetId)) {
+      selectDataset(datasets[0].id || datasets[0].code);
+    }
+  }, [datasets]);
+
+  // Fall back to the first dataset so the first render (datasetId="" ,
+  // before the snap effect fires) never derefs an undefined ds.
+  const ds = liveDs
+    || datasets.find(d => d.id === datasetId || d.code === datasetId)
+    || datasets[0];
+  // Live variables drive the picker; the mock map is only the offline
+  // preview fallback (no live catalogue reachable).
+  const vars = (liveVars && liveVars.length)
+    ? liveVars
+    : (DE_VARIABLES_BY_DATASET[ds?.id] || DE_VARIABLES_BY_DATASET[datasetId] || []);
 
   const runAggregate = async () => {
     if (!validForRun || runState.pending) return;
@@ -70,9 +104,11 @@ const BuilderScreen = () => {
     setFloorViolation(null);
     const payload = {
       dataset_code: ds.code,
-      projection,
+      // Send only codes that exist in the selected dataset's live
+      // variables — never a stale/mock code → no variable_not_found.
+      projection: projVars.map(v => v.code),
       filters: filters
-        .filter(f => f.var)
+        .filter(f => f.var && vars.some(v => v.code === f.var))
         .map(f => ({ variable: f.var, op: f.op, value: f.value })),
       geographic_scope: { level: scopeLevel, codes: scopeCodes },
     };
@@ -159,7 +195,22 @@ const BuilderScreen = () => {
   const updateFilter = (i, patch) => setFilters(filters.map((f, j) => j === i ? { ...f, ...patch } : f));
   const removeFilter = (i) => setFilters(filters.filter((_, j) => j !== i));
 
-  const validForRun = ds && projection.length > 0 && !floorViolated && ds.privacy !== "sensitive";
+  const validForRun = ds && projVars.length > 0 && !floorViolated && ds.privacy !== "sensitive";
+
+  // No dataset resolved yet (catalogue still loading, or nothing to
+  // show) — render a calm state rather than deref an undefined ds.
+  if (!ds) {
+    return (
+      <DEShell active="builder">
+        <RoleGateBanner me={me}/>
+        <div className="card" style={{padding:40, textAlign:"center", marginTop:16}}>
+          <div className="t-cap">
+            {(dsMeta && dsMeta.loading) ? "Loading datasets…" : "No datasets available — connect to the Data Explorer API."}
+          </div>
+        </div>
+      </DEShell>
+    );
+  }
 
   return (
     <DEShell active="builder" refreshed_at={ds?.refreshed_at || "28 May 2026 06:00 UTC"}>
@@ -216,7 +267,7 @@ const BuilderScreen = () => {
           <div className="t-cap">DATASET</div>
           <div style={{display:"flex", alignItems:"center", gap:10, marginTop:4}}>
             <select className="field-select" style={{maxWidth:340}}
-              value={datasetId} onChange={(e) => setDatasetId(e.target.value)}>
+              value={datasetId} onChange={(e) => selectDataset(e.target.value)}>
               {datasets.filter(d => d.privacy !== "sensitive").map(d =>
                 <option key={d.id || d.code} value={d.id || d.code}>{d.code} — {d.label}</option>
               )}
@@ -268,7 +319,7 @@ const BuilderScreen = () => {
         {/* Column 1 — Projection */}
         <Column n="1" title="Projection"
           sub="Which variables to group by + count."
-          right={<Chip size="sm" tone="neutral">{projection.length} selected</Chip>}>
+          right={<Chip size="sm" tone="neutral">{projVars.length} selected</Chip>}>
           <div style={{padding:14}}>
             {projVars.length === 0 && (
               <EmptyHint icon="sliders" title="No projection yet" body="Add at least one variable. Each row in the result will be one combination of the variables you pick."/>

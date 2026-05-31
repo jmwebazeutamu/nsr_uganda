@@ -185,12 +185,26 @@ def render_bundle(req: DataRequest) -> tuple[bytes, int]:
         if allowed_fields is not None else None
     )
 
+    # US-CONSENT-14 — row-level consent gate. The DSA scope may map to one or
+    # more consent purposes (e.g. a RESEARCH-scoped DSA → RESEARCH). Members who
+    # withdrew or refused any mapped purpose are excluded at the SQL layer so an
+    # application-layer bug cannot leak un-consented rows (CR7). Inert when the
+    # DSA declares no consent_purposes or CONSENT_MODULE_ENABLED is off. A
+    # STATISTICS-scoped DSA serves aggregates only (Data Explorer), so it never
+    # reaches this record-level path and declares no consent_purposes here.
+    from apps.consent import services as consent_services
+    consent_purposes = list((dsa.entities_scope or {}).get("consent_purposes", []))
+    blocked_member_ids: set[str] = set()
+    for _pc in consent_purposes:
+        blocked_member_ids.update(consent_services.blocked_member_ids(_pc))
+
     rows: list[dict] = []
     for hh in qs:
         row = _household_to_row(hh, allowed_fields)
         if embed_members:
             members = (
                 Member.objects.filter(household=hh, is_deleted=False)
+                .exclude(id__in=blocked_member_ids)
                 .order_by("line_number")
             )
             row["members"] = [

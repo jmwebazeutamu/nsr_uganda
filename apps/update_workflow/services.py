@@ -294,6 +294,19 @@ def commit_change_request(
     # Fire the post-commit event. PMT subscribes when it lands.
     post_change_committed.send(sender=ChangeRequest, change_request=req, target=target)
 
+    # US-CONSENT-16 — head-change re-consent. If this change set a new
+    # household head, the new head must carry active REGISTRATION consent or a
+    # re-capture sub-task is opened. Inert when CONSENT_MODULE_ENABLED is off.
+    head_changed = any(
+        str(k).split(".")[-1] in ("head_member", "head_member_id")
+        for k in (req.changes or {})
+    )
+    if (req.entity_type == EntityType.HOUSEHOLD and head_changed
+            and getattr(target, "head_member_id", None)):
+        from apps.consent import services as consent_services
+        consent_services.require_head_registration_consent(
+            head_member=target.head_member, actor=approver)
+
     return req
 
 

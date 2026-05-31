@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, KPI, PageHeader, Modal, Toast, ChangeRequestModal */
+/* global React, Icon, Chip, KPI, PageHeader, Modal, Toast */
 // NSR MIS — Household detail (US-005, US-090)
 //
 // Visual design from the claude.ai/design redesign deposited at
@@ -184,169 +184,6 @@ const _hhApiToView = (h) => {
 };
 
 
-// ────────────────────────────────────────────────────────────────
-// US-S22-002 — Open Update + Open Grievance wiring helpers
-// ────────────────────────────────────────────────────────────────
-
-// Project the household view-model into the modal's `currentValues`
-// map ("category.field" → current value). Only household-level
-// fields that we have in `h` are populated; member-level fields
-// (rost.member_*, ed.*, hd.*, emp.*) come through `memberValues`
-// for the selected member. Missing keys fall back to "current —"
-// in the modal.
-//
-// Wherever the household stores both a code and a resolved label
-// (h.questionnaireLabels.* + h.questionnaire.*), prefer the label —
-// that's what the operator sees elsewhere on the screen.
-const projectCurrentValues = (h) => {
-  if (!h) return {};
-  const cv = {};
-  const addValue = (key, value, label) => {
-    if (value == null || value === "" || value === "—") return;
-    cv[key] = label && label !== value ? { value: String(value), label: String(label) } : String(value);
-  };
-  const addRecord = (prefix, record) => {
-    if (!record) return;
-    for (const [key, value] of Object.entries(record)) {
-      if (key === "id" || key === "is_deleted" || key === "updated_at" || key === "sub_region_code") continue;
-      if (key.endsWith("_label") || key.endsWith("_labels")) continue;
-      addValue(`${prefix}.${key}`, value, record[`${key}_label`] ?? record[`${key}_labels`]);
-    }
-  };
-  const hg  = h.questionnaire?.housing      || {};
-  const hgL = h.questionnaireLabels?.housing || {};
-  const fs  = h.questionnaire?.food_security || {};
-  const sc  = h.questionnaire?.shocks_coping || {};
-  const scL = h.questionnaireLabels?.shocks_coping || {};
-
-  addValue("household.region", h.householdRecord?.region, h.householdRecord?.region_name);
-  addValue("household.sub_region", h.householdRecord?.sub_region, h.householdRecord?.sub_region_name);
-  addValue("household.district", h.householdRecord?.district, h.householdRecord?.district_name);
-  addValue("household.county", h.householdRecord?.county, h.householdRecord?.county_name);
-  addValue("household.sub_county", h.householdRecord?.sub_county, h.householdRecord?.sub_county_name);
-  addValue("household.parish", h.householdRecord?.parish, h.householdRecord?.parish_name);
-  addValue("household.village", h.householdRecord?.village, h.householdRecord?.village_name);
-  addValue("household.urban_rural", h.householdRecord?.urban_rural, h.householdRecord?.urban_rural_label);
-  addValue("household.enumeration_area", h.enumerationArea);
-  addValue("household.household_number", h.householdNumber);
-  addValue("household.address_narrative", h.householdRecord?.address_narrative);
-  addValue("household.gps_lat", h.gps?.lat);
-  addValue("household.gps_lng", h.gps?.lng);
-  addValue("household.gps_accuracy_m", h.gps?.acc);
-  addValue("household.dwelling_tenure", h.householdRecord?.dwelling_tenure, h.householdRecord?.dwelling_tenure_label);
-  addValue("household.residence_status", h.householdRecord?.residence_status, h.householdRecord?.residence_status_label);
-
-  addRecord("dwelling", h.dwelling);
-  addRecord("utilities", h.utilities);
-  addRecord("livelihood", h.livelihood);
-  addRecord("food_security", h.food_security);
-  addRecord("food_consumption", h.food_consumption);
-
-  // iden
-  if (h.phone && h.phone !== "—")          cv["iden.phone"]     = h.phone;
-  if (h.head)                              cv["iden.head_name"] = h.head;
-
-  // loc
-  if (h.village && h.village !== "—")      cv["loc.village"]    = h.village;
-  if (h.parish && h.parish !== "—")        cv["loc.parish"]     = h.parish;
-  if (h.gps && h.gps.lat != null && h.gps.lng != null) {
-    cv["loc.gps"] = `${h.gps.lat.toFixed(5)}, ${h.gps.lng.toFixed(5)}`;
-  }
-  if (h.enumerationArea)                   cv["loc.ea"]         = h.enumerationArea;
-
-  // rost (household-scope only)
-  if (h.hh != null)                        cv["rost.hh_size"]   = String(h.hh);
-
-  // hous — prefer resolved label (e.g. "Iron sheets") over the raw code.
-  const pickHg = (key) => hgL[key] || hg[key];
-  const pickIfPresent = (catField, value) => {
-    if (value != null && value !== "") cv[catField] = String(value);
-  };
-  pickIfPresent("hous.roof",   pickHg("roof_material"));
-  pickIfPresent("hous.wall",   pickHg("wall_material"));
-  pickIfPresent("hous.floor",  pickHg("floor_material"));
-  pickIfPresent("hous.water",  pickHg("water_source"));
-  pickIfPresent("hous.toilet", pickHg("toilet_type"));
-  pickIfPresent("hous.fuel",   pickHg("cooking_fuel"));
-  pickIfPresent("hous.light",  pickHg("lighting_source"));
-  pickIfPresent("hous.tenure", pickHg("tenure"));
-
-  // Assets — the catalog's radio / tv / phone_owned are yes/no
-  // selects; the household stores a count. Treat any non-zero
-  // count as "yes" so the before-state matches the catalog options.
-  const counts = hg.asset_counts || {};
-  if (counts.radio != null) cv["hous.radio"]       = counts.radio > 0 ? "yes" : "no";
-  if (counts.tv != null)    cv["hous.tv"]          = counts.tv    > 0 ? "yes" : "no";
-  if (counts.phone != null) cv["hous.phone_owned"] = counts.phone > 0 ? "yes" : "no";
-
-  // food
-  if (fs.meals_per_day != null) cv["food.meals"] = String(fs.meals_per_day);
-  if (fs.fcs_score != null)     cv["food.fcs"]   = String(fs.fcs_score);
-  pickIfPresent("food.shock",  scL.shock_affected  || sc.shock_affected);
-
-  return cv;
-};
-
-// Project the household's member roster into the modal's `members`
-// prop shape: {id, name, line, relationship, dob, sex}. Only the head
-// is decorated; sibling members carry the relationship label from the
-// projected VM. The id is the Member ULID (used as the CR entity_id
-// when entity=member).
-const projectMembers = (h) => {
-  if (!h || !Array.isArray(h.members)) return [];
-  return h.members.map(m => ({
-    id: m.id,
-    name: m.name || "—",
-    line: m.line ?? null,
-    relationship: m.rel || (m.relationship_to_head_label || ""),
-    dob: m.dob || "",
-    sex: m.sex_label || m.sex || "",
-  }));
-};
-
-// Per-member current values for the modal's "current: X" chip. v1
-// only fills the bits we can pull off the VM without a second fetch
-// (name, DOB, sex, relation). Health / education / employment will
-// fill in once those snapshots land in the household payload.
-const projectMemberValues = (h) => {
-  if (!h || !Array.isArray(h.members)) return {};
-  const out = {};
-  const addValue = (cv, key, value, label) => {
-    if (value == null || value === "" || value === "—") return;
-    cv[key] = label && label !== value ? { value: String(value), label: String(label) } : String(value);
-  };
-  const addRecord = (cv, prefix, record) => {
-    if (!record) return;
-    for (const [key, value] of Object.entries(record)) {
-      if (key === "id" || key === "is_deleted" || key === "updated_at" || key === "sub_region_code") continue;
-      if (key.endsWith("_label") || key.endsWith("_labels")) continue;
-      addValue(cv, `${prefix}.${key}`, value, record[`${key}_label`] ?? record[`${key}_labels`]);
-    }
-  };
-  for (const m of h.members) {
-    const cv = {};
-    addValue(cv, "member.line_number", m.line);
-    if (m.name && m.name !== "—") cv["rost.member_name"]     = m.name;
-    if (m.dob)                     cv["rost.member_dob"]      = m.dob;
-    if (m.sex_label || m.sex)      cv["rost.member_sex"]      = m.sex_label || m.sex;
-    if (m.rel && m.rel !== "Head") cv["rost.member_relation"] = m.rel;
-    const [surname, ...givenParts] = (m.name || "").split(" ");
-    addValue(cv, "member.surname", surname);
-    addValue(cv, "member.first_name", givenParts.join(" "));
-    addValue(cv, "member.relationship_to_head", m.relationship_to_head || m.rel, m.rel);
-    addValue(cv, "member.sex", m.sexRaw || m.sex, m.sex);
-    addValue(cv, "member.date_of_birth", m.dob);
-    addValue(cv, "member.age_years", m.age);
-    addValue(cv, "member.telephone_1", m.phone);
-    addRecord(cv, "health", m.health);
-    addRecord(cv, "disability", m.disability);
-    addRecord(cv, "education", m.education);
-    addRecord(cv, "employment", m.employment);
-    out[m.id] = cv;
-  }
-  return out;
-};
-
 // CSRF cookie reader for DRF session-auth POSTs (same pattern as
 // screens-grm + screens-upd).
 const _hhCsrf = () => {
@@ -355,9 +192,9 @@ const _hhCsrf = () => {
 };
 
 // US-S22-002 — Grievance form vocabularies. The Open Update flow
-// no longer lives inline here; it's been replaced by the
-// ChangeRequestModal component (US-S22-004), which owns the field
-// catalog + change-type vocabulary + routing matrix.
+// lives in the full-page change-request screen
+// (design/v0.1/screens/change-request/), which carries its own
+// field catalog + change-type vocabulary + routing matrix.
 const _GRM_CATEGORIES = [
   { value: "data_correction",  label: "Data correction" },
   { value: "exclusion_error",  label: "Wrongly excluded" },
@@ -399,15 +236,14 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
   const [loadError, setLoadError] = useStateHH(null);
   const [dataSource, setDataSource] = useStateHH(householdId ? "loading" : "mock");
 
-  // US-S22-002 — Open Update / Open Grievance wiring state.
-  // `modal` is the open dialog ("upd" | "grm" | null). `me` is bound
-  // from /api/v1/upd/change-requests/me/ and serves as the actor /
-  // requester on every POST. `lastCreated` powers the post-submit
-  // toast that offers a one-click jump to UPD / GRM.
+  // US-S22-002 — Open Grievance wiring state. (Open Update is no
+  // longer modal — it navigates to the full-page change-request
+  // screen, which owns its own actor/requester binding.)
+  // `modal` is the open dialog ("grm" | null). `lastCreated` powers
+  // the post-submit toast that offers a one-click jump to GRM.
   const [modal, setModal] = useStateHH(null);
   const [toast, setToast] = useStateHH("");
   const [busy, setBusy] = useStateHH(false);
-  const [me, setMe] = useStateHH(null);
   const [lastCreated, setLastCreated] = useStateHH(null);
   const [grmForm, setGrmForm] = useStateHH({
     category: "data_correction",
@@ -450,52 +286,33 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
 
   const h = useMemoHH(() => liveHh || (householdId ? null : DEMO_HH), [liveHh, householdId]);
 
-  // Probe /me once on mount so action POSTs can bind a real actor.
-  // 401/403 (file:// preview) leaves me=null and submits use the
-  // "console-operator" placeholder.
-  useEffectHH(() => {
-    fetch("/api/v1/upd/change-requests/me/", {
-      credentials: "same-origin", headers: { Accept: "application/json" },
-    })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => { if (data) setMe(data); })
-      .catch(() => {});
-  }, []);
-
-  // Open the rich Open-CR modal (US-S22-004). It owns its own state;
-  // we only flip our local `modal` flag.
+  // Open the full-page Open-CR submitter (US-S22-004). Replaces the
+  // legacy ChangeRequestModal — see design/v0.1/screens/change-request/.
+  // The new screen handles its own POST + success toast; we project
+  // the household's live roster into the navigate payload so
+  // member-scope CRs can submit with a real Member ULID instead of
+  // the synthesized M-…-NNN fallback the server rejects.
   const openUpdate = () => {
-    if (!h) return;
-    setModal("upd");
-  };
-
-  // US-S22-004 — submit handler for ChangeRequestModal. POSTs the
-  // multi-row payload to /api/v1/upd/change-requests/bundle/ and
-  // returns the normalised response so the modal closes itself.
-  // Wrapped errors propagate as the modal's inline error banner.
-  const submitBundle = async (payload) => {
-    const r = await fetch("/api/v1/upd/change-requests/bundle/", {
-      method: "POST", credentials: "same-origin",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRFToken": _hhCsrf(),
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
+    if (!h || !onNavigate) return;
+    const roster = Array.isArray(h.members) ? h.members.map(m => ({
+      id: m.id,
+      line: m.line,
+      name: m.name,
+      rel: m.rel,
+      sex: m.sex,
+      age: m.age,
+      dob: m.dob === "—" ? "" : m.dob,
+      nin: m.nin === "—" ? "" : m.nin,
+      // ninStatus drives the row's "verified / not on file" chip in
+      // the bundle. The view-model only carries a masked last-4 so
+      // treat any value as "verified" and absence as not on file.
+      ninStatus: m.nin && m.nin !== "—" ? "verified" : "not-issued",
+    })) : null;
+    onNavigate("change-request", {
+      householdId: h.rid,
+      initialScope: "household",
+      roster,
     });
-    const data = await r.json().catch(() => ({}));
-    if (r.status !== 201) {
-      throw new Error(data.detail || JSON.stringify(data) || `HTTP ${r.status}`);
-    }
-    return data;
-  };
-
-  const onBundleSuccess = (result) => {
-    setLastCreated({ kind: "upd", id: result.cr_id });
-    setToast(
-      `Change request created · ${result.changes} change${result.changes === 1 ? "" : "s"} `
-      + `· routed to ${result.routed_to}`,
-    );
   };
 
   const openGrievance = () => {
@@ -703,19 +520,6 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
         Audit chain available under the Audit tab.
       </div>
 
-      {/* US-S22-004 + CR-modal slice 2 — multi-row Open-CR modal */}
-      <ChangeRequestModal
-        open={modal === "upd"}
-        onClose={() => setModal(null)}
-        currentValues={projectCurrentValues(h)}
-        members={projectMembers(h)}
-        memberValues={projectMemberValues(h)}
-        householdId={h?.rid || ""}
-        me={me}
-        addUx="composer"
-        onSubmit={submitBundle}
-        onSuccess={onBundleSuccess}/>
-
       {/* US-S22-002 — Open Grievance modal */}
       <Modal open={modal === "grm"} onClose={() => !busy && setModal(null)}
         title="Open a grievance"
@@ -807,7 +611,7 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
         </div>
       </Modal>
 
-      {/* Post-submit toast with one-click jump to the new record */}
+      {/* Post-submit toast with one-click jump to the new grievance. */}
       {toast && (
         <div style={{position:"fixed", bottom:24, right:24, zIndex:50,
           padding:"12px 16px", background:"var(--primary-900)", color:"white",
@@ -818,15 +622,11 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
             <button className="btn btn-sm"
               style={{background:"white", color:"var(--primary-900)"}}
               onClick={() => {
-                if (lastCreated.kind === "upd") {
-                  onNavigate("upd", { changeRequestId: lastCreated.id });
-                } else {
-                  onNavigate("grm");
-                }
+                onNavigate("grm");
                 setToast("");
                 setLastCreated(null);
               }}>
-              Open in {lastCreated.kind === "upd" ? "UPD" : "GRM"}
+              Open in GRM
             </button>
           )}
           <button className="icon-btn" style={{color:"white"}}
@@ -1483,10 +1283,79 @@ const TabProgrammes = ({ h, live }) => {
 const TabConsent = ({ h, live }) => {
   const consent = h.questionnaire?.interview?.consent;
   const respondent = h.questionnaire?.interview?.respondent_name;
+  const [showManage, setShowManage] = useStateHH(false);
+  // The view-model exposes the roster (with member ULIDs + resolved "Head"
+  // relationship), not a head_member id — derive the head's ULID from it.
+  const headMember = (h.members || []).find(m => m.rel === "Head") || (h.members || [])[0];
+  const headId = headMember && headMember.id;
+  const hasCluster = typeof window !== "undefined" && typeof window.ConsentBadgeCluster === "function";
+  const hasPortal = typeof window !== "undefined" && typeof window.CitizenConsentScreen === "function";
+  // Existing households gave a broad interview consent but have no per-purpose
+  // ConsentRecords yet (the legacy column was never backfilled). Infer the
+  // purposes that statement covers — registration, processing for eligibility,
+  // and sharing under a DSA — so the detail card reflects reality instead of
+  // showing every purpose as "Not captured". Inferred rows are clearly marked.
+  const interviewConsented = live ? !!(consent || h.current_consent_state) : true;
+  const inferredConsent = interviewConsented ? {
+    codes: ["REGISTRATION", "ELIGIBILITY", "REFERRAL"],
+    date: h.capturedAt,
+    note: "It covers registration, processing for eligibility, and sharing with partner agencies under a Data Sharing Agreement.",
+  } : null;
   return (
     <div>
       <TabHeader title="Consent"
         sub="Data Protection and Privacy Act 2019 (Uganda). Evidence captured at the interview."/>
+      {/* US-CONSENT-08 — live per-purpose consent status for the head member,
+          plus the capture / manage action (US-CONSENT-03 / -05). Reads
+          GET /api/v1/consent/members/{head_member}; renders nothing when the
+          consent module is dark or nothing has been captured. */}
+      <div style={{padding:"16px 20px 0", display:"flex",
+            justifyContent:"space-between", alignItems:"center",
+            flexWrap:"wrap", gap:12}}>
+        <div>
+          <div className="t-cap" style={{marginBottom:8}}>Consent status · head of household</div>
+          {hasCluster && headId
+            ? React.createElement(window.ConsentBadgeCluster, { memberId: headId, size: "sm" })
+            : <span className="muted t-bodysm">No per-purpose consent captured yet.</span>}
+        </div>
+        <button className="btn btn-primary"
+          disabled={!hasPortal}
+          title={hasPortal ? "Capture or manage this household's consent" : "Consent portal not loaded"}
+          onClick={() => setShowManage(true)}>
+          <Icon name="shield" size={14}/> Manage / capture consent
+        </button>
+      </div>
+      {showManage && hasPortal && (
+        <Modal open={showManage} onClose={() => setShowManage(false)}
+          title="Consent management" width={920}>
+          {/* Live mode: pass THIS household's members so the screen reads each
+              member's real consent matrix and withdraws against the live API.
+              Demo mode (no live data): render the sample preview, flagged. */}
+          {!live && (
+            <div className="tint-update" style={{
+              padding: "8px 12px", borderRadius: 6, marginBottom: 12,
+              fontSize: 12, color: "var(--neutral-700)"}}>
+              <Icon name="info" size={12} style={{verticalAlign:"middle", marginRight:6}}/>
+              Preview — sample data. Open a real (live) household to manage its
+              actual consent.
+            </div>
+          )}
+          {React.createElement(window.CitizenConsentScreen,
+            live ? { members: h.members, householdId: h.rid, live: true } : {})}
+        </Modal>
+      )}
+      {/* US-CONSENT-08 detail — full per-purpose consent breakdown
+          (accepted / withdrawn / pending …) for the head member. Sits above
+          the original interview-evidence cards, which are left untouched. */}
+      {typeof window !== "undefined" && typeof window.ConsentStatusCard === "function" && headId && (
+        <div style={{padding:"16px 20px 0"}}>
+          {React.createElement(window.ConsentStatusCard, {
+            memberId: headId,
+            title: `Consent detail · per purpose · ${headMember && headMember.name ? headMember.name : "head of household"}`,
+            inferred: inferredConsent,
+          })}
+        </div>
+      )}
       <div style={{padding:20, display:"grid", gridTemplateColumns:"1.4fr 1fr", gap:16}}>
         <div className="tint-update" style={{padding:18, borderRadius:6,
               borderLeft:"3px solid var(--accent-update)"}}>
