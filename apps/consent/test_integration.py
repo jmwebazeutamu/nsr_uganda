@@ -248,3 +248,74 @@ def test_fast_track_noop_when_no_consent_purposes(geo):
     src = _source_system_with_dpa(consent_purposes=())
     out = services.fast_track_dpa_consent(household=hh, source_system=src, actor="dih")
     assert out["written"] == 0
+
+
+# ---------------------------------------------------------------------------
+# US-CONSENT-14 — DRS row-level consent gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_drs_bundle_excludes_members_without_research_consent(geo):
+    from apps.data_management.models import Member
+    from apps.data_requests.bundles import render_bundle
+    from apps.data_requests.models import DataRequest
+    from apps.data_requests.test_helpers import make_dsa, make_partner
+
+    hh, head = _household_with_head(geo)  # member 1 (head)
+    member2 = Member.objects.create(
+        household=hh, line_number=2, surname="Okot", first_name="Mary",
+        sex="2", age_years=30)
+
+    # member2 withdrew RESEARCH consent; head did not.
+    services.capture_consent(
+        member=member2, purpose=_purpose("RESEARCH"), state=ConsentState.WITHDRAWN,
+        captured_via="WEB_INTAKE", captured_by="op1")
+
+    partner = make_partner(code="RES-OPM", name="Research OPM")
+    dsa = make_dsa(
+        partner=partner, reference="DSA-RES-001", status="active",
+        allowed_scopes={"fields": ["household.id", "member.surname"]})
+    # Map this DSA's scope to the RESEARCH consent purpose.
+    dsa.entities_scope = {**(dsa.entities_scope or {}), "consent_purposes": ["RESEARCH"]}
+    dsa.save(update_fields=["entities_scope"])
+
+    req = DataRequest.objects.create(
+        dsa=dsa, requester="partner-x",
+        request_payload={"fields": ["household.id", "member.surname"]})
+
+    body, count = render_bundle(req)
+    assert count == 1
+    text = body.decode("utf-8")
+    # The head (member 1) is included; member 2 (withdrew RESEARCH) is excluded.
+    assert head.surname in text
+    member_lines = [m for m in text.split("members") if "Mary" in m]
+    assert not member_lines, "member who withdrew RESEARCH consent leaked into the extract"
+
+
+@pytest.mark.django_db
+def test_drs_bundle_ungated_when_dsa_declares_no_consent_purposes(geo):
+    from apps.data_management.models import Member
+    from apps.data_requests.bundles import render_bundle
+    from apps.data_requests.models import DataRequest
+    from apps.data_requests.test_helpers import make_dsa, make_partner
+
+    hh, _head = _household_with_head(geo)
+    member2 = Member.objects.create(
+        household=hh, line_number=2, surname="Okot", first_name="Mary",
+        sex="2", age_years=30)
+    services.capture_consent(
+        member=member2, purpose=_purpose("RESEARCH"), state=ConsentState.WITHDRAWN,
+        captured_via="WEB_INTAKE", captured_by="op1")
+
+    partner = make_partner(code="RES-OPM2", name="Research OPM2")
+    dsa = make_dsa(
+        partner=partner, reference="DSA-RES-002", status="active",
+        allowed_scopes={"fields": ["household.id", "member.surname"]})
+    req = DataRequest.objects.create(
+        dsa=dsa, requester="partner-x",
+        request_payload={"fields": ["household.id", "member.surname"]})
+
+    body, _count = render_bundle(req)
+    # No consent_purposes on the DSA → no per-member gating; Mary stays in.
+    assert "Mary" in body.decode("utf-8")
