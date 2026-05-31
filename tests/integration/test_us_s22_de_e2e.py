@@ -504,13 +504,15 @@ def test_active_pmt_recomputes_22_variable_surface(connector, geo_codes):
 
     # Step 3 — recompute under query budget. AC-DE-PMT-NO-N-PLUS-1: the
     # scoring chain must NOT issue per-member queries. The fixed baseline
-    # is 21: members are fetched once, the member-detail tables
+    # is 22: members are fetched once, the member-detail tables
     # (health/disability/education/employment) are batch-fetched via
     # member_id__in, and the household-detail tables (asset/livestock/
     # crop/shock/coping) are one query each — none scale with roster
-    # size, so a 10-member household issues the same 21. The budget moved
-    # 20 → 21 when the US-S22-DE expansion added one detail table; any
-    # regression to a real N+1 would push it past 21 and trip here.
+    # size, so a 10-member household issues the same 22. The budget moved
+    # 20 → 21 when the US-S22-DE expansion added one detail table, and
+    # 21 → 22 when US-CONSENT-12 added the head's ELIGIBILITY-consent
+    # gate (one constant lookup, NOT per-member). Any regression to a real
+    # N+1 would push it past 22 and trip here.
     with CaptureQueriesContext(connection) as ctx:
         result = recompute_for_household(
             hh, triggered_by="dih_promote_e2e", actor="op2",
@@ -519,9 +521,9 @@ def test_active_pmt_recomputes_22_variable_surface(connector, geo_codes):
     assert isinstance(result, PMTResult)
 
     query_count = len(ctx.captured_queries)
-    assert query_count <= 21, (
+    assert query_count <= 22, (
         f"got {query_count} queries scoring 2-member household; "
-        f"budget is 21:\n"
+        f"budget is 22:\n"
         + "\n".join(q["sql"][:120] for q in ctx.captured_queries)
     )
 
