@@ -61,6 +61,17 @@ const BuilderScreen = () => {
   const [floorViolation, setFloorViolation] = useBld(null);
   const [handoffOpen, setHandoffOpen] = useBld(false);
 
+  // The seed default ("ds_hh_profile") is a mock id. Against the live
+  // catalogue it matches nothing, so `ds` would fall back to the mock
+  // and POST a mock code → the validator answers dataset_not_found.
+  // Snap to the first real dataset once the live catalogue resolves
+  // (the mock list contains the seed id, so this is a no-op offline).
+  React.useEffect(() => {
+    if (datasets.length && !datasets.some(d => d.id === datasetId || d.code === datasetId)) {
+      setDatasetId(datasets[0].id || datasets[0].code);
+    }
+  }, [datasets]);
+
   const ds = liveDs || datasets.find(d => d.id === datasetId || d.code === datasetId);
   const vars = (liveVars && liveVars.length) ? liveVars : (DE_VARIABLES_BY_DATASET[datasetId] || []);
 
