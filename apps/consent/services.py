@@ -778,9 +778,13 @@ def capture_intake_consent(*, household, payload: dict, actor: str = "",
         return {"captured": 0}
 
     block = (payload or {}).get("consent_block") or {}
+    method = block.get("_method") or "DIGITAL"
+    witness_name = block.get("_witness_name", "")
+    witness_role = block.get("_witness_role", "")
     if block:
+        # Per-purpose values only; keys starting "_" carry capture metadata.
         items = [(c, s) for c, s in block.items()
-                 if s in (ConsentState.GRANTED, ConsentState.REFUSED)]
+                 if not str(c).startswith("_") and s in (ConsentState.GRANTED, ConsentState.REFUSED)]
     elif decision == ConsentState.REFUSED:
         items = [("REGISTRATION", ConsentState.REFUSED)]
     else:
@@ -792,9 +796,13 @@ def capture_intake_consent(*, household, payload: dict, actor: str = "",
             purpose = ConsentPurpose.objects.get(code=code)
         except ConsentPurpose.DoesNotExist:
             continue
-        capture_consent(
+        rec = capture_consent(
             member=head, purpose=purpose, state=st,
-            captured_via=captured_via, capture_method="DIGITAL",
+            captured_via=captured_via, capture_method=method,
             captured_by=actor or "intake", reason="intake_capture")
+        if (st == ConsentState.GRANTED and method == "VERBAL_WITNESSED"
+                and witness_name):
+            attach_evidence(record=rec, evidence_type=EvidenceType.WITNESS_STATEMENT,
+                            witness_name=witness_name, witness_role=witness_role)
         captured += 1
     return {"captured": captured}

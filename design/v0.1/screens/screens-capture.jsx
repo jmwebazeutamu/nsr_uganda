@@ -97,7 +97,13 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
     region: "", subregion: "", district: "",
     county: "", subcounty: "", parish: "", village: "",
   });
-  const [consent, setConsent] = useStateCap("yes");
+  // US-CONSENT-03 — per-purpose consent (consent_block). `consent` ("yes"/"no")
+  // is derived from REGISTRATION for the submission gate + backward compat.
+  const _newConsentBlock = () => (window.defaultConsentBlock
+    ? window.defaultConsentBlock() : { REGISTRATION: "GRANTED" });
+  const [consentBlock, setConsentBlock] = useStateCap(_newConsentBlock);
+  const consent = consentBlock.REGISTRATION === "GRANTED" ? "yes"
+    : (consentBlock.REGISTRATION === "REFUSED" ? "no" : "");
   const [urbanRural, setUR] = useStateCap("2"); // "1"=Urban, "2"=Rural per rural_urban list
   const [submitOpen, setSubmitOpen] = useStateCap(false);
   const [showReceipt, setShowReceipt] = useStateCap(false);
@@ -324,7 +330,7 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
             <IdentificationSection
               geo={geo} setGeo={setGeo}
               urbanRural={urbanRural} setUR={setUR}
-              consent={consent} setConsent={setConsent}
+              consentBlock={consentBlock} setConsentBlock={setConsentBlock}
             />
           )}
           {active === "rost" && (
@@ -474,6 +480,7 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
                 geographic: geo,
                 urban_rural: urbanRural,
                 consent: consent,
+                consent_block: consentBlock,
                 gps_lat: "2.49423", gps_lng: "34.65103", gps_accuracy_m: "6.00",
                 members: members,
                 health: healthData,
@@ -534,7 +541,7 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
             region: "", subregion: "", district: "",
             county: "", subcounty: "", parish: "", village: "",
           });
-          setConsent("yes");
+          setConsentBlock(_newConsentBlock());
           setUR("2");
           setMembers([]);
           setHealthData({});
@@ -553,7 +560,7 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
 /* ============================================================
    Section 1 — Identification (extracted for the conditional shell)
    ============================================================ */
-const IdentificationSection = ({ geo, setGeo, urbanRural, setUR, consent, setConsent }) => {
+const IdentificationSection = ({ geo, setGeo, urbanRural, setUR, consentBlock, setConsentBlock }) => {
   const [urOpts] = (typeof useChoiceList === "function")
     ? useChoiceList("rural_urban")
     : [[]];
@@ -632,15 +639,18 @@ const IdentificationSection = ({ geo, setGeo, urbanRural, setUR, consent, setCon
         <div className="divider mt-5"/>
 
         <h4 className="t-h3" style={{ margin: '8px 0 16px' }}>Consent <span style={{ color: 'var(--accent-danger)' }}>*</span></h4>
-        <div className="tint-update" style={{ padding: 16, borderRadius: 6, borderLeft: '3px solid var(--accent-update)' }}>
-          <p style={{ margin: '0 0 12px', fontSize: 13, lineHeight: 1.6 }}>
-            "I, the respondent, consent to the collection and processing of my household's data by the Ministry of Gender, Labour and Social Development (MGLSD) under the Data Protection and Privacy Act 2019 of Uganda. I understand my data may be shared with partner agencies under a signed Data Sharing Agreement."
-          </p>
-          <div className="seg">
-            <button className={consent === 'yes' ? 'on' : ''} onClick={() => setConsent('yes')}><Icon name="check" size={12}/> Yes — consented</button>
-            <button className={consent === 'no' ? 'on' : ''} onClick={() => setConsent('no')}>No</button>
+        {typeof window !== 'undefined' && typeof window.ConsentCaptureBlock === 'function' ? (
+          React.createElement(window.ConsentCaptureBlock, { value: consentBlock, onChange: setConsentBlock })
+        ) : (
+          // Fallback to the legacy single toggle if the consent module bundle
+          // is not loaded.
+          <div className="tint-update" style={{ padding: 16, borderRadius: 6, borderLeft: '3px solid var(--accent-update)' }}>
+            <div className="seg">
+              <button className={(consentBlock || {}).REGISTRATION === 'GRANTED' ? 'on' : ''} onClick={() => setConsentBlock({ ...(consentBlock || {}), REGISTRATION: 'GRANTED' })}><Icon name="check" size={12}/> Yes — consented</button>
+              <button className={(consentBlock || {}).REGISTRATION === 'REFUSED' ? 'on' : ''} onClick={() => setConsentBlock({ ...(consentBlock || {}), REGISTRATION: 'REFUSED' })}>No</button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </>
   );

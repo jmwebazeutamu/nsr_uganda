@@ -243,6 +243,40 @@ def test_fast_track_held_when_dpa_not_ratified(geo):
 
 
 @pytest.mark.django_db
+def test_intake_consent_refused_helper():
+    assert services.intake_consent_refused({"consent": "2"}) is True
+    assert services.intake_consent_refused({"consent": "no"}) is True
+    assert services.intake_consent_refused({"consent": "1"}) is False
+    assert services.intake_consent_refused({}) is False  # missing = not a refusal
+
+
+@pytest.mark.django_db
+def test_capture_intake_consent_block_per_purpose(geo):
+    hh, head = _household_with_head(geo)
+    payload = {"consent": "1", "consent_block": {
+        "REGISTRATION": "GRANTED", "REFERRAL": "GRANTED", "PAYMENTS": "REFUSED",
+        "_method": "VERBAL_WITNESSED", "_witness_name": "Mukasa", "_witness_role": "LC1",
+    }}
+    out = services.capture_intake_consent(household=hh, payload=payload, actor="op1")
+    assert out["captured"] == 3
+    recs = {r.purpose.code: r for r in ConsentRecord.objects.filter(member=head)}
+    assert recs["REGISTRATION"].state == ConsentState.GRANTED
+    assert recs["PAYMENTS"].state == ConsentState.REFUSED
+    assert recs["REGISTRATION"].capture_method == "VERBAL_WITNESSED"
+    # Witness evidence recorded for the verbal grant.
+    assert recs["REGISTRATION"].evidence.filter(evidence_type="WITNESS_STATEMENT").exists()
+
+
+@pytest.mark.django_db
+def test_capture_intake_consent_single_refused(geo):
+    hh, head = _household_with_head(geo)
+    out = services.capture_intake_consent(household=hh, payload={"consent": "2"}, actor="op1")
+    assert out["captured"] == 1
+    assert ConsentRecord.objects.get(
+        member=head, purpose__code="REGISTRATION").state == ConsentState.REFUSED
+
+
+@pytest.mark.django_db
 def test_fast_track_noop_when_no_consent_purposes(geo):
     hh, _head = _household_with_head(geo)
     src = _source_system_with_dpa(consent_purposes=())
