@@ -129,6 +129,7 @@ nav:
       - API-DRS — Data Requests: modules/api-drs.md
       - DIH — Integration Hub: modules/dih.md
       - SEC — Security: modules/sec.md
+      - Consent (SEC) — Consent Management: modules/consent.md
       - RPT — Reporting: modules/rpt.md
       - REF-DATA — Reference Data: modules/ref-data.md
       - Partners and DSA: modules/partners.md
