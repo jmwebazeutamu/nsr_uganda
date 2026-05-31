@@ -49,12 +49,18 @@ def check_postgres_required_outside_dev(app_configs, **kwargs):
     would render the SAD §8.4 hash-chain guarantee meaningless."""
     if settings.DEBUG:
         return []
-    vendors = {db.get("ENGINE", "").split(".")[-1] for db in settings.DATABASES.values()}
-    bad = vendors - {"postgresql", "postgis"}
-    if bad:
+    # Validate only the DEFAULT database — that is where the audit-chain trigger
+    # lives. The `analytics_replica` alias is an intentional no-op that points at
+    # SQLite in dev/CI (DATABASE_URL_ANALYTICS unset) and only resolves to a real
+    # Postgres read-replica in staging/prod; including it here would fail CI's
+    # Postgres job purely because the replica defaults to SQLite.
+    default_engine = (
+        settings.DATABASES.get("default", {}).get("ENGINE", "").split(".")[-1]
+    )
+    if default_engine and default_engine not in ("postgresql", "postgis"):
         return [Error(
-            f"non-Postgres DATABASE ENGINE(s) {sorted(bad)} are forbidden when "
-            f"DEBUG=False — the audit-chain trigger requires PostgreSQL.",
+            f"non-Postgres default DATABASE ENGINE '{default_engine}' is forbidden "
+            f"when DEBUG=False — the audit-chain trigger requires PostgreSQL.",
             id="security.E004",
         )]
     return []

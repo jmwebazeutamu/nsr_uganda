@@ -294,7 +294,7 @@ class ChangeRequestSerializer(serializers.ModelSerializer):
                     **change,
                     "old": _current_value_for_change_key(obj.entity_type, obj.entity_id, key),
                 }
-            except Exception:  # noqa: BLE001 - display fallback only
+            except Exception:  # noqa: BLE001 - display fallback only  # nosec B112 - best-effort old-value lookup
                 continue
         return changes
 
