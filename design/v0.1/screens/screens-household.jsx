@@ -1328,18 +1328,20 @@ const TabConsent = ({ h, live }) => {
       {showManage && hasPortal && (
         <Modal open={showManage} onClose={() => setShowManage(false)}
           title="Consent management" width={920}>
-          {/* The citizen consent screen is the design preview and renders
-              sample household data, NOT this household — the live truth is the
-              "Consent detail" card above. Flag it so the two aren't confused
-              until the screen is wired to the live per-member API. */}
-          <div className="tint-update" style={{
-            padding: "8px 12px", borderRadius: 6, marginBottom: 12,
-            fontSize: 12, color: "var(--neutral-700)"}}>
-            <Icon name="info" size={12} style={{verticalAlign:"middle", marginRight:6}}/>
-            Preview — shows sample data, not this household. The live per-purpose
-            status for this household is in the “Consent detail” card.
-          </div>
-          {React.createElement(window.CitizenConsentScreen)}
+          {/* Live mode: pass THIS household's members so the screen reads each
+              member's real consent matrix and withdraws against the live API.
+              Demo mode (no live data): render the sample preview, flagged. */}
+          {!live && (
+            <div className="tint-update" style={{
+              padding: "8px 12px", borderRadius: 6, marginBottom: 12,
+              fontSize: 12, color: "var(--neutral-700)"}}>
+              <Icon name="info" size={12} style={{verticalAlign:"middle", marginRight:6}}/>
+              Preview — sample data. Open a real (live) household to manage its
+              actual consent.
+            </div>
+          )}
+          {React.createElement(window.CitizenConsentScreen,
+            live ? { members: h.members, householdId: h.rid, live: true } : {})}
         </Modal>
       )}
       {/* US-CONSENT-08 detail — full per-purpose consent breakdown

@@ -91,9 +91,40 @@ const sampleAudit = (member) => [
 ];
 
 /* ============================================================
+   Live-mode projection helpers (US-CONSENT-05 wiring)
+   When the screen is mounted with real `members`, it reads each member's
+   matrix from GET /api/v1/consent/members/{id} and projects it into the
+   {state,granted,last} shape the table renders. Falls back to the sample
+   household above when no members are supplied (standalone portal preview).
+   ============================================================ */
+const _initials = (name) => (name || "?").split(/\s+/).filter(Boolean)
+  .map(s => s[0]).slice(0, 2).join("").toUpperCase() || "?";
+
+const projectMember = (m) => ({
+  id: m.id,
+  name: m.name || "Member",
+  rel: m.rel === "Head" ? "Self (head)" : (m.rel || "Member"),
+  self: m.rel === "Head",
+  age: typeof m.age === "number" ? m.age : 99,
+  initials: _initials(m.name),
+});
+
+const projectMatrix = (data) => {
+  const out = {};
+  ((data && data.purposes) || []).forEach(p => {
+    const day = p.captured_at ? String(p.captured_at).slice(0, 10) : "—";
+    out[p.purpose_code] = {
+      state: p.state_label || (p.state || "Not captured"),
+      granted: day, last: day, channel: "",
+    };
+  });
+  return out;
+};
+
+/* ============================================================
    Withdrawal modal (Screen 3) — two steps
    ============================================================ */
-const WithdrawalModal = ({ open, purposeCode, onClose, onComplete }) => {
+const WithdrawalModal = ({ open, purposeCode, onClose, onComplete, live, memberId }) => {
   const [step, setStep] = useStateCD(1);
   const [reason, setReason] = useStateCD("");
   const [busy, setBusy] = useStateCD(false);
@@ -109,14 +140,21 @@ const WithdrawalModal = ({ open, purposeCode, onClose, onComplete }) => {
 
   const submit = () => {
     setBusy(true); setError(false);
-    setTimeout(() => {
-      setBusy(false);
-      // Idempotent submit; demo a successful ticket.
-      const id = "WD-2026-0" + (4500 + Math.floor(Math.random() * 90));
-      const deadline = "29 Jun 2026";
-      setTicket({ id, deadline });
-      setStep(2);
-    }, 650);
+    const ok = (id, deadline) => { setBusy(false); setTicket({ id, deadline }); setStep(2); };
+    const fail = () => { setBusy(false); setError(true); };
+    if (live && memberId && typeof window !== "undefined" && window.nsrApi) {
+      // Real, idempotent withdrawal request (US-CONSENT-06).
+      window.nsrApi.post(`/api/v1/consent/members/${memberId}/withdraw`,
+        { purpose_code: purposeCode, reason_code: reason })
+        .then(data => ok(
+          data.ticket_id || "—",
+          data.sla_deadline ? String(data.sla_deadline).slice(0, 10) : "—"))
+        .catch(fail);
+    } else {
+      // Standalone preview — demo a successful ticket.
+      setTimeout(() => ok(
+        "WD-2026-0" + (4500 + Math.floor(Math.random() * 90)), "29 Jun 2026"), 650);
+    }
   };
 
   const titleByStep = step === 1 ? "Withdraw your consent" : "Request received";
@@ -225,22 +263,47 @@ const WithdrawalModal = ({ open, purposeCode, onClose, onComplete }) => {
 /* ============================================================
    MAIN — Citizen consent dashboard
    ============================================================ */
-const CitizenConsentScreen = () => {
-  const [memberId, setMemberId] = useStateCD("M1");
-  const [records, setRecords] = useStateCD(seedRecords);
+const CitizenConsentScreen = (props = {}) => {
+  // Live mode when real members are supplied AND the CSRF-aware API client is
+  // present (operator console). Otherwise the sample household preview.
+  const api = (typeof window !== "undefined" && window.nsrApi) ? window.nsrApi : null;
+  const liveMembers = (Array.isArray(props.members) && props.members.length) ? props.members : null;
+  const liveMode = !!(liveMembers && api);
+  const house = liveMode
+    ? { id: props.householdId || "—", members: liveMembers.map(projectMember) }
+    : HOUSEHOLD;
+
+  const [memberId, setMemberId] = useStateCD(house.members[0] ? house.members[0].id : "M1");
+  const [records, setRecords] = useStateCD(liveMode ? {} : seedRecords);
+  const [loading, setLoading] = useStateCD(liveMode);
   const [withdrawCode, setWithdrawCode] = useStateCD(null);
   const [showAudit, setShowAudit] = useStateCD(false);
   const [toast, setToast] = useStateCD("");
 
-  const member = HOUSEHOLD.members.find(m => m.id === memberId);
+  // Fetch the selected member's live consent matrix.
+  React.useEffect(() => {
+    if (!liveMode) return undefined;
+    let alive = true;
+    setLoading(true);
+    api.get(`/api/v1/consent/members/${memberId}`)
+      .then(data => { if (!alive) return; setRecords(prev => ({ ...prev, [memberId]: projectMatrix(data) })); setLoading(false); })
+      .catch(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [memberId, liveMode]);
+
+  const member = house.members.find(m => m.id === memberId) || house.members[0] || { name: "", self: true };
+  const head = house.members.find(m => m.self) || house.members[0] || { name: "—" };
   const memberRecords = records[memberId] || {};
+  const tableLoading = liveMode && loading && Object.keys(memberRecords).length === 0;
 
   const onWithdrawComplete = (code) => {
+    // Optimistic: show the purpose as pending DPO review (the backend ticket is
+    // open; the record flips to Withdrawn only when the DPO confirms).
     setRecords(r => ({
       ...r,
-      [memberId]: { ...(r[memberId] || {}), [code]: { ...((r[memberId] || {})[code] || {}), state: "Pending review", last: "30 May 2026", channel: "Web" } },
+      [memberId]: { ...(r[memberId] || {}), [code]: { ...((r[memberId] || {})[code] || {}), state: "Pending review", last: "today", channel: "Web" } },
     }));
-    setToast(`Withdrawal request submitted for ${PURPOSE_BY_CODE[code].name}.`);
+    setToast(`Withdrawal request submitted for ${(PURPOSE_BY_CODE[code] || {}).name || code}.`);
   };
 
   return (
@@ -252,14 +315,14 @@ const CitizenConsentScreen = () => {
             MY CONSENT &nbsp;<StoryTag>US-S26-CONSENT-CITIZEN-VIEW</StoryTag>
           </div>
           <h1 className="t-h1" style={{ margin: 0 }}>Your consent records</h1>
-          <div className="page-sub">Household <span className="t-mono">{HOUSEHOLD.id}</span> · you can view and change consent for everyone you are responsible for.</div>
+          <div className="page-sub">Household <span className="t-mono">{house.id}</span> · you can view and change consent for everyone you are responsible for.</div>
         </div>
         <div className="row gap-2" style={{
           padding: "6px 12px", borderRadius: 999, background: "var(--accent-system-bg)",
           border: "1px solid rgba(55,71,79,0.2)", fontSize: 12.5, color: "var(--neutral-700)",
         }}>
           <Icon name="user" size={14} color="var(--accent-system)"/>
-          Signed in as <strong>Nakiru Christine</strong> · head
+          Signed in as <strong>{head.name}</strong> · head
         </div>
       </div>
 
@@ -267,7 +330,7 @@ const CitizenConsentScreen = () => {
       <div className="card card-body" style={{ marginBottom: 16 }}>
         <ConsentSectionLabel hint="Choose whose consent you want to view. As head you can act for every member.">Household member</ConsentSectionLabel>
         <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
-          {HOUSEHOLD.members.map(m => {
+          {house.members.map(m => {
             const active = m.id === memberId;
             return (
               <button key={m.id} onClick={() => setMemberId(m.id)} style={{
@@ -313,11 +376,16 @@ const CitizenConsentScreen = () => {
             </tr>
           </thead>
           <tbody>
-            {PURPOSES.map(p => {
-              // Null-safe: a purpose may have no record yet (e.g. a newly
-              // seeded purpose like ELIGIBILITY before capture) — render it as
-              // not-yet-captured rather than crashing on rec.state.
-              const rec = memberRecords[p.code] || { state: "Pending review", granted: "—", last: "—", channel: "—" };
+            {tableLoading && (
+              <tr><td colSpan={6} className="muted" style={{ padding: 18, textAlign: "center" }}>
+                Loading consent…
+              </td></tr>
+            )}
+            {!tableLoading && PURPOSES.map(p => {
+              // Null-safe: a purpose may have no record (legacy household with
+              // no per-purpose capture) — render it as not-captured rather than
+              // crashing on rec.state.
+              const rec = memberRecords[p.code] || { state: "Not captured", granted: "—", last: "—", channel: "—" };
               const canWithdraw = p.withdrawable && rec.state === "Granted";
               const pending = rec.state === "Pending review";
               return (
@@ -364,6 +432,7 @@ const CitizenConsentScreen = () => {
       </div>
 
       <WithdrawalModal open={!!withdrawCode} purposeCode={withdrawCode}
+        live={liveMode} memberId={memberId}
         onClose={() => setWithdrawCode(null)} onComplete={onWithdrawComplete}/>
       <AuditDrawer open={showAudit} onClose={() => setShowAudit(false)}
         events={sampleAudit(member)} title={`${member.self ? "Your" : member.name} · consent history`}/>
