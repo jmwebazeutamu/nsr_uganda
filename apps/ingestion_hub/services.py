@@ -657,7 +657,7 @@ def promote_stage_record(
     _src_kind = _consent_src.kind if _consent_src else ""
     consent_services.capture_intake_consent(
         household=hh, payload=payload, actor=actor,
-        captured_via="CAPI" if _src_kind == "capi_walkin" else "WEB_INTAKE")
+        captured_via="CAPI" if _src_kind in ("capi_walkin", "kobo") else "WEB_INTAKE")
 
     # US-S22-DE-04: detail-entity fanout. Population order per build
     # prompt §3: Household → Members → per-household details →

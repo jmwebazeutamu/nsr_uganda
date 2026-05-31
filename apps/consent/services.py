@@ -728,22 +728,34 @@ _GRANT_TOKENS = {"1", "yes", "y", "true", "granted"}
 _REFUSE_TOKENS = {"2", "no", "n", "false", "refused"}
 
 
+def _token_to_state(value):
+    if value is None or str(value).strip() == "":
+        return None
+    s = str(value).strip().lower()
+    if s in _GRANT_TOKENS:
+        return ConsentState.GRANTED
+    if s in _REFUSE_TOKENS:
+        return ConsentState.REFUSED
+    return None
+
+
 def _intake_consent_decision(payload: dict):
     """Return 'GRANTED' / 'REFUSED' / None for the registration consent carried
-    in an intake payload. Reads payload['consent'] (the legacy single field) or
-    payload['consent_block']['REGISTRATION'] (explicit per-purpose form)."""
-    v = (payload or {}).get("consent")
-    if v is not None and str(v).strip() != "":
-        s = str(v).strip().lower()
-        if s in _GRANT_TOKENS:
-            return ConsentState.GRANTED
-        if s in _REFUSE_TOKENS:
-            return ConsentState.REFUSED
-        return None
-    block = (payload or {}).get("consent_block") or {}
-    reg = block.get("REGISTRATION")
+    in an intake payload. Sources, in order:
+    - payload['consent']                       (walk-in / web capture form, top-level)
+    - payload['consent_block']['REGISTRATION'] (explicit per-purpose capture form)
+    - payload['interview']['consent']          (Kobo connector, kobo_to_canonical)
+    """
+    payload = payload or {}
+    state = _token_to_state(payload.get("consent"))
+    if state is not None:
+        return state
+    reg = (payload.get("consent_block") or {}).get("REGISTRATION")
     if reg in (ConsentState.GRANTED, ConsentState.REFUSED):
         return reg
+    interview = payload.get("interview")
+    if isinstance(interview, dict):
+        return _token_to_state(interview.get("consent"))
     return None
 
 

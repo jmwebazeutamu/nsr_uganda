@@ -268,6 +268,24 @@ def test_capture_intake_consent_block_per_purpose(geo):
 
 
 @pytest.mark.django_db
+def test_intake_consent_decision_reads_kobo_interview_block():
+    # Kobo lands consent under interview.consent (kobo_to_canonical), not top-level.
+    assert services.intake_consent_refused({"interview": {"consent": "2"}}) is True
+    assert services.intake_consent_refused({"interview": {"consent": "1"}}) is False
+
+
+@pytest.mark.django_db
+def test_capture_intake_consent_from_kobo_interview(geo):
+    hh, head = _household_with_head(geo)
+    payload = {"interview": {"consent": "1"}}  # Kobo-shaped
+    out = services.capture_intake_consent(
+        household=hh, payload=payload, actor="kobo", captured_via="CAPI")
+    assert out["captured"] == 3  # REGISTRATION + ELIGIBILITY + REFERRAL
+    rec = ConsentRecord.objects.get(member=head, purpose__code="REGISTRATION")
+    assert rec.state == ConsentState.GRANTED and rec.captured_via == "CAPI"
+
+
+@pytest.mark.django_db
 def test_capture_intake_consent_single_refused(geo):
     hh, head = _household_with_head(geo)
     out = services.capture_intake_consent(household=hh, payload={"consent": "2"}, actor="op1")
