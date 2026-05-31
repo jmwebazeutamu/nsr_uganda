@@ -104,11 +104,49 @@ def on_change_committed(sender, *, change_request, target, **kwargs):
     if new_rows:
         DqaResult.objects.bulk_create(new_rows, batch_size=50)
 
-    by_severity = {"blocking": 0, "warning": 0, "info": 0}
+    # Severity-aware failure counter. Reads through severity_bucket
+    # so a legacy `warning` rule and a new-vocabulary `flag` rule
+    # both land in the same `flag` bucket — previously they were
+    # split and the counter mis-totalled for the audit row.
+    # Lazy import — severity_bucket lives in dqa.models alongside the Severity
+    # enum; importing it at module top-level created a circular-import cycle
+    # that surfaced under the CI full-suite collection order (coverage +
+    # analytics replica). Deferring to call time breaks it.
+    from .models import severity_bucket
+
+    by_bucket = {"block": [], "flag": [], "info": []}
     for ev in evaluations:
         if ev.passed:
             continue
-        by_severity[ev.rule.severity] = by_severity.get(ev.rule.severity, 0) + 1
+        bucket = severity_bucket(ev.rule.severity)
+        by_bucket[bucket].append(ev.rule.rule_id)
+
+    # Resolve the parent household_id for FLAG audit emission. CR
+    # entity_type=member commits write the result row keyed by the
+    # member; the UPD reactor still needs to know which household to
+    # open a review case against, so we walk through to it.
+    flagged_codes = sorted(set(by_bucket["flag"]))
+    if flagged_codes:
+        household_id = (
+            str(target.pk) if record_type == "household"
+            else str(getattr(target, "household_id", "") or "")
+        )
+        if household_id:
+            emit_audit(
+                action="dqa.household.flag",
+                entity_type="household",
+                entity_id=household_id,
+                actor=change_request.approver or "system",
+                reason=(
+                    f"stage=registry_post_promote "
+                    f"change_request={change_request.id}"
+                ),
+                field_changes={
+                    "stage": "registry_post_promote",
+                    "change_request": change_request.id,
+                    "flagged_codes": flagged_codes,
+                },
+            )
 
     emit_audit(
         action="rules_re_evaluated", entity_type=f"dat.{record_type}",
@@ -116,14 +154,19 @@ def on_change_committed(sender, *, change_request, target, **kwargs):
         actor=change_request.approver or "system",
         reason=(
             f"upd_commit {change_request.id} → "
-            f"{sum(by_severity.values())} failure(s)"
+            f"{sum(len(v) for v in by_bucket.values())} failure(s)"
         ),
         field_changes={
             "change_request": change_request.id,
             "evaluations_total": len(evaluations),
-            "failures_blocking": by_severity["blocking"],
-            "failures_warning": by_severity["warning"],
-            "failures_info": by_severity["info"],
+            # Legacy keys (blocking / warning) kept for back-compat
+            # of any consumer that reads the old shape; the new
+            # bucket keys are the authoritative values.
+            "failures_blocking": len(by_bucket["block"]),
+            "failures_warning": len(by_bucket["flag"]),
+            "failures_block": len(by_bucket["block"]),
+            "failures_flag": len(by_bucket["flag"]),
+            "failures_info": len(by_bucket["info"]),
         },
     )
 
