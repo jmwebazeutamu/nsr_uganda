@@ -58,10 +58,10 @@ _MATVIEWS: list[tuple[str, str, str]] = [
         ) head_sex ON TRUE
         LEFT JOIN LATERAL (
             SELECT CASE
-                WHEN dob IS NULL THEN ''
-                WHEN EXTRACT(YEAR FROM age(dob)) < 30 THEN '15-29'
-                WHEN EXTRACT(YEAR FROM age(dob)) < 45 THEN '30-44'
-                WHEN EXTRACT(YEAR FROM age(dob)) < 60 THEN '45-59'
+                WHEN date_of_birth IS NULL THEN ''
+                WHEN EXTRACT(YEAR FROM age(date_of_birth)) < 30 THEN '15-29'
+                WHEN EXTRACT(YEAR FROM age(date_of_birth)) < 45 THEN '30-44'
+                WHEN EXTRACT(YEAR FROM age(date_of_birth)) < 60 THEN '45-59'
                 ELSE '60+'
             END AS band
             FROM data_management_member
