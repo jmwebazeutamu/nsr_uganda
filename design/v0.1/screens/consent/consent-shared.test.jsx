@@ -74,3 +74,33 @@ describe("consent admin stub screens", () => {
     expect(typeof globalThis.ConsentCoverageScreen).toBe("function");
   });
 });
+
+describe("consent badge cluster (US-CONSENT-08)", () => {
+  let projectConsentMatrix;
+  beforeAll(async () => {
+    globalThis.ConsentStateChip = () => null;
+    globalThis.AuditDrawer = () => null;
+    await import("./consent-badge-cluster.jsx");
+    ({ projectConsentMatrix } = globalThis);
+    expect(typeof globalThis.ConsentBadgeCluster).toBe("function");
+  });
+
+  it("drops un-captured purposes and keeps acted-on ones", () => {
+    const chips = projectConsentMatrix({
+      member_id: "M1",
+      purposes: [
+        { purpose_code: "REGISTRATION", name: "Registration", state: "GRANTED", state_label: "Granted", withdrawable: true },
+        { purpose_code: "RESEARCH", name: "Research", state: null, state_label: null, withdrawable: true },
+        { purpose_code: "STATISTICS", name: "National statistics", state: "GRANTED", state_label: "Granted", withdrawable: false },
+      ],
+    });
+    expect(chips.map(c => c.code)).toEqual(["REGISTRATION", "STATISTICS"]);
+    expect(chips[0].state).toBe("Granted");
+    expect(chips[1].withdrawable).toBe(false);
+  });
+
+  it("returns an empty list for an empty / missing matrix", () => {
+    expect(projectConsentMatrix(null)).toEqual([]);
+    expect(projectConsentMatrix({ purposes: [] })).toEqual([]);
+  });
+});
