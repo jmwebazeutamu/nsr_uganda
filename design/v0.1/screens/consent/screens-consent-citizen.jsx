@@ -34,7 +34,7 @@ const seedRecords = () => ({
     COMMUNICATIONS_USSD:  { state: "Refused", granted: "—",          last: "12 Jan 2026", channel: "Signature" },
     RESEARCH:             { state: "Refused", granted: "—",          last: "12 Jan 2026", channel: "Signature" },
     GRIEVANCE_CONTACT:    { state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Signature" },
-    IDENTITY_VERIFICATION:{ state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Public task" },
+    ELIGIBILITY:          { state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Web" },
     STATISTICS:           { state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Public task" },
   },
   M2: {
@@ -45,7 +45,7 @@ const seedRecords = () => ({
     COMMUNICATIONS_USSD:  { state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Thumbprint" },
     RESEARCH:             { state: "Refused", granted: "—",          last: "12 Jan 2026", channel: "Thumbprint" },
     GRIEVANCE_CONTACT:    { state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Thumbprint" },
-    IDENTITY_VERIFICATION:{ state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Public task" },
+    ELIGIBILITY:          { state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Web" },
     STATISTICS:           { state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Public task" },
   },
   M3: { /* minor — registration via guardian */
@@ -56,7 +56,7 @@ const seedRecords = () => ({
     COMMUNICATIONS_USSD:  { state: "Refused", granted: "—",          last: "12 Jan 2026", channel: "Guardian" },
     RESEARCH:             { state: "Refused", granted: "—",          last: "12 Jan 2026", channel: "Guardian" },
     GRIEVANCE_CONTACT:    { state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Guardian" },
-    IDENTITY_VERIFICATION:{ state: "Pending re-consent", granted: "12 Jan 2026", last: "20 May 2026", channel: "Public task" },
+    ELIGIBILITY:          { state: "Pending re-consent", granted: "12 Jan 2026", last: "20 May 2026", channel: "Guardian" },
     STATISTICS:           { state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Public task" },
   },
   M4: {
@@ -67,7 +67,7 @@ const seedRecords = () => ({
     COMMUNICATIONS_USSD:  { state: "Refused", granted: "—",          last: "12 Jan 2026", channel: "Guardian" },
     RESEARCH:             { state: "Refused", granted: "—",          last: "12 Jan 2026", channel: "Guardian" },
     GRIEVANCE_CONTACT:    { state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Guardian" },
-    IDENTITY_VERIFICATION:{ state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Public task" },
+    ELIGIBILITY:          { state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Guardian" },
     STATISTICS:           { state: "Granted", granted: "12 Jan 2026", last: "12 Jan 2026", channel: "Public task" },
   },
 });
@@ -233,12 +233,12 @@ const CitizenConsentScreen = () => {
   const [toast, setToast] = useStateCD("");
 
   const member = HOUSEHOLD.members.find(m => m.id === memberId);
-  const memberRecords = records[memberId];
+  const memberRecords = records[memberId] || {};
 
   const onWithdrawComplete = (code) => {
     setRecords(r => ({
       ...r,
-      [memberId]: { ...r[memberId], [code]: { ...r[memberId][code], state: "Pending review", last: "30 May 2026", channel: "Web" } },
+      [memberId]: { ...(r[memberId] || {}), [code]: { ...((r[memberId] || {})[code] || {}), state: "Pending review", last: "30 May 2026", channel: "Web" } },
     }));
     setToast(`Withdrawal request submitted for ${PURPOSE_BY_CODE[code].name}.`);
   };
@@ -314,7 +314,10 @@ const CitizenConsentScreen = () => {
           </thead>
           <tbody>
             {PURPOSES.map(p => {
-              const rec = memberRecords[p.code];
+              // Null-safe: a purpose may have no record yet (e.g. a newly
+              // seeded purpose like ELIGIBILITY before capture) — render it as
+              // not-yet-captured rather than crashing on rec.state.
+              const rec = memberRecords[p.code] || { state: "Pending review", granted: "—", last: "—", channel: "—" };
               const canWithdraw = p.withdrawable && rec.state === "Granted";
               const pending = rec.state === "Pending review";
               return (

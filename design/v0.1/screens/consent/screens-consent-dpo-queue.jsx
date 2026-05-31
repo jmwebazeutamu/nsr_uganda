@@ -15,7 +15,7 @@ const TICKETS = [
   { id: "WD-2026-04420", hh: "HH-7411-0231", member: "Nakato Sarah",  purpose: "REFERRAL",            channel: "USSD", daysOpen: 27, state: "In DPO review", assignee: "You",          referrals: 0, smsSubs: 1, extracts: 0, origin: "Citizen" },
   { id: "WD-2026-04450", hh: "HH-8821-0144", member: "Auma Florence", purpose: "RESEARCH",            channel: "Web",  daysOpen: 28, state: "Open",          assignee: "—",            referrals: 0, smsSubs: 0, extracts: 2, origin: "Citizen" },
   { id: "WD-2026-04417", hh: "HH-7411-0192", member: "Lokol Moses",   purpose: "PAYMENTS",            channel: "Web",  daysOpen: 4,  state: "Open",          assignee: "—",            referrals: 1, smsSubs: 1, extracts: 0, origin: "Citizen" },
-  { id: "WD-2026-04422", hh: "HH-7411-0250", member: "Mugisha James", purpose: "IDENTITY_VERIFICATION",channel: "Web", daysOpen: 8,  state: "In DPO review", assignee: "You",          referrals: 0, smsSubs: 0, extracts: 0, origin: "Citizen" },
+  { id: "WD-2026-04422", hh: "HH-7411-0250", member: "Mugisha James", purpose: "ELIGIBILITY",          channel: "Web", daysOpen: 8,  state: "In DPO review", assignee: "You",          referrals: 0, smsSubs: 0, extracts: 0, origin: "Citizen" },
   { id: "WD-2026-04431", hh: "HH-3920-1101", member: "Okello Peter",  purpose: "REFERRAL",            channel: "OPM-PDM", daysOpen: 2, state: "Open",        assignee: "—",            referrals: 0, smsSubs: 0, extracts: 0, origin: "Bulk DIH" },
   { id: "WD-2026-04432", hh: "HH-3920-1102", member: "Adong Mary",    purpose: "REFERRAL",            channel: "OPM-PDM", daysOpen: 2, state: "Open",        assignee: "—",            referrals: 0, smsSubs: 0, extracts: 0, origin: "Bulk DIH" },
   { id: "WD-2026-04433", hh: "HH-3920-1108", member: "Ojok Samuel",   purpose: "REFERRAL",            channel: "OPM-PDM", daysOpen: 2, state: "Open",        assignee: "—",            referrals: 0, smsSubs: 0, extracts: 0, origin: "Bulk DIH" },
@@ -30,7 +30,11 @@ const QUICK_FILTERS = [
 ];
 
 const remaining = (t) => SLA_DAYS - t.daysOpen;
-const isPublicTask = (t) => PURPOSE_BY_CODE[t.purpose].basis !== "Consent";
+// Null-safe purpose lookup — a ticket may reference a purpose code not in the
+// current catalogue (vocabulary drift); fall back to a Consent-basis default
+// rather than crashing.
+const purposeOf = (code) => PURPOSE_BY_CODE[code] || { name: code, basis: "Consent", withdrawable: true };
+const isPublicTask = (t) => purposeOf(t.purpose).basis !== "Consent";
 const isOpenState = (t) => t.state === "Open" || t.state === "In DPO review" || t.state === "Clarification requested";
 
 /* ============================================================
@@ -59,7 +63,7 @@ const DecisionPanel = ({ ticket, onDecide }) => {
         }}>
           <Icon name="lock" size={15} color="var(--accent-identity)"/>
           <div className="t-cap" style={{ color: "var(--neutral-700)" }}>
-            This purpose runs on a <strong>{PURPOSE_BY_CODE[ticket.purpose].basis}</strong> basis. Confirming withdrawal is
+            This purpose runs on a <strong>{purposeOf(ticket.purpose).basis}</strong> basis. Confirming withdrawal is
             not normally available — use <strong>Override</strong> and cite the DPPA provision.
           </div>
         </div>
@@ -155,7 +159,7 @@ const DpoWithdrawalQueueScreen = () => {
   }), [rows, quick]);
 
   const current = useMemoDQ(() => rows.find(t => t.id === selectedId), [rows, selectedId]);
-  const purpose = current ? PURPOSE_BY_CODE[current.purpose] : null;
+  const purpose = current ? purposeOf(current.purpose) : null;
 
   // Bulk eligibility: Confirm only, same Consent-basis purpose, zero active referrals, open state.
   const selRows = rows.filter(t => sel.has(t.id));
@@ -286,9 +290,9 @@ const DpoWithdrawalQueueScreen = () => {
                   </td>
                   <td>
                     <div className="row gap-2">
-                      <span style={{ fontWeight: 500 }}>{PURPOSE_BY_CODE[t.purpose].name}</span>
+                      <span style={{ fontWeight: 500 }}>{purposeOf(t.purpose).name}</span>
                     </div>
-                    <BasisChip basis={PURPOSE_BY_CODE[t.purpose].basis}/>
+                    <BasisChip basis={purposeOf(t.purpose).basis}/>
                   </td>
                   <td>{t.channel}{t.origin === "Bulk DIH" && <div className="t-cap">Bulk DIH</div>}</td>
                   <td>
