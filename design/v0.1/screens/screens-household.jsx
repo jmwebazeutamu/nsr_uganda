@@ -1290,6 +1290,17 @@ const TabConsent = ({ h, live }) => {
   const headId = headMember && headMember.id;
   const hasCluster = typeof window !== "undefined" && typeof window.ConsentBadgeCluster === "function";
   const hasPortal = typeof window !== "undefined" && typeof window.CitizenConsentScreen === "function";
+  // Existing households gave a broad interview consent but have no per-purpose
+  // ConsentRecords yet (the legacy column was never backfilled). Infer the
+  // purposes that statement covers — registration, processing for eligibility,
+  // and sharing under a DSA — so the detail card reflects reality instead of
+  // showing every purpose as "Not captured". Inferred rows are clearly marked.
+  const interviewConsented = live ? !!(consent || h.current_consent_state) : true;
+  const inferredConsent = interviewConsented ? {
+    codes: ["REGISTRATION", "ELIGIBILITY", "REFERRAL"],
+    date: h.capturedAt,
+    note: "It covers registration, processing for eligibility, and sharing with partner agencies under a Data Sharing Agreement.",
+  } : null;
   return (
     <div>
       <TabHeader title="Consent"
@@ -1317,6 +1328,17 @@ const TabConsent = ({ h, live }) => {
       {showManage && hasPortal && (
         <Modal open={showManage} onClose={() => setShowManage(false)}
           title="Consent management" width={920}>
+          {/* The citizen consent screen is the design preview and renders
+              sample household data, NOT this household — the live truth is the
+              "Consent detail" card above. Flag it so the two aren't confused
+              until the screen is wired to the live per-member API. */}
+          <div className="tint-update" style={{
+            padding: "8px 12px", borderRadius: 6, marginBottom: 12,
+            fontSize: 12, color: "var(--neutral-700)"}}>
+            <Icon name="info" size={12} style={{verticalAlign:"middle", marginRight:6}}/>
+            Preview — shows sample data, not this household. The live per-purpose
+            status for this household is in the “Consent detail” card.
+          </div>
           {React.createElement(window.CitizenConsentScreen)}
         </Modal>
       )}
@@ -1328,6 +1350,7 @@ const TabConsent = ({ h, live }) => {
           {React.createElement(window.ConsentStatusCard, {
             memberId: headId,
             title: `Consent detail · per purpose · ${headMember && headMember.name ? headMember.name : "head of household"}`,
+            inferred: inferredConsent,
           })}
         </div>
       )}

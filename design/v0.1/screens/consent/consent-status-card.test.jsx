@@ -49,4 +49,30 @@ describe("ConsentStatusCard", () => {
     render(globalThis.React.createElement(globalThis.ConsentStatusCard, { memberId: "M-ERR" }));
     await waitFor(() => expect(screen.getByText(/No per-purpose consent on record/i)).toBeTruthy());
   });
+
+  it("infers statement-covered purposes from interview consent", async () => {
+    // All un-captured (legacy household, no per-purpose records).
+    const allNull = {
+      member_id: "M-LEGACY",
+      purposes: [
+        { purpose_code: "REGISTRATION", name: "Registration", lawful_basis: "CONSENT", withdrawable: true, state: null, state_label: null, captured_at: null },
+        { purpose_code: "RESEARCH", name: "Research", lawful_basis: "CONSENT", withdrawable: true, state: null, state_label: null, captured_at: null },
+        { purpose_code: "STATISTICS", name: "National statistics", lawful_basis: "STATISTICAL_EXEMPTION", withdrawable: false, state: null, state_label: null, captured_at: null },
+      ],
+    };
+    globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve(allNull) }));
+    render(globalThis.React.createElement(globalThis.ConsentStatusCard, {
+      memberId: "M-LEGACY",
+      inferred: { codes: ["REGISTRATION"], date: "2026-05-28", note: "covers registration." },
+    }));
+    await waitFor(() => expect(screen.getByText("Registration")).toBeTruthy());
+    // REGISTRATION inferred granted (marked "from interview").
+    expect(screen.getAllByText(/from interview/i).length).toBeGreaterThan(0);
+    // RESEARCH not covered → still Not captured.
+    expect(screen.getByText(/Not captured/)).toBeTruthy();
+    // STATISTICS → Applies (exemption).
+    expect(screen.getByText(/Applies \(exemption\)/)).toBeTruthy();
+    // Footer explains the inference.
+    expect(screen.getByText(/inferred from the household’s broad/i)).toBeTruthy();
+  });
 });

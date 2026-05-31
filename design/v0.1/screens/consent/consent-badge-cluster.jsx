@@ -92,7 +92,14 @@ const BASIS_LABELS = {
 // Reads GET /api/v1/consent/members/{memberId} (shares the 60s cache with the
 // badge cluster). Renders a "module dark / nothing captured" note rather than
 // disappearing, so the card is always present on the Consent tab.
-const ConsentStatusCard = ({ memberId, title }) => {
+//
+// `inferred` (optional): when an existing household has no per-purpose
+// ConsentRecord yet but DID give the broad interview consent, the card can
+// infer the purposes that legacy statement covers as Granted. Shape:
+//   { codes: ["REGISTRATION", ...], date: "2026-05-28", note: "…" }
+// Inferred rows are clearly marked "from interview" so they are never
+// confused with an explicit per-purpose capture.
+const ConsentStatusCard = ({ memberId, title, inferred }) => {
   const [matrix, setMatrix] = useStateBadge(null);
   const [state, setState] = useStateBadge("loading"); // loading | ready | error
 
@@ -116,12 +123,42 @@ const ConsentStatusCard = ({ memberId, title }) => {
   }, [memberId]);
 
   const purposes = (matrix && matrix.purposes) || [];
-  const stateChip = (p) => {
-    if (!p.state) return <span className="muted" style={{ fontSize: 12 }}>Not captured</span>;
-    if (typeof window.ConsentStateChip === "function") {
-      return React.createElement(window.ConsentStateChip, { state: p.state_label || p.state, size: "sm" });
+  const inferredCodes = (inferred && inferred.codes) || [];
+  let anyInferred = false;
+
+  // Classify a purpose row into: live (real record), inferred (from the
+  // interview statement), applies (statistical exemption — no consent needed),
+  // or none (genuinely un-captured).
+  const rowInfo = (p) => {
+    if (p.state) return { kind: "live", label: p.state_label || p.state, captured: p.captured_at };
+    if (inferredCodes.indexOf(p.purpose_code) !== -1) {
+      anyInferred = true;
+      return { kind: "inferred", label: "Granted", captured: inferred.date };
     }
-    return <span style={{ fontSize: 12 }}>{p.state_label || p.state}</span>;
+    if (p.lawful_basis === "STATISTICAL_EXEMPTION") {
+      return { kind: "applies", label: "Applies", captured: null };
+    }
+    return { kind: "none", label: "Not captured", captured: null };
+  };
+
+  const statusCell = (info) => {
+    if (info.kind === "live" && typeof window.ConsentStateChip === "function") {
+      return React.createElement(window.ConsentStateChip, { state: info.label, size: "sm" });
+    }
+    if (info.kind === "inferred") {
+      return (
+        <span className="row gap-1" style={{ alignItems: "center" }}>
+          {typeof window.ConsentStateChip === "function"
+            ? React.createElement(window.ConsentStateChip, { state: "Granted", size: "sm" })
+            : <span style={{ fontSize: 12 }}>Granted</span>}
+          <span className="muted" style={{ fontSize: 11, fontStyle: "italic" }}>· from interview</span>
+        </span>
+      );
+    }
+    if (info.kind === "applies") {
+      return <span className="muted" style={{ fontSize: 12 }}>Applies (exemption)</span>;
+    }
+    return <span className="muted" style={{ fontSize: 12 }}>Not captured</span>;
   };
 
   return (
@@ -155,24 +192,27 @@ const ConsentStatusCard = ({ memberId, title }) => {
             </tr>
           </thead>
           <tbody>
-            {purposes.map(p => (
-              <tr key={p.purpose_code} style={{ borderTop: "1px solid var(--neutral-100)" }}>
-                <td style={{ padding: "8px 16px" }}>
-                  {p.name}
-                  {!p.withdrawable && (
-                    <Icon name="lock" size={11} color="var(--neutral-400)"
-                          style={{ marginLeft: 6, verticalAlign: "middle" }}/>
-                  )}
-                </td>
-                <td style={{ padding: "8px 16px", color: "var(--neutral-600)" }}>
-                  {BASIS_LABELS[p.lawful_basis] || p.lawful_basis || "—"}
-                </td>
-                <td style={{ padding: "8px 16px" }}>{stateChip(p)}</td>
-                <td style={{ padding: "8px 16px", color: "var(--neutral-500)" }}>
-                  {p.captured_at ? String(p.captured_at).slice(0, 10) : "—"}
-                </td>
-              </tr>
-            ))}
+            {purposes.map(p => {
+              const info = rowInfo(p);
+              return (
+                <tr key={p.purpose_code} style={{ borderTop: "1px solid var(--neutral-100)" }}>
+                  <td style={{ padding: "8px 16px" }}>
+                    {p.name}
+                    {!p.withdrawable && (
+                      <Icon name="lock" size={11} color="var(--neutral-400)"
+                            style={{ marginLeft: 6, verticalAlign: "middle" }}/>
+                    )}
+                  </td>
+                  <td style={{ padding: "8px 16px", color: "var(--neutral-600)" }}>
+                    {BASIS_LABELS[p.lawful_basis] || p.lawful_basis || "—"}
+                  </td>
+                  <td style={{ padding: "8px 16px" }}>{statusCell(info)}</td>
+                  <td style={{ padding: "8px 16px", color: "var(--neutral-500)" }}>
+                    {info.captured ? String(info.captured).slice(0, 10) : "—"}
+                  </td>
+                </tr>
+              );
+            })}
             {!purposes.length && (
               <tr><td colSpan={4} className="muted" style={{ padding: 16 }}>
                 No active purposes in the catalogue.
@@ -180,6 +220,19 @@ const ConsentStatusCard = ({ memberId, title }) => {
             )}
           </tbody>
         </table>
+      )}
+      {state === "ready" && anyInferred && (
+        <div className="muted" style={{
+          padding: "10px 16px", borderTop: "1px solid var(--neutral-100)",
+          fontSize: 11.5, lineHeight: 1.5,
+        }}>
+          <Icon name="info" size={11} style={{ verticalAlign: "middle", marginRight: 4 }}/>
+          “From interview” states are inferred from the household’s broad
+          interview consent statement (DPPA 2019), not an explicit per-purpose
+          capture. {inferred && inferred.note ? inferred.note : ""} Use
+          <strong> Manage / capture consent</strong> to record explicit
+          per-purpose consent.
+        </div>
       )}
     </div>
   );
