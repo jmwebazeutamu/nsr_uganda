@@ -14,17 +14,20 @@
 
 const { useState: useSyn } = React;
 
-const COLUMNS = [
-  { key: "synth_id",       label: "Synthetic ID",     mono: true },
-  { key: "hh_size",        label: "HH size",          num: true },
-  { key: "head_sex",       label: "Head sex" },
-  { key: "head_age_band",  label: "Head age band" },
-  { key: "subregion",      label: "Sub-region" },
-  { key: "district",       label: "District" },
-  { key: "roof_material",  label: "Roof material" },
-  { key: "water_source",   label: "Water source" },
-  { key: "pmt_band",       label: "PMT band",         chip: true },
-];
+// Columns are NOT hardcoded — they're derived from the rows the API
+// returns (or, offline, from the mock rows). Display hints (mono / num
+// / chip) are inferred from the key name + value type.
+const _humanize = (k) => String(k).replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+const _deriveColumns = (rows) => {
+  if (!Array.isArray(rows) || !rows.length) return [];
+  return Object.keys(rows[0]).map(k => ({
+    key: k,
+    label: _humanize(k),
+    num: typeof rows[0][k] === "number",
+    mono: /(_id$|^id$|hash|^synth)/i.test(k),
+    chip: /(band|class|status|tier)/i.test(k),
+  }));
+};
 
 // Deep-link support: the Catalogue's "Synthetic sample" button lands
 // here with ?dataset=<section/dataset id>.
@@ -56,6 +59,7 @@ const SyntheticScreen = () => {
     && !list.some(d => d.id === requestedParam || d.code === requestedParam);
   const [rows] = useDeSynthetic(ds?.id || ds?.code || datasetId);
   const visible = rows.slice(0, rowCount);
+  const columns = _deriveColumns(rows);
 
   return (
     <DEShell active="synthetic" refreshed_at={ds?.refreshed_at}>
@@ -177,7 +181,7 @@ const SyntheticScreen = () => {
           <table className="tbl" style={{minWidth:1000, background:"rgba(255,255,255,0.92)"}}>
             <thead>
               <tr>
-                {COLUMNS.map(c => (
+                {columns.map(c => (
                   <th key={c.key} style={{textAlign: c.num ? "right" : "left"}}>{c.label}</th>
                 ))}
               </tr>
@@ -185,7 +189,7 @@ const SyntheticScreen = () => {
             <tbody>
               {visible.map((row, i) => (
                 <tr key={i}>
-                  {COLUMNS.map(c => {
+                  {columns.map(c => {
                     const v = row[c.key];
                     return (
                       <td key={c.key} style={{

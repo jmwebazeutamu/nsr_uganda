@@ -24,6 +24,9 @@ const QUERY = {
   geographic_scope: { level: "district", codes: ["Lyantonde", "Moroto", "Napak", "Arua", "Yumbe", "Gulu"] },
 };
 
+// Columns are derived from the live aggregate response (the group-by
+// dimensions + the count). COLUMNS below is only the offline-preview
+// fallback shape used when there are no rows to introspect.
 const COLUMNS = [
   { key: "subregion", label: "Sub-region",      group: "geo" },
   { key: "district",  label: "District",        group: "geo" },
@@ -32,6 +35,22 @@ const COLUMNS = [
   { key: "count",     label: "Households",      group: "count", num: true },
   { key: "pmt_avg",   label: "Mean PMT score",  group: "agg",   num: true, fmt: (v) => v == null ? null : v.toFixed(3) },
 ];
+
+const _humanize = (k) => String(k).replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+const _deriveColumns = (rows) => {
+  if (!Array.isArray(rows) || !rows.length) return COLUMNS;
+  const sample = rows[0];
+  const keys = Object.keys(sample).filter(k => k !== "suppressed");
+  const dims = keys.filter(k => k !== "count");
+  const cols = dims.map(k => ({
+    key: k, label: _humanize(k),
+    num: typeof sample[k] === "number", group: "fact",
+  }));
+  if ("count" in sample) {
+    cols.push({ key: "count", label: "Count", num: true, group: "count" });
+  }
+  return cols;
+};
 
 const _readSession = () => {
   try {
@@ -57,8 +76,10 @@ const ResultsScreen = () => {
   const livePayload  = session?.payload;
 
   const datasetCode = livePayload?.dataset_code || QUERY.dataset_code;
-  const ds = datasets.find(d => d.code === datasetCode) || DE_DATASETS.find(d => d.code === datasetCode);
-  const k = DE_PRIVACY[ds.privacy].k_floor;
+  const ds = datasets.find(d => d.code === datasetCode)
+    || DE_DATASETS.find(d => d.code === datasetCode)
+    || datasets[0] || DE_DATASETS[0];
+  const k = (DE_PRIVACY[ds.privacy] || {}).k_floor ?? 0;
 
   const projection = livePayload?.projection || QUERY.projection;
 
@@ -80,6 +101,12 @@ const ResultsScreen = () => {
       }))
     : DE_RESULT_ROWS;
 
+  // Backend-driven columns + query summary — derived from the response /
+  // the payload that produced it. QUERY/COLUMNS are offline fallbacks.
+  const columns = useResM(() => _deriveColumns(rawRows), [rawRows]);
+  const filtersList = livePayload?.filters || QUERY.filters || [];
+  const scope = livePayload?.geographic_scope || QUERY.geographic_scope || { level: "", codes: [] };
+
   const sortedRows = useResM(() => {
     const rows = showSuppressed ? rawRows : rawRows.filter(r => !r.suppressed);
     return [...rows].sort((a, b) => {
@@ -95,7 +122,7 @@ const ResultsScreen = () => {
   const suppressedCount = liveResponse?.metadata?.suppressed_cell_count
     ?? rawRows.filter(r => r.suppressed).length;
   const totalCellCount = liveResponse?.metadata?.total_cell_count
-    ?? rawRows.length * COLUMNS.filter(c => c.group === "count" || c.group === "agg").length;
+    ?? rawRows.length * (columns.filter(c => c.group === "count").length || 1);
   const queryHash = liveResponse?.metadata?.query_hash || "qh_8f3a92e4c1b6d0a7";
   const matview = liveResponse?.metadata?.matview;
   const refreshedAt = liveResponse?.metadata?.refreshed_at || ds.refreshed_at;
@@ -147,20 +174,21 @@ const ResultsScreen = () => {
           <div>
             <div className="t-cap">QUERY</div>
             <div style={{display:"flex", alignItems:"center", gap:8, marginTop:4}}>
-              <span className="t-mono" style={{fontWeight:600, fontSize:14}}>{QUERY.dataset_code}</span>
+              <span className="t-mono" style={{fontWeight:600, fontSize:14}}>{datasetCode}</span>
               <PrivacyChip klass={klass}/>
             </div>
             <div className="t-cap mt-1">
-              project [{QUERY.projection.join(", ")}] · filter {QUERY.filters.length}
-              {" "}· scope {QUERY.geographic_scope.codes.length} {QUERY.geographic_scope.level}s
+              project [{projection.join(", ")}] · filter {filtersList.length}
+              {" "}· scope {scope.codes.length ? `${scope.codes.length} ${scope.level}s` : `all ${scope.level || "units"}`}
             </div>
           </div>
           <div>
             <div className="t-cap">FILTERS</div>
             <div style={{display:"flex", flexWrap:"wrap", gap:4, marginTop:6}}>
-              {QUERY.filters.map((f, i) => (
+              {filtersList.length === 0 && <span className="t-cap">none</span>}
+              {filtersList.map((f, i) => (
                 <span key={i} className="t-mono" style={{fontSize:11, padding:"2px 6px", border:"1px solid var(--neutral-300)", borderRadius:3, background:"#fff"}}>
-                  {f.variable} {f.op} {Array.isArray(f.value) ? f.value.join("|") : f.value}
+                  {(f.variable || f.var)} {f.op} {Array.isArray(f.value) ? f.value.join("|") : f.value}
                 </span>
               ))}
             </div>
@@ -168,9 +196,9 @@ const ResultsScreen = () => {
           <div>
             <div className="t-cap">SCOPE</div>
             <div className="t-bodysm" style={{fontWeight:500, marginTop:4}}>
-              {QUERY.geographic_scope.codes.length} {QUERY.geographic_scope.level}s
+              {scope.codes.length ? `${scope.codes.length} ${scope.level}s` : `All ${scope.level || "units"}`}
             </div>
-            <div className="t-cap mt-1">{QUERY.geographic_scope.codes.slice(0, 4).join(", ")}{QUERY.geographic_scope.codes.length > 4 ? "…" : ""}</div>
+            <div className="t-cap mt-1">{scope.codes.slice(0, 4).join(", ")}{scope.codes.length > 4 ? "…" : ""}</div>
           </div>
           <button className="btn" onClick={() => location.href = "Data Explorer - Aggregate Builder.html"}>
             <Icon name="edit" size={14}/> Edit query
@@ -195,7 +223,7 @@ const ResultsScreen = () => {
           <table className="tbl" style={{minWidth:920}}>
             <thead>
               <tr>
-                {COLUMNS.map(c => {
+                {columns.map(c => {
                   const sorted = c.key === sortKey;
                   return (
                     <th key={c.key} onClick={() => setSort(c.key)} className="sortable"
@@ -214,7 +242,7 @@ const ResultsScreen = () => {
             <tbody>
               {sortedRows.map((row, i) => (
                 <tr key={i} style={row.suppressed ? { background:"var(--neutral-50)" } : undefined}>
-                  {COLUMNS.map(c => {
+                  {columns.map(c => {
                     const v = row[c.key];
                     const cellSuppressed = row.suppressed && (c.group === "count" || c.group === "agg");
                     return (
