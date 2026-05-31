@@ -713,3 +713,88 @@ def fast_track_dpa_consent(*, household, source_system, actor: str = "") -> dict
                             object_key=doc_key)
         written += 1
     return {"written": written, "dpa_reference": dpa.reference}
+
+
+# ---------------------------------------------------------------------------
+# Intake-runtime consent (US-CONSENT-03) — gate at submit, capture at promote
+# ---------------------------------------------------------------------------
+
+# Purposes the broad single-field intake consent covers (matches the household
+# detail card's inference): registration + processing for eligibility + sharing
+# under a DSA. Granular opt-ins (payments, SMS, …) need an explicit per-purpose
+# toggle carried in payload["consent_block"].
+_INTAKE_GRANT_CODES = ("REGISTRATION", "ELIGIBILITY", "REFERRAL")
+_GRANT_TOKENS = {"1", "yes", "y", "true", "granted"}
+_REFUSE_TOKENS = {"2", "no", "n", "false", "refused"}
+
+
+def _intake_consent_decision(payload: dict):
+    """Return 'GRANTED' / 'REFUSED' / None for the registration consent carried
+    in an intake payload. Reads payload['consent'] (the legacy single field) or
+    payload['consent_block']['REGISTRATION'] (explicit per-purpose form)."""
+    v = (payload or {}).get("consent")
+    if v is not None and str(v).strip() != "":
+        s = str(v).strip().lower()
+        if s in _GRANT_TOKENS:
+            return ConsentState.GRANTED
+        if s in _REFUSE_TOKENS:
+            return ConsentState.REFUSED
+        return None
+    block = (payload or {}).get("consent_block") or {}
+    reg = block.get("REGISTRATION")
+    if reg in (ConsentState.GRANTED, ConsentState.REFUSED):
+        return reg
+    return None
+
+
+def intake_consent_refused(payload: dict) -> bool:
+    """True when the module is on AND the intake payload explicitly refuses
+    registration consent. Missing/blank consent is NOT a refusal (legacy
+    payloads proceed unchanged)."""
+    return module_enabled() and _intake_consent_decision(payload) == ConsentState.REFUSED
+
+
+@transaction.atomic
+def capture_intake_consent(*, household, payload: dict, actor: str = "",
+                           captured_via: str = "WEB_INTAKE") -> dict:
+    """At promotion, capture the head member's consent declared at intake.
+
+    - Explicit payload['consent_block'] (per-purpose) wins when present.
+    - Otherwise the single registration decision applies: GRANTED captures
+      REGISTRATION + the statement-covered purposes; REFUSED records a REFUSED
+      REGISTRATION.
+
+    Inert (no capture) when the module is off, the payload carries no consent
+    decision, or the household has no head — so existing promotion flows are
+    unchanged.
+    """
+    if not module_enabled():
+        return {"captured": 0}
+    decision = _intake_consent_decision(payload)
+    if decision is None:
+        return {"captured": 0}
+    head = household.head_member
+    if head is None:
+        return {"captured": 0}
+
+    block = (payload or {}).get("consent_block") or {}
+    if block:
+        items = [(c, s) for c, s in block.items()
+                 if s in (ConsentState.GRANTED, ConsentState.REFUSED)]
+    elif decision == ConsentState.REFUSED:
+        items = [("REGISTRATION", ConsentState.REFUSED)]
+    else:
+        items = [(c, ConsentState.GRANTED) for c in _INTAKE_GRANT_CODES]
+
+    captured = 0
+    for code, st in items:
+        try:
+            purpose = ConsentPurpose.objects.get(code=code)
+        except ConsentPurpose.DoesNotExist:
+            continue
+        capture_consent(
+            member=head, purpose=purpose, state=st,
+            captured_via=captured_via, capture_method="DIGITAL",
+            captured_by=actor or "intake", reason="intake_capture")
+        captured += 1
+    return {"captured": captured}

@@ -31,6 +31,9 @@ class SubmissionResult(models.TextChoices):
     NOT_AT_HOME = "not_at_home"
     PARTIAL = "partial"
     OTHER = "other"
+    # US-CONSENT-03 — registration consent refused at intake; the submission is
+    # recorded but never promoted (no registry Household/Member is created).
+    DECLINED_CONSENT = "declined_consent"
 
 
 class SubmissionState(models.TextChoices):

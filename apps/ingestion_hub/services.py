@@ -651,6 +651,14 @@ def promote_stage_record(
     consent_services.fast_track_dpa_consent(
         household=hh, source_system=_consent_src, actor=actor)
 
+    # US-CONSENT-03 — capture the head's consent declared at intake (walk-in /
+    # web / CAPI). Inert unless the payload carries a consent decision; the DPA
+    # fast-track above covers bulk DIH sources, this covers the field channels.
+    _src_kind = _consent_src.kind if _consent_src else ""
+    consent_services.capture_intake_consent(
+        household=hh, payload=payload, actor=actor,
+        captured_via="CAPI" if _src_kind == "capi_walkin" else "WEB_INTAKE")
+
     # US-S22-DE-04: detail-entity fanout. Population order per build
     # prompt §3: Household → Members → per-household details →
     # per-member details → repeat groups. PMT recompute (below) stays
