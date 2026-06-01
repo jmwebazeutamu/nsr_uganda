@@ -2497,3 +2497,76 @@ class TestResolveDdup:
                 stage, surviving_member_id=survivor.id,
                 actor="reviewer", reason="short",
             )
+
+
+# --- US-S11-044 — intra-household blocks surface in the summary -------------
+
+class TestIntraHouseholdSurfacedInSummary:
+    """Regression: a blocking intra-household rule (AC-HOH-EXISTS) must
+    surface in the stage's dqa_summary + status during triage, not only
+    abort at promote. Otherwise the Decision panel shows nothing, the
+    status reads as a promotable state, and the operator hits a surprise
+    block when they try to promote."""
+
+    def _seed_and_activate(self):
+        import importlib.util
+        from pathlib import Path
+
+        from django.utils import timezone
+
+        from apps.dqa.models import DqaRule, RuleStatus
+
+        seed_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "scripts" / "seed_dqa_intra_household_rules.py"
+        )
+        spec = importlib.util.spec_from_file_location(
+            "seed_dqa_intra_household_rules", seed_path,
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.seed()
+        DqaRule.objects.filter(
+            rule_id__startswith="AC-", status=RuleStatus.DRAFT,
+        ).update(
+            status=RuleStatus.ACTIVE, approved_by="test-approver",
+            approved_at=timezone.now(),
+        )
+
+    def _zero_head_payload(self, geo):
+        # Members present but NONE is head → AC-HOH-EXISTS (BLOCK). Roster
+        # size matches so AC-MEMBER-COUNT-MATCH stays clean; no dup nin_hash.
+        return {
+            "geographic": geo,
+            "urban_rural": "rural",
+            "address_narrative": "Headless homestead",
+            "gps_lat": "1.2", "gps_lng": "33.0", "gps_accuracy_m": "5.00",
+            "reported_household_size": 2,
+            "members": [
+                {"line_number": 1, "surname": "Okot", "first_name": "Mary",
+                 "sex": "F", "relationship_to_head": "spouse"},
+                {"line_number": 2, "surname": "Okot", "first_name": "Joy",
+                 "sex": "F", "relationship_to_head": "child",
+                 "mother_line_number": 1},
+            ],
+        }
+
+    def test_blocking_intra_household_rule_surfaces_in_summary_and_status(
+        self, connector, geo_codes, settings,
+    ):
+        settings.DQA_INTRA_HOUSEHOLD_ENABLED = True
+        self._seed_and_activate()
+        payload = self._zero_head_payload(geo_codes)
+
+        run = start_connector_run(connector)
+        landing = land_payload(run, payload)
+        stage = stage_from_landing(landing, canonical_payload=payload)
+        process_stage_record(stage, actor="reviewer-1")
+        stage.refresh_from_db()
+
+        # Status reflects the block instead of sitting at a promotable state.
+        assert stage.state == StageRecordState.QUALITY_FAILED
+        # The Decision panel reads dqa_summary.blocking_failures — the
+        # intra-household block must be there, not only raised at promote.
+        codes = {f["rule_id"] for f in stage.dqa_summary["blocking_failures"]}
+        assert "AC-HOH-EXISTS" in codes, codes
