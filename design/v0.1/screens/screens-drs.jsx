@@ -2025,12 +2025,18 @@ const ScopeStep = ({
    DSA card (shared)
    ============================================================ */
 const DSACard = ({ effectiveDsa = null } = {}) => {
-  // When the wizard knows which DSA it is filing under (operator
-  // pick OR partner-bound DSA), surface a thin live header. The
-  // illustrative usage/quota body stays placeholder — those metrics
-  // are not yet on the schema endpoint (await DRS-O-02).
+  // Surface the key terms of the DSA the operator is filing under so
+  // they know what they're bound to. Valid window + monthly row budget
+  // travel on the picker payload (build_schema.available_dsas). Live
+  // usage-against-budget is the DRS-O-02 follow-up.
   const ref = effectiveDsa?.reference;
   const partner = effectiveDsa?.partner_name;
+  const from = effectiveDsa?.effective_from;
+  const to = effectiveDsa?.effective_to;
+  const validWindow = (from || to) ? `${from || "—"} → ${to || "open-ended"}` : "—";
+  const budget = (effectiveDsa?.monthly_row_budget != null)
+    ? `${effectiveDsa.monthly_row_budget.toLocaleString()} rows / month`
+    : "—";
   return (
     <div className="card" style={{borderTop:'3px solid var(--accent-system)'}}>
       <div className="card-header" style={{padding:'12px 16px'}}>
@@ -2043,13 +2049,14 @@ const DSACard = ({ effectiveDsa = null } = {}) => {
       <div style={{padding:16}}>
         <div style={{display:'grid', gridTemplateColumns:'110px 1fr', rowGap:6, fontSize:13}}>
           <div className="muted">Partner</div><div>{partner || "—"}</div>
-          <div className="muted">Programme</div><div className="muted">(advertised on schema follow-up)</div>
-          <div className="muted">Valid window</div><div className="muted">(advertised on schema follow-up)</div>
-          <div className="muted">Row budget</div><div className="muted">(advertised on schema follow-up)</div>
+          <div className="muted">Valid window</div><div>{validWindow}</div>
+          <div className="muted">Row budget</div><div>{budget}</div>
         </div>
         <div className="t-cap mt-3">
-          DSA fine print — quotas, sensitivity caveats, retention
-          pledges — lands on the schema endpoint in a follow-up slice.
+          Your request is filed under this DSA. Requested fields and
+          geography must fall within its scope — out-of-scope fields are
+          disabled in the Field Selector. The row budget is the agreed
+          monthly cap; the operator enforces quotas and retention at delivery.
         </div>
       </div>
     </div>
