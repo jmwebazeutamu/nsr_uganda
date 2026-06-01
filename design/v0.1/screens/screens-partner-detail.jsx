@@ -315,10 +315,10 @@ const FactPD = ({ label, big, sub }) => (
    TABS list
    ============================================================ */
 // Tab counts now derive from the live `p` projection at render
-// time (lifted into the component below). The const PD_TABS array
+// time (lifted into the component below). The const PARTNER_TABS array
 // stays for the stepper's iteration order; counts are computed
 // inline.
-const PD_TABS = [
+const PARTNER_TABS = [
   { id: "over",  label: "Overview" },
   { id: "dsa",   label: "DSAs" },
   { id: "prog",  label: "Programmes" },
@@ -548,7 +548,7 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme, onNavigat
 
       {/* Tab bar */}
       <div role="tablist" style={{display:'flex', gap:0, borderBottom:'1px solid var(--neutral-300)', marginBottom:0, flexWrap:'wrap'}}>
-        {PD_TABS.map(t => {
+        {PARTNER_TABS.map(t => {
           const active = t.id === tab;
           return (
             <button key={t.id} role="tab" onClick={() => setTab(t.id)} style={{

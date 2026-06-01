@@ -233,7 +233,7 @@ const _LEGACY_PROG_DETAIL_UNUSED = {
   ],
 };
 
-const PD_TABS = [
+const PROGRAMME_TABS = [
   { id:"over",  label:"Overview" },
   { id:"elig",  label:"Eligibility" },
   { id:"sched", label:"Schedule & disbursement" },
@@ -442,7 +442,7 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
 
       {/* Tabs */}
       <div role="tablist" style={{display:'flex', gap:0, borderBottom:'1px solid var(--neutral-300)', marginBottom:0, flexWrap:'wrap'}}>
-        {PD_TABS.map(t => {
+        {PROGRAMME_TABS.map(t => {
           const active = t.id === tab;
           return (
             <button key={t.id} role="tab" onClick={() => setTab(t.id)} style={{
