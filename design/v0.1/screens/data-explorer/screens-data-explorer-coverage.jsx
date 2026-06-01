@@ -28,7 +28,10 @@ const { useState: useCov, useMemo: useCovM } = React;
    obvious. The map degrades to a clear message (table still renders)
    when d3-geo is missing or the fetch fails.
    ================================================================ */
-const _GB = "https://raw.githubusercontent.com/wmgeolab/geoBoundaries/main/releaseData/gbOpen/UGA";
+// geoBoundaries stores these via Git LFS — raw.githubusercontent returns
+// the LFS *pointer* (not JSON). The media.githubusercontent.com/media
+// endpoint serves the resolved LFS content with permissive CORS.
+const _GB = "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/main/releaseData/gbOpen/UGA";
 const _UGA_BOUNDARIES = {
   region:     `${_GB}/ADM1/geoBoundaries-UGA-ADM1_simplified.geojson`,
   sub_region: `${_GB}/ADM1/geoBoundaries-UGA-ADM1_simplified.geojson`,
