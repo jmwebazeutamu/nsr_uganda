@@ -639,19 +639,27 @@ const useDeCatalogue = () => {
           { loading: false, error: meta.error || pubMeta.error, isLive: false, isPublic: false }];
 };
 
+// Hook-shaped no-op for when api-client.jsx isn't loaded. Calling NO
+// hooks, it stays consistent across renders because window.useApi never
+// changes within a session (set once at load).
+const _noopUseApi = () => [null, { loading: false, error: null, refresh: () => {} }];
+
 const useDeDataset = (datasetId) => {
   /* Returns the dataset detail (with variables[]) for the given id.
      Cascade mirrors useDeCatalogue: gated dataset → public section →
      mock by id/code. */
-  const useApi = (typeof window !== "undefined" && window.useApi) || null;
+  const useApi = (typeof window !== "undefined" && window.useApi) || _noopUseApi;
   const mockDs = DE_DATASETS.find(d => d.id === datasetId || d.code === datasetId);
   const mockVars = DE_VARIABLES_BY_DATASET[mockDs?.id] || [];
-  if (!useApi || !datasetId) {
+  // Call useApi UNCONDITIONALLY (null url = no fetch). A falsy datasetId
+  // must not skip these hooks — toggling it (e.g. "" → real id after the
+  // builder's snap effect) would change hook order and crash React.
+  const [resp, meta] = useApi(datasetId ? `${_DE_API_PREFIX}/datasets/${datasetId}/` : null);
+  const [pubResp, pubMeta] = useApi(datasetId ? _DE_PUBLIC_URL : null);
+  if (!datasetId) {
     return [{ dataset: mockDs, variables: mockVars },
             { loading: false, error: null, isLive: false }];
   }
-  const [resp, meta] = useApi(`${_DE_API_PREFIX}/datasets/${datasetId}/`);
-  const [pubResp, pubMeta] = useApi(_DE_PUBLIC_URL);
   if (!meta.loading && !meta.error && resp) {
     return [{ dataset: _normaliseDataset(resp), variables: resp.variables || mockVars },
             { loading: false, error: null, isLive: true }];
@@ -701,9 +709,10 @@ const useDePublicCatalogue = () => {
 };
 
 const useDeCoverage = (datasetId) => {
-  const useApi = (typeof window !== "undefined" && window.useApi) || null;
-  if (!useApi || !datasetId) return [DE_COVERAGE_ROWS, { loading: false, error: null, isLive: false }];
-  const [resp, meta] = useApi(`${_DE_API_PREFIX}/coverage/${datasetId}/`);
+  const useApi = (typeof window !== "undefined" && window.useApi) || _noopUseApi;
+  // Unconditional hook call — see useDeDataset note on toggling datasetId.
+  const [resp, meta] = useApi(datasetId ? `${_DE_API_PREFIX}/coverage/${datasetId}/` : null);
+  if (!datasetId) return [DE_COVERAGE_ROWS, { loading: false, error: null, isLive: false }];
   const rows = (resp && (resp.rows || resp.results || resp)) || null;
   if (meta.loading) return [DE_COVERAGE_ROWS, { ...meta, isLive: false }];
   if (meta.error || !Array.isArray(rows) || rows.length === 0) {
@@ -713,9 +722,10 @@ const useDeCoverage = (datasetId) => {
 };
 
 const useDeSynthetic = (datasetId) => {
-  const useApi = (typeof window !== "undefined" && window.useApi) || null;
-  if (!useApi || !datasetId) return [DE_SYNTHETIC_ROWS, { loading: false, error: null, isLive: false }];
-  const [resp, meta] = useApi(`${_DE_API_PREFIX}/synthetic-sample/${datasetId}/`);
+  const useApi = (typeof window !== "undefined" && window.useApi) || _noopUseApi;
+  // Unconditional hook call — see useDeDataset note on toggling datasetId.
+  const [resp, meta] = useApi(datasetId ? `${_DE_API_PREFIX}/synthetic-sample/${datasetId}/` : null);
+  if (!datasetId) return [DE_SYNTHETIC_ROWS, { loading: false, error: null, isLive: false }];
   const rows = (resp && (resp.rows || resp.results || resp)) || null;
   if (meta.loading) return [DE_SYNTHETIC_ROWS, { ...meta, isLive: false }];
   if (meta.error || !Array.isArray(rows) || rows.length === 0) {
