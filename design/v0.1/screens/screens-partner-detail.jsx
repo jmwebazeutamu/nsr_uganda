@@ -456,6 +456,7 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme, onNavigat
 
       {/* Eyebrow + title */}
       <PageHeader
+        back={{ label: "Partners", onClick: onBack }}
         eyebrow={<>PARTNERS · <span className="t-mono">{p.code}</span> · §11.6</>}
         title={<>{p.name} <Chip tone="data" style={{marginLeft:8, verticalAlign:'2px'}}>{p.status}</Chip></>}
         sub={<>{p.type} · {p.sector} · lead {p.lead} · last activity {p.lastActivity}</>}
@@ -466,7 +467,6 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme, onNavigat
           // "Edit scope" affordance is meaningless — surface the
           // create-wizard path instead so the operator isn't dead-ended.
           return <>
-            <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to partners</button>
             <button className="btn"><Icon name="download" size={14}/> Export partner record</button>
             <button className="btn" onClick={() => setEditOpen(true)}
                     title="Edit name, type, status, contact info (PATCH /api/v1/partners/{id}/)">

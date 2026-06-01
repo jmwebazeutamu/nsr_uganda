@@ -579,11 +579,11 @@ const PmtConfigurationScreen = ({ onBack }) => {
   return (
     <div className="page">
       <PageHeader
+        back={{ label: "PMT Dashboard", onClick: onBack }}
         eyebrow="ADMIN · PMT · configuration"
         title="PMT Configuration"
         sub="Model registry — draft, calibrate, and activate PMT model versions. Activation requires dual approval (AC-PMT-MODEL-VERSION)."
         right={<>
-          <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to dashboard</button>
           <button className="btn btn-primary" onClick={createVersion} disabled={!!saving}>
             <Icon name="plus" size={14}/> New model version
           </button>

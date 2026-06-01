@@ -353,6 +353,7 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
   return (
     <div className="page">
       <PageHeader
+        back={{ label: "Programmes", onClick: onBack }}
         eyebrow={<>PROGRAMME · <span className="t-mono">{p.code}</span> · {p.partner}</>}
         title={<>{p.name} <span className="t-bodysm" style={{fontWeight:400, color:'var(--accent-data)', marginLeft:8}}>· {p.phase}</span></>}
         sub={<>{KIND_LABEL[p.kind]} · {UNIT_LABEL[p.unit]} · {p.cycle} · DSA <span className="t-mono">{p.dsa}</span></>}
@@ -378,7 +379,6 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
               <Icon name="trash" size={14}/> Delete draft
             </button>
           )}
-          <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to Programmes</button>
         </>}
       />
 

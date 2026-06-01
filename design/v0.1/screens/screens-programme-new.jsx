@@ -299,11 +299,11 @@ const ProgrammeRegistrationScreen = ({ onBack }) => {
     <div className="page" style={{paddingBottom:0}}>
 
       <PageHeader
+        back={{ label: "Partners", onClick: onBack }}
         eyebrow={<>PROGRAMMES · NEW · REF module · SAD §5.1</>}
         title="Register programme"
         sub={<>Define a new partner-run programme — its eligibility rules, disbursement schedule, and the lifecycle events the partner MIS will push back to NSR. Saved as a <strong>draft</strong> until signed off by the partner's Data Steward.</>}
         right={<>
-          <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back</button>
           <button className="btn" onClick={() => setToast("Draft saved · resume from Programmes tab any time")}><Icon name="save" size={14}/> Save draft</button>
           <button className="btn btn-ghost" onClick={onBack}><Icon name="x" size={14}/> Discard</button>
         </>}
