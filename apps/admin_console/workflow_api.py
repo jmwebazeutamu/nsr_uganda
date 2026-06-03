@@ -321,44 +321,30 @@ def dqa_rule_clone(request, rule_id: str):
 @api_view(["POST"])
 @permission_classes([IsAdminConsoleUser])
 def dqa_rule_preview(request, rule_id: str):
-    """Run the rule's expression against a sample.
+    """Run the rule's expression against a sample of registry households.
 
-    AC: persist only sample size + counts + a list of failing record
-    IDs. Never persist field values from the sample.
+    Sweep is deterministic (ORDER BY id LIMIT sample_size) so two
+    consecutive runs against the same snapshot return the same counts
+    and the same failing IDs. Service-layer caps the sample at 10,000
+    households and the persisted failures list at 10 IDs per the
+    DqaRulePreviewRun docstring (no PII persisted). Real evaluation
+    dispatches to the household evaluator for INTRA_HOUSEHOLD rules
+    and to the legacy engine for entity-filtered rules.
     """
+    from apps.dqa import services as dqa_services
+
     rule = _get_dqa_rule(rule_id)
     body = request.data or {}
     sample_size = int(body.get("sample_size", 100))
-    # Real evaluation lives in apps.dqa.engine — for the prototype we
-    # synthesize a deterministic dummy outcome. The contract test only
-    # cares that we write the run row + return the shape.
-    pass_count = max(0, sample_size - 3)
-    fail_count = sample_size - pass_count
-    run = DqaRulePreviewRun.objects.create(
-        rule=rule,
-        sample_size=sample_size,
-        pass_count=pass_count,
-        fail_count=fail_count,
-        executed_by=request.user.username,
-    )
-    emit_audit(
-        action="dqa.rule_version.preview",
-        entity_type="dqa.rule",
-        entity_id=rule.pk,
-        actor=request.user.username,
-        reason=f"rule_id={rule.rule_id} sample={sample_size}",
-        field_changes={
-            "sample_size": sample_size,
-            "fail_count": fail_count,
-            "pass_count": pass_count,
-        },
+    run = dqa_services.preview_rule(
+        rule, sample_size=sample_size, actor=request.user.username,
     )
     return Response({
         "preview_run_id": run.pk,
-        "sample_size": sample_size,
-        "pass_count": pass_count,
-        "fail_count": fail_count,
-        "sample_failures": [],
+        "sample_size": run.sample_size,
+        "pass_count": run.pass_count,
+        "fail_count": run.fail_count,
+        "sample_failures": list(run.sample_failed_record_ids or []),
     })
 
 
@@ -406,6 +392,18 @@ def dqa_rule_reject(request, rule_id: str, version: int):
     return Response(_dqa_row(rule, full=True))
 
 
+@api_view(["POST"])
+@permission_classes([IsAdminConsoleUser])
+def dqa_rule_retire(request, rule_id: str, version: int):
+    rule = _get_dqa_rule(rule_id, int(version))
+    from apps.dqa import services as dqa_services
+    try:
+        dqa_services.retire(rule, actor=request.user.username)
+    except dqa_services.ApprovalError as e:
+        return Response({"detail": str(e)}, status=drf_status.HTTP_409_CONFLICT)
+    return Response(_dqa_row(rule, full=True))
+
+
 # ───────────────────────────────────────────────────────────────
 # DDUP  (Cat 2.3)
 # ───────────────────────────────────────────────────────────────
@@ -424,11 +422,22 @@ def _ddup_version_row(v: DdupModelVersion) -> dict:
         "id": v.pk,
         "version": v.version,
         "status": v.status,
+        "description": v.description or "",
+        "author": v.author,
+        "effective_from": v.effective_from.isoformat() if v.effective_from else None,
         "threshold": _ddup_threshold(v),
         "config": v.config,
         "approved_by": v.approved_by,
         "approved_at": v.approved_at.isoformat() if v.approved_at else None,
         "created_at": v.created_at.isoformat(),
+        # Live-counted merge metrics — read via the DdupModelVersion
+        # @property surface (auto_merge_count / manual_merge_count /
+        # auto_reverse_rate) so the dashboard KPIs never drift from
+        # the audit reality. None on a fresh draft with zero auto
+        # merges; the front-end renders "—" in that case.
+        "auto_merge_count": v.auto_merge_count,
+        "manual_merge_count": v.manual_merge_count,
+        "auto_reverse_rate": v.auto_reverse_rate,
     }
 
 
@@ -676,21 +685,72 @@ def ddup_decision_un_merge(request, decision_id: int):
 @api_view(["GET"])
 @permission_classes([IsAdminConsoleUser])
 def ddup_queue_stats(request):
-    """Counters for the DDUP screen header."""
+    """Counters for the DDUP screen header + Decisions tab tiles.
+
+    Backs the live KPI strip — Pending pairs / Auto-merge today /
+    Active threshold / Auto-reverse rate — plus the Decisions-tab
+    summary (Merged this week / Rejected this week / On hold /
+    Cross-household pending).
+    """
     now = timezone.now()
-    cutoff = now - timedelta(days=30)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=7)
+    cutoff_30d = now - timedelta(days=30)
+
     by_status = dict(
         MatchPair.objects
         .values_list("status")
         .annotate(c=Count("id"))
         .values_list("status", "c")
     )
+
+    # The auto_merge_high_confidence_pairs service writes
+    # MergeDecision.reason starting with "auto-merge tier-3 …".
+    # Mirror that signal so today's auto vs. manual split matches the
+    # per-version computed counters.
+    auto_prefix = DdupModelVersion.AUTO_MERGE_REASON_PREFIX
+    today_merges = MergeDecision.objects.filter(
+        action="merge", decided_at__gte=today_start,
+    )
+    week_merges = MergeDecision.objects.filter(
+        action="merge", decided_at__gte=week_start,
+    )
+
+    active_version = (
+        DdupModelVersion.objects
+        .filter(status=DdupModelStatus.ACTIVE)
+        .order_by("-version")
+        .first()
+    )
+
     return Response({
+        # legacy fields — kept for any consumer that already reads them
         "pairs_by_status": by_status,
         "merges_30d": MergeDecision.objects.filter(
-            decided_at__gte=cutoff,
+            decided_at__gte=cutoff_30d,
         ).count(),
         "reversible_now": MergeDecision.objects.filter(
             reverse_window_until__gt=now,
         ).count(),
+        # New KPI surface
+        "pending": by_status.get(PairStatus.PENDING, 0),
+        "on_hold": by_status.get(PairStatus.ON_HOLD, 0),
+        "cross_household": by_status.get(PairStatus.CROSS_HOUSEHOLD, 0),
+        "auto_merged_today": today_merges.filter(
+            reason__startswith=auto_prefix,
+        ).count(),
+        "manual_merged_today": today_merges.exclude(
+            reason__startswith=auto_prefix,
+        ).count(),
+        "merged_this_week": week_merges.count(),
+        "rejected_this_week": MergeDecision.objects.filter(
+            action="reject", decided_at__gte=week_start,
+        ).count(),
+        "active_threshold": (
+            _ddup_threshold(active_version) if active_version else None
+        ),
+        "active_version": active_version.version if active_version else None,
+        "active_auto_reverse_rate": (
+            active_version.auto_reverse_rate if active_version else None
+        ),
     })

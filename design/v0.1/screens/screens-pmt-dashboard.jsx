@@ -562,14 +562,31 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
 
         {/* Threshold drift compact */}
         <div className="card" style={{ padding: 14, borderLeft: '3px solid var(--accent-update)' }}>
-          <div className="t-cap" style={{ color: 'var(--accent-update)', fontWeight: 600 }}>EMPIRICAL THRESHOLDS · v1</div>
+          <div className="t-cap" style={{ color: 'var(--accent-update)', fontWeight: 600 }}>
+            EMPIRICAL THRESHOLDS · v{PMT_ACTIVE.version}
+          </div>
+          <div className="t-cap" style={{ marginTop: 2 }}>
+            Score upper bound for each band. A household lands in the band whose threshold its
+            PMT score is ≤.
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
-            {Object.entries(PMT_ACTIVE.thresholdsLatest).map(([b, t]) => (
-              <div key={b}>
-                <BandChip band={b}/>
-                <div className="t-num" style={{ fontSize: 18, fontWeight: 600, marginTop: 4 }}>≤ {t.toFixed(3)}</div>
-              </div>
-            ))}
+            {/* Iterate in severity order, not the alphabetical key
+                order PMTBandThreshold ORM .order_by('band_name')
+                returns; otherwise the card renders extreme_poverty →
+                not_poor → poverty → vulnerable, which reads as random
+                next to the BandChip colours. */}
+            {["extreme_poverty", "poverty", "vulnerable", "not_poor"].map(b => {
+              const t = PMT_ACTIVE.thresholdsLatest?.[b];
+              if (t == null) return null;
+              return (
+                <div key={b}>
+                  <BandChip band={b}/>
+                  <div className="t-num" style={{ fontSize: 18, fontWeight: 600, marginTop: 4 }}>
+                    ≤ {Number(t).toFixed(3)}
+                  </div>
+                </div>
+              );
+            })}
           </div>
           <div className="t-cap mt-3">
             Computed {PMT_ACTIVE.thresholdsComputedAt}<br/>
@@ -629,9 +646,16 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
               <div className="t-cap muted">No sub-region snapshots yet.</div>
             )}
             {PMT_GEO.map(g => {
-              const tone = g.rate >= 40 ? 'var(--accent-danger)'
-                : g.rate >= 25 ? 'var(--accent-quality)'
-                : g.rate >= 15 ? 'var(--accent-update)'
+              // Tier the bar tone against the band semantics rather
+              // than against arbitrary percentage cuts: red when most
+              // of the sub-region is poor, orange when ≥ half is poor
+              // (this catches the band the legend calls Poverty), blue
+              // for a meaningful minority, green for the rest. The
+              // previous cuts (40/25/15) hid the orange band entirely
+              // when small sub-region samples produced bimodal rates.
+              const tone = g.rate >= 75 ? 'var(--accent-danger)'
+                : g.rate >= 50 ? 'var(--accent-quality)'
+                : g.rate >= 25 ? 'var(--accent-update)'
                 : 'var(--accent-data)';
               const maxRate = Math.max(1, ...PMT_GEO.map(x => x.rate));
               return (

@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, PageHeader, KPI, useApi */
+/* global React, Icon, Chip, PageHeader, KPI, Modal, useApi */
 // NSR MIS — Admin · Workflow · DQA Rules
 // =========================================================
 // Versioned JSON-DSL rule engine. Sprint 0 item 4.
@@ -113,11 +113,28 @@ const DQA_PREVIEW_RUNS = [
 
 const AdminDqaRulesScreen = () => {
   // Live overlay: fetch once on mount, fall back to mocks on error.
-  const [resp] = (typeof useApi === "function")
+  // `refresh` is forwarded into DqaRuleDetail so the lifecycle
+  // buttons (submit / sign / reject) can re-fetch the list after a
+  // successful state transition.
+  const [resp, apiMeta] = (typeof useApi === "function")
     ? useApi("/api/v1/admin/workflow/dqa/rules/")
-    : [null];
+    : [null, { refresh: () => {} }];
+  const refresh = apiMeta?.refresh || (() => {});
   // eslint-disable-next-line no-shadow
   const DQA_RULES_LIVE = _projectDqaRules(resp && resp.results) || DQA_RULES;
+  // Tracks which rules actually exist server-side. When the API
+  // response is in, anything outside this set is mock-only — clicking
+  // its lifecycle buttons would 404 against /api/v1/admin/workflow/...
+  // Used downstream to disable Submit/Clone/Approve/Reject/Retire and
+  // surface an explanatory banner instead of letting the 404 fire.
+  const liveRuleIds = useMemoDQA(() => {
+    const ids = new Set();
+    if (resp && Array.isArray(resp.results)) {
+      for (const r of resp.results) ids.add(r.rule_id);
+    }
+    return ids;
+  }, [resp]);
+  const apiLoaded = !!(resp && Array.isArray(resp.results));
 
   const [q, setQ] = useStateDQA("");
   const [severity, setSeverity] = useStateDQA("");
@@ -141,7 +158,10 @@ const AdminDqaRulesScreen = () => {
     const rule = DQA_RULES_LIVE.find(r => r.ruleId === selected)
       || DQA_RULES.find(r => r.ruleId === selected);
     if (!rule) { setSelected(null); return null; }
-    return <DqaRuleDetail rule={rule} onBack={() => setSelected(null)}/>;
+    return <DqaRuleDetail rule={rule}
+      onBack={() => setSelected(null)}
+      onRefresh={refresh}
+      isMockOnly={apiLoaded && !liveRuleIds.has(rule.ruleId)}/>;
   }
 
   return (
@@ -240,10 +260,226 @@ const AdminDqaRulesScreen = () => {
 /* ===========================================================
    DQA Rule Detail
    =========================================================== */
-const DqaRuleDetail = ({ rule, onBack }) => {
-  const [tab, setTab] = useStateDQA("expression");
-  const previewRuns = DQA_PREVIEW_RUNS.filter(p => p.ruleId === rule.ruleId);
+// Lifecycle modal config — one object per action so the same Modal
+// renders the right title, body copy, and OK label. `text` modals
+// require non-blank input; `confirm` modals just need OK to fire.
+const _LIFECYCLE_MODAL = {
+  sign: {
+    title: "Approve & activate rule",
+    intent: "approve",
+    okLabel: "Approve & activate",
+    okTone: "success",
+    field: { label: "Approval note", placeholder: "Why this rule is fit to evaluate every intake. Logged to the audit chain." },
+    bodyField: "note",
+  },
+  reject: {
+    title: "Reject this draft",
+    intent: "reject",
+    okLabel: "Reject",
+    okTone: "danger",
+    field: { label: "Rejection reason", placeholder: "What the author needs to fix before resubmitting. Logged to the audit chain." },
+    bodyField: "reason",
+  },
+  retire: {
+    title: "Retire this rule",
+    intent: "retire",
+    okLabel: "Retire rule",
+    okTone: "danger",
+    body: (rule) => (
+      <>
+        <p style={{margin:"0 0 8px"}}>
+          <strong>{rule.ruleId}</strong> v{rule.latestVersion} will stop evaluating
+          immediately. Live intake submissions and UPD reviews bypass the rule from
+          the next event.
+        </p>
+        <p className="t-bodysm muted" style={{margin:0}}>
+          A successor version can be cloned and approved separately. The audit
+          chain keeps every retired version.
+        </p>
+      </>
+    ),
+  },
+};
+
+const DqaRuleDetail = ({ rule, onBack, onRefresh, isMockOnly = false }) => {
+  const [tab, setTab] = useStateDQA("preview");
+  const [busy, setBusy] = useStateDQA("");
+  const [toast, setToast] = useStateDQA("");
+  const [err, setErr] = useStateDQA("");
+  // In-app lifecycle modal state. `action` keys into _LIFECYCLE_MODAL;
+  // `input` is the note/reason text (unused for retire/confirm).
+  const [modalAction, setModalAction] = useStateDQA("");
+  const [modalInput, setModalInput] = useStateDQA("");
+  const [modalErr, setModalErr] = useStateDQA("");
+  // Live preview run rows — populated by Run preview button POSTs in
+  // this session. Newest first so the latest sweep is the top row.
+  // Combined with the static DQA_PREVIEW_RUNS mock for display.
+  const [previewLive, setPreviewLive] = useStateDQA([]);
+  const [previewBusy, setPreviewBusy] = useStateDQA(false);
+  const previewMock = DQA_PREVIEW_RUNS.filter(p => p.ruleId === rule.ruleId);
+  const previewRuns = [...previewLive, ...previewMock];
   const isEditable = rule.status === "draft";
+
+  // Run preview — POST to /api/v1/admin/workflow/dqa/rules/{id}/preview/
+  // and push the response into the live runs list. Sample size is
+  // 1000 by default; could be promoted to a modal selector later if
+  // operators want fine-grained control.
+  const PREVIEW_SAMPLE_SIZE = 1000;
+  const onRunPreview = async () => {
+    setPreviewBusy(true);
+    setErr("");
+    try {
+      const res = await window.nsrApi.post(
+        `/api/v1/admin/workflow/dqa/rules/${encodeURIComponent(rule.ruleId)}/preview/`,
+        { sample_size: PREVIEW_SAMPLE_SIZE },
+      );
+      setPreviewLive(prev => [{
+        ruleId: rule.ruleId,
+        version: rule.latestVersion,
+        sample: res.sample_size,
+        passCount: res.pass_count,
+        failCount: res.fail_count,
+        executedAt: new Date().toLocaleString("en-GB", {
+          day: "2-digit", month: "short", year: "numeric",
+          hour: "2-digit", minute: "2-digit",
+        }),
+        executedBy: "you",
+        failingIds: res.sample_failures || [],
+      }, ...prev]);
+      const failPct = res.sample_size > 0
+        ? ((res.fail_count / res.sample_size) * 100).toFixed(1)
+        : "0.0";
+      setToast(`Preview swept ${res.sample_size.toLocaleString()} households — ${failPct}% fail rate`);
+      setTimeout(() => setToast(""), 4500);
+    } catch (e) {
+      const detail = e?.body?.detail || e?.message || String(e);
+      setErr(`Run preview failed: ${detail}`);
+    } finally {
+      setPreviewBusy(false);
+    }
+  };
+
+  // Lifecycle URL builder — admin-console workflow API takes
+  // (rule_id, version) as URL params and infers the actor from the
+  // session user. Submit, sign (approve+activate), reject all share
+  // the same shape and the same /api/v1/admin/workflow/dqa/rules/
+  // mount.
+  const _lifecycleUrl = (action) =>
+    `/api/v1/admin/workflow/dqa/rules/${encodeURIComponent(rule.ruleId)}`
+    + `/v${rule.latestVersion}/${action}/`;
+
+  // Generic POST that handles busy + error + toast + parent refresh.
+  // Returns true on success, false on failure so the caller (e.g. the
+  // modal Confirm path) can decide whether to dismiss UI on the same
+  // tick — React's setState batching means reading `err` here would
+  // see the previous render's value.
+  const _fireAction = async (action, label, body = {}) => {
+    setBusy(action);
+    setErr("");
+    try {
+      await window.nsrApi.post(_lifecycleUrl(action), body);
+      setToast(`${label} — ${rule.ruleId} v${rule.latestVersion}`);
+      setTimeout(() => setToast(""), 3500);
+      onRefresh?.();
+      return true;
+    } catch (e) {
+      const detail = e?.body?.detail || e?.message || String(e);
+      setErr(`${label} failed: ${detail}`);
+      return false;
+    } finally {
+      setBusy("");
+    }
+  };
+
+  // Clone — produces a new DRAFT version (v+1) from the active rule.
+  // After a successful clone the parent list refresh picks up the new
+  // row; the screen returns to the rules list (the new draft now
+  // shows under the status filter and can be opened to edit).
+  const onClone = async () => {
+    setBusy("clone");
+    setErr("");
+    try {
+      const draft = await window.nsrApi.post(
+        `/api/v1/admin/workflow/dqa/rules/${encodeURIComponent(rule.ruleId)}/clone/`,
+      );
+      setToast(`Cloned to v${draft.version} (draft) — open it to edit severity, then submit for approval`);
+      setTimeout(() => setToast(""), 4500);
+      onRefresh?.();
+      onBack?.();
+    } catch (e) {
+      const detail = e?.body?.detail || e?.message || String(e);
+      setErr(`Clone failed: ${detail}`);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  // Severity edit — PATCH the rule with the new severity. Backend
+  // returns 409 unless the rule is in DRAFT; the dropdown only renders
+  // for drafts, but we still surface the server error if state drifts.
+  // Optimistically updates the displayed chip via parent refresh.
+  const onChangeSeverity = async (nextSeverity) => {
+    if (!nextSeverity || nextSeverity === rule.severity) return;
+    setBusy("severity");
+    setErr("");
+    try {
+      await window.nsrApi.patch(
+        `/api/v1/admin/workflow/dqa/rules/${encodeURIComponent(rule.ruleId)}/`,
+        { severity: nextSeverity },
+      );
+      setToast(`Severity → ${DQA_SEVERITY_LABEL[nextSeverity] || nextSeverity}`);
+      setTimeout(() => setToast(""), 3500);
+      onRefresh?.();
+    } catch (e) {
+      const detail = e?.body?.detail || e?.message || String(e);
+      setErr(`Severity change failed: ${detail}`);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  // Submit needs no input — fire directly. The rest open the in-app
+  // Modal which collects note/reason or just confirms.
+  const onSubmit  = () => _fireAction("submit", "Submitted for approval");
+  const openModal = (action) => {
+    setModalAction(action);
+    setModalInput("");
+    setModalErr("");
+  };
+  const closeModal = () => {
+    if (busy) return;
+    setModalAction("");
+    setModalInput("");
+    setModalErr("");
+  };
+
+  const onApprove = () => openModal("sign");
+  const onReject  = () => openModal("reject");
+  const onRetire  = () => openModal("retire");
+
+  // Modal OK click — validate input (if the action collects one) and
+  // fire the lifecycle POST. Wraps _fireAction so the modal closes
+  // automatically on success; errors surface as the inline banner.
+  const modalConfig = _LIFECYCLE_MODAL[modalAction] || null;
+  const confirmModal = async () => {
+    if (!modalConfig) return;
+    let body = {};
+    if (modalConfig.bodyField) {
+      if (!modalInput.trim()) {
+        setModalErr(`${modalConfig.field.label} is required.`);
+        return;
+      }
+      body = { [modalConfig.bodyField]: modalInput.trim() };
+    }
+    const successLabel = ({
+      sign: "Approved & activated",
+      reject: "Rejected",
+      retire: "Retired",
+    })[modalAction];
+    setModalErr("");
+    const ok = await _fireAction(modalAction, successLabel, body);
+    if (ok) closeModal();
+  };
 
   // Sample DSL — for AC-PMT-OUTLIER-DETECTION
   const sampleExpression = {
@@ -255,25 +491,116 @@ const DqaRuleDetail = ({ rule, onBack }) => {
   return (
     <div className="page">
       <PageHeader
+        back={{ label: "DQA rules", onClick: onBack }}
         eyebrow={<>ADMIN · WORKFLOW · DQA · <span className="t-mono">{rule.ruleId}</span> · v{rule.latestVersion}</>}
         title={(rule.description || rule.ruleId).slice(0, 60) + ((rule.description || "").length > 60 ? '…' : '')}
         sub={<>Author <strong>{rule.author}</strong> {rule.approvedBy && <>· Approved by <strong>{rule.approvedBy}</strong> on {rule.approvedAt}</>}</>}
         right={<>
-          <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to rules</button>
-          {rule.status === "active" && <button className="btn"><Icon name="copy" size={14}/> Clone as draft</button>}
-          {isEditable && <button className="btn btn-primary"><Icon name="upload" size={14}/> Submit for approval</button>}
+          {rule.status === "active" && (
+            <button className="btn" disabled={!!busy || isMockOnly}
+              title={isMockOnly ? "Mock-only rule — not in the live database" : ""}
+              onClick={onClone}>
+              <Icon name="copy" size={14}/>
+              {busy === "clone" ? "Cloning…" : "Clone as draft"}
+            </button>
+          )}
+          {rule.status === "active" && (
+            <button className="btn" disabled={!!busy || isMockOnly}
+              title={isMockOnly ? "Mock-only rule — not in the live database" : ""}
+              onClick={onRetire}>
+              <Icon name="archive" size={14}/>
+              {busy === "retire" ? "Retiring…" : "Retire"}
+            </button>
+          )}
+          {isEditable && (
+            <button className="btn btn-primary" disabled={!!busy || isMockOnly}
+              title={isMockOnly ? "Mock-only rule — not in the live database" : ""}
+              onClick={onSubmit}>
+              <Icon name="upload" size={14}/>
+              {busy === "submit" ? "Submitting…" : "Submit for approval"}
+            </button>
+          )}
           {rule.status === "pending_approval" && <>
-            <button className="btn"><Icon name="x" size={14}/> Reject</button>
-            <button className="btn btn-primary"><Icon name="check" size={14}/> Approve & activate</button>
+            <button className="btn" disabled={!!busy || isMockOnly}
+              title={isMockOnly ? "Mock-only rule — not in the live database" : ""}
+              onClick={onReject}>
+              <Icon name="x" size={14}/>
+              {busy === "reject" ? "Rejecting…" : "Reject"}
+            </button>
+            <button className="btn btn-primary" disabled={!!busy || isMockOnly}
+              title={isMockOnly ? "Mock-only rule — not in the live database" : ""}
+              onClick={onApprove}>
+              <Icon name="check" size={14}/>
+              {busy === "sign" ? "Approving…" : "Approve & activate"}
+            </button>
           </>}
         </>}
       />
+
+      {isMockOnly && (
+        <div className="card" role="status" style={{
+          padding:"10px 14px", marginBottom:12,
+          borderLeft:"3px solid var(--accent-quality)",
+          background:"var(--accent-quality-bg)", color:"var(--accent-quality)",
+          display:"flex", alignItems:"center", gap:10,
+        }}>
+          <Icon name="info" size={16}/>
+          <div style={{flex:1}}>
+            <strong>Design-preview rule.</strong>{" "}
+            <span style={{color:"var(--neutral-700)"}}>
+              <span className="t-mono">{rule.ruleId}</span> isn't in the live database, so lifecycle
+              actions are disabled. Author it via the Rule Editor (or seed it) to make it real.
+            </span>
+          </div>
+        </div>
+      )}
+      {err && (
+        <div className="card" role="alert" style={{
+          padding:"10px 14px", marginBottom:12,
+          borderLeft:"3px solid var(--accent-danger)",
+          background:"var(--accent-danger-bg)", color:"var(--accent-danger)",
+          display:"flex", alignItems:"center", gap:10,
+        }}>
+          <Icon name="alert" size={16}/>
+          <div style={{flex:1}}>{err}</div>
+          <button className="icon-btn" onClick={() => setErr("")} aria-label="Dismiss">
+            <Icon name="x" size={14}/>
+          </button>
+        </div>
+      )}
+      {toast && (
+        <div style={{
+          position:"fixed", bottom:24, right:24, zIndex:50,
+          padding:"12px 16px", background:"var(--primary-900)", color:"white",
+          borderRadius:8, boxShadow:"0 4px 14px rgba(0,0,0,0.15)",
+          fontSize:13,
+        }}>
+          {toast}
+        </div>
+      )}
 
       <div className="card" style={{ padding: 0 }}>
         <div style={{ padding: '16px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 16 }}>
           <div>
             <div className="t-cap">Severity</div>
-            <Chip tone={DQA_SEVERITY_TONE[rule.severity]} style={{ marginTop: 4 }}>{DQA_SEVERITY_LABEL[rule.severity] || rule.severity}</Chip>
+            {isEditable && !isMockOnly ? (
+              <select
+                className="field-select"
+                style={{ marginTop: 4, height: 32, width: "100%", maxWidth: 200 }}
+                value={rule.severity}
+                disabled={busy === "severity"}
+                onChange={(e) => onChangeSeverity(e.target.value)}
+                title="Editable while the rule is in DRAFT. Activation goes through dual approval.">
+                <option value="block">Block — refuses promotion</option>
+                <option value="reject_with_override">Reject (override) — overridable</option>
+                <option value="flag">Flag — opens UPD review case</option>
+                <option value="info">Info — logged only</option>
+              </select>
+            ) : (
+              <Chip tone={DQA_SEVERITY_TONE[rule.severity]} style={{ marginTop: 4 }}>
+                {DQA_SEVERITY_LABEL[rule.severity] || rule.severity}
+              </Chip>
+            )}
           </div>
           <div>
             <div className="t-cap">Status</div>
@@ -293,7 +620,6 @@ const DqaRuleDetail = ({ rule, onBack }) => {
 
       <div role="tablist" style={{ display: 'flex', borderBottom: '1px solid var(--neutral-300)', marginTop: 16, flexWrap: 'wrap' }}>
         {[
-          { id: "expression",      label: "Expression (DSL)" },
           // US-S11-044 — only show the intra-household tab when the
           // rule actually carries the category. Legacy rules without
           // category data hide it cleanly.
@@ -303,6 +629,7 @@ const DqaRuleDetail = ({ rule, onBack }) => {
           { id: "preview",    label: "Preview & sample failures" },
           { id: "lifecycle",  label: "Lifecycle & approval" },
           { id: "history",    label: "Version history" },
+          { id: "expression", label: "Expression (DSL)" },
         ].map(t => {
           const active = t.id === tab;
           return (
@@ -424,9 +751,15 @@ const DqaRuleDetail = ({ rule, onBack }) => {
         <div className="card" style={{ borderTopLeftRadius: 0, borderTopRightRadius: 0, padding: 0 }}>
           <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--neutral-200)', display: 'flex', alignItems: 'center', gap: 10 }}>
             <strong className="t-bodysm">Preview runs</strong>
-            <span className="t-cap">audit log — record values are never persisted, only IDs</span>
+            <span className="t-cap">Sweeps {PREVIEW_SAMPLE_SIZE.toLocaleString()} registry households · audit log keeps IDs only, never values</span>
             <div style={{ flex: 1 }}/>
-            <button className="btn btn-sm btn-primary"><Icon name="play" size={12}/> Run preview</button>
+            <button
+              className="btn btn-sm btn-primary"
+              disabled={previewBusy}
+              onClick={onRunPreview}>
+              <Icon name="play" size={12}/>
+              {previewBusy ? "Sweeping…" : "Run preview"}
+            </button>
           </div>
           {previewRuns.length === 0
             ? <div style={{ padding: 32, textAlign: 'center', color: 'var(--neutral-500)' }}>
@@ -515,6 +848,65 @@ const DqaRuleDetail = ({ rule, onBack }) => {
           </table>
         </div>
       )}
+
+      {/* Lifecycle modal — replaces the browser-native window.prompt /
+          window.confirm dialogs ("localhost:8000 says…") with an
+          in-app surface that owns its own title, body copy, and OK
+          tone per action. */}
+      <Modal
+        open={!!modalConfig}
+        onClose={closeModal}
+        title={modalConfig?.title || ""}
+        width={520}
+        footer={modalConfig && (
+          <>
+            <button className="btn" disabled={!!busy} onClick={closeModal}>Cancel</button>
+            <button
+              className={`btn ${modalConfig.okTone === "success" ? "btn-success" : modalConfig.okTone === "danger" ? "btn-danger" : "btn-primary"}`}
+              disabled={!!busy}
+              onClick={confirmModal}>
+              <Icon name={modalConfig.intent === "approve" ? "check" : modalConfig.intent === "reject" ? "x" : "archive"} size={14}/>
+              {busy ? "Working…" : modalConfig.okLabel}
+            </button>
+          </>
+        )}>
+        {modalConfig && (
+          <div>
+            <div className="t-cap mb-2" style={{color:"var(--neutral-700)"}}>
+              <span className="t-mono">{rule.ruleId}</span> · v{rule.latestVersion}
+            </div>
+            {modalConfig.body
+              ? <div className="t-bodysm">{modalConfig.body(rule)}</div>
+              : (
+                <div className="field">
+                  <label className="field-label">
+                    {modalConfig.field.label} <span className="req">*</span>
+                  </label>
+                  <textarea
+                    className="field-textarea"
+                    rows={4}
+                    autoFocus
+                    value={modalInput}
+                    onChange={(e) => setModalInput(e.target.value)}
+                    placeholder={modalConfig.field.placeholder}/>
+                  <span className="field-help">
+                    <Icon name="shield" size={11}/> Written verbatim to the rule's
+                    audit chain (AC-AUDIT-EVENT). Visible to every reviewer.
+                  </span>
+                </div>
+              )}
+            {modalErr && (
+              <div className="t-bodysm" style={{
+                marginTop:10, padding:"8px 10px",
+                borderLeft:"3px solid var(--accent-danger)",
+                background:"var(--accent-danger-bg)", color:"var(--accent-danger)",
+              }}>
+                {modalErr}
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

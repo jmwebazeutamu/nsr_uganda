@@ -277,6 +277,25 @@ def dqa_blocking_name_rule(db):
     )
 
 
+@pytest.fixture
+def dqa_flag_first_name_rule(db):
+    """Active FLAG (new-vocabulary) DQA rule on a member field.
+    Used to verify the legacy ingest path emits a
+    `dqa.household.flag` AuditEvent the way the intra-household gate
+    does — the gap that previously left FLAG events invisible to the
+    UPD reactor when the rule was authored under the legacy DSL."""
+    return DqaRule.objects.create(
+        rule_id="TEST-MEMBER-FIRSTNAME-FLAG",
+        version=1, description="first_name should be present",
+        severity=Severity.FLAG,
+        applicability_filter={"entity": "member"},
+        expression={"field": "first_name", "op": "not_null"},
+        error_message_template="first_name missing",
+        status=RuleStatus.ACTIVE,
+        author="test-author", approved_by="test-approver",
+    )
+
+
 def _make_stage(connector, geo_codes, *, payload=None):
     run = start_connector_run(connector)
     pl = payload or _payload(geo_codes)
@@ -317,6 +336,49 @@ class TestProcessOrchestrator:
         # record_id = "{provisional_registry_id}:{line_number}"
         assert row.record_id == f"{stage.provisional_registry_id}:1"
         assert row.severity == "blocking"
+
+    def test_dqa_flag_emits_household_flag_audit_event(
+        self, connector, geo_codes, dqa_flag_first_name_rule,
+    ):
+        """A FLAG-severity failure at DIH ingest emits one
+        `dqa.household.flag` AuditEvent with the deduplicated rule
+        codes — the legacy path now mirrors what
+        apps.dqa.pipeline.run_household_gate already does for
+        INTRA_HOUSEHOLD rules so the UPD reactor consumes both."""
+        from apps.security.models import AuditEvent
+        payload = _payload(geo_codes)
+        # Both members fail the first_name FLAG rule.
+        payload["members"][0]["first_name"] = ""
+        payload["members"][1]["first_name"] = ""
+        stage = _make_stage(connector, geo_codes, payload=payload)
+        before = AuditEvent.objects.filter(action="dqa.household.flag").count()
+        process_stage_record(stage, actor="orch")
+        after = AuditEvent.objects.filter(action="dqa.household.flag").count()
+        assert after == before + 1
+        ev = (AuditEvent.objects
+              .filter(action="dqa.household.flag", entity_id=stage.provisional_registry_id)
+              .latest("occurred_at"))
+        assert ev.entity_type == "household"
+        codes = (ev.field_changes or {}).get("flagged_codes")
+        assert codes == [dqa_flag_first_name_rule.rule_id]
+        assert (ev.field_changes or {}).get("stage") == "dih_ingest"
+
+    def test_dqa_flag_populates_warnings_summary(
+        self, connector, geo_codes, dqa_flag_first_name_rule,
+    ):
+        """New-vocabulary FLAG rules show up in the StageRecord's
+        dqa_summary under both `warnings` (legacy key) and `flagged`
+        (new key). Previously the legacy bucket only matched exact
+        string `warning`, so FLAG rules silently disappeared."""
+        payload = _payload(geo_codes)
+        payload["members"][0]["first_name"] = ""
+        stage = _make_stage(connector, geo_codes, payload=payload)
+        process_stage_record(stage, actor="orch")
+        stage.refresh_from_db()
+        warnings = stage.dqa_summary.get("warnings") or []
+        flagged = stage.dqa_summary.get("flagged") or []
+        assert any(w.get("rule_id") == dqa_flag_first_name_rule.rule_id for w in warnings)
+        assert any(f.get("rule_id") == dqa_flag_first_name_rule.rule_id for f in flagged)
 
     def test_dqa_multiple_failures_each_get_a_row(
         self, connector, geo_codes, dqa_blocking_name_rule,
