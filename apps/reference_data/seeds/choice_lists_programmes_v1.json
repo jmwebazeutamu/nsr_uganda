@@ -16,10 +16,10 @@
     { "code": "one_off",     "label": "One-off" }
   ],
   "programme_pmt_band": [
-    { "code": "poorest_20", "label": "Poorest 20%" },
-    { "code": "poorest_40", "label": "Poorest 40%" },
-    { "code": "middle_40",  "label": "Middle 40%" },
-    { "code": "top_20",     "label": "Top 20%" }
+    { "code": "poorest_20", "label": "Extreme poverty" },
+    { "code": "poorest_40", "label": "Poverty" },
+    { "code": "middle_40",  "label": "Vulnerable" },
+    { "code": "top_20",     "label": "Not poor" }
   ],
   "programme_exit_reason": [
     { "code": "10", "label": "Graduated" },

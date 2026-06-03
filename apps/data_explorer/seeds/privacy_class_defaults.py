@@ -92,7 +92,7 @@ def classify(category: str, field: str) -> str:
     return DEFAULT_CLASS
 
 
-# Dataset-level defaults — each catalog category becomes a Dataset row
+# Dataset-level defaults — each explorer dataset becomes a Dataset row
 # with its own privacy class + matview + refresh cadence.
 DATASET_DEFAULTS: list[dict] = [
     {
@@ -168,6 +168,76 @@ DATASET_DEFAULTS: list[dict] = [
         "geographic_floor": "sub_region",
     },
 ]
+
+
+def _var(code: str, label: str, data_type: str) -> dict:
+    return {
+        "code": code,
+        "label": label,
+        "source_field": code,
+        "data_type": data_type,
+    }
+
+
+# Live aggregate-variable defaults keyed by explorer dataset code.
+# These point at the matview columns, not the questionnaire fields.
+DATASET_VARIABLE_DEFAULTS: dict[str, list[dict]] = {
+    "household_core": [
+        _var("district_code", "District", "geo"),
+        _var("sub_county_code", "Sub-county", "geo"),
+        _var("head_sex_code", "Head sex", "select"),
+        _var("head_age_band", "Head age band", "select"),
+        _var("household_count", "Household count", "number"),
+        _var("member_count", "Member count", "number"),
+    ],
+    "household_pmt": [
+        _var("district_code", "District", "geo"),
+        _var("sub_county_code", "Sub-county", "geo"),
+        _var("pmt_band", "PMT band", "select"),
+        _var("household_count", "Household count", "number"),
+    ],
+    "member_education": [
+        _var("district_code", "District", "geo"),
+        _var("sub_county_code", "Sub-county", "geo"),
+        _var("sex_code", "Sex", "select"),
+        _var("age_band", "Age band", "select"),
+        _var("attendance_status", "Attendance status", "select"),
+        _var("member_count", "Member count", "number"),
+    ],
+    "member_employment": [
+        _var("district_code", "District", "geo"),
+        _var("sub_county_code", "Sub-county", "geo"),
+        _var("sex_code", "Sex", "select"),
+        _var("age_band", "Age band", "select"),
+        _var("employment_status", "Employment status", "select"),
+        _var("member_count", "Member count", "number"),
+    ],
+    "household_shocks": [
+        _var("sub_region_code", "Sub-region", "geo"),
+        _var("shock_type", "Shock type", "select"),
+        _var("severity", "Severity", "select"),
+        _var("household_count", "Household count", "number"),
+    ],
+    "referrals": [
+        _var("district_code", "District", "geo"),
+        _var("sub_county_code", "Sub-county", "geo"),
+        _var("programme_code", "Programme", "select"),
+        _var("referral_status", "Referral status", "select"),
+        _var("referral_count", "Referral count", "number"),
+    ],
+    "grievances": [
+        _var("district_code", "District", "geo"),
+        _var("sub_county_code", "Sub-county", "geo"),
+        _var("category", "Category", "select"),
+        _var("status", "Status", "select"),
+        _var("grievance_count", "Grievance count", "number"),
+    ],
+    "health_chronic": [
+        _var("sub_region_code", "Sub-region", "geo"),
+        _var("condition_code", "Condition", "select"),
+        _var("member_count", "Member count", "number"),
+    ],
+}
 
 
 # Default per-class caps (ADR-0023 D3 / OPEN-3). Hardcoded only in

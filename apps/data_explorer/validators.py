@@ -46,6 +46,13 @@ _GEO_LEVELS = {
     "village": 7,
 }
 
+_GEO_ALIASES = {
+    "country": "national",
+    "subregion": "sub_region",
+    "sub-county": "sub_county",
+    "subcounty": "sub_county",
+}
+
 
 @dataclass
 class ValidatedQuery:
@@ -162,6 +169,9 @@ def validate(payload: dict) -> ValidatedQuery:
 
     geographic_scope = payload.get("geographic_scope") or {}
     level = (geographic_scope.get("level") or "").lower()
+    level = _GEO_ALIASES.get(level, level)
+    if level and level != (geographic_scope.get("level") or "").lower():
+        geographic_scope = {**geographic_scope, "level": level}
     if level:
         if level not in _GEO_LEVELS:
             raise ValidationError(

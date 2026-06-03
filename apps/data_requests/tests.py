@@ -7,6 +7,7 @@ from datetime import date
 import pytest
 from rest_framework.test import APIClient
 
+from apps.data_management.models import Household
 from apps.data_requests.models import DataRequest, RequestStatus
 from apps.data_requests.services import (
     DrsError,
@@ -18,6 +19,7 @@ from apps.data_requests.services import (
     validate_against_dsa,
 )
 from apps.data_requests.test_helpers import make_dsa, make_partner
+from apps.reference_data.models import GeographicUnit
 from apps.security.models import AuditEvent
 
 
@@ -351,6 +353,91 @@ class TestApi:
         # Per ADR-0013 the validator gates at group level; the offender
         # is the `member` group, not the specific field name.
         assert "member" in r.data["detail"]
+
+
+class TestEstimateMatches:
+    @pytest.fixture
+    def operator_client(self, db, django_user_model):
+        u = django_user_model.objects.create_user(
+            username="nsr-unit-op", password="p", is_superuser=True, is_staff=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        return c
+
+    @pytest.fixture
+    def geo(self, db):
+        nodes = {}
+        parent = None
+        for level, code, name in [
+            ("region", "R-NORTH", "North"),
+            ("sub_region", "SR-NORTH", "North Sub-region"),
+            ("district", "DST-NORTH", "North District"),
+            ("county", "CNT-NORTH", "North County"),
+            ("sub_county", "SC-NORTH", "North Sub-county"),
+            ("parish", "PR-NORTH", "North Parish"),
+            ("village", "V-NORTH", "North Village"),
+        ]:
+            node = GeographicUnit.objects.create(
+                level=level, code=code, name=name,
+                parent=parent, effective_from=date(2026, 1, 1),
+            )
+            nodes[level] = node
+            parent = node
+        return nodes
+
+    @pytest.fixture
+    def household_total(self, geo):
+        for _ in range(400):
+            Household.objects.create(
+                region=geo["region"], sub_region=geo["sub_region"],
+                district=geo["district"], county=geo["county"],
+                sub_county=geo["sub_county"], parish=geo["parish"],
+                village=geo["village"], urban_rural="2",
+            )
+        return 400
+
+    def test_estimate_defaults_to_live_registry_total(self, operator_client, household_total):
+        r = operator_client.post(
+            "/api/v1/drs/requests/estimate/",
+            data={"criteria": None, "max_rows": 2500},
+            format="json",
+        )
+        assert r.status_code == 200, r.data
+        assert r.data["registry_total"] == household_total
+        assert r.data["estimated_matches"] == household_total
+        assert r.data["estimated_pct"] == 100.0
+        assert r.data["rule_count"] == 0
+        assert r.data["max_rows"] == 2500
+        assert r.data["source"] == "server"
+
+    def test_estimate_uses_live_total_and_rule_count(self, operator_client, household_total):
+        r = operator_client.post(
+            "/api/v1/drs/requests/estimate/",
+            data={
+                "criteria": {
+                    "kind": "group",
+                    "combinator": "AND",
+                    "rules": [
+                        {
+                            "kind": "rule",
+                            "field": "household.sub_region_code",
+                            "op": "eq",
+                            "value": "SR-NORTH",
+                        },
+                    ],
+                },
+                "max_rows": 5000,
+            },
+            format="json",
+        )
+        assert r.status_code == 200, r.data
+        assert r.data["registry_total"] == household_total
+        assert r.data["rule_count"] == 1
+        assert r.data["estimated_matches"] == 152
+        assert r.data["estimated_pct"] == 38.0
+        assert r.data["max_rows"] == 5000
+        assert r.data["source"] == "server"
 
 
 class TestPartnerAbac:

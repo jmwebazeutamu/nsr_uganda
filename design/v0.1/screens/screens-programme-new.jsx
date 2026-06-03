@@ -55,10 +55,41 @@ const EXIT_TONE = {
 // PMT-band rough fraction of total HHs (for the wizard's live reach
 // estimate only; the actual eligibility is server-side and depends
 // on the household PMT score).
-const PMT_FRAC = {
-  poorest_20: 0.20, poorest_40: 0.20,
-  middle_40:  0.40, top_20:     0.20,
+const PMT_BAND_META = {
+  extreme_poverty: { label: "Extreme poverty", fraction: 0.10, note: "≤ 2.812 · 10%" },
+  poverty:         { label: "Poverty",         fraction: 0.10, note: "≤ 3.245 · 20%" },
+  vulnerable:      { label: "Vulnerable",      fraction: 0.10, note: "≤ 3.582 · 30%" },
+  not_poor:        { label: "Not poor",        fraction: 0.00, note: "≤ 7.219 · default excludes" },
+  poorest_20:      { label: "Extreme poverty", fraction: 0.10, note: "legacy code" },
+  poorest_40:      { label: "Poverty",         fraction: 0.10, note: "legacy code" },
+  middle_40:       { label: "Vulnerable",      fraction: 0.10, note: "legacy code" },
+  top_20:          { label: "Not poor",        fraction: 0.00, note: "legacy code" },
 };
+const PMT_BAND_ALIASES = {
+  extreme_poverty: "poorest_20",
+  "extreme poverty": "poorest_20",
+  "poorest 20%": "poorest_20",
+  poorest_20: "poorest_20",
+  poverty: "poorest_40",
+  "poorest 40%": "poorest_40",
+  poorest_40: "poorest_40",
+  vulnerable: "middle_40",
+  "middle 40%": "middle_40",
+  middle_40: "middle_40",
+  not_poor: "top_20",
+  "not poor": "top_20",
+  "top 20%": "top_20",
+  top_20: "top_20",
+};
+const normalizePmtBandCode = (value) => {
+  const raw = (value ?? "").toString().trim().toLowerCase();
+  return PMT_BAND_ALIASES[raw] || raw;
+};
+const pmtDisplayLabel = (code, fallback = code) => {
+  const normalized = normalizePmtBandCode(code);
+  return PMT_BAND_META[normalized]?.label || fallback;
+};
+const pmtFraction = (code) => Number(PMT_BAND_META[normalizePmtBandCode(code)]?.fraction || 0);
 
 // Composition flag → narrowing factor for the live reach estimate.
 const COMP_FACTOR = {
@@ -229,7 +260,7 @@ const ProgrammeRegistrationScreen = ({ onBack }) => {
   const estReach = useMemoProg(() => {
     let base = 12100000;
     if (data.pmt_bands.length) {
-      base *= data.pmt_bands.reduce((s, c) => s + (PMT_FRAC[c] || 0), 0);
+      base *= data.pmt_bands.reduce((s, c) => s + pmtFraction(c), 0);
     }
     const geoFrac = allGeoUnits.length === 0
       ? 0
@@ -264,7 +295,7 @@ const ProgrammeRegistrationScreen = ({ onBack }) => {
         sex_filter:        data.sex_filter,
         age_min:           data.age_min,
         age_max:           data.age_max,
-        pmt_bands:         data.pmt_bands,
+        pmt_bands:         data.pmt_bands.map(normalizePmtBandCode),
         composition_flags: data.composition_flags,
         amount_ugx:        data.amount_ugx,
         disbursement_cycle: data.disbursement_cycle,
@@ -594,6 +625,7 @@ const StepCohort = ({ data, setD, toggleInArr, unitOpts, pmtOpts, sexOpts, compO
         <div className="row-wrap">
           {pmtOpts.map(b => {
             const on = data.pmt_bands.includes(b.code);
+            const meta = PMT_BAND_META[b.code] || {};
             return (
               <button key={b.code} onClick={() => toggleInArr("pmt_bands", b.code)} style={{
                 border:`1px solid ${on ? "var(--accent-eligibility)" : "var(--neutral-300)"}`,
@@ -601,7 +633,10 @@ const StepCohort = ({ data, setD, toggleInArr, unitOpts, pmtOpts, sexOpts, compO
                 color: on ? "var(--accent-eligibility)" : "var(--neutral-700)",
                 padding:"7px 13px", borderRadius:16, fontSize:13, fontWeight: on ? 600 : 500,
                 cursor:"pointer",
-              }}>{on && <Icon name="check" size={11} style={{marginRight:5, verticalAlign:"-1px"}}/>}{b.label}</button>
+              }} title={meta.note || b.label}>
+                {on && <Icon name="check" size={11} style={{marginRight:5, verticalAlign:"-1px"}}/>}
+                {pmtDisplayLabel(b.code, b.label)}
+              </button>
             );
           })}
         </div>
@@ -965,7 +1000,7 @@ const ProgPreview = ({ data, partner, activeDsa, kindMeta, estReach, totalPerBen
         <div className="row-wrap">
           {data.pmt_bands.length === 0
             ? <span className="muted t-bodysm">none selected</span>
-            : data.pmt_bands.map(c => <Chip key={c} size="sm" tone="eligibility">{label(pmtOpts, c, c)}</Chip>)}
+            : data.pmt_bands.map(c => <Chip key={c} size="sm" tone="eligibility">{pmtDisplayLabel(c, label(pmtOpts, c, c))}</Chip>)}
         </div>
       </div>
 

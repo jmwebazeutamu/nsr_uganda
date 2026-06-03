@@ -12,8 +12,8 @@
  *      catalogue) instead of silently dropping them.
  */
 
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen, within, waitFor } from "@testing-library/react";
 
 let PreviewStep;
 let _previewCell;
@@ -114,6 +114,24 @@ describe("_previewCell type dispatch", () => {
     const v = _previewCell("household.id", F({ key: "household.id" }), 0);
     expect(v).toMatch(/^01[A-Z0-9]{24}$/);
   });
+
+  it("renders dwelling and residence preview labels", () => {
+    expect(_previewCell("household.dwelling_tenure",
+      F({ key: "household.dwelling_tenure", type: "text" }), 0))
+      .toBe("Owner occupied");
+    expect(_previewCell("household.residence_status",
+      F({ key: "household.residence_status", type: "text" }), 0))
+      .toBe("Resident");
+  });
+
+  it("falls back to a sample value for otherwise plain text / enum fields", () => {
+    expect(_previewCell("household.custom_text",
+      F({ key: "household.custom_text", label: "Custom text", type: "text" }), 0))
+      .toBe("Custom text sample 1");
+    expect(_previewCell("household.custom_enum",
+      F({ key: "household.custom_enum", label: "Custom enum", type: "enum" }), 0))
+      .toBe("Custom enum sample 1");
+  });
 });
 
 // ───────────────────────────────────────────────────────────────
@@ -126,6 +144,8 @@ describe("PreviewStep", () => {
     "household.household_number": F({ key: "household.household_number", label: "Household number" }),
     "household.gps_lat":          F({ key: "household.gps_lat", label: "GPS latitude", sensitivity: "Sensitive", type: "number" }),
     "member.telephone_1":         F({ key: "member.telephone_1", label: "Telephone 1", sensitivity: "Personal" }),
+    "household.dwelling_tenure":  F({ key: "household.dwelling_tenure", label: "Dwelling tenure" }),
+    "household.residence_status": F({ key: "household.residence_status", label: "Residence status" }),
   };
 
   it("renders empty state when nothing is selected", () => {
@@ -162,6 +182,56 @@ describe("PreviewStep", () => {
       catalogueByKey={catalogue}/>);
     expect(screen.getByText(/not in current catalogue/)).toBeInTheDocument();
     expect(screen.getByText("household.removed_field")).toBeInTheDocument();
+  });
+
+  it("refreshes the estimate when the tree gains another filter", async () => {
+    const fetchMock = vi.fn(async (url, opts) => {
+      if (String(url).includes("/api/v1/drs/requests/estimate/")) {
+        const body = JSON.parse(opts.body);
+        const ruleCount = body?.criteria?.rules?.length || 0;
+        const estimated = ruleCount === 1 ? 38 : 14;
+        return {
+          ok: true,
+          json: async () => ({
+            registry_total: 100,
+            estimated_matches: estimated,
+            estimated_pct: estimated,
+            rule_count: ruleCount,
+            source: "server",
+          }),
+        };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const oneRule = {
+        id: "g", kind: "group", combinator: "AND",
+        rules: [
+          { id: "r1", kind: "rule", field: "household.id", op: "eq", value: "A" },
+        ],
+      };
+      const twoRules = {
+        ...oneRule,
+        rules: [
+          ...oneRule.rules,
+          { id: "r2", kind: "rule", field: "household.household_number", op: "eq", value: "B" },
+        ],
+      };
+      const { rerender } = render(<PreviewStep
+        selected={["household.id", "household.household_number"]}
+        catalogueByKey={catalogue}
+        tree={oneRule}/>);
+      await waitFor(() => expect(screen.getByText(/~38/)).toBeInTheDocument());
+      rerender(<PreviewStep
+        selected={["household.id", "household.household_number"]}
+        catalogueByKey={catalogue}
+        tree={twoRules}/>);
+      await waitFor(() => expect(screen.getByText(/~14/)).toBeInTheDocument());
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

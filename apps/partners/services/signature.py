@@ -179,6 +179,33 @@ def submit_for_signoff(
         reason=first.docusign_envelope_id or "stub",
     )
 
+    # In the default stub path, DocuSign is not provisioned yet, so
+    # the partner signatory would otherwise hear nothing at submit
+    # time. Send the same workflow-style notification the console
+    # steps use so the chain is visible end-to-end in dev / CI and in
+    # any deployment where the feature flag remains off.
+    if not getattr(settings, "PARTNERS_DOCUSIGN_ENABLED", False):
+        send_notification(
+            to=first.signer_email,
+            subject=(
+                f"[NSR MIS] DSA {dsa.reference} awaits your signature"
+            ),
+            body=(
+                f"DSA {dsa.reference} v{dsa.version} has been submitted for "
+                f"sign-off and is now awaiting your signature as "
+                f"{first.signer_role} (step 1 of 3).\n\n"
+                f"Partner: {dsa.partner.name}\n\n"
+                f"Open the DSA in the Admin Console to review and sign.\n"
+            ),
+            entity_type="dsa_signature",
+            entity_id=str(first.id),
+            audit_actor=actor,
+            audit_action="dsa.signoff.notified",
+            audit_reason=(
+                f"step 1 ({first.signer_role}) notified on submit"
+            ),
+        )
+
     return dsa
 
 

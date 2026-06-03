@@ -1,7 +1,7 @@
 /* global React, ReactDOM,
    Icon, Chip, PageHeader,
    DE_DATASETS, DE_VARIABLES_BY_DATASET, DE_PRIVACY, DE_PRIVACY_ORDER,
-   PrivacyChip, DEShell, ScreenJumpTweak,
+   PrivacyChip, DEShell, ScreenJumpTweak, navigateDeScreen,
    useDePublicCatalogue, useDeMe, RoleGateBanner,
    TweaksPanel, useTweaks, TweakSection */
 
@@ -89,7 +89,7 @@ const CatalogueScreen = () => {
         sub={<>The full questionnaire data dictionary — every field the registry captures, with its privacy class on each row. Aggregatable fields preview in the builder; record-level access happens in the DRS console.</>}
         right={<>
           <button className="btn"><Icon name="download" size={14}/> Export catalogue</button>
-          <button className="btn btn-primary" onClick={() => location.href="Data Explorer - Aggregate Builder.html"}>
+          <button className="btn btn-primary" onClick={() => navigateDeScreen("builder")}>
             <Icon name="sliders" size={14}/> Build an aggregate
           </button>
         </>}
@@ -246,11 +246,11 @@ const DatasetDetail = ({ ds, vars, searchActive }) => {
               <h2 className="t-h2" style={{margin:0}}>{ds.label}</h2>
               <div className="t-bodysm muted mt-1">{ds.desc}</div>
             </div>
-            <button className="btn btn-primary" onClick={() => location.href="Data Explorer - Aggregate Builder.html"}>
+            <button className="btn btn-primary" onClick={() => navigateDeScreen("builder")}>
               <Icon name="sliders" size={14}/> Use in builder
             </button>
             <button className="btn"
-              onClick={() => location.href=`Data Explorer - Synthetic Sample.html?dataset=${encodeURIComponent(ds.id)}`}>
+              onClick={() => navigateDeScreen("synthetic", { dataset: ds.id })}>
               <Icon name="database" size={14}/> Synthetic sample
             </button>
           </div>
@@ -415,4 +415,7 @@ const VariableRow = ({ v }) => {
   );
 };
 
-ReactDOM.createRoot(document.getElementById("app")).render(<CatalogueScreen/>);
+Object.assign(window, { DataExplorerCatalogueScreen: CatalogueScreen });
+if (!window.NSR_EMBEDDED_CONSOLE) {
+  ReactDOM.createRoot(document.getElementById("app")).render(<CatalogueScreen/>);
+}

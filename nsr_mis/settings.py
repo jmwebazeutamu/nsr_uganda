@@ -13,6 +13,11 @@ from pathlib import Path
 
 import environ
 
+from nsr_mis.email_settings import (
+    default_email_backend,
+    server_email_from_default,
+)
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 env = environ.Env(
@@ -290,29 +295,37 @@ SLACK_WEBHOOK_URL = env("SLACK_WEBHOOK_URL", default="")
 DPO_EMAIL = env("DPO_EMAIL", default="")
 
 # --- Email / SMTP ---------------------------------------------------------
-# Default backend is `console` so dev runs never reach an SMTP server (and
-# accidentally email a real person from a fixture). Production sets
-# `EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend` plus the
-# SMTP credentials in the environment.
+# If SMTP credentials are present, default to the SMTP backend. That
+# keeps deployed environments working even if EMAIL_BACKEND was omitted
+# from the secrets bundle. Otherwise fall back to the console backend so
+# local dev and CI stay side-effect free unless explicitly configured.
 #
 # Default host points at the quasar.ug SMTP relay — same one the
 # `comms` rental_project uses. Credentials are NEVER hardcoded; they
 # come from the environment so we don't ship secrets in git.
+_email_host_user = env("EMAIL_HOST_USER", default="")
+_email_host_password = env("EMAIL_HOST_PASSWORD", default="")
 EMAIL_BACKEND = env(
     "EMAIL_BACKEND",
-    default="django.core.mail.backends.console.EmailBackend",
+    default=default_email_backend(
+        host_user=_email_host_user,
+        host_password=_email_host_password,
+    ),
 )
 EMAIL_HOST = env("EMAIL_HOST", default="comms.quasar.ug")
 EMAIL_PORT = env.int("EMAIL_PORT", default=587)
 EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
-EMAIL_HOST_USER = env("EMAIL_HOST_USER", default="")
-EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", default="")
+EMAIL_HOST_USER = _email_host_user
+EMAIL_HOST_PASSWORD = _email_host_password
 EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=30)
 DEFAULT_FROM_EMAIL = env(
     "DEFAULT_FROM_EMAIL",
     default="NSR MIS <admin@quasar.ug>",
 )
-SERVER_EMAIL = env("SERVER_EMAIL", default=DEFAULT_FROM_EMAIL)
+SERVER_EMAIL = env(
+    "SERVER_EMAIL",
+    default=server_email_from_default(DEFAULT_FROM_EMAIL),
+)
 
 # US-117b — feature flag for the Questionnaire builder admin UI
 # (section/question tree, up-down reorder, inline expression

@@ -1,26 +1,17 @@
 """Metadata loader — single source of truth for the DATA-EXP catalogue.
 
-ADR-0023 D5: catalogue rows are *not* hand-curated. Three sources feed
-this loader and the loader upserts Dataset + Variable rows by
-(dataset_code, variable_code):
-
-1. apps.update_workflow.field_catalog.categories() — already does the
-   model-introspection work for the Open-CR wizard. Reusing it means
-   the explorer's surface is a strict subset of the editable surface
-   by construction; drift between them is impossible.
-
-2. apps.reference_data ChoiceLists — for coded fields the resolver
-   attaches list_name + kind to the Variable so the field-picker can
-   show enumerated values.
-
-3. Default PrivacyClass mapping from
-   apps.data_explorer.seeds.privacy_class_defaults.
+ADR-0023 D5: catalogue rows are *not* hand-curated. The loader upserts
+Dataset + Variable rows by (dataset_code, variable_code) from the
+live matview-backed explorer seed in
+apps.data_explorer.seeds.privacy_class_defaults.
 
 Loader lifecycle:
 - refresh() is idempotent. Newly-added variables seed INACTIVE.
 - Variables whose underlying field SHAPE changes (data_type, choice
   list, source_field) flip to INACTIVE and bump `version` so dual
   approval is required to re-activate.
+- refresh(activate=True) is the explicit bootstrap path that marks the
+  live explorer catalogue ACTIVE in development / seeded environments.
 - Called on Django startup (apps.py) AND on the post_migrate signal
   (signals.py) so the catalogue tracks model migrations.
 
@@ -97,7 +88,7 @@ def _ensure_datasets():
                 "geographic_floor": row["geographic_floor"],
             },
         )
-        out[row["category"]] = ds
+        out[row["code"]] = ds
     return out
 
 
@@ -165,6 +156,58 @@ def _upsert_variable(*, dataset, code, label, data_type, source_model,
     return "stable"
 
 
+def _retire_stale_variables(*, dataset, keep_codes: set[str]) -> int:
+    from .models import Variable, VariableStatus
+
+    stale = list(
+        Variable.objects
+        .filter(dataset=dataset)
+        .exclude(code__in=keep_codes)
+    )
+    if not stale:
+        return 0
+    for v in stale:
+        if v.status != VariableStatus.DEPRECATED:
+            v.status = VariableStatus.DEPRECATED
+            v.save(update_fields=["status", "updated_at"])
+    return len(stale)
+
+
+def _activate_loaded_variables(*, dataset, keep_codes: set[str],
+                               actor_prefix: str = "system-metadata-loader") -> int:
+    from .models import ApprovalRole, Variable, VariableApproval, VariableStatus
+
+    variables = list(
+        Variable.objects.filter(dataset=dataset, code__in=keep_codes)
+    )
+    if not variables:
+        return 0
+
+    activated = 0
+    for v in variables:
+        VariableApproval.objects.update_or_create(
+            variable=v,
+            approval_role=ApprovalRole.DQA,
+            defaults={
+                "approver": f"{actor_prefix}-dqa",
+                "note": "bootstrap live aggregate metadata",
+            },
+        )
+        VariableApproval.objects.update_or_create(
+            variable=v,
+            approval_role=ApprovalRole.DPO,
+            defaults={
+                "approver": f"{actor_prefix}-dpo",
+                "note": "bootstrap live aggregate metadata",
+            },
+        )
+        if v.status != VariableStatus.ACTIVE:
+            v.status = VariableStatus.ACTIVE
+            v.save(update_fields=["status", "updated_at"])
+            activated += 1
+    return activated
+
+
 def _tables_ready() -> bool:
     """Best-effort check: are the catalogue tables present? Tolerates
     the pre-migrate case (apps.py startup, fresh-DB test runs)."""
@@ -176,9 +219,9 @@ def _tables_ready() -> bool:
         return False
 
 
-def refresh(*, quiet: bool = False) -> dict:
+def refresh(*, quiet: bool = False, activate: bool = False) -> dict:
     """Idempotently refresh PrivacyClass + RefreshCadence + Dataset +
-    Variable rows from the field-catalog feed. Returns a tally dict.
+    Variable rows from the live explorer seed. Returns a tally dict.
 
     quiet=True suppresses the "no tables" warning at app-ready time
     (the post_migrate signal will run this again after migrations).
@@ -189,48 +232,60 @@ def refresh(*, quiet: bool = False) -> dict:
                 "data_explorer.metadata_loader: tables not present yet "
                 "(skipping refresh). Run migrate to land 0001_initial.",
             )
-        return {"created": 0, "shape_changed": 0, "stable": 0, "skipped": True}
+        return {
+            "created": 0,
+            "shape_changed": 0,
+            "stable": 0,
+            "deprecated": 0,
+            "activated": 0,
+            "skipped": True,
+        }
 
     # Import inside refresh so signal handlers + AppConfig.ready aren't
     # paying the catalog cost unless the loader actually runs.
-    from apps.update_workflow import field_catalog
-
-    from .models import PrivacyClass
-    from .seeds.privacy_class_defaults import classify
+    from .seeds.privacy_class_defaults import DATASET_VARIABLE_DEFAULTS
 
     with transaction.atomic():
         _ensure_seed_rows()
-        datasets_by_category = _ensure_datasets()
+        datasets_by_code = _ensure_datasets()
 
-        tally = {"created": 0, "shape_changed": 0, "stable": 0,
-                 "skipped": False}
-        pc_cache = {pc.code: pc for pc in PrivacyClass.objects.all()}
+        tally = {
+            "created": 0,
+            "shape_changed": 0,
+            "stable": 0,
+            "deprecated": 0,
+            "activated": 0,
+            "skipped": False,
+        }
 
-        for category in field_catalog.categories():
-            ds = datasets_by_category.get(category["key"])
+        for dataset_code, variable_rows in DATASET_VARIABLE_DEFAULTS.items():
+            ds = datasets_by_code.get(dataset_code)
             if ds is None:
-                # Catalog category we don't yet have a Dataset for —
-                # this is fine: extending DATASET_DEFAULTS is a seed
-                # change.
                 continue
-            for f in category["fields"]:
-                pc_code = classify(category["key"], f["key"])
-                pc = pc_cache.get(pc_code) or pc_cache[
-                    "internal"
-                ]
+            keep_codes: set[str] = set()
+            for f in variable_rows:
+                keep_codes.add(f["code"])
                 outcome = _upsert_variable(
                     dataset=ds,
-                    code=f["field_id"],
+                    code=f["code"],
                     label=f["label"],
-                    data_type=f["type"],
-                    source_model=f.get("model", ""),
-                    source_field=f["key"],
-                    choice_list=f.get("choice_list", ""),
-                    choice_kind=f.get("choice_kind", ""),
-                    privacy_class=pc,
-                    questionnaire_section=f.get(
-                        "questionnaire_section", ""),
+                    data_type=f["data_type"],
+                    source_model=ds.source_matview,
+                    source_field=f["source_field"],
+                    choice_list="",
+                    choice_kind="",
+                    privacy_class=ds.privacy_class,
+                    questionnaire_section="",
                 )
                 tally[outcome] += 1
+            tally["deprecated"] += _retire_stale_variables(
+                dataset=ds,
+                keep_codes=keep_codes,
+            )
+            if activate:
+                tally["activated"] += _activate_loaded_variables(
+                    dataset=ds,
+                    keep_codes=keep_codes,
+                )
 
     return tally

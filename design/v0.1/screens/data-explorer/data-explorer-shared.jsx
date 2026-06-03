@@ -199,10 +199,12 @@ const DE_VARIABLES_BY_DATASET = {
    Geographic frame — used by scope picker
    ================================================================ */
 const DE_GEO_LEVELS = [
-  { code: "country",    label: "Country (national)", units: 1 },
-  { code: "subregion",  label: "Sub-region",         units: 15 },
+  { code: "national",   label: "Country (national)", units: 1 },
+  { code: "region",     label: "Region",             units: 4 },
+  { code: "sub_region", label: "Sub-region",         units: 15 },
   { code: "district",   label: "District",           units: 146 },
-  { code: "subcounty",  label: "Sub-county",         units: 1447 },
+  { code: "county",     label: "County",             units: 312 },
+  { code: "sub_county", label: "Sub-county",         units: 1447 },
   { code: "parish",     label: "Parish",             units: 10594 },
   { code: "village",    label: "Village",            units: 71000 },
 ];
@@ -210,10 +212,17 @@ const DE_GEO_LEVELS = [
 // Floor ordering — anything finer than the floor is a violation.
 const DE_GEO_INDEX = Object.fromEntries(DE_GEO_LEVELS.map((g, i) => [g.code, i]));
 const violatesFloor = (level, floor) => {
-  const map = { "sub-region": "subregion", "sub-county": "subcounty", "national": "country" };
+  const map = {
+    "country": "national",
+    "sub-region": "sub_region",
+    "subregion": "sub_region",
+    "sub-county": "sub_county",
+    "subcounty": "sub_county",
+  };
   const floorKey = map[floor] || floor;
-  if (!(floorKey in DE_GEO_INDEX) || !(level in DE_GEO_INDEX)) return false;
-  return DE_GEO_INDEX[level] > DE_GEO_INDEX[floorKey];
+  const levelKey = map[level] || level;
+  if (!(floorKey in DE_GEO_INDEX) || !(levelKey in DE_GEO_INDEX)) return false;
+  return DE_GEO_INDEX[levelKey] > DE_GEO_INDEX[floorKey];
 };
 
 /* ================================================================
@@ -236,6 +245,17 @@ const DE_SCREENS = [
   { id: "coverage",  label: "Coverage",          icon: "mapPin",   href: "Data Explorer - Coverage.html" },
   { id: "synthetic", label: "Synthetic sample",  icon: "database", href: "Data Explorer - Synthetic Sample.html" },
 ];
+
+const navigateDeScreen = (id, params = {}) => {
+  const screen = DE_SCREENS.find(s => s.id === id);
+  if (!screen) return;
+  if (window.NSR_EMBEDDED_CONSOLE && typeof window.NSR_DATA_EXPLORER_NAVIGATE === "function") {
+    window.NSR_DATA_EXPLORER_NAVIGATE(id, params);
+    return;
+  }
+  const query = new URLSearchParams(params).toString();
+  window.location.href = `${screen.href}${query ? `?${query}` : ""}`;
+};
 
 /* ================================================================
    PrivacyChip — color-coded per the ADR-0023 table.
@@ -344,7 +364,12 @@ const DEShell = ({ active, refreshed_at, children, right, publicLive }) => {
         {DE_SCREENS.map(s => {
           const isActive = s.id === active;
           return (
-            <a key={s.id} href={s.href} style={{
+            <a key={s.id} href={s.href} onClick={(e) => {
+              if (window.NSR_EMBEDDED_CONSOLE) {
+                e.preventDefault();
+                navigateDeScreen(s.id);
+              }
+            }} style={{
               display:"inline-flex", alignItems:"center", gap:8,
               padding:"10px 16px",
               borderBottom: isActive ? "2px solid var(--primary-900)" : "2px solid transparent",
@@ -380,8 +405,7 @@ const ScreenJumpTweak = ({ active }) => {
   const [val, setVal] = React.useState(active);
   const onChange = (next) => {
     setVal(next);
-    const screen = DE_SCREENS.find(s => s.id === next);
-    if (screen) window.location.href = screen.href;
+    navigateDeScreen(next);
   };
   return (
     <TweakRadio
@@ -611,6 +635,34 @@ const _fieldToVar = (f, sectionKey) => ({
   values: f.choice_list ? `coded · ${f.choice_list}` : (f.pmt_relevant ? "PMT-relevant" : ""),
 });
 
+const _normaliseVariable = (raw) => {
+  if (!raw) return raw;
+  const privacy = raw.privacy
+    || (raw.privacy_class && raw.privacy_class.code)
+    || raw.privacy_class_code
+    || "internal";
+  const dataType = raw.type || raw.data_type || "text";
+  const type = ({
+    text: "string",
+    number: "continuous",
+    boolean: "categorical",
+    select: "categorical",
+    date: "string",
+    geo: "geo",
+  })[dataType] || dataType;
+  return {
+    ...raw,
+    code: raw.code || raw.field_id,
+    label: raw.label || raw.code || raw.field_id,
+    type,
+    privacy,
+    domain: raw.domain || raw.questionnaire_section || raw.source_model || "",
+    desc: raw.description || raw.desc || "",
+    values: raw.values || (raw.choice_list ? `coded · ${raw.choice_list}` : ""),
+    aggregatable: raw.aggregatable !== false,
+  };
+};
+
 const useDeCatalogue = () => {
   const useApi = (typeof window !== "undefined" && window.useApi) || null;
   if (!useApi) {
@@ -655,14 +707,17 @@ const useDeDataset = (datasetId) => {
   // must not skip these hooks — toggling it (e.g. "" → real id after the
   // builder's snap effect) would change hook order and crash React.
   const [resp, meta] = useApi(datasetId ? `${_DE_API_PREFIX}/datasets/${datasetId}/` : null);
+  const [varsResp, varsMeta] = useApi(datasetId ? `${_DE_API_PREFIX}/datasets/${datasetId}/variables/` : null);
   const [pubResp, pubMeta] = useApi(datasetId ? _DE_PUBLIC_URL : null);
   if (!datasetId) {
     return [{ dataset: mockDs, variables: mockVars },
             { loading: false, error: null, isLive: false }];
   }
   if (!meta.loading && !meta.error && resp) {
-    return [{ dataset: _normaliseDataset(resp), variables: resp.variables || mockVars },
-            { loading: false, error: null, isLive: true }];
+    const varRows = (varsResp && (varsResp.variables || varsResp.results || varsResp)) || resp.variables || [];
+    const liveVars = Array.isArray(varRows) ? varRows.map(_normaliseVariable) : [];
+    return [{ dataset: _normaliseDataset(resp), variables: liveVars.length ? liveVars : mockVars },
+            { loading: varsMeta.loading, error: varsMeta.error, isLive: true }];
   }
   const sections = (pubResp && pubResp.sections) || null;
   if (!pubMeta.loading && !pubMeta.error && Array.isArray(sections)) {
@@ -678,6 +733,23 @@ const useDeDataset = (datasetId) => {
   }
   return [{ dataset: mockDs, variables: mockVars },
           { loading: false, error: meta.error || pubMeta.error, isLive: false }];
+};
+
+const useDeGeoUnits = (level) => {
+  const useApi = (typeof window !== "undefined" && window.useApi) || _noopUseApi;
+  const map = {
+    country: "national",
+    subregion: "sub_region",
+    subcounty: "sub_county",
+    "sub-county": "sub_county",
+  };
+  const apiLevel = map[level] || level;
+  const fetchable = apiLevel && apiLevel !== "national";
+  const [resp, meta] = useApi(fetchable
+    ? `/api/v1/reference-data/geographic-units/?level=${encodeURIComponent(apiLevel)}&status=active&page_size=500`
+    : null);
+  const rows = (resp && (resp.results || resp)) || [];
+  return [Array.isArray(rows) ? rows : [], { ...meta, level: apiLevel, fetchable }];
 };
 
 const useDePublicCatalogue = () => {
@@ -710,15 +782,40 @@ const useDePublicCatalogue = () => {
 
 const useDeCoverage = (datasetId) => {
   const useApi = (typeof window !== "undefined" && window.useApi) || _noopUseApi;
-  // Unconditional hook call — see useDeDataset note on toggling datasetId.
+  // Unconditional hook calls — see useDeDataset note on toggling datasetId.
   const [resp, meta] = useApi(datasetId ? `${_DE_API_PREFIX}/coverage/${datasetId}/` : null);
+  // If the Data Explorer coverage snapshot table is empty in a dev or
+  // pilot environment, use the live reporting aggregate instead of
+  // dropping straight to fabricated rows. This keeps the coverage map
+  // wired to backend household counts while the snapshot job catches up.
+  const [rptResp, rptMeta] = useApi(datasetId
+    ? "/api/v1/rpt/dashboards/households-by-sub-region/?group_by=district"
+    : null);
   if (!datasetId) return [DE_COVERAGE_ROWS, { loading: false, error: null, isLive: false }];
   const rows = (resp && (resp.rows || resp.results || resp)) || null;
-  if (meta.loading) return [DE_COVERAGE_ROWS, { ...meta, isLive: false }];
-  if (meta.error || !Array.isArray(rows) || rows.length === 0) {
-    return [DE_COVERAGE_ROWS, { loading: false, error: meta.error, isLive: false }];
+  const rptRows = Array.isArray(rptResp) ? rptResp : null;
+  if (!rptMeta.loading && !rptMeta.error && Array.isArray(rptRows) && rptRows.length) {
+    return [rptRows.map(r => ({
+      geo_level: "district",
+      geo_code: r.key,
+      geo_label: r.label || r.key,
+      row_count: Number(r.count || 0),
+      completeness_pct: null,
+      last_capture: "",
+    })), { loading: false, error: null, isLive: true, source: "reporting" }];
   }
-  return [rows, { loading: false, error: null, isLive: true }];
+  if (!meta.loading && !meta.error && Array.isArray(rows) && rows.length) {
+    return [rows, { loading: false, error: null, isLive: true, source: "data_explorer" }];
+  }
+  if (meta.loading || rptMeta.loading) {
+    return [DE_COVERAGE_ROWS, { loading: true, error: null, isLive: false }];
+  }
+  return [DE_COVERAGE_ROWS, {
+    loading: false,
+    error: meta.error || rptMeta.error,
+    isLive: false,
+    source: "mock",
+  }];
 };
 
 const useDeSynthetic = (datasetId) => {
@@ -991,10 +1088,10 @@ Object.assign(window, {
   DE_GEO_LEVELS, violatesFloor,
   DE_SUPPRESSION, DE_SCREENS,
   DE_RESULT_ROWS, DE_COVERAGE_ROWS, DE_SYNTHETIC_ROWS,
-  PrivacyChip, DEShell, ScreenJumpTweak,
+  PrivacyChip, DEShell, ScreenJumpTweak, navigateDeScreen,
   strictestClass, SuppressedCell, FloorViolationBanner,
   // Live-data wiring (US-DATA-EXP-001):
-  useDeCatalogue, useDeDataset, useDePublicCatalogue, useDeCoverage, useDeSynthetic,
+  useDeCatalogue, useDeDataset, useDeGeoUnits, useDePublicCatalogue, useDeCoverage, useDeSynthetic,
   useDeMe, submitAggregate, submitHandoff,
   RoleGateBanner, HandoffPrompt,
 });

@@ -187,11 +187,12 @@ class TestDecline:
 
 @pytest.mark.django_db
 class TestDsaSigningNotifications:
-    """Each chain transition emails the right parties. Partner-auth
-    signer (sequence 1) is reached via DocuSign envelope — we don't
-    duplicate. In-console signers (sequences 2 + 3) get our email.
-    Activation emails every signer + the partner's primary contact.
-    Decline does the same with the verbatim reason."""
+    """Each chain transition emails the right parties. Step 1 uses
+    DocuSign in production, but the default stub path still emits a
+    workflow email so the partner signatory sees the submit event.
+    In-console signers (sequences 2 + 3) get our email. Activation
+    emails every signer + the partner's primary contact. Decline does
+    the same with the verbatim reason."""
 
     def _submitted(self, dsa):
         signature_service.submit_for_signoff(
@@ -211,6 +212,21 @@ class TestDsaSigningNotifications:
         msg = mail.outbox[0]
         assert msg.to == ["lead@nsr.go.ug"]
         assert "awaits your signature" in msg.subject
+
+    def test_submit_emails_partner_signatory_when_docusign_disabled(self, draft_dsa):
+        from django.core import mail
+        self._submitted(draft_dsa)
+        submit_mails = [m for m in mail.outbox if "awaits your signature" in m.subject]
+        assert len(submit_mails) == 1
+        msg = submit_mails[0]
+        assert msg.to == ["signer1@partner.go.ug"]
+        assert "step 1 of 3" in msg.body
+        sig1 = draft_dsa.signatures.get(sequence_order=1)
+        assert AuditEvent.objects.filter(
+            action="dsa.signoff.notified",
+            entity_type="dsa_signature",
+            entity_id=sig1.id,
+        ).count() == 1
 
     def test_activation_emails_all_signers_plus_partner(self, draft_dsa):
         from django.core import mail

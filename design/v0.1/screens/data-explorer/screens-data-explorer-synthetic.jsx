@@ -32,6 +32,9 @@ const _deriveColumns = (rows) => {
 // Deep-link support: the Catalogue's "Synthetic sample" button lands
 // here with ?dataset=<section/dataset id>.
 const _datasetParam = () => {
+  if (window.NSR_EMBEDDED_CONSOLE && window.NSR_DATA_EXPLORER_PARAMS?.dataset) {
+    return window.NSR_DATA_EXPLORER_PARAMS.dataset;
+  }
   try {
     return new URLSearchParams(window.location.search).get("dataset") || "";
   } catch (e) {
@@ -271,4 +274,7 @@ const DistCard = ({ label, type, bars }) => (
   </div>
 );
 
-ReactDOM.createRoot(document.getElementById("app")).render(<SyntheticScreen/>);
+Object.assign(window, { DataExplorerSyntheticScreen: SyntheticScreen });
+if (!window.NSR_EMBEDDED_CONSOLE) {
+  ReactDOM.createRoot(document.getElementById("app")).render(<SyntheticScreen/>);
+}

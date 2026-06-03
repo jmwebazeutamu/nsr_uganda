@@ -56,11 +56,11 @@ Both belong in the NITA-U KMS. Rotate per the rotation runbook (Planned in Sprin
 
 ## Email / SMTP (v0.3)
 
-The system sends transactional email for PMT sign-off, DSA signing, Programme sign-off, DRS request lifecycle, and DPO audit-chain alerts. Without an SMTP backend configured nothing is sent — workflows still complete on the audit-bearing side.
+The system sends transactional email for PMT sign-off, DSA signing, Programme sign-off, DRS request lifecycle, and DPO audit-chain alerts. If SMTP credentials are present, the app defaults to the SMTP backend automatically; otherwise it falls back to the console backend so dev/CI stay side-effect free.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `EMAIL_BACKEND` | `django.core.mail.backends.console.EmailBackend` | Dev default — emails print to stdout, nobody is contacted. Set to `django.core.mail.backends.smtp.EmailBackend` for real delivery. |
+| `EMAIL_BACKEND` | `django.core.mail.backends.console.EmailBackend` | Falls back to console when no SMTP creds are present. Set explicitly to `django.core.mail.backends.smtp.EmailBackend` to force delivery. |
 | `EMAIL_HOST` | `comms.quasar.ug` | The quasar.ug relay (same one the rental_project uses) |
 | `EMAIL_PORT` | `587` | STARTTLS port |
 | `EMAIL_USE_TLS` | `True` | |
@@ -68,14 +68,14 @@ The system sends transactional email for PMT sign-off, DSA signing, Programme si
 | `EMAIL_HOST_PASSWORD` | (empty) | KMS-managed in prod. **Never commit this to git** — `.env` is gitignored; `.env.example` carries only the placeholder. |
 | `EMAIL_TIMEOUT` | `30` | seconds |
 | `DEFAULT_FROM_EMAIL` | `NSR MIS <admin@quasar.ug>` | Used as the `From:` header when callers don't override |
-| `SERVER_EMAIL` | inherits `DEFAULT_FROM_EMAIL` | Used by Django for error mails to ADMINS |
+| `SERVER_EMAIL` | `admin@quasar.ug` | Used by Django for error mails to ADMINS |
 | `DPO_EMAIL` | (empty) | DPO inbox for chain-break alerts (`apps.security.tasks.verify_audit_chain_task`). Leave empty in dev to disable alerts. |
 | `SLACK_WEBHOOK_URL` | (empty) | Parallel chain-break channel. Independent of email. |
 
 To roll out real email to a new environment:
 
 1. Get the SMTP password from the secrets manager (or copy from the `comms` rental_project — same relay).
-2. Set `EMAIL_HOST_USER` + `EMAIL_HOST_PASSWORD` + flip `EMAIL_BACKEND` to the SMTP backend.
+2. Set `EMAIL_HOST_USER` + `EMAIL_HOST_PASSWORD`. The app will prefer SMTP automatically; set `EMAIL_BACKEND` explicitly only if you want to override the default.
 3. Smoke-test via the Django shell:
    ```python
    from django.core.mail import send_mail

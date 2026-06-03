@@ -195,7 +195,8 @@ class Programme(models.Model):
     pmt_bands = models.JSONField(
         default=list, blank=True,
         help_text='List of programme_pmt_band codes, e.g. '
-                  '["poorest_20", "poorest_40"].',
+                  '["poorest_20", "poorest_40"] '
+                  '(Extreme poverty, Poverty, Vulnerable, Not poor).',
     )
     composition_flags = models.JSONField(
         default=list, blank=True,
