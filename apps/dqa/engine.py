@@ -21,6 +21,7 @@ within-record cross-checks. Unknown operators raise DSLError.
 
 from __future__ import annotations
 
+import datetime as _dt
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -127,6 +128,54 @@ def _op_between(field_value, bounds):
         return False
     low, high = bounds
     return low <= field_value <= high
+
+
+def _to_date(value: Any) -> _dt.date | None:
+    """Coerce date / datetime / ISO-8601 string into a date. Returns
+    None on anything we can't parse so date-based operators can fail
+    cleanly without crashing the pipeline."""
+    if isinstance(value, _dt.datetime):
+        return value.date()
+    if isinstance(value, _dt.date):
+        return value
+    if isinstance(value, str):
+        try:
+            return _dt.date.fromisoformat(value[:10])
+        except ValueError:
+            return None
+    return None
+
+
+@_op("age_le")
+def _op_age_le(field_value, value):
+    """True when (today - field_value) in years <= value.
+
+    `field_value` is a date / datetime / ISO-8601 string read from
+    the record. Calculated at evaluation time so the rule stays
+    current as the registry ages: an active rule today will catch
+    a fixture that crosses the threshold tomorrow without a re-seed.
+
+    Missing or unparseable dob returns False (rule fails). Authors
+    who want "missing OR ≤ N" wrap with `any_of` containing
+    `is_null` + `age_le` — same pattern AC-GPS-ACCURACY uses for
+    optional geometry. Negative ages (dob > today) and out-of-range
+    bound coerce to False.
+    """
+    dob = _to_date(field_value)
+    if dob is None:
+        return False
+    try:
+        bound = int(value)
+    except (TypeError, ValueError):
+        return False
+    today = _dt.date.today()
+    years = (
+        today.year - dob.year
+        - ((today.month, today.day) < (dob.month, dob.day))
+    )
+    if years < 0:
+        return False
+    return years <= bound
 
 
 # DQA-3 / US-079 — SAD §4.2.3 operator completions ---------------------------
@@ -413,8 +462,33 @@ def evaluate(rule: DqaRule, record: Any, *, record_type: str, record_id: str) ->
 
 
 def evaluate_all(record: Any, *, record_type: str, record_id: str) -> list[Evaluation]:
-    """Evaluate every ACTIVE rule whose applicability_filter.entity matches."""
-    qs = DqaRule.objects.filter(status=RuleStatus.ACTIVE)
+    """Evaluate every ACTIVE entity-filtered rule whose
+    applicability_filter.entity matches.
+
+    INTRA_HOUSEHOLD rules are **explicitly excluded** here — their DSL
+    uses household-aware operators (`count_where`, `for_each_member`, …)
+    that only the household evaluator knows. Running them through this
+    legacy engine raises DSLError, which used to crash the connector
+    pull after rows had already staged (symptom: ConnectorRun
+    status=failed with landed≥1, note "unknown operator: count_where").
+
+    The two engines route distinct rule populations:
+      - apps.dqa.engine.evaluate_all → entity-filtered rules (legacy).
+      - apps.dqa.pipeline.run_household_gate (→ household_evaluator)
+        → INTRA_HOUSEHOLD rules.
+    Both stages of the pipeline call both engines in turn, so each rule
+    population gets evaluated exactly once per record. See ADR-S11-044.
+    """
+    # Import locally — RuleCategory is a sibling enum in the same
+    # models module and ASCII-importing it at module top-level would
+    # add no value here. Keep the engine import surface minimal.
+    from .models import RuleCategory
+
+    qs = (
+        DqaRule.objects
+        .filter(status=RuleStatus.ACTIVE)
+        .exclude(category=RuleCategory.INTRA_HOUSEHOLD)
+    )
     evaluations: list[Evaluation] = []
     for rule in qs:
         entity = (rule.applicability_filter or {}).get("entity")
