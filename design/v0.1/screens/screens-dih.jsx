@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, KPI, PageHeader, AuditDrawer, ActionBar, ReasonModal, Modal, Toast */
+/* global React, Icon, Chip, KPI, PageHeader, AuditDrawer, ActionBar, ReasonModal, Modal, Toast, useNavCounts */
 // NSR MIS — 11.3 NSR Unit DIH review queue
 // US-S11-013: live-data wiring. The screen tries to fetch from
 // /api/v1/dih/stage-records/?state=pending_promotion on mount; if
@@ -155,6 +155,12 @@ const DIHScreen = () => {
   // immediately. The effect below replaces it with live API rows when
   // available.
   const [rows, setRows] = useStateDIH(MOCK_DIH_ROWS);
+  // Live count of post-promotion MatchPairs pending — reused from
+  // useNavCounts which already polls /api/v1/ddup/match-pairs/.
+  // Surfaces a tiny caption clarifying that the two queues count
+  // distinct populations (operator-reported confusion 2026-06-01).
+  const [navCounts] = (typeof useNavCounts === "function") ? useNavCounts() : [{}];
+  const dedupPendingCount = (navCounts && typeof navCounts.dedup === "number") ? navCounts.dedup : 0;
   const [archiveRows, setArchiveRows] = useStateDIH([]);
   const [dataSource, setDataSource] = useStateDIH("mock"); // 'mock' | 'live' | 'live-empty'
   const [selectedRow, setSelectedRow] = useStateDIH(MOCK_DIH_ROWS[1].id);
@@ -501,7 +507,22 @@ const DIHScreen = () => {
           {dataSource === "live" && <Chip tone="eligibility" size="sm">live</Chip>}
           {dataSource === "live-empty" && <Chip tone="data" size="sm">live (queue empty — mock shown)</Chip>}
         </>}
-        sub="Promote, promote-as-merge, hold, or reject. Walk-in SLA = 24 hours from capture."
+        sub={<>
+          Promote, promote-as-merge, hold, or reject. Walk-in SLA = 24 hours from capture.
+          {/* Disambiguate this from /console/dedup. The two surfaces
+              measure two distinct populations: this queue is the
+              PRE-promotion DDUP gate (StageRecord.state); the
+              "Duplicates" sidebar entry is the POST-promotion
+              MatchPair sweep over already-registered records. */}
+          {dedupPendingCount > 0 && (
+            <span className="t-cap" style={{display:"block", marginTop:6, color:"var(--neutral-500)"}}>
+              <Icon name="info" size={11}/>{" "}
+              <strong>{dedupPendingCount.toLocaleString()}</strong> post-promotion duplicate
+              {dedupPendingCount === 1 ? "" : "s"} pending in <strong>Duplicates</strong> (sidebar) —
+              registry-side sweep, separate from this pre-promotion DDUP gate.
+            </span>
+          )}
+        </>}
         right={<>
           <button className="btn" onClick={() => setAuditOpen(true)}><Icon name="history"/> Audit chain</button>
           <button className="btn" onClick={exportVisibleRows}><Icon name="download"/> Export CSV</button>

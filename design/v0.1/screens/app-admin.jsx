@@ -94,64 +94,87 @@ const AdminApp = () => {
   const [screen, setScreen] = useStateAdmin(initialFromHost);
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--neutral-50)", display: "flex" }}>
-      {/* Sidebar. Flex column so the nav can scroll internally while
-          the footer keeps its own slot at the bottom — earlier this
-          screen used a position:absolute footer over a scrolling
+    <div style={{
+      minHeight: "100vh",
+      background: "var(--neutral-50)",
+      display: "flex",
+      flexDirection: "column",
+    }}>
+      {/* National masthead — Uganda Coat of Arms on a white tile, navy
+          bar with 3px gold rule, sticky over every admin route. Same
+          chrome as the operator console so the two stay visually one
+          state app. The sidebar below picks up its branding from the
+          masthead; its header now just labels the console. */}
+      <header className="topbar">
+        <div className="topbar-brand">
+          <span className="brand-mark">
+            <img src="assets/Coat_of_arms_of_Uganda.png" alt="Coat of Arms of Uganda"/>
+          </span>
+          <div style={{display:'flex', flexDirection:'column', lineHeight:1.15}}>
+            <span className="brand-wordmark">National Social Registry</span>
+            <span className="brand-sub">Ministry of Gender, Labour and Social Development</span>
+          </div>
+        </div>
+        <div className="topbar-spacer"/>
+        <div className="topbar-actions">
+          <span className="role-chip">
+            <span>Admin Console</span>
+          </span>
+        </div>
+      </header>
+
+      <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
+      {/* Sidebar. Uses the shared .sidenav / .nav-item classes so it
+          inherits the light-rail palette + navy active accent the
+          operator console adopted. Flex column so the nav scrolls
+          internally while the footer keeps its own slot — earlier
+          this screen used a position:absolute footer over a scrolling
           nav, and the footer rendered ON TOP of the last items
           (Chatbot, Examples) when the nav was taller than the
           viewport. */}
-      <aside style={{
+      <aside className="sidenav" style={{
         width: 248, flex: "0 0 248px",
-        background: "var(--primary-900)",
-        color: "var(--neutral-0)",
-        position: "sticky", top: 0, height: "100vh",
+        position: "sticky", top: 84, height: "calc(100vh - 84px)",
         display: "flex", flexDirection: "column",
+        padding: 0,                                            /* override .sidenav default; group header has its own pad */
       }}>
-        <div style={{ padding: "20px 20px 20px", borderBottom: "1px solid rgba(255,255,255,0.1)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{
-              width: 30, height: 30, borderRadius: 6,
-              background: "var(--neutral-0)",
-              color: "var(--primary-900)",
-              display: "grid", placeItems: "center",
-              fontSize: 13, fontWeight: 700,
-            }}>NSR</div>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 600 }}>Admin Console</div>
-              <div style={{ fontSize: 11, opacity: 0.7 }}>Uganda NSR MIS</div>
-            </div>
+        <div style={{
+          padding: "16px 20px",
+          borderBottom: "1px solid var(--neutral-200)",
+        }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: "var(--neutral-900)" }}>Admin Console</div>
+            <div style={{ fontSize: 11, color: "var(--neutral-500)" }}>Uganda NSR MIS</div>
           </div>
         </div>
 
-        <nav style={{ flex: 1, overflow: "auto", padding: "16px 0" }}>
+        <nav style={{ flex: 1, overflow: "auto", padding: "10px 8px" }}>
           {NAV_GROUPS.map(group => (
-            <div key={group.label} style={{ marginBottom: 18 }}>
-              <div style={{
-                padding: "0 20px 6px",
-                fontSize: 10, fontWeight: 600,
-                letterSpacing: "0.08em", textTransform: "uppercase",
-                opacity: 0.5,
-              }}>{group.label}</div>
+            <div key={group.label} style={{ marginBottom: 8 }}>
+              <div className="nav-section-label">{group.label}</div>
               {group.items.map(it => {
                 const active = it.id === screen;
+                const cls = `nav-item${active ? " active" : ""}`;
                 return (
                   <button key={it.id}
+                    className={cls}
                     disabled={it.disabled}
                     onClick={() => !it.disabled && setScreen(it.id)}
-                    style={{
-                      display: "flex", alignItems: "center", gap: 10,
-                      width: "100%", padding: "8px 20px",
-                      border: 0, background: active ? "rgba(255,255,255,0.15)" : "transparent",
-                      borderLeft: active ? "3px solid var(--neutral-0)" : "3px solid transparent",
-                      color: it.disabled ? "rgba(255,255,255,0.35)" : active ? "var(--neutral-0)" : "rgba(255,255,255,0.85)",
-                      fontSize: 13.5, fontWeight: active ? 600 : 500,
-                      cursor: it.disabled ? "not-allowed" : "pointer",
-                      textAlign: "left",
-                    }}>
+                    style={it.disabled ? {
+                      color: "var(--neutral-400)",
+                      cursor: "not-allowed",
+                    } : undefined}>
                     <Icon name={it.icon} size={14}/>
                     <span style={{ flex: 1 }}>{it.label}</span>
-                    {it.disabled && <span style={{ fontSize: 9, opacity: 0.6 }}>soon</span>}
+                    {it.disabled && (
+                      <span style={{
+                        fontSize: 9, fontWeight: 600,
+                        textTransform: "uppercase", letterSpacing: "0.06em",
+                        color: "var(--neutral-500)",
+                        background: "var(--neutral-100)",
+                        padding: "1px 6px", borderRadius: 8,
+                      }}>soon</span>
+                    )}
                   </button>
                 );
               })}
@@ -162,8 +185,8 @@ const AdminApp = () => {
         <div style={{
           flex: "0 0 auto",
           padding: "12px 20px",
-          borderTop: "1px solid rgba(255,255,255,0.1)",
-          fontSize: 11, opacity: 0.6,
+          borderTop: "1px solid var(--neutral-200)",
+          fontSize: 11, color: "var(--neutral-500)",
         }}>
           Akello P. · NSR Coordinator
         </div>
@@ -202,6 +225,7 @@ const AdminApp = () => {
           </ErrorBoundary>
         </div>
       </main>
+      </div>
     </div>
   );
 };

@@ -93,6 +93,21 @@ const DedupScreen = () => {
   const [selectedPairId, setSelectedPairId] = useStateDup(null);
   const [livePair, setLivePair] = useStateDup(null);
   const [loadNote, setLoadNote] = useStateDup("loading…");
+  // Refresh-button UX state. `refreshBusy` disables the button +
+  // shows a spinner label; `lastRefreshedAt` lets the operator see
+  // that "Refresh queue" actually fired and how stale the list is.
+  // `actionError` is the persistent banner for merge/reject/discard
+  // failures — the old toast auto-dismissed in 3s and operators
+  // missed the 4xx, then saw the pair re-appear on refresh.
+  const [refreshBusy, setRefreshBusy] = useStateDup(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useStateDup(null);
+  const [actionError, setActionError] = useStateDup("");
+  // /me/ for the actor field on POSTs — the dedup service stamps
+  // decided_by + AC-DDUP-DUAL-ACTOR with this. Hardcoded "admin"
+  // used to mean every operator's merges came from "admin", which
+  // (a) wrote bad data into the audit chain and (b) tripped any
+  // future dual-actor guard against the original capturer.
+  const [me, setMe] = useStateDup(null);
 
   // Bulk-fetch helper: resolve every unique Member id referenced by
   // the list of pairs in parallel. Caches into membersById so the
@@ -127,6 +142,7 @@ const DedupScreen = () => {
     )
       .then(data => {
         const pairs = data.results || data;
+        setLastRefreshedAt(new Date());
         if (!pairs.length) {
           setPendingList([]);
           setSelectedPairId(null);
@@ -153,7 +169,41 @@ const DedupScreen = () => {
       });
   };
 
+  // Explicit Refresh-queue handler — distinct from _loadQueue so we
+  // can toggle the button's busy label, surface a toast on success,
+  // and pin the error to the persistent banner instead of the 3s
+  // toast operators were missing.
+  const _refreshQueue = () => {
+    if (refreshBusy) return;
+    setRefreshBusy(true);
+    setActionError("");
+    const pinned = selectedPairId;
+    Promise.resolve(_loadQueue(pinned))
+      .then(() => {
+        setToast("Queue refreshed.");
+      })
+      .catch(e => {
+        setActionError(`Refresh failed: ${e?.message || e}`);
+      })
+      .finally(() => setRefreshBusy(false));
+  };
+
   useEffectDup(() => { _loadQueue(); /* mount only */ }, []);
+
+  // Probe /me/ once on mount so action POSTs ship the real username
+  // as `actor` instead of the hardcoded "admin". 401/403 (file://
+  // preview) leaves me=null and we fall back to "console-operator"
+  // — the server stamps it in the audit chain either way.
+  useEffectDup(() => {
+    fetch("/api/v1/security/users/me/", {
+      credentials: "same-origin", headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setMe(d); })
+      .catch(() => {});
+  }, []);
+
+  const _actorName = () => me?.username || me?.display_name || "console-operator";
 
   // Derive livePair from the current selection. The members are
   // already in the cache from _loadQueue, so this is a pure compose
@@ -272,10 +322,11 @@ const DedupScreen = () => {
       const targets = FIELD_KEYS[f.key] || [f.key];
       targets.forEach(t => { chosen[t] = value; });
     });
+    setActionError("");
     _post(`/api/v1/ddup/match-pairs/${activePair.id}/merge/`, {
       surviving_id: survivor.id,
       chosen_field_values: chosen,
-      actor: "admin",
+      actor: _actorName(),
       note,
     })
       .then(async r => {
@@ -289,7 +340,7 @@ const DedupScreen = () => {
         setToast(`Merge committed · survivor ${survivor.id.slice(0, 12)}…`);
         _refreshNext();
       })
-      .catch(e => setToast(`Merge failed: ${e.message}`));
+      .catch(e => setActionError(`Merge failed for pair ${activePair.id.slice(0, 12)}… — ${e.message}`));
   };
   const commitDiscard = () => {
     setDiscardOpen(false);
@@ -299,9 +350,10 @@ const DedupScreen = () => {
       return;
     }
     const survivor = discardSide === "A" ? livePair._memberA : livePair._memberB;
+    setActionError("");
     _post(`/api/v1/ddup/match-pairs/${activePair.id}/discard/`, {
       surviving_id: survivor.id,
-      actor: "admin",
+      actor: _actorName(),
       reason: discardReason || "discarded via DDUP screen",
     })
       .then(async r => {
@@ -316,7 +368,7 @@ const DedupScreen = () => {
         setDiscardReason("");
         _refreshNext();
       })
-      .catch(e => setToast(`Discard failed: ${e.message}`));
+      .catch(e => setActionError(`Discard failed for pair ${activePair.id.slice(0, 12)}… — ${e.message}`));
   };
   const commitReject = ({ reason, note: rNote } = {}) => {
     setRejectOpen(false);
@@ -324,8 +376,9 @@ const DedupScreen = () => {
       setToast("Pair rejected. Records remain separate.");
       return;
     }
+    setActionError("");
     _post(`/api/v1/ddup/match-pairs/${activePair.id}/reject/`, {
-      actor: "admin",
+      actor: _actorName(),
       reason: reason || rNote || "rejected via DDUP screen",
     })
       .then(async r => {
@@ -339,7 +392,7 @@ const DedupScreen = () => {
         setToast(`Pair rejected · ${activePair.id.slice(0, 12)}…`);
         _refreshNext();
       })
-      .catch(e => setToast(`Reject failed: ${e.message}`));
+      .catch(e => setActionError(`Reject failed for pair ${activePair.id.slice(0, 12)}… — ${e.message}`));
   };
 
   // ── Loading + empty / error gates ────────────────────────────────
@@ -401,14 +454,53 @@ const DedupScreen = () => {
       <PageHeader
         eyebrow="DUPLICATES · US-083 · LIVE"
         title={<>Dedup compare <span className="t-bodysm muted" style={{marginLeft:10}}>{pendingList.length} pending</span></>}
-        sub="Pick a pair from the queue to adjudicate. Decisions advance the queue automatically."
+        sub={<>
+          Pick a pair from the queue to adjudicate. Decisions advance the queue automatically.
+          {lastRefreshedAt && (
+            <span className="t-cap" style={{marginLeft: 10}}>
+              · Last refreshed {lastRefreshedAt.toLocaleTimeString("en-GB", {hour:"2-digit", minute:"2-digit", second:"2-digit"})}
+            </span>
+          )}
+          {/* Disambiguate from the DIH DDUP gate — these pairs are
+              the registry's POST-promotion sweep over already-
+              registered records, not the pre-promotion staging gate
+              shown in DIH review. Operator-reported confusion on
+              2026-06-01: "DIH shows 0 dups, here shows 7" — that's
+              correct, two separate queues. */}
+          <span className="t-cap" style={{display:"block", marginTop:6, color:"var(--neutral-500)"}}>
+            <Icon name="info" size={11}/>{" "}
+            Post-promotion sweep — distinct from <strong>DIH review</strong>'s pre-promotion DDUP gate.
+          </span>
+        </>}
         right={<>
-          <button className="btn" onClick={() => _loadQueue(selectedPairId)}>
-            <Icon name="play" size={14}/> Refresh queue
+          <button className="btn" disabled={refreshBusy} onClick={_refreshQueue}
+            title="Re-fetch the queue from the server">
+            <Icon name="play" size={14}/>
+            {refreshBusy ? "Refreshing…" : "Refresh queue"}
           </button>
           <button className="btn"><Icon name="moreH" size={14}/></button>
         </>}
       />
+
+      {actionError && (
+        <div className="card" role="alert" style={{
+          padding: "10px 14px", marginBottom: 12,
+          borderLeft: "3px solid var(--accent-danger)",
+          background: "var(--accent-danger-bg)", color: "var(--accent-danger)",
+          display: "flex", alignItems: "center", gap: 10,
+        }}>
+          <Icon name="alert" size={16}/>
+          <div style={{flex: 1}}>
+            <strong>Action failed.</strong> {actionError}
+            <div className="t-cap" style={{marginTop: 2, color: "var(--accent-danger)"}}>
+              The pair stays in the queue. Click Refresh queue once the underlying issue is resolved.
+            </div>
+          </div>
+          <button className="icon-btn" onClick={() => setActionError("")} aria-label="Dismiss">
+            <Icon name="x" size={14}/>
+          </button>
+        </div>
+      )}
 
       {/* ── Pending pairs queue (US-S15-001: queue + adjudication split) */}
       <div className="card" style={{padding:0, marginBottom:16}}>
