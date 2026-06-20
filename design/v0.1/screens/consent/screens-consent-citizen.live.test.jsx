@@ -66,7 +66,10 @@ describe("CitizenConsentScreen (live mode)", () => {
       { members: MEMBERS, householdId: "HH-LIVE-1", live: true }));
     await waitFor(() => expect(globalThis.nsrApi.get).toHaveBeenCalled());
     // REGISTRATION is Granted + withdrawable → a Withdraw action button exists.
-    const withdrawBtn = screen.getAllByRole("button", { name: /^Withdraw$/ })[0];
+    // Use findAllByRole (async): the button renders only after the GET
+    // resolves and state flushes, which can lag the get-was-called wait
+    // above on a loaded CI runner (getAllByRole here was flaky).
+    const withdrawBtn = (await screen.findAllByRole("button", { name: /^Withdraw$/ }))[0];
     fireEvent.click(withdrawBtn);
     // Modal (pass-through stub) renders the submit button inline.
     const submit = await screen.findByRole("button", { name: /Submit withdrawal request/i });
@@ -81,7 +84,8 @@ describe("CitizenConsentScreen (live mode)", () => {
       { members: MEMBERS, householdId: "HH-LIVE-1", live: true }));
     await waitFor(() => expect(globalThis.nsrApi.get).toHaveBeenCalled());
     // RESEARCH is not captured → a Capture action button exists.
-    const captureBtn = screen.getAllByRole("button", { name: /^Capture$/ })[0];
+    // findAllByRole (async): the button renders after the GET resolves.
+    const captureBtn = (await screen.findAllByRole("button", { name: /^Capture$/ }))[0];
     fireEvent.click(captureBtn);
     const save = await screen.findByRole("button", { name: /Save consent/i });
     fireEvent.click(save);
@@ -94,7 +98,8 @@ describe("CitizenConsentScreen (live mode)", () => {
     render(globalThis.React.createElement(globalThis.CitizenConsentScreen,
       { members: MEMBERS, householdId: "HH-LIVE-1", live: true }));
     await waitFor(() => expect(globalThis.nsrApi.get).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole("button", { name: /View full consent history/i }));
+    const historyBtn = await screen.findByRole("button", { name: /View full consent history/i });
+    fireEvent.click(historyBtn);
     await waitFor(() => expect(globalThis.nsrApi.get).toHaveBeenCalledWith(
       "/api/v1/consent/members/M-HEAD/history"));
     // The formatted history event surfaces (AuditDrawer stub is pass-through).

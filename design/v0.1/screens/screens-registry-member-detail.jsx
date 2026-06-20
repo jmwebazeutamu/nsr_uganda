@@ -294,12 +294,12 @@ const MemberDetailScreen = ({ memberId, onBack, onOpenHousehold }) => {
   return (
     <div className="page">
       <PageHeader
+        back={{ label: "Members", onClick: onBack }}
         eyebrow={<>MEMBER · <span className="t-mono">{(m.mid || "").slice(0, 20)}{m.mid && m.mid.length > 20 ? "…" : ""}</span></>}
         title={<>{m.name} {m.rel && m.rel !== "—" && <span className="t-bodysm" style={{fontWeight:400, color:'var(--accent-data)', marginLeft:8}}>({String(m.rel).toLowerCase()})</span>}</>}
         sub={<>Line {m.line || "—"} of HH <span className="t-mono">{m.hh ? `${m.hh.slice(0, 16)}…` : "—"}</span> · {m.village || "—"} · {m.parish || "—"}, {m.district || "—"} · {m.subreg || "—"}</>}
         right={<>
           <button className="btn" onClick={() => onOpenHousehold?.(m.hh)}><Icon name="home" size={14}/> Open household</button>
-          <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to Members</button>
         </>}
       />
 

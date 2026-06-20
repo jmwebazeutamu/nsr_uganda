@@ -866,6 +866,97 @@ def _evaluate_dqa(payload: dict, *, stage_id: str = "") -> dict:
     }
 
 
+def _intra_household_summary(payload: dict, *, stage_id: str = "") -> dict:
+    """Evaluate the intra-household DQA gate (the SAME rules that BLOCK
+    promotion at dih_promote — e.g. AC-HOH-EXISTS) and return its failed
+    findings bucketed to match _evaluate_dqa's shape ({block, flag,
+    info}).
+
+    Pure read: no DqaEvaluation row is written here (stage_from_landing
+    already persisted the ingest evaluation + audit). Returns empty when
+    the DQA_INTRA_HOUSEHOLD feature flag is off, or defensively on any
+    error — the summary build must never crash triage.
+
+    Folding these into dqa_summary is what makes the Decision panel and
+    the stage status report head-of-household / roster issues up front,
+    instead of the operator discovering them only when promote raises
+    DqaBlockError (US-S11-044). We evaluate at the `dih_promote` stage so
+    what's shown is exactly what promotion will gate on.
+    """
+    out: dict[str, list[dict]] = {"block": [], "flag": [], "info": []}
+    try:
+        from apps.dqa.pipeline import _flag_enabled
+        if not _flag_enabled():
+            return out
+        from apps.dqa.household_evaluator import (
+            evaluate_household,
+            load_active_household_rules,
+        )
+        rules = load_active_household_rules("dih_promote")
+        aggregate = evaluate_household(rules, payload or {}, stage="dih_promote")
+    except Exception:  # noqa: BLE001 — never let summary-building crash triage
+        return out
+    for r in aggregate.get("results", []):
+        if r.get("status") not in ("fail", "error"):
+            continue
+        sev = r.get("severity") or "info"
+        # block + reject_with_override both prevent a clean promote, so
+        # they belong in blocking_failures; flag → flagged; else info.
+        bucket = "block" if sev in ("block", "reject_with_override") else _bucket(sev)
+        out[bucket].append({
+            "rule_id": r.get("rule_code"),
+            "record_id": stage_id or "household",
+            "reason": r.get("message", ""),
+            "severity": sev,
+            "scope": "household",
+            "offending_member_ids": r.get("offending_member_ids", []),
+        })
+    return out
+
+
+@transaction.atomic
+def record_promote_dqa_block(stage: StageRecord, *, actor: str,
+                             codes: list[str] | None = None) -> StageRecord:
+    """Persist a promote-time DQA block onto the stage so the Decision
+    panel + status report WHY promotion was refused, instead of leaving
+    the record sitting at its prior state with a stale (clean) summary.
+
+    promote_stage_record runs in its own atomic block and re-raises
+    DqaBlockError, which rolls back any write there — so the promote API
+    handler calls this afterwards. It re-evaluates the intra-household
+    gate, folds the blocking findings into dqa_summary (deduped), and
+    routes the stage to QUALITY_FAILED. (US-S11-044 / AC-HOH-EXISTS.)
+    """
+    stage = StageRecord.objects.select_for_update().get(pk=stage.pk)
+    if stage.state in (StageRecordState.PROMOTED, StageRecordState.REJECTED,
+                        StageRecordState.QUARANTINED):
+        return stage
+    payload = stage.canonical_payload or {}
+    intra = _intra_household_summary(payload, stage_id=stage.provisional_registry_id)
+
+    summary = dict(stage.dqa_summary or {})
+    blocking = list(summary.get("blocking_failures") or [])
+    seen = {(f.get("rule_id"), f.get("record_id")) for f in blocking}
+    for f in intra["block"]:
+        key = (f.get("rule_id"), f.get("record_id"))
+        if key not in seen:
+            blocking.append(f)
+            seen.add(key)
+    summary["blocking_failures"] = blocking
+    summary.setdefault("warnings", [])
+    summary.setdefault("flagged", summary["warnings"])
+    summary.setdefault("info", [])
+    stage.dqa_summary = summary
+    stage.state = StageRecordState.QUALITY_FAILED
+    stage.save(update_fields=["dqa_summary", "state", "updated_at"])
+    _emit_audit("evaluate", "stage_record", stage.id, actor=actor,
+                reason="dqa-blocking (promote gate)",
+                field_changes={"blocking_codes": codes or [
+                    f.get("rule_id") for f in intra["block"]
+                ]})
+    return stage
+
+
 @transaction.atomic
 def resolve_idv_pending(
     stage: StageRecord, *, actor: str, reason: str, decision: str,
@@ -1115,6 +1206,16 @@ def process_stage_record(
     # into the DqaResult record_ids so the violations dashboard can
     # aggregate by rule and trace back to the originating stage.
     dqa_summary = _evaluate_dqa(payload, stage_id=stage.provisional_registry_id)
+    # Fold the intra-household gate findings (AC-HOH-EXISTS etc.) into the
+    # summary so the Decision panel + stage status report ALL DQA issues —
+    # not only field-level ones — instead of the operator hitting a
+    # promote-time block on something the panel never showed (US-S11-044).
+    _intra = _intra_household_summary(payload, stage_id=stage.provisional_registry_id)
+    dqa_summary["blocking_failures"].extend(_intra["block"])
+    # `warnings` and `flagged` are the same list object in the summary —
+    # extend once.
+    dqa_summary["warnings"].extend(_intra["flag"])
+    dqa_summary["info"].extend(_intra["info"])
     stage.dqa_summary = dqa_summary
 
     if dqa_summary["blocking_failures"]:

@@ -353,6 +353,7 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
   return (
     <div className="page" style={{paddingBottom: 0}}>
       <PageHeader
+        back={{ label: "Data Sharing Agreements", onClick: onBack }}
         eyebrow={`PARTNERS · DSA · ${d.partner_code || "—"}`}
         title={<span className="t-mono">{d.reference}</span>}
         sub={<>
@@ -362,9 +363,6 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
           )}
         </>}
         right={<>
-          <button className="btn btn-ghost" onClick={onBack}>
-            <Icon name="arrowLeft" size={14}/> Workspace
-          </button>
           {_DSA_SUBMITTABLE.has(d.status) && (
             <button className="btn btn-primary" onClick={() => setSubmitOpen(true)}>
               <Icon name="check" size={13}/> Submit for sign-off
@@ -1133,6 +1131,7 @@ const DsaCreateWizard = ({ onBack, onCreated, prefillPartnerId = null }) => {
   return (
     <div className="page" style={{paddingBottom: 0}}>
       <PageHeader
+        back={{ label: "Data Sharing Agreements", onClick: onBack }}
         eyebrow="PARTNERS · DSA · NEW"
         title="Create a Data Sharing Agreement"
         sub="Three steps: identify the partner + reference, set the scope, review. The DSA is created as a draft — sign-off dispatch is a separate action."

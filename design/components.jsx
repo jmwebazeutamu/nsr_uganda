@@ -431,9 +431,23 @@ const Toast = ({ message, onDone, duration = 3000 }) => {
 /* ============================================================
    Page chrome helper
    ============================================================ */
-const PageHeader = ({ eyebrow, title, sub, right }) => (
+// `back` (optional): { label, onClick } renders a subtle
+// "‹ Back to {label}" link above the eyebrow for drill-down screens.
+const PageHeader = ({ eyebrow, title, sub, right, back }) => (
   <div className="page-header">
     <div>
+      {back && (
+        <button type="button" onClick={back.onClick} style={{
+          display: "inline-flex", alignItems: "center", gap: 4,
+          background: "none", border: 0, padding: 0, marginBottom: 6,
+          cursor: "pointer", color: "var(--neutral-600)",
+          fontSize: 12.5, fontWeight: 500,
+        }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "var(--primary-700)"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "var(--neutral-600)"; }}>
+          <Icon name="chevronLeft" size={14}/> Back to {back.label}
+        </button>
+      )}
       {eyebrow && <div className="page-eyebrow">{eyebrow}</div>}
       <h1 className="page-title t-h1">{title}</h1>
       {sub && <div className="page-sub">{sub}</div>}

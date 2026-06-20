@@ -44,6 +44,7 @@ from apps.admin_console.workflow_api import (
     dqa_rule_detail,
     dqa_rule_preview,
     dqa_rule_reject,
+    dqa_rule_retire,
     dqa_rule_sign,
     dqa_rule_submit,
     dqa_rules_list,
@@ -126,6 +127,8 @@ urlpatterns = [
          dqa_rule_sign, name="admin-workflow-dqa-sign"),
     path("workflow/dqa/rules/<str:rule_id>/v<int:version>/reject/",
          dqa_rule_reject, name="admin-workflow-dqa-reject"),
+    path("workflow/dqa/rules/<str:rule_id>/v<int:version>/retire/",
+         dqa_rule_retire, name="admin-workflow-dqa-retire"),
 
     # Workflow — DDUP (sprint 23 Cat 2.3)
     path("workflow/ddup/versions/",

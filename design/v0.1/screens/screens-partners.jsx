@@ -485,14 +485,10 @@ const PartnerRegistrationScreen = ({ onBack, onCreated }) => {
   return (
     <div className="page" style={{paddingBottom: 0}}>
       <PageHeader
+        back={{ label: "Partners", onClick: onBack }}
         eyebrow="PARTNERS · REGISTER NEW ORGANISATION · §11.6"
         title="Register partner"
         sub={<>Onboard a new partner and draft its first Data Sharing Agreement.</>}
-        right={<>
-          <button className="btn" onClick={onBack}>
-            <Icon name="chevronLeft" size={14}/> Back to partners
-          </button>
-        </>}
       />
 
       {/* Stepper */}

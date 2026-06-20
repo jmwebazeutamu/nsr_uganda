@@ -3,8 +3,9 @@
    DE_DATASETS, DE_VARIABLES_BY_DATASET, DE_PRIVACY, DE_GEO_LEVELS,
    PrivacyChip, DEShell, ScreenJumpTweak,
    strictestClass, violatesFloor, FloorViolationBanner,
-   useDeCatalogue, useDeDataset, useDeMe, RoleGateBanner,
+   useDeCatalogue, useDeDataset, useDePublicCatalogue, useDeGeoUnits, useDeMe, RoleGateBanner,
    submitAggregate, HandoffPrompt,
+   navigateDeScreen,
    TweaksPanel, useTweaks, TweakSection */
 
 // NSR MIS — Data Explorer · Aggregate builder (screen 2 of 5)
@@ -58,10 +59,13 @@ const BuilderScreen = () => {
 
   const me = useDeMe();
   const [datasets, dsMeta] = useDeCatalogue();
-  const [{ dataset: liveDs, variables: liveVars }] = useDeDataset(datasetId);
+  const [{ dataset: liveDs, variables: liveVars }, datasetMeta] = useDeDataset(datasetId);
+  const [, publicMeta, publicVarsBySection] = useDePublicCatalogue();
   const [runState, setRunState] = useBld({ pending: false, error: null });
+  const [saveState, setSaveState] = useBld({ message: null, error: null });
   const [floorViolation, setFloorViolation] = useBld(null);
   const [handoffOpen, setHandoffOpen] = useBld(false);
+  const [geoUnits, geoMeta] = useDeGeoUnits(scopeLevel);
 
   // Switching dataset must clear the query: projection/filter codes are
   // dataset-specific (each section has its own field_id namespace), so a
@@ -94,31 +98,72 @@ const BuilderScreen = () => {
     || datasets[0];
   // Live variables drive the picker; the mock map is only the offline
   // preview fallback (no live catalogue reachable).
+  const publicSectionKey = (ds?.code || datasetId || "").split("_")[0];
+  const publicVars = publicVarsBySection?.[publicSectionKey] || [];
+  const hasLiveAggregateVars = Array.isArray(liveVars) && liveVars.length > 0;
+  const usingPublicFallback = !hasLiveAggregateVars && publicVars.length > 0;
   const vars = (liveVars && liveVars.length)
     ? liveVars
-    : (DE_VARIABLES_BY_DATASET[ds?.id] || DE_VARIABLES_BY_DATASET[datasetId] || []);
+    : (publicVars.length
+      ? publicVars
+      : (DE_VARIABLES_BY_DATASET[ds?.id] || DE_VARIABLES_BY_DATASET[datasetId] || []));
 
-  const runAggregate = async () => {
-    if (!validForRun || runState.pending) return;
-    setRunState({ pending: true, error: null });
-    setFloorViolation(null);
-    const payload = {
+  const normaliseFilterValue = (f) => {
+    if (f.op === "in") {
+      if (Array.isArray(f.value)) return f.value;
+      return String(f.value || "").split(",").map(v => v.trim()).filter(Boolean);
+    }
+    if (f.op === "between") {
+      if (Array.isArray(f.value)) return f.value;
+      return String(f.value || "").split(",").map(v => v.trim()).filter(Boolean).slice(0, 2);
+    }
+    return f.value;
+  };
+
+  function buildAggregatePayload() {
+    return {
       dataset_code: ds.code,
       // Send only codes that exist in the selected dataset's live
       // variables — never a stale/mock code → no variable_not_found.
       projection: projVars.map(v => v.code),
       filters: filters
         .filter(f => f.var && vars.some(v => v.code === f.var))
-        .map(f => ({ variable: f.var, op: f.op, value: f.value })),
+        .map(f => ({ variable: f.var, op: f.op, value: normaliseFilterValue(f) })),
       geographic_scope: { level: scopeLevel, codes: scopeCodes },
     };
+  }
+
+  const saveQuery = () => {
+    if (!ds) return;
+    try {
+      const payload = buildAggregatePayload();
+      const key = "de_saved_queries";
+      const existing = JSON.parse(localStorage.getItem(key) || "[]");
+      const saved = {
+        id: `query_${Date.now()}`,
+        saved_at: new Date().toISOString(),
+        label: `${ds.code} · ${payload.projection.length || "all"} projection${payload.projection.length === 1 ? "" : "s"}`,
+        payload,
+      };
+      localStorage.setItem(key, JSON.stringify([saved, ...existing].slice(0, 25)));
+      setSaveState({ message: "Query saved locally.", error: null });
+    } catch (err) {
+      setSaveState({ message: null, error: String(err?.message || err) });
+    }
+  };
+
+  const runAggregate = async () => {
+    if (!validForRun || runState.pending) return;
+    setRunState({ pending: true, error: null });
+    setFloorViolation(null);
+    const payload = buildAggregatePayload();
     try {
       const resp = await submitAggregate(payload);
       sessionStorage.setItem("de_last_aggregate", JSON.stringify({
         ts: Date.now(),
         payload, response: resp,
       }));
-      location.href = "Data Explorer - Results.html";
+      navigateDeScreen("results");
     } catch (err) {
       // 422 geographic_floor_violation → render the FloorViolationBanner
       // with the DRS handoff CTA. The backend payload carries the
@@ -140,7 +185,7 @@ const BuilderScreen = () => {
         sessionStorage.setItem("de_last_aggregate", JSON.stringify({
           ts: Date.now(), payload, response: null, preview: true,
         }));
-        location.href = "Data Explorer - Results.html";
+        navigateDeScreen("results");
         return;
       }
       setRunState({ pending: false, error: String(body.error || err.message || err) });
@@ -194,8 +239,20 @@ const BuilderScreen = () => {
   const addFilter = () => setFilters([...filters, { var: filterableVars[0]?.code || "", op: "eq", value: "" }]);
   const updateFilter = (i, patch) => setFilters(filters.map((f, j) => j === i ? { ...f, ...patch } : f));
   const removeFilter = (i) => setFilters(filters.filter((_, j) => j !== i));
+  const scopeLevelLabel = DE_GEO_LEVELS.find(g => g.code === scopeLevel)?.label || scopeLevel;
+  const availableGeoUnits = geoUnits.filter(u => u.code && !scopeCodes.includes(u.code));
+  const addScopeCode = (code) => {
+    if (!code || scopeCodes.includes(code)) return;
+    setScopeCodes([...scopeCodes, code]);
+  };
 
-  const validForRun = ds && projVars.length > 0 && !floorViolated && ds.privacy !== "sensitive";
+  const validForRun = ds && projVars.length > 0 && !floorViolated && ds.privacy !== "sensitive" && hasLiveAggregateVars;
+  const runBlockedReason = !hasLiveAggregateVars
+    ? "This dataset has no live aggregate variables loaded yet, so the run path is blocked. The picker is using questionnaire fields as a fallback."
+    : floorViolated
+      ? "Geographic floor violation — fix the scope"
+      : "Add at least one projection";
+  const previewPayload = ds ? buildAggregatePayload() : null;
 
   // No dataset resolved yet (catalogue still loading, or nothing to
   // show) — render a calm state rather than deref an undefined ds.
@@ -235,12 +292,41 @@ const BuilderScreen = () => {
         title="Build an aggregate query"
         sub={<>Pick variables to project, add filters, choose a geographic scope. Strictest class &amp; the suppression k-floor are derived from the variables you include.</>}
         right={<>
-          <button className="btn"><Icon name="save" size={14}/> Save query</button>
+          <button className="btn" onClick={saveQuery}><Icon name="save" size={14}/> Save query</button>
           <button className="btn" onClick={() => setHandoffOpen(true)}>
             <Icon name="arrowRight" size={14}/> Request record-level data
           </button>
         </>}
       />
+
+      {(saveState.message || saveState.error) && (
+        <div style={{
+          background: saveState.error ? "var(--accent-danger-bg)" : "var(--accent-data-bg)",
+          border: `1px solid ${saveState.error ? "var(--accent-danger)" : "var(--accent-data)"}`,
+          borderRadius: 4,
+          padding: "8px 12px",
+          marginBottom: 16,
+          display: "flex", alignItems: "center", gap: 8,
+          color: saveState.error ? "var(--accent-danger)" : "var(--accent-data)",
+          fontSize: 12.5,
+        }}>
+          <Icon name={saveState.error ? "alertTriangle" : "save"} size={14}/>
+          <strong>{saveState.error ? "Save failed." : saveState.message}</strong>
+          {saveState.error && <span style={{color:"var(--neutral-700)"}}>{saveState.error}</span>}
+        </div>
+      )}
+
+      {!hasLiveAggregateVars && (
+        <div style={{
+          background: "var(--accent-quality-bg)",
+          borderBottom: "1px solid var(--accent-quality)",
+          padding: "8px 24px",
+          color: "var(--accent-quality)",
+          fontSize: 12.5,
+        }}>
+          This dataset has no live aggregate variables loaded yet. The picker is usable, but Run aggregate is disabled until the metadata table is populated.
+        </div>
+      )}
 
       {floorViolation && (
         <FloorViolationBanner
@@ -310,7 +396,7 @@ const BuilderScreen = () => {
             requested_codes: scopeCodes,
             scope_label: `${scopeCodes.length} ${scopeLevel}${scopeCodes.length === 1 ? "" : "s"}`,
           }}
-          onRequestHandoff={() => alert("→ POST /handoff/  → /data-requests/{id}/")}
+          onRequestHandoff={() => setHandoffOpen(true)}
         />
       )}
 
@@ -321,6 +407,19 @@ const BuilderScreen = () => {
           sub="Which variables to group by + count."
           right={<Chip size="sm" tone="neutral">{projVars.length} selected</Chip>}>
           <div style={{padding:14}}>
+            {usingPublicFallback && (
+              <div style={{
+                marginBottom: 10,
+                padding: "8px 10px",
+                border: "1px solid var(--accent-update)",
+                background: "var(--accent-update-bg)",
+                borderRadius: 4,
+                color: "var(--accent-update)",
+                fontSize: 12.5,
+              }}>
+                Aggregate metadata is empty for this dataset, so the picker is using questionnaire fields until the live variable table is populated.
+              </div>
+            )}
             {projVars.length === 0 && (
               <EmptyHint icon="sliders" title="No projection yet" body="Add at least one variable. Each row in the result will be one combination of the variables you pick."/>
             )}
@@ -328,7 +427,7 @@ const BuilderScreen = () => {
               <ProjectionPill key={v.code} v={v} onRemove={() => removeProj(v.code)}/>
             ))}
             {showVarPicker ? (
-              <VarPicker variables={projableVars} onPick={addProj} onCancel={() => setShowVarPicker(false)}/>
+              <VarPicker variables={projableVars} loading={datasetMeta?.loading || publicMeta.loading} onPick={addProj} onCancel={() => setShowVarPicker(false)}/>
             ) : (
               <button className="bld-add-btn" onClick={() => setShowVarPicker(true)}>
                 <Icon name="plus" size={13}/> Add variable
@@ -396,7 +495,10 @@ const BuilderScreen = () => {
                     borderRadius:4,
                     cursor:"pointer",
                   }}>
-                    <input type="radio" checked={isActive} onChange={() => setScopeLevel(g.code)}
+                    <input type="radio" checked={isActive} onChange={() => {
+                      setScopeLevel(g.code);
+                      setScopeCodes([]);
+                    }}
                       style={{margin:0}}/>
                     <div style={{flex:1}}>
                       <div style={{fontWeight:500, fontSize:13}}>{g.label}</div>
@@ -427,19 +529,38 @@ const BuilderScreen = () => {
                     </button>
                   </span>
                 ))}
-                <button className="t-cap" style={{
-                  border:"1px dashed var(--neutral-300)", background:"transparent",
-                  padding:"2px 6px", borderRadius:3, cursor:"pointer", color:"var(--neutral-700)",
-                  display:"inline-flex", alignItems:"center", gap:4,
-                }} onClick={() => setScopeCodes([...scopeCodes, `Area-${scopeCodes.length + 1}`])}>
-                  <Icon name="plus" size={10}/> Add unit
-                </button>
+                {scopeLevel === "national" ? (
+                  <span className="t-cap" style={{padding:"3px 0", color:"var(--neutral-600)"}}>
+                    National scope includes all Uganda records.
+                  </span>
+                ) : (
+                  <select className="field-select"
+                    value=""
+                    onChange={(e) => {
+                      addScopeCode(e.target.value);
+                      e.target.value = "";
+                    }}
+                    disabled={geoMeta.loading || availableGeoUnits.length === 0}
+                    style={{width:"100%", minWidth:220, flex:"1 1 240px"}}>
+                    <option value="">
+                      {geoMeta.loading ? `Loading ${scopeLevelLabel.toLowerCase()} units...` : `Add ${scopeLevelLabel.toLowerCase()} unit...`}
+                    </option>
+                    {availableGeoUnits.map(u => (
+                      <option key={u.code} value={u.code}>{u.code} - {u.name || u.label || u.code}</option>
+                    ))}
+                  </select>
+                )}
               </div>
               <div className="t-cap mt-1">
                 Floor for this dataset: <strong>{ds.floor}</strong>.
                 {floorViolated && <span style={{color:"var(--accent-quality)", marginLeft:4}}>
                   Current level is finer than the floor.
                 </span>}
+                {!floorViolated && scopeLevel !== "national" && !geoMeta.loading && availableGeoUnits.length === 0 && scopeCodes.length === 0 && (
+                  <span style={{color:"var(--neutral-600)", marginLeft:4}}>
+                    No active {scopeLevelLabel.toLowerCase()} units returned; leave blank to aggregate all units at this level.
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -462,15 +583,7 @@ const BuilderScreen = () => {
           fontSize:12.5, lineHeight:1.55,
           overflowX:"auto",
         }}>
-{`{
-  "dataset_code": "${ds.code}",
-  "projection":   ${JSON.stringify(projection)},
-  "filters":      ${JSON.stringify(filters, null, 2).split("\n").map((l, i) => i === 0 ? l : "                  " + l).join("\n")},
-  "geographic_scope": {
-    "level": "${scopeLevel}",
-    "codes": ${JSON.stringify(scopeCodes)}
-  }
-}`}
+{JSON.stringify(previewPayload, null, 2)}
         </pre>
       </div>
 
@@ -494,10 +607,10 @@ const BuilderScreen = () => {
         <button className="btn" onClick={() => setHandoffOpen(true)}>
           <Icon name="arrowRight" size={14}/> Request record-level data
         </button>
-        <button className="btn"><Icon name="save" size={14}/> Save query</button>
+        <button className="btn" onClick={saveQuery}><Icon name="save" size={14}/> Save query</button>
         <button className="btn btn-primary" disabled={!validForRun || runState.pending}
           onClick={runAggregate}
-          title={!validForRun ? (floorViolated ? "Geographic floor violation — fix the scope" : "Add at least one projection") : "POST /aggregate/"}>
+          title={!validForRun ? runBlockedReason : "POST /aggregate/"}>
           <Icon name={runState.pending ? "loader" : "play"} size={14}/>
           {runState.pending ? " Running…" : " Run aggregate"}
         </button>
@@ -611,7 +724,7 @@ const ProjectionPill = ({ v, onRemove }) => (
 /* ----------------------------------------------------------------
    Variable picker drop-down
    ---------------------------------------------------------------- */
-const VarPicker = ({ variables, onPick, onCancel }) => {
+const VarPicker = ({ variables, loading = false, onPick, onCancel }) => {
   const [q, setQ] = useBld("");
   const filtered = q
     ? variables.filter(v => v.label.toLowerCase().includes(q.toLowerCase()) || v.code.toLowerCase().includes(q.toLowerCase()))
@@ -627,7 +740,11 @@ const VarPicker = ({ variables, onPick, onCancel }) => {
         <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter variables…"/>
       </div>
       <div style={{maxHeight:240, overflowY:"auto", border:"1px solid var(--neutral-200)", borderRadius:3, background:"#fff"}}>
-        {filtered.length === 0 && <div className="t-cap" style={{padding:14, textAlign:"center"}}>No matches</div>}
+        {filtered.length === 0 && (
+          <div className="t-cap" style={{padding:14, textAlign:"center"}}>
+            {loading ? "Loading variables..." : "No matches"}
+          </div>
+        )}
         {filtered.map(v => (
           <button key={v.code} onClick={() => onPick(v.code)} style={{
             display:"grid", gridTemplateColumns:"1fr auto auto", gap:10, alignItems:"center",
@@ -701,4 +818,7 @@ const FilterRow = ({ f, v, variables, onChange, onRemove }) => {
   );
 };
 
-ReactDOM.createRoot(document.getElementById("app")).render(<BuilderScreen/>);
+Object.assign(window, { DataExplorerBuilderScreen: BuilderScreen });
+if (!window.NSR_EMBEDDED_CONSOLE) {
+  ReactDOM.createRoot(document.getElementById("app")).render(<BuilderScreen/>);
+}

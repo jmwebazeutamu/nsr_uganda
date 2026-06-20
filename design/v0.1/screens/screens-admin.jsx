@@ -140,6 +140,15 @@ const _runApiToRow = (r) => {
   const connectorLabel = r.source_code
     ? `${r.source_code}${r.run_type === "test" ? " (test)" : ""}`
     : (r.connector_name || "");
+  // Pull the human-readable run summary off the model. The pull
+  // service writes things like "pulled 0 new row(s) … skipped_duplicate=1"
+  // into ConnectorRun.note; before this surface, an operator-triggered
+  // run that succeeded against an empty page looked indistinguishable
+  // from a failure ("succeeded · 0 · 0 · 0 · 0"). We also parse the
+  // skipped_duplicate counter out so the table can chip it explicitly.
+  const note = r.note || "";
+  const skipMatch = note.match(/skipped_duplicate=(\d+)/);
+  const skippedDuplicate = skipMatch ? Number(skipMatch[1]) : 0;
   return {
     id: r.id,
     connector: connectorLabel,
@@ -152,6 +161,8 @@ const _runApiToRow = (r) => {
     promoted: r.records_promoted || 0,
     quarantined: r.records_quarantined || 0,
     rejected: r.records_rejected || 0,
+    skippedDuplicate,
+    note,
   };
 };
 
@@ -855,6 +866,7 @@ const ConnectorRunsTab = () => {
         // Optimistic prepend so the operator sees the new row
         // immediately. The next live-fetch tick (S10-005's 5-second
         // poll) will replace it with the server-truth row.
+        const skippedDuplicate = Number(body.skipped_duplicate || 0);
         const newRow = {
           id: body.run_id,
           connector: `${body.source_code}${dryRun ? " (dry-run)" : ""}`,
@@ -866,13 +878,25 @@ const ConnectorRunsTab = () => {
           promoted: 0,
           quarantined: body.quarantined || 0,
           rejected: body.errored || 0,
+          skippedDuplicate,
+          note: body.note || "",
         };
         setRuns(prev => [newRow, ...prev]);
-        setToast(
-          dryRun
-            ? `Dry-run complete: would have landed ${body.landed} row(s).`
-            : `Pull complete: landed ${body.landed} row(s), staged ${body.staged}.`,
-        );
+        // Toast spells out the no-op case explicitly so the operator
+        // can stop confusing "succeeded · 0 / 0 / 0 / 0 + skipped"
+        // with an error condition. The trigger response carries the
+        // same `skipped_duplicate` counter the model writes into
+        // ConnectorRun.note for the polled rows.
+        const noNew = (body.landed || 0) === 0 && (body.staged || 0) === 0;
+        if (dryRun) {
+          setToast(`Dry-run complete: would have landed ${body.landed} row(s).`);
+        } else if (noNew && skippedDuplicate > 0) {
+          setToast(`No new submissions — ${skippedDuplicate} already pulled in earlier runs.`);
+        } else if (noNew) {
+          setToast(`Pull succeeded — no new submissions upstream.`);
+        } else {
+          setToast(`Pull complete: landed ${body.landed} row(s), staged ${body.staged}.`);
+        }
       })
       .catch(err => {
         setSubmitting(false);
@@ -975,6 +999,20 @@ const ConnectorRunsTab = () => {
               <div style={{padding:"12px 16px"}}>
                 <div style={{fontSize:13, fontWeight:500}}>{r.connector}</div>
                 <div className="t-mono muted" style={{fontSize:11, marginTop:2}}>{r.id}</div>
+                {/* When a succeeded run touched zero rows, surface
+                    *why* — almost always "everything upstream was
+                    already pulled" (skipped_duplicate=N). Without this
+                    caption the row reads as a silent failure. */}
+                {r.status === "succeeded"
+                  && (r.landed || 0) === 0
+                  && (r.staged || 0) === 0 && (
+                  <div style={{fontSize:11, marginTop:3, color:"var(--neutral-500)"}}
+                       title={r.note || ""}>
+                    {r.skippedDuplicate > 0
+                      ? <>No new — <strong style={{color:"var(--neutral-700)"}}>{r.skippedDuplicate.toLocaleString()}</strong> already pulled in earlier runs.</>
+                      : <>No new submissions upstream.</>}
+                  </div>
+                )}
               </div>
               <div style={{padding:"12px 8px", fontSize:12, color:"var(--neutral-700)"}}>
                 {_formatRunDate(r.started_at)}

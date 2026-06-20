@@ -796,16 +796,11 @@ const _drsQueryHash = (tree, selected) => {
   return h.toString(16).padStart(8, "0");
 };
 
-// Total registry size used by the heuristic matched-count estimate.
-// The real number is whatever /api/v1/data-management/households/
-// reports today; pinning it here keeps the headline label aligned
-// with what the operator already saw on Step 2's right rail.
-const _DRS_REGISTRY_TOTAL = 12_089_442;
-
 // Heuristic estimate — same shape BuildStepV2 uses on Step 2.
 // Each rule cuts ~62% of the cohort (capped at 8 rules). 0 rules =
-// the full registry size. There is no live count endpoint yet
-// (DRS-O-PREVIEW); the estimate is clearly badged in the UI.
+// the full registry size. This remains the offline fallback when the
+// live estimate endpoint is unavailable.
+const _DRS_REGISTRY_TOTAL = 12_089_442;
 const _drsEstimateMatched = (tree) => {
   // qbCountRules expects a node — guard for null up front so the
   // estimator survives a yet-uninitialised tree (or a PreviewStep
@@ -818,6 +813,49 @@ const _drsEstimateMatched = (tree) => {
   return Math.max(120, Math.round(
     _DRS_REGISTRY_TOTAL * Math.pow(0.38, Math.min(count, 8)),
   ));
+};
+
+const _drsFetchLiveEstimate = async (tree) => {
+  const payload = { criteria: tree || null };
+  const api = typeof window !== "undefined" ? window.nsrApi : null;
+  try {
+    const data = api
+      ? await api.post("/api/v1/drs/requests/estimate/", payload)
+      : await (async () => {
+          const r = await fetch("/api/v1/drs/requests/estimate/", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.json();
+        })();
+    return { ...data, source: "server" };
+  } catch {
+    try {
+      const r = await fetch("/api/v1/data-management/households/aggregates/", {
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const agg = await r.json();
+      const total = Number(agg?.total || 0);
+      const matched = _drsEstimateMatched(tree);
+      return {
+        registry_total: total,
+        estimated_matches: matched,
+        estimated_pct: total ? Number((matched / total * 100).toFixed(2)) : 0,
+        rule_count: typeof window?.qbCountRules === "function" ? window.qbCountRules(tree) : 0,
+        source: "fallback",
+      };
+    } catch {
+      return null;
+    }
+  }
 };
 const _PREVIEW_ULIDS = [
   "01HXY7K3B2N9PVQE4M6FZRWS18", "01HXZ9MR4N8P2QFB7K6FZRWS33",
@@ -848,6 +886,10 @@ const _PREVIEW_PHONE_TAILS = [
   "4567", "2119", "8221", "5582", "6620",
   "0044", "9912", "3322", "7711", "1188",
 ];
+const _previewSampleText = (field, i) => {
+  const label = (field && field.label) || "value";
+  return `${label} sample ${i + 1}`;
+};
 const _PREVIEW_NIN_LAST4 = [
   "ABCD", "8821", "1109", "4F2C", "7733",
   "9911", "3361", "5520", "0844", "6678",
@@ -1141,7 +1183,7 @@ const _previewCell = (key, field, i, pin) => {
     if (/parish|county|district|region|village|sub_region/.test(key)) {
       return _PREVIEW_PLACES[i];
     }
-    return "—";
+    return _previewSampleText(field, i);
   }
   // type === "text" (or unspecified)
   if (key === "household.id" || key === "member.id") return _PREVIEW_ULIDS[i];
@@ -1152,10 +1194,12 @@ const _previewCell = (key, field, i, pin) => {
   if (/enumeration_area/.test(key)) return "EA-" + String(7411 + i);
   if (/consent_state/.test(key)) return ["granted", "granted", "granted", "withdrawn", "granted", "granted", "pending", "granted", "granted", "granted"][i];
   if (/intake_source/.test(key)) return ["CAPI-walkin", "CAPI-walkin", "UBOS-2024", "CAPI-walkin", "CAPI-walkin", "UBOS-2024", "OPM-pdm", "CAPI-walkin", "CAPI-walkin", "OPM-pdm"][i];
+  if (/dwelling_tenure/.test(key)) return ["Owner occupied", "Rented", "Free - private", "Free - employer provided", "Other", "Owner occupied", "Rented", "Free - private", "Other", "Rented"][i];
+  if (/residence_status|residency_status/.test(key)) return ["Resident", "Visitor", "Temporary resident", "Resident", "Visitor", "Resident", "Temporary resident", "Resident", "Visitor", "Resident"][i];
   if (/relationship_to_head/.test(key)) return ["head", "spouse", "child", "head", "spouse", "head", "parent", "child", "head", "spouse"][i];
   if (/marital_status/.test(key)) return ["married", "single", "married", "widowed", "married", "single", "married", "divorced", "married", "married"][i];
   if (/nationality/.test(key)) return "Ugandan";
-  return "—";
+  return _previewSampleText(field, i);
 };
 
 /* ============================================================
@@ -2025,12 +2069,18 @@ const ScopeStep = ({
    DSA card (shared)
    ============================================================ */
 const DSACard = ({ effectiveDsa = null } = {}) => {
-  // When the wizard knows which DSA it is filing under (operator
-  // pick OR partner-bound DSA), surface a thin live header. The
-  // illustrative usage/quota body stays placeholder — those metrics
-  // are not yet on the schema endpoint (await DRS-O-02).
+  // Surface the key terms of the DSA the operator is filing under so
+  // they know what they're bound to. Valid window + monthly row budget
+  // travel on the picker payload (build_schema.available_dsas). Live
+  // usage-against-budget is the DRS-O-02 follow-up.
   const ref = effectiveDsa?.reference;
   const partner = effectiveDsa?.partner_name;
+  const from = effectiveDsa?.effective_from;
+  const to = effectiveDsa?.effective_to;
+  const validWindow = (from || to) ? `${from || "—"} → ${to || "open-ended"}` : "—";
+  const budget = (effectiveDsa?.monthly_row_budget != null)
+    ? `${effectiveDsa.monthly_row_budget.toLocaleString()} rows / month`
+    : "—";
   return (
     <div className="card" style={{borderTop:'3px solid var(--accent-system)'}}>
       <div className="card-header" style={{padding:'12px 16px'}}>
@@ -2043,13 +2093,14 @@ const DSACard = ({ effectiveDsa = null } = {}) => {
       <div style={{padding:16}}>
         <div style={{display:'grid', gridTemplateColumns:'110px 1fr', rowGap:6, fontSize:13}}>
           <div className="muted">Partner</div><div>{partner || "—"}</div>
-          <div className="muted">Programme</div><div className="muted">(advertised on schema follow-up)</div>
-          <div className="muted">Valid window</div><div className="muted">(advertised on schema follow-up)</div>
-          <div className="muted">Row budget</div><div className="muted">(advertised on schema follow-up)</div>
+          <div className="muted">Valid window</div><div>{validWindow}</div>
+          <div className="muted">Row budget</div><div>{budget}</div>
         </div>
         <div className="t-cap mt-3">
-          DSA fine print — quotas, sensitivity caveats, retention
-          pledges — lands on the schema endpoint in a follow-up slice.
+          Your request is filed under this DSA. Requested fields and
+          geography must fall within its scope — out-of-scope fields are
+          disabled in the Field Selector. The row budget is the agreed
+          monthly cap; the operator enforces quotas and retention at delivery.
         </div>
       </div>
     </div>
@@ -2075,6 +2126,8 @@ const DSACard = ({ effectiveDsa = null } = {}) => {
 // value across the preview so the rendered rows match the captured
 // WHERE clause. Unconstrained columns still vary via the generator.
 const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
+  const [estimate, setEstimate] = useStateDRS(null);
+  const [estimateSource, setEstimateSource] = useStateDRS("loading");
   const cols = selected
     .map(key => ({ key, field: catalogueByKey[key] }))
     .filter(c => c.field);
@@ -2085,6 +2138,25 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
   // BUG-S27-025 — per-row coherent geographic path so cells in
   // _GEO_CHAIN form a true parent→child chain within each row.
   const geoPathsByRow = _buildGeoPathsForRows(pins, cols, catalogueByKey, _PREVIEW_ROW_COUNT);
+
+  useEffectDRS(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const live = await _drsFetchLiveEstimate(tree);
+      if (cancelled) return;
+      if (live) {
+        setEstimate(live);
+        setEstimateSource(live.source || "server");
+      } else {
+        setEstimate(null);
+        setEstimateSource("error");
+      }
+    }, 180);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [tree]);
 
   if (selected.length === 0) {
     return (
@@ -2111,8 +2183,14 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
   // "a4e9d2f1…b7c3" no matter what the operator built; approvers
   // couldn't fingerprint different requests apart. Now both update
   // every time `tree` / `selected` changes.
-  const matched = _drsEstimateMatched(tree);
-  const matchedPct = (matched / _DRS_REGISTRY_TOTAL) * 100;
+  const matched = estimate ? Number(estimate.estimated_matches || 0) : _drsEstimateMatched(tree);
+  const matchedPct = estimate
+    ? Number(estimate.estimated_pct || 0)
+    : (() => {
+        const total = estimate?.registry_total || _DRS_REGISTRY_TOTAL;
+        return total ? (matched / total) * 100 : 0;
+      })();
+  const registryTotal = estimate ? Number(estimate.registry_total || 0) : _DRS_REGISTRY_TOTAL;
   const queryHash = _drsQueryHash(tree, selected);
 
   return (
@@ -2121,10 +2199,12 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
         <div>
           <div className="row gap-2" style={{alignItems:'center'}}>
             <span className="t-cap">ESTIMATED ROWS</span>
-            <Chip size="sm" tone="neutral">heuristic</Chip>
+            <Chip size="sm" tone={estimateSource === "server" ? "data" : estimateSource === "fallback" ? "update" : "neutral"}>
+              {estimateSource === "server" ? "live" : estimateSource === "fallback" ? "fallback" : "loading"}
+            </Chip>
           </div>
           <div className="t-num" style={{fontSize:24, fontWeight:700, letterSpacing:'-0.01em', color:'var(--neutral-700)'}}>~{matched.toLocaleString()}</div>
-          <div className="t-cap">of {_DRS_REGISTRY_TOTAL.toLocaleString()} households ({matchedPct.toFixed(2)}%) · final count at delivery</div>
+          <div className="t-cap">of {registryTotal.toLocaleString()} households ({matchedPct.toFixed(2)}%) · final count at delivery</div>
         </div>
         <div style={{width:1, height:48, background:'var(--neutral-200)'}}/>
         <div>
@@ -2167,7 +2247,11 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
             {scopedSelectedCount > 0 && <>{scopedSelectedCount} column{scopedSelectedCount === 1 ? "" : "s"} scoped to the pinned region · </>}
             {sensitiveCount > 0 && <>{sensitiveCount} Sensitive column{sensitiveCount === 1 ? "" : "s"} masked · </>}
             {personalCount > 0 && <>{personalCount} Personal phone column{personalCount === 1 ? "" : "s"} last-4 only · </>}
-            cell values are design-time fixtures until DRS-O-PREVIEW lands
+            {estimateSource === "server"
+              ? "estimates refresh from the live DRS backend as you add filters"
+              : estimateSource === "fallback"
+                ? "backend estimate unavailable; using live registry totals with the same heuristic"
+                : "estimating against the live registry as the query changes"}
           </span>
         </div>
         <div style={{overflowX:'auto'}}>

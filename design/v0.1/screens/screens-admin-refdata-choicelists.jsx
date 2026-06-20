@@ -496,11 +496,11 @@ const CLDetail = ({ listName, meta: metaProp, onBack }) => {
   return (
     <div className="page">
       <PageHeader
+        back={{ label: "Choice lists", onClick: onBack }}
         eyebrow={<>ADMIN · REFERENCE DATA · CHOICE LIST · <span className="t-mono">{listName}</span></>}
         title={meta?.label || listName}
         sub={<>Versioned · stable across revisions · last activated <strong>{selectedVersion.effectiveFrom || '—'}</strong></>}
         right={<>
-          <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to lists</button>
           {meta?.draftVersion
             ? <button className="btn" disabled title="A draft already exists for this list — switch to it to edit options">
                 <Icon name="edit" size={14}/> Draft v{meta.draftVersion} exists

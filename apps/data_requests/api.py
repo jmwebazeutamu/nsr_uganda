@@ -9,6 +9,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 
+from apps.data_management.models import Household
 from apps.security.abac import PartnerScopedQuerysetMixin
 from apps.security.audit import emit as emit_audit
 from apps.security.audit_views import AuditReadMixin, _client_ip
@@ -110,6 +111,41 @@ class _Deliver(serializers.Serializer):
     actor = serializers.CharField(max_length=64)
     manifest_sha256 = serializers.CharField(min_length=64, max_length=64)
     row_count = serializers.IntegerField(min_value=0)
+
+
+class _EstimateRequest(serializers.Serializer):
+    criteria = serializers.JSONField(required=False, allow_null=True)
+    max_rows = serializers.IntegerField(required=False, min_value=1)
+    fields = serializers.ListField(
+        child=serializers.CharField(),
+        required=False,
+    )
+
+
+def _count_criteria_rules(node) -> int:
+    if not node or not isinstance(node, dict):
+        return 0
+    if node.get("kind") == "rule":
+        return 1
+    return sum(_count_criteria_rules(child) for child in (node.get("rules") or []))
+
+
+def _estimate_match_count(criteria) -> dict[str, int]:
+    registry_total = Household.objects.filter(is_deleted=False).count()
+    rule_count = _count_criteria_rules(criteria)
+    if rule_count <= 0:
+        return {
+            "registry_total": registry_total,
+            "estimated_matches": registry_total,
+            "rule_count": 0,
+        }
+    factor = 0.38 ** min(rule_count, 8)
+    estimated_matches = max(120, round(registry_total * factor))
+    return {
+        "registry_total": registry_total,
+        "estimated_matches": estimated_matches,
+        "rule_count": rule_count,
+    }
 
 
 # Partner + DSA endpoints moved to apps/partners/api.py per ADR-0013.
@@ -230,6 +266,31 @@ class DataRequestViewSet(
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         req.refresh_from_db()
         return Response(self.get_serializer(req).data)
+
+    @extend_schema(
+        tags=["api-drs"],
+        summary="Estimate matches for a DRS criteria tree",
+        request=_EstimateRequest,
+        responses={200: OpenApiResponse(description="live registry estimate")},
+    )
+    @action(detail=False, methods=["post"], url_path="estimate")
+    def estimate(self, request):
+        ser = _EstimateRequest(data=request.data)
+        ser.is_valid(raise_exception=True)
+        criteria = ser.validated_data.get("criteria") or {}
+        data = _estimate_match_count(criteria)
+        registry_total = data["registry_total"]
+        estimated_matches = data["estimated_matches"]
+        pct = (estimated_matches / registry_total * 100) if registry_total else 0
+        capped = ser.validated_data.get("max_rows")
+        return Response({
+            "registry_total": registry_total,
+            "estimated_matches": estimated_matches,
+            "estimated_pct": round(pct, 2),
+            "rule_count": data["rule_count"],
+            "max_rows": capped,
+            "source": "server",
+        })
 
     @extend_schema(
         tags=["api-drs"],

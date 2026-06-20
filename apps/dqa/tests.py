@@ -145,6 +145,81 @@ class TestEvaluateProducesResult:
         assert "missing" in ev.reason
 
 
+class TestEvaluateAllSkipsIntraHousehold:
+    """evaluate_all() must NOT pick up INTRA_HOUSEHOLD rules — their
+    DSL uses household-aware operators (count_where, for_each_member,
+    …) that only apps.dqa.household_evaluator knows. Feeding one
+    into the legacy engine raises DSLError, which until 2026-06-01
+    crashed connector pulls after rows had already staged."""
+
+    @pytest.fixture
+    def _legacy_active_rule(self, db):
+        # A vanilla legacy-vocabulary rule that DOES belong to
+        # evaluate_all — keeps the positive assertion honest.
+        return DqaRule.objects.create(
+            rule_id="EAL-LEGACY-SURNAME",
+            version=1, description="surname not null",
+            severity=Severity.WARNING,
+            expression={"field": "surname", "op": "not_null"},
+            error_message_template="missing surname",
+            applicability_filter={"entity": "member"},
+            effective_from=date(2026, 1, 1),
+            status=RuleStatus.ACTIVE,
+            author="alice", approved_by="bob",
+        )
+
+    @pytest.fixture
+    def _intra_active_rule(self, db):
+        from apps.dqa.models import (
+            ExpressionType,
+            RuleCategory,
+            RuleScope,
+        )
+        return DqaRule.objects.create(
+            rule_id="EAL-INTRA-COUNTWHERE",
+            version=1, description="exactly one head",
+            severity=Severity.BLOCK,
+            category=RuleCategory.INTRA_HOUSEHOLD,
+            scope=RuleScope.HOUSEHOLD,
+            expression_type=ExpressionType.DSL,
+            expression={"op": "count_where", "predicate": {"op": "eq", "args": ["$relationship_to_head", "01"]}},
+            error_message_template="head count off",
+            applicability_filter={"entity": "household"},
+            effective_from=date(2026, 1, 1),
+            status=RuleStatus.ACTIVE,
+            author="alice", approved_by="bob",
+        )
+
+    def test_intra_household_rule_is_skipped(
+        self, _legacy_active_rule, _intra_active_rule,
+    ):
+        # Member-shaped record so the legacy rule's entity filter
+        # matches; the intra-household rule should NOT be in the
+        # returned evaluations at all (filtered by category, not by
+        # silently raising and being caught).
+        from apps.dqa.engine import evaluate_all
+        evaluations = evaluate_all(
+            {"surname": "Okot", "first_name": "James"},
+            record_type="member", record_id="m-1",
+        )
+        rule_ids = [ev.rule.rule_id for ev in evaluations]
+        assert "EAL-LEGACY-SURNAME" in rule_ids
+        assert "EAL-INTRA-COUNTWHERE" not in rule_ids
+
+    def test_intra_household_does_not_raise_dsl_error(
+        self, _intra_active_rule,
+    ):
+        # Regression: before the filter landed, this call raised
+        # DSLError("unknown operator: 'count_where'") and bubbled out
+        # of the connector pull, marking the run failed even after
+        # rows had landed.
+        from apps.dqa.engine import evaluate_all
+        # No raise.
+        evaluate_all(
+            {"members": []}, record_type="household", record_id="hh-1",
+        )
+
+
 # --- Approval workflow: author != approver ----------------------------------
 
 class TestApprovalWorkflow:
@@ -325,6 +400,65 @@ class TestAccuracyLe:
         # "missing or under N" wrap with any_of.
         expr = {"field": "acc", "op": "accuracy_le", "value": 10}
         assert evaluate_expression(expr, {"acc": None}) is False
+
+
+class TestAgeLe:
+    """`age_le` — computes (today - field_value) in years and compares
+    against an upper bound. Used by AC-MEMBER-AGE-MAX to flag
+    implausible ages without re-seeding as the registry ages."""
+
+    def test_passes_for_young_member(self):
+        expr = {"field": "dob", "op": "age_le", "value": 120}
+        dob = date.today().replace(year=date.today().year - 30)
+        assert evaluate_expression(expr, {"dob": dob}) is True
+
+    def test_fails_above_threshold(self):
+        expr = {"field": "dob", "op": "age_le", "value": 120}
+        dob = date.today().replace(year=date.today().year - 130)
+        assert evaluate_expression(expr, {"dob": dob}) is False
+
+    def test_at_boundary_passes(self):
+        # Exactly 120 years old today is the inclusive ≤ bound — passes.
+        today = date.today()
+        try:
+            dob = today.replace(year=today.year - 120)
+        except ValueError:
+            # Feb 29 in a non-leap year — step back to Feb 28.
+            dob = today.replace(year=today.year - 120, day=today.day - 1)
+        expr = {"field": "dob", "op": "age_le", "value": 120}
+        assert evaluate_expression(expr, {"dob": dob}) is True
+
+    def test_accepts_iso_string(self):
+        expr = {"field": "dob", "op": "age_le", "value": 120}
+        dob = date.today().replace(year=date.today().year - 30)
+        assert evaluate_expression(expr, {"dob": dob.isoformat()}) is True
+
+    def test_fails_on_null(self):
+        # Bare op fails on missing dob — authors wrap with
+        # any_of(is_null, age_le) when they want optional date.
+        expr = {"field": "dob", "op": "age_le", "value": 120}
+        assert evaluate_expression(expr, {"dob": None}) is False
+
+    def test_fails_on_unparseable(self):
+        expr = {"field": "dob", "op": "age_le", "value": 120}
+        assert evaluate_expression(expr, {"dob": "not-a-date"}) is False
+        assert evaluate_expression(expr, {"dob": 12345}) is False
+
+    def test_negative_age_fails(self):
+        # dob in the future → negative age → fail, not pass.
+        future = date.today().replace(year=date.today().year + 5)
+        expr = {"field": "dob", "op": "age_le", "value": 120}
+        assert evaluate_expression(expr, {"dob": future}) is False
+
+    def test_full_rule_shape_passes_with_null_dob(self):
+        # AC-MEMBER-AGE-MAX expression: missing dob short-circuits to
+        # PASS via the any_of(is_null, age_le) wrap.
+        expr = {"any_of": [
+            {"field": "dob", "op": "is_null"},
+            {"field": "dob", "op": "age_le", "value": 120},
+        ]}
+        assert evaluate_expression(expr, {"dob": None}) is True
+        assert evaluate_expression(expr, {"dob": ""}) is True
 
 
 class TestCountOps:
@@ -1078,6 +1212,61 @@ class TestRulesOnUpdCommit:
         ).count()
         assert after == before + 1
 
+    def test_flag_severity_emits_household_flag_audit(self, _member):
+        """A FLAG-severity rule that fails on UPD commit emits
+        dqa.household.flag with stage=registry_post_promote, mirroring
+        the DIH ingest path. Without this, the legacy engine's FLAG
+        rules silently land in DqaResult and the UPD reactor never
+        sees them."""
+        from apps.security.models import AuditEvent
+        rule = DqaRule.objects.create(
+            rule_id="UPD-FLAG-AGE-PROBE",
+            version=1, description="surname must be empty (flag probe)",
+            severity=Severity.FLAG,
+            expression={"field": "surname", "op": "is_null"},
+            error_message_template="surname present (test)",
+            applicability_filter={"entity": "member"},
+            effective_from=date(2026, 1, 1),
+            status=RuleStatus.ACTIVE,
+            author="alice", approved_by="bob",
+        )
+        before = AuditEvent.objects.filter(
+            action="dqa.household.flag",
+        ).count()
+        self._commit_a_change(_member)
+        after = AuditEvent.objects.filter(
+            action="dqa.household.flag",
+        ).count()
+        assert after == before + 1
+        ev = (
+            AuditEvent.objects
+            .filter(action="dqa.household.flag")
+            .latest("occurred_at")
+        )
+        # entity_id is the parent household — UPD reactor opens its
+        # review case against the household, not the member.
+        assert ev.entity_type == "household"
+        assert ev.entity_id == str(_member.household_id)
+        fc = ev.field_changes or {}
+        assert fc.get("stage") == "registry_post_promote"
+        assert rule.rule_id in (fc.get("flagged_codes") or [])
+
+    def test_audit_counter_uses_severity_bucket(self, _member, _failing_rule):
+        """The rules_re_evaluated audit's failure counters bucket old
+        + new severity vocabularies consistently. _failing_rule is
+        legacy WARNING — must show up under failures_flag (and the
+        legacy failures_warning alias) rather than getting lost."""
+        from apps.security.models import AuditEvent
+        self._commit_a_change(_member)
+        ev = (
+            AuditEvent.objects
+            .filter(action="rules_re_evaluated", entity_type="dat.member")
+            .latest("occurred_at")
+        )
+        fc = ev.field_changes or {}
+        assert fc.get("failures_flag") == 1
+        assert fc.get("failures_warning") == 1  # legacy alias retained
+
     def test_household_change_evaluates_household_rules(self, _member):
         """The signal handler routes by entity_type — a household
         CR triggers household-scoped rules, not member-scoped."""
@@ -1300,3 +1489,130 @@ class TestBackfillRulePack:
         )
         assert r.status_code in (200, 302)
         assert DqaResult.objects.count() == before + 3
+
+
+# --- Preview service: real registry sweep, not the old stub ---------------
+
+class TestPreviewService:
+    """preview_rule() sweeps `sample_size` households (ORDER BY id),
+    dispatches each to the right engine, and writes a DqaRulePreviewRun
+    row with real counts + capped failing IDs. Mirrors what the
+    admin-console Run-preview button hits."""
+
+    @pytest.fixture
+    def _geo(self, db):
+        from apps.reference_data.models import GeographicUnit
+        nodes = {}
+        for level, key, parent in [
+            ("region", "r", None), ("sub_region", "sr", "r"),
+            ("district", "d", "sr"), ("county", "c", "d"),
+            ("sub_county", "sc", "c"), ("parish", "p", "sc"),
+            ("village", "v", "p"),
+        ]:
+            nodes[key] = GeographicUnit.objects.create(
+                level=level, code=f"PV-{key.upper()}", name=key.title(),
+                parent=nodes.get(parent), effective_from=date(2026, 1, 1),
+            )
+        return nodes
+
+    @pytest.fixture
+    def _three_households(self, _geo):
+        # Three households, each with one head member. Index 1's
+        # surname is blank so the member-scope null-surname rule fails
+        # on that household only.
+        from apps.data_management.models import Household, Member
+        hhs = []
+        for i in range(3):
+            hh = Household.objects.create(
+                region=_geo["r"], sub_region=_geo["sr"], district=_geo["d"],
+                county=_geo["c"], sub_county=_geo["sc"], parish=_geo["p"],
+                village=_geo["v"], urban_rural="2",
+                address_narrative=f"Plot {i + 1}",
+                reported_household_size=4,
+            )
+            Member.objects.create(
+                household=hh, line_number=1,
+                surname="" if i == 1 else f"Family{i}",
+                first_name="Head", sex="1",
+                relationship_to_head="01",  # 01 = head per AC-HOH-EXISTS
+            )
+            hhs.append(hh)
+        return hhs
+
+    def test_legacy_member_rule_sweep(self, _three_households):
+        from apps.dqa.models import DqaRule, DqaRulePreviewRun, Severity
+        from apps.dqa.services import preview_rule
+        rule = DqaRule.objects.create(
+            rule_id="PREVIEW-MEM", version=901,
+            description="surname must not be blank",
+            severity=Severity.WARNING,
+            applicability_filter={"entity": "member"},
+            expression={"field": "surname", "op": "not_null"},
+            error_message_template="missing surname",
+            status=RuleStatus.ACTIVE,
+            author="alice", approved_by="bob",
+        )
+        run = preview_rule(rule, sample_size=100, actor="qa")
+        # sample_size is the requested cap (not actual visited rows);
+        # pass + fail tracks what was evaluated against the registry.
+        assert run.sample_size == 100
+        assert run.pass_count + run.fail_count == 3
+        assert run.pass_count == 2
+        assert run.fail_count == 1
+        assert run.record_type == "household"
+        # The one failing household's id is captured (string form).
+        failing_hh = _three_households[1]
+        assert str(failing_hh.id) in run.sample_failed_record_ids
+        # Persisted row is queryable + linked to the rule.
+        assert DqaRulePreviewRun.objects.filter(
+            rule=rule, executed_by="qa",
+        ).count() == 1
+
+    def test_empty_registry_returns_zero_counts(self, db):
+        from apps.dqa.models import DqaRule, Severity
+        from apps.dqa.services import preview_rule
+        rule = DqaRule.objects.create(
+            rule_id="PREVIEW-EMPTY", version=902,
+            description="anything", severity=Severity.WARNING,
+            applicability_filter={"entity": "household"},
+            expression={"field": "address_narrative", "op": "not_null"},
+            error_message_template="",
+            status=RuleStatus.ACTIVE,
+            author="alice", approved_by="bob",
+        )
+        run = preview_rule(rule, sample_size=50, actor="qa")
+        assert run.pass_count == 0
+        assert run.fail_count == 0
+        assert run.sample_failed_record_ids == []
+
+    def test_failures_capped_at_ten(self, _geo):
+        from apps.data_management.models import Household
+        from apps.dqa.models import DqaRule, Severity
+        from apps.dqa.services import preview_rule
+        # 15 households, all fail the rule. Persisted IDs capped at 10
+        # per the DqaRulePreviewRun docstring.
+        for i in range(15):
+            Household.objects.create(
+                region=_geo["r"], sub_region=_geo["sr"], district=_geo["d"],
+                county=_geo["c"], sub_county=_geo["sc"], parish=_geo["p"],
+                village=_geo["v"], urban_rural="2",
+                address_narrative=f"H{i}",
+            )
+        rule = DqaRule.objects.create(
+            rule_id="PREVIEW-CAP", version=903,
+            description="always-fail probe",
+            severity=Severity.WARNING,
+            applicability_filter={"entity": "household"},
+            # gps_accuracy_m is null on every fixture household → rule
+            # demands it be <= 10, the IS_NULL+LE all_of fails.
+            expression={"all_of": [
+                {"field": "gps_accuracy_m", "op": "not_null"},
+                {"field": "gps_accuracy_m", "op": "le", "value": 10},
+            ]},
+            error_message_template="",
+            status=RuleStatus.ACTIVE,
+            author="alice", approved_by="bob",
+        )
+        run = preview_rule(rule, sample_size=50, actor="qa")
+        assert run.fail_count == 15
+        assert len(run.sample_failed_record_ids) == 10

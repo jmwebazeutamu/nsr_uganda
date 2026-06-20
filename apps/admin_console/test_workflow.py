@@ -268,6 +268,26 @@ class TestDqaWorkflow:
         assert r.status_code == 200
         assert r.data["status"] == "active"
 
+    def test_retire_active_rule(self, admin_client, dqa_rule):
+        # Active by fixture — retire flips to RETIRED.
+        ver = dqa_rule.version
+        r = admin_client.post(
+            f"/api/v1/admin/workflow/dqa/rules/AC-TEST-RULE/v{ver}/retire/"
+        )
+        assert r.status_code == 200, r.data
+        assert r.data["status"] == "retired"
+
+    def test_retire_draft_rejected(self, admin_client, dqa_rule):
+        # Cloning produces a DRAFT; retiring DRAFT is invalid state.
+        c = admin_client.post(
+            "/api/v1/admin/workflow/dqa/rules/AC-TEST-RULE/clone/"
+        )
+        ver = c.data["version"]
+        r = admin_client.post(
+            f"/api/v1/admin/workflow/dqa/rules/AC-TEST-RULE/v{ver}/retire/"
+        )
+        assert r.status_code == 409
+
 
 # ───────────────────────────────────────────────────────────────
 # DDUP — clone + 30-day un-merge window

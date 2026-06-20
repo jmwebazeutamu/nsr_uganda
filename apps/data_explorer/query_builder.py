@@ -62,6 +62,12 @@ def _apply_geographic_scope(qs, scope: dict):
     if not scope:
         return qs
     level = (scope.get("level") or "").lower()
+    level = {
+        "country": "national",
+        "subregion": "sub_region",
+        "sub-county": "sub_county",
+        "subcounty": "sub_county",
+    }.get(level, level)
     codes = list(scope.get("codes") or [])
     if not (level and codes):
         return qs
@@ -90,10 +96,11 @@ def _apply_filters(qs, filter_vars, filters):
             code = f.get("variable") or f.get("code")
             if code is None:
                 continue
+            op = (f.get("op") or "").lower() or None
             if "values" in f:
-                normalised[code] = f["values"]
+                normalised[code] = {"op": op or "in", "value": f["values"]}
             elif "value" in f:
-                normalised[code] = f["value"]
+                normalised[code] = {"op": op or "eq", "value": f["value"]}
         filters = normalised
     for code, value in (filters or {}).items():
         var = by_code.get(code)
@@ -102,10 +109,34 @@ def _apply_filters(qs, filter_vars, filters):
         column = var.source_field
         if not column or not hasattr(qs.model, column):
             continue
-        if isinstance(value, list):
-            qs = qs.filter(**{f"{column}__in": value})
+        if isinstance(value, dict):
+            op = (value.get("op") or "eq").lower()
+            raw_value = value.get("value")
         else:
-            qs = qs.filter(**{column: value})
+            op = "in" if isinstance(value, list) else "eq"
+            raw_value = value
+
+        if raw_value == "" or raw_value == []:
+            continue
+
+        if op == "in":
+            values = raw_value if isinstance(raw_value, list) else [raw_value]
+            qs = qs.filter(**{f"{column}__in": values})
+        elif op == "neq":
+            if isinstance(raw_value, list):
+                qs = qs.exclude(**{f"{column}__in": raw_value})
+            else:
+                qs = qs.exclude(**{column: raw_value})
+        elif op in {"gt", "gte", "lt", "lte"}:
+            qs = qs.filter(**{f"{column}__{op}": raw_value})
+        elif op == "between":
+            values = raw_value
+            if isinstance(values, str):
+                values = [v.strip() for v in values.split(",") if v.strip()]
+            if isinstance(values, (list, tuple)) and len(values) >= 2:
+                qs = qs.filter(**{f"{column}__gte": values[0], f"{column}__lte": values[1]})
+        else:
+            qs = qs.filter(**{column: raw_value})
     return qs
 
 
@@ -144,11 +175,29 @@ class AggregateQueryService:
         against the matview, with the dataset's count column folded
         into the aggregation (Sum over the precomputed counts).
         """
+        from apps.data_management.matviews import is_matview_populated
+
         from . import services
 
         dataset = validated_query.dataset
         matview_model = validated_query.matview_model
         cadence_seconds = dataset.refresh_cadence.interval_seconds
+
+        # Population gate FIRST. A never-refreshed Postgres matview is
+        # WITH NO DATA and raises OperationalError on any SELECT —
+        # including the freshness probe just below. Treat "not yet
+        # populated" as data-not-ready → 503 (matview_stale), never a
+        # 500. The data_explorer.refresh_matviews beat task clears this
+        # on first run. On non-Postgres the matview is a concrete shadow
+        # table (always populated), so this is a no-op there.
+        if not is_matview_populated(dataset.source_matview):
+            raise StaleMatviewError(
+                matview=dataset.source_matview,
+                refreshed_at=None,
+                staleness_seconds=max(2 * cadence_seconds + 1, 1),
+                max_seconds=2 * cadence_seconds,
+            )
+
         # Stale matview fallback — 2x cadence. Staleness flows through
         # the services seam so the 503 branch is forceable in tests
         # without a populated matview; the freshness query for the

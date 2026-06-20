@@ -40,6 +40,31 @@ class Severity(models.TextChoices):
     WARNING = "warning", "Warning (deprecated → flag)"
 
 
+# Severity bucket classifier — collapses both the legacy
+# {blocking, warning, info} vocabulary and the US-S11-044 vocabulary
+# {block, reject_with_override, flag, info} into three pipeline-facing
+# buckets. Callers that need to "is this a flag, a block, or info?"
+# read through here so a new-vocabulary `flag` rule and a legacy
+# `warning` rule both route to the same UPD reactor. Lives next to
+# Severity so the mapping evolves alongside the enum.
+SEVERITY_BUCKETS = {
+    "block": "block",
+    "blocking": "block",                # legacy alias
+    "reject_with_override": "block",    # promotion-time block unless overridden
+    "flag": "flag",
+    "warning": "flag",                  # legacy alias
+    "info": "info",
+}
+
+
+def severity_bucket(severity: str) -> str:
+    """Return one of {'block', 'flag', 'info'} for any rule severity
+    string (old or new vocabulary). Unknown / empty input collapses
+    to 'info' rather than raising — pipeline code should not crash
+    on a malformed Rule row."""
+    return SEVERITY_BUCKETS.get(severity or "info", "info")
+
+
 class RuleCategory(models.TextChoices):
     """High-level grouping; the Rule Editor filter chip + the
     intra-household evaluator both key off this. New categories add

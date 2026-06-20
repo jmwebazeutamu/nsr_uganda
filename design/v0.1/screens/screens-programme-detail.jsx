@@ -19,6 +19,81 @@
 
 const { useState: useStatePD } = React;
 
+const _PMT_FRACTION = {
+  extreme_poverty: 0.10,
+  poverty:         0.10,
+  vulnerable:      0.10,
+  not_poor:        0.00,
+  poorest_20:      0.10,
+  poorest_40:      0.10,
+  middle_40:       0.10,
+  top_20:          0.00,
+};
+
+const _PMT_BAND_LABEL = {
+  extreme_poverty: "Extreme poverty",
+  poverty: "Poverty",
+  vulnerable: "Vulnerable",
+  not_poor: "Not poor",
+  poorest_20: "Extreme poverty",
+  poorest_40: "Poverty",
+  middle_40: "Vulnerable",
+  top_20: "Not poor",
+};
+
+const _PMT_BAND_NOTE = {
+  extreme_poverty: "≤ 2.812 · 10%",
+  poverty: "≤ 3.245 · 20%",
+  vulnerable: "≤ 3.582 · 30%",
+  not_poor: "≤ 7.219 · default excludes",
+  poorest_20: "legacy code",
+  poorest_40: "legacy code",
+  middle_40: "legacy code",
+  top_20: "legacy code",
+};
+
+const _PMT_BAND_ALIASES = {
+  extreme_poverty: "poorest_20",
+  "extreme poverty": "poorest_20",
+  "poorest 20%": "poorest_20",
+  poorest_20: "poorest_20",
+  poverty: "poorest_40",
+  "poorest 40%": "poorest_40",
+  poorest_40: "poorest_40",
+  vulnerable: "middle_40",
+  "middle 40%": "middle_40",
+  middle_40: "middle_40",
+  not_poor: "top_20",
+  "not poor": "top_20",
+  "top 20%": "top_20",
+  top_20: "top_20",
+};
+
+const _normalizePmtBandCode = (value) => {
+  const raw = (value ?? "").toString().trim().toLowerCase();
+  return _PMT_BAND_ALIASES[raw] || raw;
+};
+
+const _normalizePmtBands = (bands) => (
+  Array.isArray(bands)
+    ? bands.map(_normalizePmtBandCode).filter(Boolean)
+    : []
+);
+
+const _pmtBandLabel = (code, fallback = code) => {
+  const normalized = _normalizePmtBandCode(code);
+  return _PMT_BAND_LABEL[normalized] || fallback;
+};
+
+const _COMP_FRACTION = {
+  female_headed: 0.35,
+  under_five: 0.55,
+  elderly: 0.18,
+  pregnant: 0.06,
+  disabled: 0.12,
+  orphan: 0.08,
+};
+
 // Same status-code → label translation as the list view.
 const _PD_STATUS_LABEL = {
   draft:             "Draft",
@@ -71,6 +146,17 @@ const _normaliseKindD = (k) => {
   return k;
 };
 
+const _csvToList = (value) => (
+  (value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+);
+
+const _listToCsv = (value) => (
+  Array.isArray(value) ? value.join(", ") : ""
+);
+
 // Project the live ProgrammeSerializer payload + signoff chain
 // response onto the `m` shape the existing tab bodies render off.
 const _projectProgrammeDetail = (programme, signoffs) => {
@@ -103,11 +189,15 @@ const _projectProgrammeDetail = (programme, signoffs) => {
     ? "wh_•••••••••••• (rotate via /webhook/rotate-secret/)"
     : "—";
   m.eligibility = {
-    pmtBands: programme.pmt_bands || [],
+    pmtBands: _normalizePmtBands(programme.pmt_bands || []),
     sex: programme.sex_filter_label || programme.sex_filter || "any",
+    sexCode: programme.sex_filter || "any",
     ageBand: (programme.age_min != null && programme.age_max != null)
       ? `${programme.age_min}–${programme.age_max}`
       : "—",
+    ageMin: programme.age_min,
+    ageMax: programme.age_max,
+    compositionFlags: programme.composition_flags || [],
     disability: "—",
     requirePmtRecency: "—",
     requireConsent: false,
@@ -132,6 +222,14 @@ const _ROLE_LABEL = {
   partner_data_steward: "Partner Data Steward",
   dpo: "Data Protection Officer (DPO)",
   nsr_director: "Director · NSR Programme",
+};
+
+const _SIGNOFF_STATUS = {
+  pending:  { label: "pending",  tone: "quality", icon: "clock" },
+  signed:   { label: "signed",   tone: "data",    icon: "check" },
+  rejected: { label: "rejected",  tone: "danger",  icon: "x" },
+  skipped:  { label: "skipped",   tone: "neutral", icon: "minus" },
+  on_hold:  { label: "on hold",   tone: "update",  icon: "pause" },
 };
 
 const _LEGACY_PROG_DETAIL_UNUSED = {
@@ -233,7 +331,7 @@ const _LEGACY_PROG_DETAIL_UNUSED = {
   ],
 };
 
-const PD_TABS = [
+const PROGRAMME_TABS = [
   { id:"over",  label:"Overview" },
   { id:"elig",  label:"Eligibility" },
   { id:"sched", label:"Schedule & disbursement" },
@@ -305,19 +403,42 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
   // allowed only for status=draft (no commitments yet).
   const [toast, setToast] = useStatePD("");
   const [editOpen, setEditOpen] = useStatePD(false);
+  const [programmeView, setProgrammeView] = useStatePD(null);
+  const [submitOpen, setSubmitOpen] = useStatePD(false);
+  const [signOpen, setSignOpen] = useStatePD(false);
+  const [signTarget, setSignTarget] = useStatePD(null);
   const [closeOpen, setCloseOpen] = useStatePD(false);
   const [deleteOpen, setDeleteOpen] = useStatePD(false);
 
   const [progResp, progMeta] = useApi(
     programmeId ? `/api/v1/programmes/${programmeId}/` : null,
   );
-  const [signoffResp] = useApi(
+  const [registryAggResp, registryAggMeta] = useApi(
+    "/api/v1/data-management/households/aggregates/",
+  );
+  const [signoffResp, signoffMeta] = useApi(
     programmeId ? `/api/v1/programmes/${programmeId}/signoffs/` : null,
   );
+  React.useEffect(() => {
+    setProgrammeView(null);
+  }, [programmeId]);
+  React.useEffect(() => {
+    if (progResp && !programmeView) {
+      setProgrammeView(progResp);
+    }
+  }, [progResp, programmeView]);
+  React.useEffect(() => {
+    if (!registryAggMeta.refresh) return undefined;
+    const id = window.setInterval(() => registryAggMeta.refresh(), 60000);
+    return () => window.clearInterval(id);
+  }, [registryAggMeta.refresh]);
+  const programmeRecord = programmeView || progResp;
   const p = _projectProgrammeDetail(
-    progResp,
+    programmeRecord,
     (signoffResp && signoffResp.items) || [],
   );
+  const registryTotal = Number(registryAggResp?.total || registryAggResp?.registered || 0);
+  const isDraft = p.statusCode === "draft";
   const pct = Math.round((p.enrolled / Math.max(p.cohortTarget, 1)) * 100);
 
   if (!programmeId) {
@@ -353,15 +474,23 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
   return (
     <div className="page">
       <PageHeader
+        back={{ label: "Programmes", onClick: onBack }}
         eyebrow={<>PROGRAMME · <span className="t-mono">{p.code}</span> · {p.partner}</>}
         title={<>{p.name} <span className="t-bodysm" style={{fontWeight:400, color:'var(--accent-data)', marginLeft:8}}>· {p.phase}</span></>}
         sub={<>{KIND_LABEL[p.kind]} · {UNIT_LABEL[p.unit]} · {p.cycle} · DSA <span className="t-mono">{p.dsa}</span></>}
         right={<>
           <button className="btn" onClick={() => onOpenPartner?.(p.partner)}><Icon name="users" size={14}/> Open partner</button>
           <button className="btn" onClick={() => setEditOpen(true)}
-                  title="Edit name, summary, disbursement, webhook (PATCH /api/v1/programmes/{id}/)">
+                  title="Edit programme draft fields (PATCH /api/v1/programmes/{id}/)">
             <Icon name="edit" size={14}/> Edit
           </button>
+          {isDraft && (
+            <button className="btn btn-primary"
+                    onClick={() => setSubmitOpen(true)}
+                    title="Submit the draft programme for the 4-step approval chain">
+              <Icon name="arrowRight" size={14}/> Submit for approval
+            </button>
+          )}
           {p.statusCode !== "draft" && p.statusCode !== "closed" && (
             <button className="btn"
                     style={{color:"var(--accent-quality)"}}
@@ -378,7 +507,6 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
               <Icon name="trash" size={14}/> Delete draft
             </button>
           )}
-          <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to Programmes</button>
         </>}
       />
 
@@ -442,7 +570,7 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
 
       {/* Tabs */}
       <div role="tablist" style={{display:'flex', gap:0, borderBottom:'1px solid var(--neutral-300)', marginBottom:0, flexWrap:'wrap'}}>
-        {PD_TABS.map(t => {
+        {PROGRAMME_TABS.map(t => {
           const active = t.id === tab;
           return (
             <button key={t.id} role="tab" onClick={() => setTab(t.id)} style={{
@@ -463,39 +591,70 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
 
       <div className="card" style={{borderTopLeftRadius:0, borderTopRightRadius:0, padding:0, marginTop:0}}>
         {tab === "over"  && <PdOverview p={p}/>}
-        {tab === "elig"  && <PdEligibility p={p}/>}
+        {tab === "elig"  && <PdEligibility p={p} registryTotal={registryTotal} registryLoading={registryAggMeta.loading}/>}
         {tab === "sched" && <PdSchedule p={p}/>}
         {tab === "geo"   && <PdGeography p={p}/>}
         {tab === "enr"   && <PdEnrolment p={p} onOpenHousehold={onOpenHousehold}/>}
         {tab === "life"  && <PdLifecycle p={p}/>}
         {tab === "intg"  && <PdIntegration p={p}/>}
         {tab === "grm"   && <PdGrievances p={p}/>}
-        {tab === "aud"   && <PdAudit p={p}/>}
+        {tab === "aud"   && <PdAudit p={p} onSignStep={(s) => { setSignTarget(s); setSignOpen(true); }}/>}
       </div>
 
       <div className="t-cap mt-4" style={{textAlign:'center'}}>
-        Read-only programme record. All edits open an Amendment ChangeRequest. Sign-off chain visible under the Sign-off & audit tab.
+        {isDraft
+          ? "Draft programme record. Edit fields here, then submit for approval when the draft is ready."
+          : "Read-only programme record. Active or closed programmes use the lifecycle actions and amendment flow."}
       </div>
 
       <Toast message={toast} onDone={() => setToast("")}/>
 
       <EditProgrammeModal
         open={editOpen}
-        programme={progResp}
+        programme={programmeRecord}
         onClose={() => setEditOpen(false)}
         onSaved={(updated) => {
           setEditOpen(false);
+          if (updated) setProgrammeView(updated);
           setToast(`Updated ${updated?.code || "programme"}.`);
           progMeta.refresh && progMeta.refresh();
         }}
         onError={(msg) => setToast(`Edit failed: ${msg}`)}/>
 
+      <SubmitProgrammeModal
+        open={submitOpen}
+        programme={programmeRecord}
+        onClose={() => setSubmitOpen(false)}
+        onSubmitted={(updated) => {
+          setSubmitOpen(false);
+          if (updated) setProgrammeView(updated);
+          setToast(`Submitted ${updated?.code || "programme"} for approval.`);
+          progMeta.refresh && progMeta.refresh();
+        }}
+        onError={(msg) => setToast(`Submit failed: ${msg}`)}/>
+
+      <SignProgrammeStepModal
+        open={signOpen}
+        programme={programmeRecord}
+        target={signTarget}
+        onClose={() => setSignOpen(false)}
+        onSigned={(updated) => {
+          setSignOpen(false);
+          setSignTarget(null);
+          if (updated) setProgrammeView(updated);
+          setToast(`Signed ${updated?.code || p.code || "programme"}.`);
+          progMeta.refresh && progMeta.refresh();
+          signoffMeta.refresh && signoffMeta.refresh();
+        }}
+        onError={(msg) => setToast(`Sign failed: ${msg}`)}/>
+
       <CloseProgrammeConfirm
         open={closeOpen}
-        programme={progResp}
+        programme={programmeRecord}
         onClose={() => setCloseOpen(false)}
         onClosed={() => {
           setCloseOpen(false);
+          if (programmeRecord) setProgrammeView({ ...programmeRecord, status: "closed" });
           setToast(`Closed ${p.code} — lifecycle event written to audit chain.`);
           progMeta.refresh && progMeta.refresh();
         }}
@@ -503,10 +662,11 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
 
       <DeleteProgrammeConfirm
         open={deleteOpen}
-        programme={progResp}
+        programme={programmeRecord}
         onClose={() => setDeleteOpen(false)}
         onDeleted={() => {
           setDeleteOpen(false);
+          setProgrammeView(null);
           setToast(`Deleted ${p.code}.`);
           if (onBack) onBack();
         }}
@@ -517,48 +677,94 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
 
 
 // ── EditProgrammeModal (US-S11-037) ───────────────────────────────────
-// PATCHes the most-commonly-changed fields. Status is intentionally
-// NOT here — lifecycle transitions go through close/suspend actions
-// so the sign-off + audit chain stays intact.
+// PATCHes the draft-editable programme fields. Status is intentionally
+// NOT here — lifecycle transitions go through the approval / close /
+// suspend actions so the sign-off + audit chain stays intact.
 const EditProgrammeModal = ({ open, programme, onClose, onSaved, onError }) => {
+  const [code, setCode] = useStatePD("");
   const [name, setName] = useStatePD("");
+  const [kind, setKind] = useStatePD("");
   const [summary, setSummary] = useStatePD("");
+  const [unitOfEnrolment, setUnitOfEnrolment] = useStatePD("");
+  const [sexFilter, setSexFilter] = useStatePD("");
+  const [ageMin, setAgeMin] = useStatePD("");
+  const [ageMax, setAgeMax] = useStatePD("");
+  const [cohortTarget, setCohortTarget] = useStatePD("");
+  const [beneficiaryEstimate, setBeneficiaryEstimate] = useStatePD("");
+  const [pmtBandsCsv, setPmtBandsCsv] = useStatePD("");
+  const [compositionFlagsCsv, setCompositionFlagsCsv] = useStatePD("");
+  const [amountUgx, setAmountUgx] = useStatePD("");
+  const [disbursementCycle, setDisbursementCycle] = useStatePD("");
   const [durationMonths, setDurationMonths] = useStatePD("");
   const [channel, setChannel] = useStatePD("");
-  const [amountUgx, setAmountUgx] = useStatePD("");
-  const [cohortTarget, setCohortTarget] = useStatePD("");
+  const [startMonth, setStartMonth] = useStatePD("");
+  const [scopeText, setScopeText] = useStatePD("");
+  const [exitCodesCsv, setExitCodesCsv] = useStatePD("");
+  const [autoExitTriggersCsv, setAutoExitTriggersCsv] = useStatePD("");
+  const [suspendOnGrievance, setSuspendOnGrievance] = useStatePD(false);
   const [webhookUrl, setWebhookUrl] = useStatePD("");
   const [submitting, setSubmitting] = useStatePD(false);
 
   React.useEffect(() => {
     if (!open || !programme) return;
+    setCode(programme.code || "");
     setName(programme.name || "");
+    setKind(programme.kind || "");
     setSummary(programme.summary || "");
+    setUnitOfEnrolment(programme.unit_of_enrolment || "");
+    setSexFilter(programme.sex_filter || "");
+    setAgeMin(programme.age_min ?? "");
+    setAgeMax(programme.age_max ?? "");
+    setCohortTarget(programme.cohort_target ?? "");
+    setBeneficiaryEstimate(programme.beneficiary_estimate ?? "");
+    setPmtBandsCsv(_listToCsv(_normalizePmtBands(programme.pmt_bands)));
+    setCompositionFlagsCsv(_listToCsv(programme.composition_flags));
+    setAmountUgx(programme.amount_ugx ?? "");
+    setDisbursementCycle(programme.disbursement_cycle || "");
     setDurationMonths(programme.duration_months ?? "");
     setChannel(programme.channel || "");
-    setAmountUgx(programme.amount_ugx ?? "");
-    setCohortTarget(programme.cohort_target ?? "");
+    setStartMonth(programme.start_month || "");
+    setScopeText(programme.scope_text || "");
+    setExitCodesCsv(_listToCsv(programme.exit_codes_allowed));
+    setAutoExitTriggersCsv(_listToCsv(programme.auto_exit_triggers));
+    setSuspendOnGrievance(Boolean(programme.suspend_on_grievance));
     setWebhookUrl(programme.webhook_url || "");
   }, [open, programme]);
 
   if (!open || !programme) return null;
-  const canSave = !submitting && name.trim();
+  const canSave = !submitting && name.trim() && kind.trim();
 
   const save = async () => {
     if (!canSave) return;
     setSubmitting(true);
     try {
       const payload = {
+        code: code.trim(),
         name: name.trim(),
+        kind: kind.trim(),
         summary: summary.trim(),
+        unit_of_enrolment: unitOfEnrolment.trim(),
+        sex_filter: sexFilter.trim(),
+        cohort_target: cohortTarget === "" ? undefined : parseInt(cohortTarget, 10),
+        beneficiary_estimate: beneficiaryEstimate === "" ? undefined : parseInt(beneficiaryEstimate, 10),
+        age_min: ageMin === "" ? undefined : parseInt(ageMin, 10),
+        age_max: ageMax === "" ? undefined : parseInt(ageMax, 10),
+        pmt_bands: _csvToList(pmtBandsCsv).map(_normalizePmtBandCode),
+        composition_flags: _csvToList(compositionFlagsCsv),
+        amount_ugx: amountUgx === "" ? undefined : parseInt(amountUgx, 10),
+        disbursement_cycle: disbursementCycle.trim(),
+        duration_months: durationMonths === "" ? undefined : parseInt(durationMonths, 10),
         channel: channel.trim(),
+        start_month: startMonth.trim(),
+        scope_text: scopeText.trim(),
+        exit_codes_allowed: _csvToList(exitCodesCsv),
+        auto_exit_triggers: _csvToList(autoExitTriggersCsv),
+        suspend_on_grievance: suspendOnGrievance,
         webhook_url: webhookUrl.trim(),
       };
-      // Numeric fields — only include when non-empty, and coerce. The
-      // serializer rejects "" for these IntegerFields.
-      if (durationMonths !== "") payload.duration_months = parseInt(durationMonths, 10);
-      if (amountUgx !== "")      payload.amount_ugx = parseInt(amountUgx, 10);
-      if (cohortTarget !== "")   payload.cohort_target = parseInt(cohortTarget, 10);
+      Object.keys(payload).forEach((k) => {
+        if (payload[k] === undefined) delete payload[k];
+      });
       const updated = await nsrApi.patch(
         `/api/v1/programmes/${programme.id}/`, payload,
       );
@@ -574,48 +780,299 @@ const EditProgrammeModal = ({ open, programme, onClose, onSaved, onError }) => {
 
   return (
     <Modal open={true} onClose={() => !submitting && onClose()}
-           title={`Edit ${programme.code || "programme"}`} size="md">
+           title={`Edit ${programme.code || "programme"}`} size="lg">
       <p className="t-bodysm muted" style={{marginTop:0, marginBottom:16}}>
-        Patches descriptive + disbursement fields. Status transitions go
-        through the Close button (lifecycle service); scope amendments
-        through the Amendment ChangeRequest path.
+        Edit the draft in place. Approval uses the existing
+        <span className="t-mono">{' /api/v1/programmes/{id}/submit-for-signoff/'}</span>
+        endpoint and moves the programme into the four-step sign-off chain.
       </p>
 
-      <Field label="Name">
-        <input value={name} onChange={e => setName(e.target.value)} disabled={submitting}/>
-      </Field>
-      <Field label="Summary">
-        <textarea value={summary} onChange={e => setSummary(e.target.value)} rows={2} disabled={submitting}/>
-      </Field>
+      <div style={{maxHeight:"72vh", overflowY:"auto", paddingRight:6}}>
+        <div className="grid grid-2" style={{gap:12}}>
+          <Field label="Code">
+            <input value={code} onChange={e => setCode(e.target.value)} disabled={submitting}/>
+          </Field>
+          <Field label="Name">
+            <input value={name} onChange={e => setName(e.target.value)} disabled={submitting}/>
+          </Field>
+        </div>
 
-      <div className="grid grid-3" style={{gap:12}}>
-        <Field label="Duration (months)">
-          <input type="number" min={0} value={durationMonths}
-                 onChange={e => setDurationMonths(e.target.value)} disabled={submitting}/>
+        <Field label="Summary">
+          <textarea value={summary} onChange={e => setSummary(e.target.value)} rows={3} disabled={submitting}/>
         </Field>
-        <Field label="Amount (UGX)">
-          <input type="number" min={0} value={amountUgx}
-                 onChange={e => setAmountUgx(e.target.value)} disabled={submitting}/>
+
+        <div className="grid grid-3" style={{gap:12}}>
+          <Field label="Kind">
+            <select className="field-select" value={kind} onChange={e => setKind(e.target.value)} disabled={submitting}>
+              <option value="">Select kind</option>
+              <option value="cash_transfer">Cash transfer</option>
+              <option value="service">Service</option>
+              <option value="in_kind">In-kind</option>
+              <option value="voucher">Voucher</option>
+              <option value="study">Study</option>
+              <option value="grant">Grant</option>
+              <option value="subsidy">Subsidy</option>
+            </select>
+          </Field>
+          <Field label="Unit of enrolment">
+            <select className="field-select" value={unitOfEnrolment} onChange={e => setUnitOfEnrolment(e.target.value)} disabled={submitting}>
+              <option value="">Unset</option>
+              <option value="household">Household</option>
+              <option value="member">Member</option>
+              <option value="group">Group</option>
+            </select>
+          </Field>
+          <Field label="Sex filter">
+            <select className="field-select" value={sexFilter} onChange={e => setSexFilter(e.target.value)} disabled={submitting}>
+              <option value="">Unset</option>
+              <option value="any">Any</option>
+              <option value="1">Male</option>
+              <option value="2">Female</option>
+            </select>
+          </Field>
+        </div>
+
+        <div className="grid grid-4" style={{gap:12}}>
+          <Field label="Age min">
+            <input type="number" min={0} value={ageMin}
+                   onChange={e => setAgeMin(e.target.value)} disabled={submitting}/>
+          </Field>
+          <Field label="Age max">
+            <input type="number" min={0} value={ageMax}
+                   onChange={e => setAgeMax(e.target.value)} disabled={submitting}/>
+          </Field>
+          <Field label="Cohort target">
+            <input type="number" min={0} value={cohortTarget}
+                   onChange={e => setCohortTarget(e.target.value)} disabled={submitting}/>
+          </Field>
+          <Field label="Beneficiary estimate">
+            <input type="number" min={0} value={beneficiaryEstimate}
+                   onChange={e => setBeneficiaryEstimate(e.target.value)} disabled={submitting}/>
+          </Field>
+        </div>
+
+        <div className="grid grid-2" style={{gap:12}}>
+          <Field label="PMT bands">
+            <input value={pmtBandsCsv} onChange={e => setPmtBandsCsv(e.target.value)} disabled={submitting}
+                   placeholder="poorest_20, poorest_40"/>
+          </Field>
+          <Field label="Composition flags">
+            <input value={compositionFlagsCsv} onChange={e => setCompositionFlagsCsv(e.target.value)} disabled={submitting}
+                   placeholder="female_headed, under_five"/>
+          </Field>
+        </div>
+
+        <div className="grid grid-3" style={{gap:12}}>
+          <Field label="Amount (UGX)">
+            <input type="number" min={0} value={amountUgx}
+                   onChange={e => setAmountUgx(e.target.value)} disabled={submitting}/>
+          </Field>
+          <Field label="Disbursement cycle">
+            <input value={disbursementCycle} onChange={e => setDisbursementCycle(e.target.value)} disabled={submitting}
+                   placeholder="monthly, quarterly, annual"/>
+          </Field>
+          <Field label="Duration (months)">
+            <input type="number" min={0} value={durationMonths}
+                   onChange={e => setDurationMonths(e.target.value)} disabled={submitting}/>
+          </Field>
+        </div>
+
+        <div className="grid grid-2" style={{gap:12}}>
+          <Field label="Channel">
+            <input value={channel} onChange={e => setChannel(e.target.value)} disabled={submitting}
+                   placeholder="e.g. mobile-money, bank-transfer"/>
+          </Field>
+          <Field label="Start month">
+            <input value={startMonth} onChange={e => setStartMonth(e.target.value)} disabled={submitting}
+                   placeholder="Aug 2026"/>
+          </Field>
+        </div>
+
+        <Field label="Scope text">
+          <textarea value={scopeText} onChange={e => setScopeText(e.target.value)} rows={2} disabled={submitting}
+                    placeholder="Free-text cohort or geographic scope"/>
         </Field>
-        <Field label="Cohort target">
-          <input type="number" min={0} value={cohortTarget}
-                 onChange={e => setCohortTarget(e.target.value)} disabled={submitting}/>
-        </Field>
+
+        <div className="grid grid-2" style={{gap:12}}>
+          <Field label="Exit codes allowed">
+            <input value={exitCodesCsv} onChange={e => setExitCodesCsv(e.target.value)} disabled={submitting}
+                   placeholder="10, 20, 30, 40, 50, 60, 70"/>
+          </Field>
+          <Field label="Auto-exit triggers">
+            <input value={autoExitTriggersCsv} onChange={e => setAutoExitTriggersCsv(e.target.value)} disabled={submitting}
+                   placeholder="age_out, deceased, pmt_shift"/>
+          </Field>
+        </div>
+
+        <div className="grid grid-2" style={{gap:12}}>
+          <Field label="Webhook URL">
+            <input type="url" value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)}
+                   disabled={submitting} placeholder="https://…/nsr-webhook"/>
+          </Field>
+          <Field label="Suspend on grievance">
+            <label className="row gap-2" style={{padding:'10px 0', alignItems:'center'}}>
+              <input type="checkbox" checked={suspendOnGrievance} onChange={e => setSuspendOnGrievance(e.target.checked)} disabled={submitting}/>
+              <span className="t-bodysm">Suspend automatically on grievance</span>
+            </label>
+          </Field>
+        </div>
       </div>
 
-      <Field label="Channel">
-        <input value={channel} onChange={e => setChannel(e.target.value)} disabled={submitting}
-               placeholder="e.g. mobile-money, bank-transfer"/>
+      <div style={{display:"flex", justifyContent:"space-between", gap:8, marginTop:16}}>
+        <div className="t-cap" style={{alignSelf:"center"}}>
+          Approval endpoint: <span className="t-mono">POST /api/v1/programmes/{programme.id}/submit-for-signoff/</span>
+        </div>
+        <div style={{display:"flex", gap:8}}>
+          <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
+          <button className="btn btn-primary" onClick={save} disabled={!canSave}>
+            {submitting ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+
+// ── SubmitProgrammeModal (US-S25-003 / approval handoff) ───────────────
+// Uses the existing 4-step sign-off chain endpoint.
+const SubmitProgrammeModal = ({ open, programme, onClose, onSubmitted, onError }) => {
+  const [nsrCoordinatorEmail, setNsrCoordinatorEmail] = useStatePD("");
+  const [partnerStewardEmail, setPartnerStewardEmail] = useStatePD("");
+  const [dpoEmail, setDpoEmail] = useStatePD("");
+  const [directorEmail, setDirectorEmail] = useStatePD("");
+  const [submitting, setSubmitting] = useStatePD(false);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setNsrCoordinatorEmail("");
+    setPartnerStewardEmail("");
+    setDpoEmail("");
+    setDirectorEmail("");
+  }, [open]);
+
+  if (!open || !programme) return null;
+
+  const canSubmit = !submitting
+    && nsrCoordinatorEmail.trim()
+    && partnerStewardEmail.trim()
+    && dpoEmail.trim()
+    && directorEmail.trim();
+
+  const fire = async () => {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    try {
+      const updated = await nsrApi.post(
+        `/api/v1/programmes/${programme.id}/submit-for-signoff/`,
+        {
+          nsr_coordinator_email: nsrCoordinatorEmail.trim(),
+          partner_steward_email: partnerStewardEmail.trim(),
+          dpo_email: dpoEmail.trim(),
+          director_email: directorEmail.trim(),
+        },
+      );
+      setSubmitting(false);
+      onSubmitted(updated);
+    } catch (err) {
+      setSubmitting(false);
+      const detail = (err && err.body && (err.body.detail
+        || JSON.stringify(err.body))) || err.message;
+      onError(detail);
+    }
+  };
+
+  return (
+    <Modal open={true} onClose={() => !submitting && onClose()}
+           title={`Submit ${programme.code || "programme"} for approval`} size="md">
+      <p className="t-bodysm muted" style={{marginTop:0, marginBottom:16}}>
+        This creates the four ProgrammeSignOff rows and moves the programme
+        to <span className="t-mono">pending_approval</span>.
+      </p>
+      <Field label="NSR Unit Coordinator email">
+        <input value={nsrCoordinatorEmail} onChange={e => setNsrCoordinatorEmail(e.target.value)} disabled={submitting}/>
       </Field>
-      <Field label="Webhook URL">
-        <input type="url" value={webhookUrl} onChange={e => setWebhookUrl(e.target.value)}
-               disabled={submitting} placeholder="https://…/nsr-webhook"/>
+      <Field label="Partner Data Steward email">
+        <input value={partnerStewardEmail} onChange={e => setPartnerStewardEmail(e.target.value)} disabled={submitting}/>
+      </Field>
+      <Field label="DPO email">
+        <input value={dpoEmail} onChange={e => setDpoEmail(e.target.value)} disabled={submitting}/>
+      </Field>
+      <Field label="Director email">
+        <input value={directorEmail} onChange={e => setDirectorEmail(e.target.value)} disabled={submitting}/>
       </Field>
 
       <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
         <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
-        <button className="btn btn-primary" onClick={save} disabled={!canSave}>
-          {submitting ? "Saving…" : "Save"}
+        <button className="btn btn-primary" onClick={fire} disabled={!canSubmit}>
+          {submitting ? "Submitting…" : "Submit for approval"}
+        </button>
+      </div>
+    </Modal>
+  );
+};
+
+
+// ── SignProgrammeStepModal ───────────────────────────────────────────
+// Signs one pending ProgrammeSignOff step in the existing approval chain.
+const SignProgrammeStepModal = ({ open, programme, target, onClose, onSigned, onError }) => {
+  const [actorEmail, setActorEmail] = useStatePD("");
+  const [note, setNote] = useStatePD("");
+  const [submitting, setSubmitting] = useStatePD(false);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setActorEmail(target?.who || "");
+    setNote("");
+  }, [open, target]);
+
+  if (!open || !programme || !target) return null;
+
+  const canSubmit = !submitting && actorEmail.trim();
+
+  const fire = async () => {
+    if (!canSubmit) return;
+    setSubmitting(true);
+    try {
+      const updated = await nsrApi.post(
+        `/api/v1/programmes/${programme.id}/sign/${target.step}/`,
+        {
+          actor_email: actorEmail.trim(),
+          note: note.trim(),
+        },
+      );
+      setSubmitting(false);
+      onSigned(updated);
+    } catch (err) {
+      setSubmitting(false);
+      const detail = (err && err.body && (err.body.detail
+        || JSON.stringify(err.body))) || err.message;
+      onError(detail);
+    }
+  };
+
+  return (
+    <Modal open={true} onClose={() => !submitting && onClose()}
+           title={`Sign step ${target.step} · ${target.role}`} size="sm">
+      <p className="t-bodysm muted" style={{marginTop:0, marginBottom:16}}>
+        The actor email must match the expected signer for this step.
+      </p>
+      <Field label="Signer email">
+        <input value={actorEmail} onChange={e => setActorEmail(e.target.value)} disabled={submitting}/>
+      </Field>
+      <Field label="Note">
+        <textarea value={note} onChange={e => setNote(e.target.value)} rows={3} disabled={submitting}
+                  placeholder="Optional approval note"/>
+      </Field>
+
+      <div className="t-cap" style={{marginTop:12}}>
+        Program: <span className="t-mono">{programme.code}</span>
+      </div>
+
+      <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
+        <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
+        <button className="btn btn-primary" onClick={fire} disabled={!canSubmit}>
+          {submitting ? "Signing…" : "Sign step"}
         </button>
       </div>
     </Modal>
@@ -778,7 +1235,41 @@ const PdOverview = ({ p }) => (
   </div>
 );
 
-const PdEligibility = ({ p }) => (
+const _estimateEligibleHouseholds = (p, registryTotal) => {
+  const total = Number(registryTotal || 0);
+  if (!total) return 0;
+
+  let factor = 1;
+  const bands = Array.isArray(p.eligibility?.pmtBands) ? p.eligibility.pmtBands : [];
+  if (bands.length) {
+    const bandFactor = bands.reduce((sum, band) => sum + (Number(_PMT_FRACTION[_normalizePmtBandCode(band)]) || 0), 0);
+    factor *= Math.min(1, bandFactor || 0);
+  }
+
+  const sex = (p.eligibility?.sexCode || "any").toString();
+  if (sex === "1" || sex === "2") {
+    factor *= 0.5;
+  }
+
+  const minAge = Number(p.eligibility?.ageMin);
+  const maxAge = Number(p.eligibility?.ageMax);
+  if (Number.isFinite(minAge) && Number.isFinite(maxAge) && maxAge >= minAge) {
+    factor *= Math.min(1, Math.max(0.05, ((maxAge - minAge + 1) / 100)));
+  }
+
+  const flags = Array.isArray(p.eligibility?.compositionFlags) ? p.eligibility.compositionFlags : [];
+  if (flags.length) {
+    const flagFactor = flags.reduce((acc, flag) => acc * (Number(_COMP_FRACTION[flag]) || 1), 1);
+    factor *= Math.min(1, flagFactor);
+  }
+
+  return Math.max(0, Math.min(total, Math.round(total * factor)));
+};
+
+const PdEligibility = ({ p, registryTotal, registryLoading }) => {
+  const eligible = _estimateEligibleHouseholds(p, registryTotal);
+
+  return (
   <div>
     <PD_TabHeader title="Eligibility rules" sub="The targeting expression compiled into the partner MIS query. Edits open an amendment that re-runs the cohort estimate."/>
     <div style={{padding:20, display:'grid', gridTemplateColumns:'1.4fr 1fr', gap:16}}>
@@ -789,7 +1280,15 @@ const PdEligibility = ({ p }) => (
         </div>
         <div style={{padding:16, display:'grid', gridTemplateColumns:'160px 1fr', rowGap:10, fontSize:13}}>
           <div className="muted">PMT bands</div>
-          <div className="row-wrap">{p.eligibility.pmtBands.map(b => <Chip key={b} size="sm" tone="eligibility">{b}</Chip>)}</div>
+          <div className="row-wrap">
+            {p.eligibility.pmtBands.length === 0
+              ? <span className="muted">None selected</span>
+              : p.eligibility.pmtBands.map((b) => (
+                  <Chip key={b} size="sm" tone="eligibility" title={_PMT_BAND_NOTE[b] || b}>
+                    {_pmtBandLabel(b, b)}
+                  </Chip>
+                ))}
+          </div>
 
           <div className="muted">Sex</div>
           <div>{p.eligibility.sex === "any" ? <Chip size="sm">Any</Chip> : <Chip size="sm">{p.eligibility.sex}</Chip>}</div>
@@ -818,20 +1317,45 @@ const PdEligibility = ({ p }) => (
           </ul>
         </div>
       </div>
-      <div className="tint-update" style={{padding:14, borderRadius:6, borderLeft:'3px solid var(--accent-update)'}}>
-        <div className="row gap-2" style={{marginBottom:6}}>
-          <Icon name="shield" size={14} color="var(--accent-update)"/>
-          <strong className="t-bodysm">Amendment lifecycle</strong>
+      <div style={{display:'grid', gap:16}}>
+        <div className="card" style={{padding:0, boxShadow:'none', border:'1px solid var(--neutral-200)'}}>
+          <div style={{padding:'12px 16px', borderBottom:'1px solid var(--neutral-200)'}}>
+            <strong>Live eligible households</strong>
+            <div className="t-cap">Updates from the Social Registry total.</div>
+          </div>
+          <div style={{padding:16}}>
+            <div className="t-cap">Estimated households matching the current rules</div>
+            <div style={{fontSize:28, lineHeight:'34px', fontWeight:700, marginTop:4, color:'var(--neutral-900)'}}>
+              {registryLoading ? "Loading…" : num(eligible)}
+            </div>
+            <div className="t-cap mt-1">
+              Based on current programme rules and the live registry total of {registryLoading ? "…" : num(registryTotal)} households.
+            </div>
+            <div className="t-cap mt-2">
+              PMT bands:
+              {" "}
+              {p.eligibility.pmtBands.length
+                ? p.eligibility.pmtBands.map((b) => _pmtBandLabel(b, b)).join(" · ")
+                : "none"}
+            </div>
+          </div>
         </div>
-        <p className="t-bodysm muted" style={{margin:0, lineHeight:1.55}}>
-          Changing any rule opens an Amendment ChangeRequest. The amendment shows the projected
-          cohort impact (estimated new size, planned-in / planned-out members), and is gated by
-          the same 4-step sign-off chain as the original programme.
-        </p>
+        <div className="tint-update" style={{padding:14, borderRadius:6, borderLeft:'3px solid var(--accent-update)'}}>
+          <div className="row gap-2" style={{marginBottom:6}}>
+            <Icon name="shield" size={14} color="var(--accent-update)"/>
+            <strong className="t-bodysm">Amendment lifecycle</strong>
+          </div>
+          <p className="t-bodysm muted" style={{margin:0, lineHeight:1.55}}>
+            Changing any rule opens an Amendment ChangeRequest. The amendment shows the projected
+            cohort impact (estimated new size, planned-in / planned-out members), and is gated by
+            the same 4-step sign-off chain as the original programme.
+          </p>
+        </div>
       </div>
     </div>
   </div>
-);
+  );
+};
 
 const PdSchedule = ({ p }) => (
   <div>
@@ -1091,7 +1615,7 @@ const PdGrievances = ({ p }) => (
   </div>
 );
 
-const PdAudit = ({ p }) => (
+const PdAudit = ({ p, onSignStep }) => (
   <div>
     <PD_TabHeader title="Sign-off & audit chain" sub="Tamper-evident programme record — sign-off chain, amendments, and the full audit event stream."/>
     {/* Sign-off chain */}
@@ -1099,26 +1623,55 @@ const PdAudit = ({ p }) => (
       <h4 className="t-h3" style={{margin:'0 0 12px'}}>Sign-off chain</h4>
       <div className="row gap-3" style={{flexWrap:'wrap'}}>
         {p.signoff.map(s => (
+          (() => {
+            const statusMeta = _SIGNOFF_STATUS[s.status] || _SIGNOFF_STATUS.pending;
+            const tone = statusMeta.tone === "data" ? "data"
+              : statusMeta.tone === "danger" ? "danger"
+              : statusMeta.tone === "update" ? "update"
+              : statusMeta.tone === "quality" ? "quality"
+              : "neutral";
+            const earlierResolved = p.signoff
+              .filter((prev) => prev.step < s.step)
+              .every((prev) => ["signed", "skipped"].includes(prev.status));
+            const canSignThisStep = s.status === "pending" && earlierResolved;
+            return (
           <div key={s.step} style={{
             flex:'1 1 220px', minWidth:200,
             padding:14, borderRadius:6,
             border:'1px solid var(--neutral-200)',
-            borderLeft:'3px solid var(--accent-data)',
+            borderLeft:`3px solid var(--accent-${tone})`,
             background:'var(--neutral-0)',
           }}>
             <div className="row gap-2" style={{marginBottom:6}}>
               <div style={{
                 width:22, height:22, borderRadius:'50%',
-                background:'var(--accent-data-bg, var(--neutral-100))',
-                color:'var(--accent-data)',
+                background:`var(--accent-${tone}-bg, var(--neutral-100))`,
+                color:`var(--accent-${tone})`,
                 display:'grid', placeItems:'center', fontSize:11, fontWeight:600,
               }}>{s.step}</div>
-              <Chip size="sm" tone="data"><Icon name="check" size={10}/> signed</Chip>
+              <Chip size="sm" tone={tone}>
+                <Icon name={statusMeta.icon} size={10}/> {statusMeta.label}
+              </Chip>
             </div>
             <div className="t-bodysm" style={{fontWeight:600}}>{s.role}</div>
             <div className="t-cap mt-1">{s.who}</div>
-            <div className="t-cap mt-1">{s.at}</div>
+            <div className="t-cap mt-1">{s.at || "—"}</div>
+            {s.status === "pending" && !canSignThisStep && (
+              <div className="t-cap mt-2">Waiting for earlier steps to complete</div>
+            )}
+            {canSignThisStep && (
+              <div style={{marginTop:12, display:'flex', justifyContent:'flex-end'}}>
+                <button
+                  className="btn btn-sm btn-primary"
+                  onClick={() => onSignStep?.(s)}
+                >
+                  <Icon name="edit" size={12}/> Sign step
+                </button>
+              </div>
+            )}
           </div>
+            );
+          })()
         ))}
       </div>
     </div>

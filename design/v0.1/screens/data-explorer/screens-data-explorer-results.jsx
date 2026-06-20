@@ -3,6 +3,7 @@
    DE_DATASETS, DE_VARIABLES_BY_DATASET, DE_PRIVACY, DE_RESULT_ROWS, DE_SUPPRESSION,
    PrivacyChip, DEShell, ScreenJumpTweak, SuppressedCell,
    useDeCatalogue, useDeMe, RoleGateBanner, HandoffPrompt,
+   navigateDeScreen,
    TweaksPanel, useTweaks, TweakSection */
 
 // NSR MIS — Data Explorer · Results panel (screen 3 of 5)
@@ -151,6 +152,7 @@ const ResultsScreen = () => {
     <DEShell active="results" refreshed_at={refreshedAt}>
       <RoleGateBanner me={me}/>
       <PageHeader
+        back={{ label: "Aggregate builder", onClick: () => navigateDeScreen("builder") }}
         eyebrow={<>DATA EXPLORER · RESULTS · <span className="t-mono">qh:{queryHash.slice(3, 11)}…</span></>}
         title="Aggregate results"
         sub={<>HTTP 200 · {sortedRows.length} of {rawRows.length} rows{matview ? <> · matview <span className="t-mono">{matview}</span></> : null} · {suppressedCount} suppressed cell{suppressedCount === 1 ? "" : "s"}</>}
@@ -200,7 +202,7 @@ const ResultsScreen = () => {
             </div>
             <div className="t-cap mt-1">{scope.codes.slice(0, 4).join(", ")}{scope.codes.length > 4 ? "…" : ""}</div>
           </div>
-          <button className="btn" onClick={() => location.href = "Data Explorer - Aggregate Builder.html"}>
+          <button className="btn" onClick={() => navigateDeScreen("builder")}>
             <Icon name="edit" size={14}/> Edit query
           </button>
         </div>
@@ -338,4 +340,7 @@ const MetaCell = ({ label, value, extra }) => (
   </div>
 );
 
-ReactDOM.createRoot(document.getElementById("app")).render(<ResultsScreen/>);
+Object.assign(window, { DataExplorerResultsScreen: ResultsScreen });
+if (!window.NSR_EMBEDDED_CONSOLE) {
+  ReactDOM.createRoot(document.getElementById("app")).render(<ResultsScreen/>);
+}

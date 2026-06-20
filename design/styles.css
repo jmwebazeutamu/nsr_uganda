@@ -94,15 +94,19 @@ a:hover { text-decoration: underline; }
 .app-shell {
   display: grid;
   grid-template-columns: 240px 1fr;
-  grid-template-rows: 56px 1fr;
+  grid-template-rows: 84px 1fr;          /* national masthead */
   min-height: 100vh;
 }
 .app-shell.collapsed { grid-template-columns: 64px 1fr; }
 
+/* National masthead. Navy bar with the Uganda coat of arms on a white
+   tile and a 3px gold rule. Same chrome across the operator console
+   and the admin console. */
 .topbar {
   grid-column: 1 / -1;
-  background: var(--neutral-0);
-  border-bottom: 1px solid var(--neutral-300);
+  background: var(--primary-900);                /* national navy */
+  border-bottom: 3px solid #FCDC04;              /* national gold */
+  height: 84px;
   display: flex;
   align-items: center;
   gap: var(--space-4);
@@ -111,46 +115,52 @@ a:hover { text-decoration: underline; }
   z-index: 30;
 }
 .topbar-brand {
-  display: flex; align-items: center; gap: 10px;
-  color: var(--primary-900);
+  display: flex; align-items: center; gap: 12px;
+  color: var(--neutral-0);
   font-weight: 700;
   letter-spacing: 0.01em;
-  min-width: 220px;
+  min-width: 0;
 }
-.brand-mark {
-  width: 28px; height: 28px;
-  background: var(--primary-900);
+/* Brand wordmark + ministry line.  The two stacked spans inside
+   .topbar-brand pick up their typography from these rules; the
+   wordmark is white, the ministry line is uppercase muted-white. */
+.topbar-brand .brand-wordmark {
+  font-size: 21px; font-weight: 700;
+  letter-spacing: -0.01em;
   color: var(--neutral-0);
-  display: grid; place-items: center;
-  font-size: 11px; font-weight: 700;
-  border-radius: 4px;
-  letter-spacing: 0.04em;
 }
-.search {
-  flex: 1;
-  max-width: 520px;
-  display: flex; align-items: center;
-  gap: var(--space-2);
-  border: 1px solid var(--neutral-300);
-  border-radius: var(--radius-default);
-  padding: 6px 10px;
-  background: var(--neutral-50);
+.topbar-brand .brand-sub {
+  font-size: 12px; font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;                       /* tightened — full ministry name is long */
+  color: rgba(241,246,252,0.72);
 }
-.search input {
-  flex: 1; border: 0; outline: 0; background: transparent;
-  color: var(--neutral-900);
-}
-.search kbd {
-  font-family: inherit;
-  font-size: 11px;
-  color: var(--neutral-500);
+
+/* Emblem tile — white square holding the coat of arms */
+.brand-mark {
+  width: 64px; height: 64px;
   background: var(--neutral-0);
-  border: 1px solid var(--neutral-300);
-  border-radius: 3px;
-  padding: 1px 4px;
+  border-radius: 10px;
+  padding: 6px;
+  display: grid; place-items: center;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  flex: 0 0 auto;
 }
+.brand-mark img {
+  width: 52px; height: 52px;
+  object-fit: contain;
+  display: block;
+}
+
+/* The global search field was removed with the national-masthead
+   redesign; the spec called for an unambiguous state banner without
+   the search affordance. Keep the rules as no-ops so any stray
+   markup still in flight degrades cleanly. */
+.search, .search input, .search kbd { display: none !important; }
+
 .topbar-spacer { flex: 1; }
 .topbar-actions { display: flex; align-items: center; gap: var(--space-3); }
+
 .icon-btn {
   width: 32px; height: 32px;
   display: grid; place-items: center;
@@ -168,6 +178,23 @@ a:hover { text-decoration: underline; }
   border-radius: 50%;
   border: 1.5px solid var(--neutral-0);
 }
+
+/* Right-cluster icon buttons read on the navy masthead. Scoped to
+   .topbar so the same .icon-btn used elsewhere on the page (inside
+   white cards) keeps the neutral palette. */
+.topbar .icon-btn {
+  color: rgba(255,255,255,0.85);
+  border-color: transparent;
+}
+.topbar .icon-btn:hover {
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(255,255,255,0.18);
+  color: var(--neutral-0);
+}
+.topbar .icon-btn .dot {
+  border-color: var(--primary-900);
+}
+
 .avatar {
   width: 32px; height: 32px;
   border-radius: 50%;
@@ -188,10 +215,31 @@ a:hover { text-decoration: underline; }
 }
 .role-chip strong { color: var(--neutral-900); font-weight: 600; }
 
-/* Side nav */
+/* Role chip on the navy masthead — translucent so it reads on dark. */
+.topbar .role-chip {
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(255,255,255,0.18);
+  color: rgba(241,246,252,0.70);
+}
+.topbar .role-chip strong { color: var(--neutral-0); }
+
+/* Narrow viewports: bar wraps, wordmark shrinks. */
+@media (max-width: 640px) {
+  .topbar { height: auto; padding: 10px var(--space-4); flex-wrap: wrap; }
+  .topbar-brand .brand-wordmark { font-size: 17px; }
+  .topbar-brand .brand-sub { letter-spacing: 0.04em; }
+  .brand-mark { width: 52px; height: 52px; }
+  .brand-mark img { width: 42px; height: 42px; }
+}
+
+/* Side nav — light rail with a navy active accent. The masthead
+   carries the national navy; the rail used to be navy too, which
+   read as navy-on-navy and dulled the masthead's authority. White
+   here lets the masthead pop and matches the page body. */
 .sidenav {
-  background: var(--primary-900);
-  color: rgba(255,255,255,0.85);
+  background: var(--neutral-0);
+  color: var(--neutral-700);
+  border-right: 1px solid var(--neutral-200);
   padding: var(--space-3) var(--space-2);
   overflow-y: auto;
 }
@@ -201,7 +249,7 @@ a:hover { text-decoration: underline; }
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: rgba(255,255,255,0.5);
+  color: var(--neutral-500);
   padding: var(--space-4) var(--space-3) var(--space-2);
 }
 .nav-item {
@@ -210,7 +258,7 @@ a:hover { text-decoration: underline; }
   gap: var(--space-3);
   padding: 8px 12px;
   border-radius: var(--radius-default);
-  color: rgba(255,255,255,0.85);
+  color: var(--neutral-700);
   font-size: 13.5px;
   font-weight: 500;
   cursor: pointer;
@@ -220,22 +268,84 @@ a:hover { text-decoration: underline; }
   width: 100%;
   text-align: left;
 }
-.nav-item:hover { background: rgba(255,255,255,0.06); color: var(--neutral-0); }
+
+/* Embedded Data Explorer host inside the main console. The Data
+   Explorer harness keeps its own tab shell; this wrapper only provides
+   route-level chrome and a stable same-origin frame. */
+.de-console-screen {
+  min-width: 0;
+}
+.de-console-card {
+  padding: 0;
+  overflow: hidden;
+}
+.de-console-tabs {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--neutral-200);
+  background: var(--neutral-0);
+}
+.de-console-tab {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-default);
+  background: transparent;
+  color: var(--neutral-700);
+  font-size: 13px;
+  font-weight: 500;
+}
+.de-console-tab:hover {
+  background: var(--neutral-100);
+  border-color: var(--neutral-300);
+}
+.de-console-tab.active {
+  background: var(--primary-100);
+  border-color: var(--primary-700);
+  color: var(--primary-900);
+}
+.de-console-tabs-spacer {
+  flex: 1;
+}
+.de-console-embedded {
+  min-height: calc(100vh - 220px);
+  background: var(--neutral-100);
+}
+.de-console-embedded > div {
+  min-height: auto !important;
+  background: transparent !important;
+}
+.de-console-embedded > div > header {
+  display: none;
+}
+.de-console-embedded > div > main {
+  max-width: none !important;
+  padding: 16px !important;
+}
+.nav-item:hover { background: var(--neutral-100); color: var(--neutral-900); }
 .nav-item.active {
-  background: rgba(255,255,255,0.12);
-  color: var(--neutral-0);
+  background: var(--primary-100);                  /* #F1F6FC */
+  color: var(--primary-900);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--primary-900);    /* navy active rail */
 }
 .nav-item .nav-count {
   margin-left: auto;
   font-size: 11px;
-  color: rgba(255,255,255,0.7);
-  background: rgba(255,255,255,0.08);
+  color: var(--neutral-500);
+  background: var(--neutral-100);
   border-radius: 10px;
   padding: 1px 8px;
   min-width: 22px;
   text-align: center;
 }
-.nav-item.active .nav-count { background: rgba(255,255,255,0.18); color: var(--neutral-0); }
+.nav-item.active .nav-count { background: #D6E4F4; color: var(--primary-900); }
 
 /* Main content */
 .main {

@@ -17,6 +17,7 @@
   <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/d3@7/dist/d3.min.js" crossorigin="anonymous"></script>
 
   <!-- Tweaks helper -->
   <script type="text/babel" src="tweaks-panel.jsx"></script>
@@ -50,9 +51,16 @@
   <script type="text/babel" src="v0.1/screens/screens-drs-querybuilder.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-drs-fieldselector.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-drs.jsx"></script>
-  <!-- Data Explorer (US-DATA-EXP-001, ADR-0023) opens in its own
-       standalone harness — see v0.1/screens/data-explorer/Data Explorer - Catalogue.html.
-       The sidebar entry in app.jsx links there in a new tab. -->
+  <!-- Data Explorer console. The standalone pages still self-mount,
+       but this flag exports their components without taking over #app. -->
+  <script>window.NSR_EMBEDDED_CONSOLE = true;</script>
+  <script type="text/babel" src="v0.1/screens/data-explorer/data-explorer-shared.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/data-explorer/screens-data-explorer-catalogue.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/data-explorer/screens-data-explorer-builder.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/data-explorer/screens-data-explorer-results.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/data-explorer/screens-data-explorer-coverage.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/data-explorer/screens-data-explorer-synthetic.jsx"></script>
+  <script type="text/babel" src="v0.1/screens/screens-data-explorer-console.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-dpo.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-household.jsx"></script>
   <script type="text/babel" src="v0.1/screens/screens-registry.jsx"></script>

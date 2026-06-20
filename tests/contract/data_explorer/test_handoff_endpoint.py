@@ -75,7 +75,7 @@ class TestHandoffEndpoint:
         def _fake_create_draft(payload, *, requester):
             captured["payload"] = payload
             class _DR:
-                id = "01DRHANDOFFCONTRACT0000000A"
+                id = "01DRHANDOFFCONTRACT000000A"
                 status = "draft"
             return _DR()
 
@@ -101,7 +101,7 @@ class TestHandoffEndpoint:
     ):
         def _fake_create_draft(payload, *, requester):
             class _DR:
-                id = "01DRHANDOFFAUDIT0000000000A"
+                id = "01DRHANDOFFAUDIT000000000A"
                 status = "draft"
             return _DR()
 
@@ -119,7 +119,7 @@ class TestHandoffEndpoint:
         assert ev is not None
         assert ev.entity_type == "DataRequest"
         # entity_id should be the new DR id
-        assert ev.entity_id == "01DRHANDOFFAUDIT0000000000A"
+        assert ev.entity_id == "01DRHANDOFFAUDIT000000000A"
         fc = ev.field_changes or {}
         assert fc.get("explorer_session_id") == session.id
         assert "source_query_hash" in fc

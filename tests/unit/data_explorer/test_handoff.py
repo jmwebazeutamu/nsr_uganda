@@ -127,7 +127,7 @@ class TestHandoffServiceIntegration:
             captured["requester"] = requester
             # Return a mock DataRequest-shaped object.
             class _DR:
-                id = "01DRTESTHANDOFF000000000000"
+                id = "01DRTESTHANDOFF00000000000"
                 status = "draft"
             return _DR()
 

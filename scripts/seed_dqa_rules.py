@@ -78,6 +78,32 @@ RULES = [
         },
         "error_message_template": "GPS accuracy {gps_accuracy_m}m exceeds the 10m threshold; retry capture.",
     },
+    {
+        # Implausible-age flag — caught both stale (10-year-old paper
+        # rolls misread as 19xx) and outright wrong NIRA NIN expansions.
+        # Calculated at evaluation time from `today() - date_of_birth`,
+        # so a member who legitimately passes today and crosses the
+        # threshold next year picks up the flag automatically without a
+        # re-seed.
+        "rule_id": "AC-MEMBER-AGE-MAX",
+        "description": (
+            "Member age must be 120 years or less, calculated from "
+            "today's date and date_of_birth. Anything above 120 is "
+            "implausible and flags the record for reviewer attention."
+        ),
+        "severity": Severity.FLAG,
+        "applicability_filter": {"entity": "member"},
+        "expression": {
+            "any_of": [
+                {"field": "date_of_birth", "op": "is_null"},
+                {"field": "date_of_birth", "op": "age_le", "value": 120},
+            ],
+        },
+        "error_message_template": (
+            "Member date_of_birth={date_of_birth} implies an age above "
+            "120 years today — verify against the source document."
+        ),
+    },
 ]
 
 
@@ -104,7 +130,7 @@ def seed() -> int:
             author=AUTHOR,
         )
         submit_for_approval(rule)
-        approve(rule, approver=APPROVER)
+        approve(rule, approver=APPROVER, note="seed bootstrap")
         print(f"  {spec['rule_id']} v{rule.version} -> ACTIVE  (author={AUTHOR}, approver={APPROVER})")
         created += 1
     return created

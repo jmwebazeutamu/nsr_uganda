@@ -197,9 +197,15 @@
 
 {{ schema|json_script:"us117e-schema" }}
 
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+{# Vendored, NOT CDN. The NITA-U Government Data Centre is air-gapped, #}
+{# so unpkg.com is unreachable in production — a CDN reference here #}
+{# left the harness stuck on "Loading interactive preview…" forever. #}
+{# Sources tracked as devDependencies in package.json; refreshed by #}
+{# copying node_modules/{react,react-dom}/umd/*.production.min.js and #}
+{# node_modules/@babel/standalone/babel.min.js into this vendor dir. #}
+<script src="{% static 'intake/vendor/react-18.3.1.production.min.js' %}"></script>
+<script src="{% static 'intake/vendor/react-dom-18.3.1.production.min.js' %}"></script>
+<script src="{% static 'intake/vendor/babel-7.29.0.min.js' %}"></script>
 
 {% verbatim %}
 <script type="text/babel">

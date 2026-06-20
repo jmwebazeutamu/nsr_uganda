@@ -220,10 +220,10 @@ const AuditEventDetail = ({ event, onBack }) => {
   return (
     <div className="page">
       <PageHeader
+        back={{ label: "Audit chain", onClick: onBack }}
         eyebrow={<>ADMIN · SECURITY · AUDIT · <span className="t-mono">{event.id}</span></>}
         title={`${event.action.toUpperCase()} on ${event.entityType}:${event.entityId.slice(0, 20)}…`}
         sub={<>{event.occurred} · actor <strong>{event.actor}</strong></>}
-        right={<button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to audit</button>}
       />
 
       <div className="card" style={{ padding: 0 }}>

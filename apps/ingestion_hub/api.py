@@ -25,6 +25,7 @@ from .services import (
     process_stage_record,
     promote_stage_record,
     quarantine_stage_record,
+    record_promote_dqa_block,
     reject_stage_record,
     resolve_ddup_as_duplicate,
     resolve_ddup_as_not_duplicate,
@@ -548,10 +549,18 @@ class StageRecordViewSet(
                 override_reason=ser.validated_data.get("override_reason", ""),
             )
         except DqaBlockError as e:
+            # Surface the block on the stage so the Decision panel + status
+            # report it (the promote txn rolled back, leaving the record at
+            # its prior state with a stale summary otherwise).
+            blocked = record_promote_dqa_block(
+                stage, actor=ser.validated_data["actor"], codes=e.codes,
+            )
             return Response(
                 {
                     "detail": str(e), "kind": "dqa_block",
                     "codes": e.codes, "evaluation_id": e.evaluation_id,
+                    "state": blocked.state,
+                    "dqa_summary": blocked.dqa_summary,
                 },
                 status=status.HTTP_409_CONFLICT,
             )

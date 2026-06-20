@@ -277,6 +277,25 @@ def dqa_blocking_name_rule(db):
     )
 
 
+@pytest.fixture
+def dqa_flag_first_name_rule(db):
+    """Active FLAG (new-vocabulary) DQA rule on a member field.
+    Used to verify the legacy ingest path emits a
+    `dqa.household.flag` AuditEvent the way the intra-household gate
+    does — the gap that previously left FLAG events invisible to the
+    UPD reactor when the rule was authored under the legacy DSL."""
+    return DqaRule.objects.create(
+        rule_id="TEST-MEMBER-FIRSTNAME-FLAG",
+        version=1, description="first_name should be present",
+        severity=Severity.FLAG,
+        applicability_filter={"entity": "member"},
+        expression={"field": "first_name", "op": "not_null"},
+        error_message_template="first_name missing",
+        status=RuleStatus.ACTIVE,
+        author="test-author", approved_by="test-approver",
+    )
+
+
 def _make_stage(connector, geo_codes, *, payload=None):
     run = start_connector_run(connector)
     pl = payload or _payload(geo_codes)
@@ -317,6 +336,49 @@ class TestProcessOrchestrator:
         # record_id = "{provisional_registry_id}:{line_number}"
         assert row.record_id == f"{stage.provisional_registry_id}:1"
         assert row.severity == "blocking"
+
+    def test_dqa_flag_emits_household_flag_audit_event(
+        self, connector, geo_codes, dqa_flag_first_name_rule,
+    ):
+        """A FLAG-severity failure at DIH ingest emits one
+        `dqa.household.flag` AuditEvent with the deduplicated rule
+        codes — the legacy path now mirrors what
+        apps.dqa.pipeline.run_household_gate already does for
+        INTRA_HOUSEHOLD rules so the UPD reactor consumes both."""
+        from apps.security.models import AuditEvent
+        payload = _payload(geo_codes)
+        # Both members fail the first_name FLAG rule.
+        payload["members"][0]["first_name"] = ""
+        payload["members"][1]["first_name"] = ""
+        stage = _make_stage(connector, geo_codes, payload=payload)
+        before = AuditEvent.objects.filter(action="dqa.household.flag").count()
+        process_stage_record(stage, actor="orch")
+        after = AuditEvent.objects.filter(action="dqa.household.flag").count()
+        assert after == before + 1
+        ev = (AuditEvent.objects
+              .filter(action="dqa.household.flag", entity_id=stage.provisional_registry_id)
+              .latest("occurred_at"))
+        assert ev.entity_type == "household"
+        codes = (ev.field_changes or {}).get("flagged_codes")
+        assert codes == [dqa_flag_first_name_rule.rule_id]
+        assert (ev.field_changes or {}).get("stage") == "dih_ingest"
+
+    def test_dqa_flag_populates_warnings_summary(
+        self, connector, geo_codes, dqa_flag_first_name_rule,
+    ):
+        """New-vocabulary FLAG rules show up in the StageRecord's
+        dqa_summary under both `warnings` (legacy key) and `flagged`
+        (new key). Previously the legacy bucket only matched exact
+        string `warning`, so FLAG rules silently disappeared."""
+        payload = _payload(geo_codes)
+        payload["members"][0]["first_name"] = ""
+        stage = _make_stage(connector, geo_codes, payload=payload)
+        process_stage_record(stage, actor="orch")
+        stage.refresh_from_db()
+        warnings = stage.dqa_summary.get("warnings") or []
+        flagged = stage.dqa_summary.get("flagged") or []
+        assert any(w.get("rule_id") == dqa_flag_first_name_rule.rule_id for w in warnings)
+        assert any(f.get("rule_id") == dqa_flag_first_name_rule.rule_id for f in flagged)
 
     def test_dqa_multiple_failures_each_get_a_row(
         self, connector, geo_codes, dqa_blocking_name_rule,
@@ -2497,3 +2559,76 @@ class TestResolveDdup:
                 stage, surviving_member_id=survivor.id,
                 actor="reviewer", reason="short",
             )
+
+
+# --- US-S11-044 — intra-household blocks surface in the summary -------------
+
+class TestIntraHouseholdSurfacedInSummary:
+    """Regression: a blocking intra-household rule (AC-HOH-EXISTS) must
+    surface in the stage's dqa_summary + status during triage, not only
+    abort at promote. Otherwise the Decision panel shows nothing, the
+    status reads as a promotable state, and the operator hits a surprise
+    block when they try to promote."""
+
+    def _seed_and_activate(self):
+        import importlib.util
+        from pathlib import Path
+
+        from django.utils import timezone
+
+        from apps.dqa.models import DqaRule, RuleStatus
+
+        seed_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "scripts" / "seed_dqa_intra_household_rules.py"
+        )
+        spec = importlib.util.spec_from_file_location(
+            "seed_dqa_intra_household_rules", seed_path,
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.seed()
+        DqaRule.objects.filter(
+            rule_id__startswith="AC-", status=RuleStatus.DRAFT,
+        ).update(
+            status=RuleStatus.ACTIVE, approved_by="test-approver",
+            approved_at=timezone.now(),
+        )
+
+    def _zero_head_payload(self, geo):
+        # Members present but NONE is head → AC-HOH-EXISTS (BLOCK). Roster
+        # size matches so AC-MEMBER-COUNT-MATCH stays clean; no dup nin_hash.
+        return {
+            "geographic": geo,
+            "urban_rural": "rural",
+            "address_narrative": "Headless homestead",
+            "gps_lat": "1.2", "gps_lng": "33.0", "gps_accuracy_m": "5.00",
+            "reported_household_size": 2,
+            "members": [
+                {"line_number": 1, "surname": "Okot", "first_name": "Mary",
+                 "sex": "F", "relationship_to_head": "spouse"},
+                {"line_number": 2, "surname": "Okot", "first_name": "Joy",
+                 "sex": "F", "relationship_to_head": "child",
+                 "mother_line_number": 1},
+            ],
+        }
+
+    def test_blocking_intra_household_rule_surfaces_in_summary_and_status(
+        self, connector, geo_codes, settings,
+    ):
+        settings.DQA_INTRA_HOUSEHOLD_ENABLED = True
+        self._seed_and_activate()
+        payload = self._zero_head_payload(geo_codes)
+
+        run = start_connector_run(connector)
+        landing = land_payload(run, payload)
+        stage = stage_from_landing(landing, canonical_payload=payload)
+        process_stage_record(stage, actor="reviewer-1")
+        stage.refresh_from_db()
+
+        # Status reflects the block instead of sitting at a promotable state.
+        assert stage.state == StageRecordState.QUALITY_FAILED
+        # The Decision panel reads dqa_summary.blocking_failures — the
+        # intra-household block must be there, not only raised at promote.
+        codes = {f["rule_id"] for f in stage.dqa_summary["blocking_failures"]}
+        assert "AC-HOH-EXISTS" in codes, codes

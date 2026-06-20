@@ -315,10 +315,10 @@ const FactPD = ({ label, big, sub }) => (
    TABS list
    ============================================================ */
 // Tab counts now derive from the live `p` projection at render
-// time (lifted into the component below). The const PD_TABS array
+// time (lifted into the component below). The const PARTNER_TABS array
 // stays for the stepper's iteration order; counts are computed
 // inline.
-const PD_TABS = [
+const PARTNER_TABS = [
   { id: "over",  label: "Overview" },
   { id: "dsa",   label: "DSAs" },
   { id: "prog",  label: "Programmes" },
@@ -456,6 +456,7 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme, onNavigat
 
       {/* Eyebrow + title */}
       <PageHeader
+        back={{ label: "Partners", onClick: onBack }}
         eyebrow={<>PARTNERS · <span className="t-mono">{p.code}</span> · §11.6</>}
         title={<>{p.name} <Chip tone="data" style={{marginLeft:8, verticalAlign:'2px'}}>{p.status}</Chip></>}
         sub={<>{p.type} · {p.sector} · lead {p.lead} · last activity {p.lastActivity}</>}
@@ -466,7 +467,6 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme, onNavigat
           // "Edit scope" affordance is meaningless — surface the
           // create-wizard path instead so the operator isn't dead-ended.
           return <>
-            <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to partners</button>
             <button className="btn"><Icon name="download" size={14}/> Export partner record</button>
             <button className="btn" onClick={() => setEditOpen(true)}
                     title="Edit name, type, status, contact info (PATCH /api/v1/partners/{id}/)">
@@ -548,7 +548,7 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme, onNavigat
 
       {/* Tab bar */}
       <div role="tablist" style={{display:'flex', gap:0, borderBottom:'1px solid var(--neutral-300)', marginBottom:0, flexWrap:'wrap'}}>
-        {PD_TABS.map(t => {
+        {PARTNER_TABS.map(t => {
           const active = t.id === tab;
           return (
             <button key={t.id} role="tab" onClick={() => setTab(t.id)} style={{

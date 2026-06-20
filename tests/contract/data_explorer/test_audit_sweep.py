@@ -217,7 +217,7 @@ class TestAuditSweep:
         # Stub create_draft so we don't need a DSA.
         def _fake(payload, *, requester):
             class _DR:
-                id = "01DRSWEEP00000000000000000A"
+                id = "01DRSWEEP0000000000000000A"
                 status = "draft"
             return _DR()
         import apps.data_requests.services as drs_services
@@ -244,7 +244,7 @@ class TestAuditSweep:
             format="json",
         )
         action, et, keys = EXPECTED["POST /handoff"]
-        _assert_audit(action, et, keys, entity_id="01DRSWEEP00000000000000000A")
+        _assert_audit(action, et, keys, entity_id="01DRSWEEP0000000000000000A")
 
     def test_overlap_burst_flag(
         self, dataset, variable_internal, explorer_user,

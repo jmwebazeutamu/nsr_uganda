@@ -250,6 +250,13 @@ const qbCountRules = (node) => {
   return node.rules.reduce((a,r) => a + qbCountRules(r), 0);
 };
 
+const qbEstimateFromTotal = (total, tree) => {
+  const ruleCount = qbCountRules(tree);
+  if (!total || ruleCount === 0) return total || 0;
+  const factor = Math.pow(0.38, Math.min(ruleCount, 8));
+  return Math.max(120, Math.round(total * factor));
+};
+
 /* Compile to a SQL-ish preview string */
 const qbToSQL = (node, indent = 0) => {
   const pad = "  ".repeat(indent);
@@ -864,16 +871,67 @@ const BuildStepV2 = ({
     return { fields: list, byKey, pins };
   }, [fields, tree]);
 
-  // Estimated match count — fake numeric model derived from rule
-  // count, just to give the surface a believable "live" feel.
-  const estimate = useMemoQB(() => {
-    const ruleCount = qbCountRules(tree);
-    if (ruleCount === 0) return 12_089_442;
-    const base = 12_089_442;
-    // Each rule cuts ~62%, capped — pure design-time mock.
-    const factor = Math.pow(0.38, Math.min(ruleCount, 8));
-    return Math.max(120, Math.round(base * factor));
-  }, [tree]);
+  const [estimate, setEstimate] = useStateQB(null);
+  const [estimateSource, setEstimateSource] = useStateQB("loading");
+  useEffectQB(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const payload = {
+        criteria: tree || null,
+        max_rows: maxRows ? Number(maxRows) : undefined,
+      };
+      try {
+        const api = typeof window !== "undefined" ? window.nsrApi : null;
+        const data = api
+          ? await api.post("/api/v1/drs/requests/estimate/", payload)
+          : await (async () => {
+              const r = await fetch("/api/v1/drs/requests/estimate/", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: {
+                  "Content-Type": "application/json",
+                  Accept: "application/json",
+                },
+                body: JSON.stringify(payload),
+              });
+              if (!r.ok) throw new Error(`HTTP ${r.status}`);
+              return r.json();
+            })();
+        if (cancelled) return;
+        setEstimate(data);
+        setEstimateSource("server");
+        return;
+      } catch (err) {
+        try {
+          const r = await fetch("/api/v1/data-management/households/aggregates/", {
+            credentials: "same-origin",
+            headers: { Accept: "application/json" },
+          });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const agg = await r.json();
+          const total = Number(agg?.total || 0);
+          if (cancelled) return;
+          setEstimate({
+            registry_total: total,
+            estimated_matches: qbEstimateFromTotal(total, tree),
+            estimated_pct: total ? Number((qbEstimateFromTotal(total, tree) / total * 100).toFixed(2)) : 0,
+            rule_count: qbCountRules(tree),
+            source: "fallback",
+          });
+          setEstimateSource("fallback");
+        } catch {
+          if (!cancelled) {
+            setEstimate(null);
+            setEstimateSource("error");
+          }
+        }
+      }
+    }, 180);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [tree, maxRows]);
 
   const sql = useMemoQB(() => qbToSQL(tree, 0), [tree]);
 
@@ -991,42 +1049,42 @@ WHERE ${sql.replace(/^\(\n  /, "").replace(/\n\)$/, "").replace(/\n  /g, "\n  ")
 
       {/* Right rail */}
       <div className="col gap-3">
-        {/* Estimated match card — design-time only.
-            There is no live recount endpoint yet (DRS-O-PREVIEW);
-            the estimate is derived from the rule count to give the
-            surface a believable feel. The card is honest about that:
-            "Design-time estimate" badge, no Recount button until the
-            backend lands, and the headline number renders in neutral
-            tone so it doesn't look like a confirmed query result. */}
-        <div className="card" style={{borderTop:"3px solid var(--neutral-400)"}}>
+        {/* Estimated match card — live server estimate with offline fallback. */}
+        <div className="card" style={{borderTop:"3px solid var(--accent-data)"}}>
           <div style={{padding:16}}>
             <div className="row gap-2" style={{alignItems:"center", justifyContent:"space-between"}}>
-              <div className="t-cap" style={{color:"var(--neutral-700)", fontWeight:600}}>
+              <div className="t-cap" style={{color:"var(--accent-data)", fontWeight:600}}>
                 <Icon name="target" size={11}/> ESTIMATED MATCHES
               </div>
-              <Chip size="sm" tone="neutral">design-time</Chip>
+              <Chip size="sm" tone={estimateSource === "server" ? "data" : estimateSource === "fallback" ? "update" : "neutral"}>
+                {estimateSource === "server" ? "live" : estimateSource === "fallback" ? "fallback" : "loading"}
+              </Chip>
             </div>
             <div className="t-num" style={{
               fontSize:32, fontWeight:700, letterSpacing:"-0.01em",
-              marginTop:4, color:"var(--neutral-700)",
-            }}>~{estimate.toLocaleString()}</div>
+              marginTop:4, color:"var(--neutral-900)",
+            }}>{estimate ? `~${Number(estimate.estimated_matches || 0).toLocaleString()}` : "—"}</div>
             <div className="t-cap">
-              of 12,089,442 households · {(estimate/12089442*100).toFixed(2)}% of registry
+              {estimate
+                ? <>of {Number(estimate.registry_total || 0).toLocaleString()} households · {Number(estimate.estimated_pct || 0).toFixed(2)}% of registry</>
+                : "Estimating against the live registry…"}
             </div>
             <div style={{
               height:6, background:"var(--neutral-200)", borderRadius:3,
               marginTop:10, overflow:"hidden",
             }}>
               <div style={{
-                width:`${Math.max(0.5, estimate/12089442*100)}%`, height:"100%",
-                background:"var(--neutral-500)",
+                width: estimate ? `${Math.max(0.5, Number(estimate.estimated_pct || 0))}%` : "0%",
+                height:"100%",
+                background:"var(--accent-data)",
               }}/>
             </div>
             <div className="t-cap mt-3" style={{color:"var(--neutral-600)"}}>
-              Heuristic estimate based on the number of rules in your
-              query — not a live count. The live recount endpoint
-              (DRS-O-PREVIEW) lands in a follow-up slice; final row
-              count is computed at delivery time.
+              {estimateSource === "server"
+                ? "Live estimate returned by the DRS backend from the current criteria tree."
+                : estimateSource === "fallback"
+                  ? "Backend count endpoint was unavailable; using live registry totals with the same server-side estimate model."
+                  : "The backend estimate refreshes as you edit the criteria tree."}
             </div>
           </div>
         </div>

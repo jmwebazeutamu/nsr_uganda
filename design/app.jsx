@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, ProgrammesScreen, ProgrammeDetailScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, MemberDetailScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, CatalogueScreen, DatasetDetailScreen, VariableDetailScreen, AggregateBuilderScreen, HandoffConfirmScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts, ErrorBoundary */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, DataExplorerConsoleScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, ProgrammesScreen, ProgrammeDetailScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, MemberDetailScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, CatalogueScreen, DatasetDetailScreen, VariableDetailScreen, AggregateBuilderScreen, HandoffConfirmScreen, ChangeRequestScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts, ErrorBoundary */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -26,14 +26,12 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 const NAV = [
   { id: "home",    label: "Home",          icon: "home" },
   // Data Explorer — discovery + aggregate surface (ADR-0023,
-  // US-DATA-EXP-001). Opens the standalone 5-screen bundle in a
-  // new tab. Gated on the data_explorer.enabled feature flag AND
-  // the user's EXPLORER realm role; hidden (not greyed) when
-  // either fails, per design brief §6. Replaces the old
-  // "Design system" link at the same nav slot.
+  // US-DATA-EXP-001). Embedded same-origin so the API client uses the
+  // authenticated console session. Gated on the data_explorer.enabled
+  // feature flag AND the user's EXPLORER realm role; hidden (not
+  // greyed) when either fails, per design brief §6.
   { id: "data-explorer", label: "Data Explorer", icon: "database",
-    featureFlag: "data_explorer_enabled", requireRole: "EXPLORER",
-    externalHref: "v0.1/screens/data-explorer/Data Explorer - Catalogue.html" },
+    featureFlag: "data_explorer_enabled", requireRole: "EXPLORER" },
   { section: "WORKFLOWS" },
   { id: "dih",     label: "DIH review",    icon: "inbox",     count: 342 },
   { id: "upd",     label: "Updates",       icon: "edit",      count: 23 },
@@ -235,20 +233,18 @@ function App() {
           </button>
         </div>
       )}
-      {/* Topbar */}
+      {/* National masthead — Uganda Coat of Arms on a white tile, navy
+          bar with a 3px gold rule, sticky over every route. Search
+          and ⌘K affordance removed with this redesign. */}
       <header className="topbar">
         <div className="topbar-brand">
-          <div className="brand-mark">NSR</div>
+          <span className="brand-mark">
+            <img src="assets/Coat_of_arms_of_Uganda.png" alt="Coat of Arms of Uganda"/>
+          </span>
           <div style={{display:'flex', flexDirection:'column', lineHeight:1.15}}>
-            <span style={{fontSize:13.5, fontWeight:700, color:'var(--primary-900)'}}>National Social Registry</span>
-            <span className="t-cap">MGLSD · Republic of Uganda</span>
+            <span className="brand-wordmark">National Social Registry</span>
+            <span className="brand-sub">Ministry of Gender, Labour and Social Development</span>
           </div>
-        </div>
-
-        <div className="search">
-          <Icon name="search" size={16} color="var(--neutral-500)"/>
-          <input placeholder="Search households, members, Registry IDs, NIN…"/>
-          <kbd>⌘K</kbd>
         </div>
 
         <div className="topbar-spacer"/>
@@ -336,10 +332,7 @@ function App() {
         {screen === "dedup"   && <DedupScreen/>}
         {screen === "upd"     && <UPDScreen changeRequestId={screenPayload?.changeRequestId} onNavigate={navigate}/>}
         {screen === "drs"     && <DRSScreen onNavigate={navigate}/>}
-        {/* Data Explorer — the sidebar entry opens the standalone
-            5-screen harness in a new tab (catalogue → builder →
-            results → coverage → synthetic). Not embedded in this
-            shell. ADR-0023 §D1, US-DATA-EXP-001. */}
+        {screen === "data-explorer" && <DataExplorerConsoleScreen/>}
         {screen === "grm"     && <GRMScreen onNavigate={navigate}/>}
         {screen === "partner-drs" && <PartnerDRSScreen/>}
         {screen === "my-dsa" && <MyDsaScreen/>}
@@ -352,6 +345,13 @@ function App() {
             onOpenMember={(mid) => navigate("registry-member-detail", { memberId: mid })}
             onNavigate={navigate}/>}
         {screen === "household" && <HouseholdScreen householdId={screenPayload?.householdId} onNavigate={navigate}/>}
+        {screen === "change-request" && <ChangeRequestScreen
+            householdId={screenPayload?.householdId}
+            initialScope={screenPayload?.initialScope || "household"}
+            roster={screenPayload?.roster || null}
+            me={me}
+            onBack={() => navigate("household", { householdId: screenPayload?.householdId })}
+            onSuccess={() => navigate("household", { householdId: screenPayload?.householdId })}/>}
         {screen === "registry-member-detail" && <MemberDetailScreen
             memberId={screenPayload?.memberId}
             onBack={() => navigate("registry", { initialView: "members" })}
@@ -396,8 +396,8 @@ function App() {
         </ErrorBoundary>
       </main>
 
-      {/* Global DSA quick-find overlay — wired from the topbar icon
-          and (later) ⌘K. Same surface from every screen. */}
+      {/* Global DSA quick-find overlay — wired from the topbar icon.
+          Same surface from every screen. */}
       <DsaQuickFind
         open={dsaFindOpen}
         onClose={() => setDsaFindOpen(false)}

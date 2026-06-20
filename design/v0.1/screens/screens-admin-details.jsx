@@ -41,11 +41,11 @@ const AdminGeoUnitDetailScreen = ({ unit, onBack, onSave }) => {
   return (
     <div className="page">
       <PageHeader
+        back={{ label: "Geography", onClick: onBack }}
         eyebrow={<>ADMIN · REF · GEOGRAPHY · <span className="t-mono">{u.code}</span></>}
         title={<>{u.name} <span className="t-bodysm" style={{ fontWeight: 400, color: 'var(--accent-data)', marginLeft: 8 }}>· {u.level}</span></>}
         sub={<>Inside <strong>{u.parent.name}</strong> ({u.parent.level}) · {u.households.toLocaleString()} households scored</>}
         right={<>
-          <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to hierarchy</button>
           {!edit
             ? <button className="btn btn-primary" onClick={() => setEdit(true)}><Icon name="edit" size={14}/> Edit unit</button>
             : <>
@@ -187,11 +187,11 @@ const AdminUpdRoutingRuleEditScreen = ({ rule, onBack, onSave }) => {
   return (
     <div className="page">
       <PageHeader
+        back={{ label: "UPD routing", onClick: onBack }}
         eyebrow={<>ADMIN · WORKFLOW · UPD ROUTING · edit</>}
         title={<>{r.changeType} <span className="t-bodysm" style={{ fontWeight: 400, color: 'var(--accent-data)', marginLeft: 8 }}>· pmt_relevant = {r.pmtRelevant ? 'true' : 'false'}</span></>}
         sub={<>Last updated <strong>{r.updatedAt}</strong>. Edits write a new active row and supersede this one.</>}
         right={<>
-          <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to routing</button>
           <button className="btn btn-primary" onClick={() => onSave?.(draft)}><Icon name="check" size={14}/> Save (creates new active rule)</button>
         </>}
       />
@@ -294,11 +294,11 @@ const AdminUserDetailScreen = ({ user, onBack, onSave }) => {
   return (
     <div className="page">
       <PageHeader
+        back={{ label: "Roles & scopes", onClick: onBack }}
         eyebrow={<>ADMIN · SECURITY · USERS · <span className="t-mono">{u.id}</span></>}
         title={<>{u.name} <span className="t-bodysm" style={{ fontWeight: 400, color: 'var(--accent-data)', marginLeft: 8 }}>· {u.username}</span></>}
         sub={<>{u.email} · onboarded {u.onboardedAt}</>}
         right={<>
-          <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to users</button>
           {!edit
             ? <>
                 <button className="btn"><Icon name="refresh" size={14}/> Reset password</button>
@@ -467,10 +467,10 @@ const AdminDdupPairDetailScreen = ({ pair, onBack, onMerge, onReject, onHold }) 
   return (
     <div className="page">
       <PageHeader
+        back={{ label: "DDUP model", onClick: onBack }}
         eyebrow={<>ADMIN · WORKFLOW · DDUP · MATCH PAIR · <span className="t-mono">{p.id.slice(0, 16)}…</span></>}
         title={<>{p.type === 'household' ? 'Household' : 'Member'} match · Tier {p.tier} · score {p.score.toFixed(2)}</>}
         sub={<>Pending {p.ageHours}h · reason: <strong>{p.reason}</strong></>}
-        right={<button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to queue</button>}
       />
 
       {/* Survivor picker */}
@@ -600,11 +600,11 @@ const AdminChoiceListOptionEditScreen = ({ option, onBack, onSave }) => {
   return (
     <div className="page">
       <PageHeader
+        back={{ label: "Choice lists", onClick: onBack }}
         eyebrow={<>ADMIN · REF · CHOICE LIST · <span className="t-mono">{o.listName}</span> · v{o.listVersion} (draft)</>}
         title={<>Edit option <span className="t-mono" style={{ marginLeft: 8 }}>{o.code}</span></>}
         sub={<>Inside <strong>{o.listLabel}</strong> · draft version — locks on submit-for-approval.</>}
         right={<>
-          <button className="btn" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to list</button>
           <button className="btn btn-primary" onClick={() => onSave?.(draft)}><Icon name="check" size={14}/> Save</button>
         </>}
       />
