@@ -1394,6 +1394,42 @@ class TestCurrentValuesEndpoint:
         assert assets["model"] == "data_management.AssetOwnership"
         assert any(f["key"] == "phone" for f in assets["fields"])
 
+    def test_out_of_scope_operator_gets_404(self, db, household, django_user_model):
+        """ABAC: an operator scoped to a different geography cannot read a
+        household's current values — 404, not its field data."""
+        from rest_framework.test import APIClient
+
+        from apps.security.models import OperatorScope, ScopeLevel
+
+        op = django_user_model.objects.create_user(username="cv-elsewhere", password="p")
+        OperatorScope.objects.create(
+            user=op, scope_level=ScopeLevel.SUB_REGION, scope_code="SOMEWHERE-ELSE",
+        )
+        c = APIClient()
+        c.force_authenticate(user=op)
+        r = c.get("/api/v1/upd/current-values/", {
+            "entity": "household", "household_id": household.id,
+            "fields": ["household.dwelling_tenure"],
+        })
+        assert r.status_code == 404
+
+    def test_in_scope_operator_can_read(self, db, household, geo, django_user_model):
+        from rest_framework.test import APIClient
+
+        from apps.security.models import OperatorScope, ScopeLevel
+
+        op = django_user_model.objects.create_user(username="cv-inscope", password="p")
+        OperatorScope.objects.create(
+            user=op, scope_level=ScopeLevel.SUB_REGION, scope_code=geo["sr"].code,
+        )
+        c = APIClient()
+        c.force_authenticate(user=op)
+        r = c.get("/api/v1/upd/current-values/", {
+            "entity": "household", "household_id": household.id,
+            "fields": ["household.dwelling_tenure"],
+        })
+        assert r.status_code == 200
+
 
 class TestListFilters:
     """The Decided tab in the UPD workbench depends on the list

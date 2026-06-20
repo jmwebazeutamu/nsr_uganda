@@ -371,6 +371,19 @@ class CurrentValuesView(APIView):
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
         entity_id = data.get("member_id") if data["entity"] == EntityType.MEMBER else data.get("household_id")
+
+        # ABAC: an operator may only read current values for a household /
+        # member inside their geographic scope. 404 (not 403) so an
+        # out-of-scope id is indistinguishable from a non-existent one.
+        from apps.security.abac import user_can_access_household, user_can_access_member
+        allowed = (
+            user_can_access_member(request.user, entity_id)
+            if data["entity"] == EntityType.MEMBER
+            else user_can_access_household(request.user, entity_id)
+        )
+        if not allowed:
+            return Response({"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND)
+
         values = {}
         for field_id in data["fields"]:
             category, field = _normalise_change_key(field_id)
