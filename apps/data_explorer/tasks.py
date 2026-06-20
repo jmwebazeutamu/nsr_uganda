@@ -37,6 +37,23 @@ def _overlap_dims(a: dict, b: dict) -> int:
     return sum(1 for k in keys if a[k] == b[k])
 
 
+@shared_task(name="data_explorer.refresh_matviews")
+def refresh_matviews():
+    """Populate the ``mv_explorer_*`` matviews from the live registry.
+
+    The matviews are created ``WITH NO DATA`` (migration 0010), so until
+    this runs the aggregate endpoint has nothing to serve — and a never-
+    refreshed Postgres matview raises OperationalError on any SELECT.
+    The raw ``REFRESH`` SQL lives in ``apps.data_management.matviews``
+    (the no-raw-SQL boundary); this task is just the schedule hook.
+    """
+    from apps.data_management.matviews import refresh_explorer_matviews
+
+    refreshed = refresh_explorer_matviews(concurrently=True)
+    logger.info("Refreshed %d Data Explorer matviews", len(refreshed))
+    return {"refreshed": refreshed}
+
+
 @shared_task(name="data_explorer.detect_overlap_burst")
 def detect_overlap_burst():
     """Sweep the last 24h of AggregateQueryLog rows. Flag any actor

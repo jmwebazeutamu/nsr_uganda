@@ -66,6 +66,16 @@ app.conf.beat_schedule = {
         # (US-CONSENT-07).
         "schedule": crontab(minute=30),
     },
+    "refresh-explorer-matviews": {
+        "task": "data_explorer.refresh_matviews",
+        # Daily at 01:00 EAT — off-peak, ahead of the 03:00 audit-chain
+        # scan. The matviews back read-only aggregate queries whose
+        # datasets carry daily/weekly refresh_cadence, so a daily
+        # populate keeps every dataset inside its 2x-cadence staleness
+        # window. Without this the matviews stay WITH NO DATA and the
+        # aggregate endpoint returns 503 (data not ready).
+        "schedule": crontab(minute=0, hour=1),
+    },
     "auto-merge-high-confidence-pairs": {
         "task": "apps.ddup.tasks.auto_merge_high_confidence_pairs_task",
         # Hourly — high-confidence tier-3 pairs are rare; we don't
