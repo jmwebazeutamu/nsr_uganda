@@ -3,10 +3,12 @@
 SAD §8.2: "Attribute-based scope enforced by parish/sub-county/district
 /region tag on the user account. ABAC policies evaluated at every read."
 
-Sprint 2 enforces visibility at the **sub_region** level using the
-denormalised partition key from ADR-0005. Finer-grained levels
-(district / parish / village) are modelled by OperatorScope but the
-matching path lives here once the relevant column is added to the row.
+Enforcement is multi-level (ADR-0026): every OperatorScope level —
+region / sub_region / district / sub_county / parish / village — resolves
+against the matching Household column (sub_region uses the ADR-0005
+denormalised partition key; the rest go through the level FK's `code`).
+Household denormalises every UBOS level as an FK, so a coarse scope
+contains its finer units automatically. `national` is the wildcard.
 
 Fail-closed:
 - Anonymous user → no rows visible.
@@ -19,7 +21,6 @@ from __future__ import annotations
 from django.db.models import Q
 
 from .models import OperatorScope, ScopeLevel
-
 
 # Denormalised sub_region partition column (ADR-0005). The mixin's
 # scope_field_path is this column optionally prefixed by a relation
@@ -100,6 +101,32 @@ def scope_q_for_field(user, field: str = "sub_region_code") -> Q:
 def household_scope_q(user) -> Q:
     """Back-compat alias for the original Household-shaped helper."""
     return scope_q_for_field(user, "sub_region_code")
+
+
+def user_can_access_household(user, household_id) -> bool:
+    """True if the operator's geographic scope covers this household
+    (or the user is national/superuser). For single-entity views that
+    take a household id by URL/param rather than listing a queryset —
+    they call this to decide 404-vs-serve. One indexed query; no full
+    scope materialisation. Empty/anonymous/partner-only scope -> False.
+    """
+    if not household_id:
+        return False
+    from apps.data_management.models import Household
+    return Household.objects.filter(
+        Q(pk=household_id) & scope_q_for_field(user, _SUB_REGION_DENORM)
+    ).exists()
+
+
+def user_can_access_member(user, member_id) -> bool:
+    """True if the operator's scope covers the member's household (or
+    national/superuser). Single-entity counterpart for member-id views."""
+    if not member_id:
+        return False
+    from apps.data_management.models import Member
+    return Member.objects.filter(
+        Q(pk=member_id) & scope_q_for_field(user, f"household__{_SUB_REGION_DENORM}")
+    ).exists()
 
 
 class ScopedQuerysetMixin:

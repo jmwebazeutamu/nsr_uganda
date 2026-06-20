@@ -649,3 +649,51 @@ class TestPmtResultFkScope:
         assert r.data["count"] == 1
         assert r.data["results"][0]["household"] == \
             households_in_each["SR-BUGANDA"].id
+
+
+class TestSingleEntityAccessHelpers:
+    """user_can_access_household / _member — for views that take an id by
+    URL/param instead of listing a queryset (consent, dqa, update_workflow)."""
+
+    def _member_in(self, hh):
+        from apps.data_management.models import Member
+        return Member.objects.create(
+            household=hh, line_number=1, first_name="X", surname="Y",
+            sex="2", date_of_birth=date(2000, 1, 1),
+        )
+
+    def test_scoped_operator_can_access_in_scope_household_only(
+        self, db, django_user_model, two_sub_regions, households_in_each,
+    ):
+        from apps.security.abac import user_can_access_household, user_can_access_member
+
+        u = django_user_model.objects.create_user(username="op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.DISTRICT,
+            scope_code=two_sub_regions["SR-BUGANDA"]["d"].code,
+        )
+        in_hh = households_in_each["SR-BUGANDA"]
+        out_hh = households_in_each["SR-KARAMOJA"]
+        assert user_can_access_household(u, in_hh.id) is True
+        assert user_can_access_household(u, out_hh.id) is False
+        assert user_can_access_member(u, self._member_in(in_hh).id) is True
+        assert user_can_access_member(u, self._member_in(out_hh).id) is False
+
+    def test_national_and_superuser_access_all(
+        self, db, django_user_model, households_in_each,
+    ):
+        from apps.security.abac import user_can_access_household
+
+        nat = django_user_model.objects.create_user(username="nat", password="p")
+        OperatorScope.objects.create(user=nat, scope_level=ScopeLevel.NATIONAL, scope_code="")
+        su = django_user_model.objects.create_user(username="su2", password="p", is_superuser=True)
+        for hh in households_in_each.values():
+            assert user_can_access_household(nat, hh.id) is True
+            assert user_can_access_household(su, hh.id) is True
+
+    def test_unscoped_user_denied(self, db, django_user_model, households_in_each):
+        from apps.security.abac import user_can_access_household
+
+        u = django_user_model.objects.create_user(username="noscope", password="p")
+        assert user_can_access_household(u, households_in_each["SR-BUGANDA"].id) is False
+        assert user_can_access_household(u, None) is False
