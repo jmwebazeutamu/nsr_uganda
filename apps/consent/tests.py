@@ -341,7 +341,29 @@ def test_minor_requires_proxy(geo):
 @pytest.fixture
 def api_client(db):
     from rest_framework.test import APIClient
+
+    from apps.security.models import OperatorScope, ScopeLevel
     user = get_user_model().objects.create_user(username="op1", password="x")
+    # Consent operations run at national level (the DPO queue is national,
+    # and an unscoped operator would be fail-closed under ABAC). Geographic
+    # gating is exercised by TestConsentAbacScope.
+    OperatorScope.objects.create(
+        user=user, scope_level=ScopeLevel.NATIONAL, scope_code="",
+    )
+    client = APIClient()
+    client.force_authenticate(user=user)
+    return client
+
+
+@pytest.fixture
+def scoped_elsewhere_client(db):
+    from rest_framework.test import APIClient
+
+    from apps.security.models import OperatorScope, ScopeLevel
+    user = get_user_model().objects.create_user(username="op-elsewhere", password="x")
+    OperatorScope.objects.create(
+        user=user, scope_level=ScopeLevel.SUB_REGION, scope_code="OTHER-SR",
+    )
     client = APIClient()
     client.force_authenticate(user=user)
     return client
@@ -405,3 +427,53 @@ def test_api_coverage_dashboard(api_client, member):
     assert body["active_purposes"] >= 9
     assert body["consent_records_by_state"].get("GRANTED") == 1
     assert "open_withdrawal_tickets" in body and "sla_breached" in body
+
+
+# ---------------------------------------------------------------------------
+# ABAC geographic scope on consent endpoints (SAD §8.2)
+# ---------------------------------------------------------------------------
+
+
+def _result_ids(resp):
+    data = resp.data
+    rows = data["results"] if isinstance(data, dict) and "results" in data else data
+    return {r["id"] for r in rows}
+
+
+@pytest.mark.django_db
+class TestConsentAbacScope:
+    def test_out_of_scope_operator_404_on_member_views(
+        self, member, scoped_elsewhere_client,
+    ):
+        c = scoped_elsewhere_client
+        assert c.get(f"/api/v1/consent/members/{member.id}").status_code == 404
+        assert c.get(f"/api/v1/consent/members/{member.id}/history").status_code == 404
+        assert c.post(
+            f"/api/v1/consent/members/{member.id}/capture",
+            {"purpose_code": "REGISTRATION", "state": "GRANTED"}, format="json",
+        ).status_code == 404
+        assert c.post(
+            f"/api/v1/consent/members/{member.id}/withdraw",
+            {"purpose_code": "REGISTRATION"}, format="json",
+        ).status_code == 404
+
+    def test_in_scope_operator_can_read_matrix(self, member, api_client):
+        # api_client is national-scoped → wildcard.
+        assert api_client.get(f"/api/v1/consent/members/{member.id}").status_code == 200
+
+    def test_withdrawal_queue_scoped_to_geography(
+        self, member, api_client, scoped_elsewhere_client,
+    ):
+        reg = ConsentPurpose.objects.get(code="REGISTRATION")
+        services.capture_consent(
+            member=member, purpose=reg, state=ConsentState.GRANTED,
+            captured_via="WEB_INTAKE", captured_by="op1")
+        ticket = services.open_withdrawal_ticket(
+            member=member, purpose=reg, requested_by="cit")
+
+        # National operator sees the ticket; an operator scoped elsewhere
+        # sees an empty queue.
+        assert ticket.id in _result_ids(
+            api_client.get("/api/v1/consent/withdrawal-tickets/"))
+        assert ticket.id not in _result_ids(
+            scoped_elsewhere_client.get("/api/v1/consent/withdrawal-tickets/"))
