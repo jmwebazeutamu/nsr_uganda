@@ -32,9 +32,18 @@ from apps.security.models import AuditEvent
 
 @pytest.fixture
 def api_client(db):
+    from apps.security.models import OperatorScope, ScopeLevel
+
     user_model = get_user_model()
     user = user_model.objects.create_user(
         username="dqa-tester", password="x", is_active=True,
+    )
+    # National-scope operator: the DQA evaluation API operates across
+    # pre-promotion provisional ids (DIH visibility), so the canonical
+    # API caller is national. Geographic gating is covered by the
+    # negative test below.
+    OperatorScope.objects.create(
+        user=user, scope_level=ScopeLevel.NATIONAL, scope_code="",
     )
     client = APIClient()
     client.force_authenticate(user=user)
@@ -334,3 +343,60 @@ class TestDqaRuleSerializerSurface:
         assert body["applies_to"]["members"] == ["relationship_to_head"]
         assert body["test_fixtures"] == []
         assert "message_template_i18n_key" in body
+
+
+@pytest.mark.django_db
+class TestEvaluationAbacScope:
+    """ABAC: a geographically-scoped operator cannot read or persist DQA
+    evaluations for households outside their scope (US-S11-044 / SAD §8.2)."""
+
+    def _scoped_op_and_household(self, settings):
+        from datetime import date
+
+        from apps.data_management.models import Household
+        from apps.reference_data.models import GeographicUnit
+        from apps.security.models import OperatorScope, ScopeLevel
+
+        settings.DQA_INTRA_HOUSEHOLD_ENABLED = True
+        nodes = {}
+        for level, key, parent in [
+            ("region", "r", None), ("sub_region", "sr", "r"), ("district", "d", "sr"),
+            ("county", "c", "d"), ("sub_county", "sc", "c"),
+            ("parish", "p", "sc"), ("village", "v", "p"),
+        ]:
+            nodes[key] = GeographicUnit.objects.create(
+                level=level, code=f"DQ-{key.upper()}", name=key,
+                parent=nodes.get(parent), effective_from=date(2026, 1, 1),
+            )
+        hh = Household.objects.create(
+            region=nodes["r"], sub_region=nodes["sr"], district=nodes["d"],
+            county=nodes["c"], sub_county=nodes["sc"], parish=nodes["p"],
+            village=nodes["v"], urban_rural="2",
+        )
+        user = get_user_model().objects.create_user(username="dqa-elsewhere", password="x")
+        OperatorScope.objects.create(
+            user=user, scope_level=ScopeLevel.SUB_REGION, scope_code="OTHER-SR",
+        )
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c, hh
+
+    def test_history_out_of_scope_returns_empty(self, db, settings):
+        c, hh = self._scoped_op_and_household(settings)
+        DqaEvaluation.objects.create(
+            household_id=hh.id, stage="dih_ingest", outcome="block",
+            results=[], evaluator_service_version="t", actor="x",
+        )
+        r = c.get(f"/api/v1/dqa/evaluations/{hh.id}")
+        assert r.status_code == 200
+        assert r.json() == []
+
+    def test_persist_out_of_scope_returns_404(self, db, settings):
+        c, hh = self._scoped_op_and_household(settings)
+        r = c.post(
+            "/api/v1/dqa/evaluate/household",
+            data={"payload": {"members": []}, "stage": "dih_ingest",
+                  "persist": True, "household_id": hh.id},
+            format="json",
+        )
+        assert r.status_code == 404

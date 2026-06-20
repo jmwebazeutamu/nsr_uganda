@@ -405,6 +405,15 @@ class EvaluateHouseholdView(APIView):
                     {"detail": "household_id is required when persist=true"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            # ABAC: only persist an evaluation for a household the operator
+            # is scoped to (national/superuser may persist for pre-promotion
+            # provisional ids). The sync (persist=false) path evaluates the
+            # caller-supplied payload only and needs no geographic gate.
+            from apps.security.abac import user_can_access_household
+            if not user_can_access_household(request.user, household_id):
+                return Response(
+                    {"detail": "Not found."}, status=status.HTTP_404_NOT_FOUND,
+                )
             eval_row = persist_household_evaluation(
                 payload, stage=stage, actor=actor,
                 household_id=household_id,
@@ -462,6 +471,14 @@ class HouseholdEvaluationsView(APIView):
     def get(self, request, household_id: str):
         if not _flag_enabled():
             return _disabled_response()
+        # ABAC: a scoped operator sees evaluation history only for
+        # households in their geography. Out-of-scope (or pre-promotion
+        # provisional ids, which are national-only) yield an empty list —
+        # the same "rows just don't appear" semantics as the queryset
+        # scope mixins, rather than confirming the household exists.
+        from apps.security.abac import user_can_access_household
+        if not user_can_access_household(request.user, household_id):
+            return Response([])
         qs = DqaEvaluation.objects.filter(
             household_id=household_id,
         ).order_by("-evaluated_at")

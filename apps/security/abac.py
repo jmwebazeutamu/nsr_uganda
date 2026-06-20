@@ -103,6 +103,23 @@ def household_scope_q(user) -> Q:
     return scope_q_for_field(user, "sub_region_code")
 
 
+def _is_wildcard(user) -> bool:
+    """True if the user sees everything — superuser, or a national scope.
+
+    Wildcard users see rows whose household reference is a pre-promotion
+    *provisional* id with no Household row yet (DIH lives at national
+    visibility), so the single-entity helpers below short-circuit here
+    BEFORE the existence check. This matches HouseholdIdScopedQuerysetMixin.
+    """
+    if user is None or not getattr(user, "is_authenticated", False):
+        return False
+    if getattr(user, "is_superuser", False):
+        return True
+    return OperatorScope.objects.filter(
+        user=user, active=True, scope_level=ScopeLevel.NATIONAL,
+    ).exists()
+
+
 def user_can_access_household(user, household_id) -> bool:
     """True if the operator's geographic scope covers this household
     (or the user is national/superuser). For single-entity views that
@@ -112,6 +129,8 @@ def user_can_access_household(user, household_id) -> bool:
     """
     if not household_id:
         return False
+    if _is_wildcard(user):
+        return True
     from apps.data_management.models import Household
     return Household.objects.filter(
         Q(pk=household_id) & scope_q_for_field(user, _SUB_REGION_DENORM)
@@ -123,6 +142,8 @@ def user_can_access_member(user, member_id) -> bool:
     national/superuser). Single-entity counterpart for member-id views."""
     if not member_id:
         return False
+    if _is_wildcard(user):
+        return True
     from apps.data_management.models import Member
     return Member.objects.filter(
         Q(pk=member_id) & scope_q_for_field(user, f"household__{_SUB_REGION_DENORM}")
