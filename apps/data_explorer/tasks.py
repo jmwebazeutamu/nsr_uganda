@@ -11,7 +11,6 @@ ADR-0023 D3 / R1 each flag fires:
 from __future__ import annotations
 
 import logging
-from collections import Counter
 from datetime import UTC, datetime, timedelta
 
 from django.conf import settings
@@ -28,13 +27,6 @@ logger = logging.getLogger(__name__)
 # queries × 3 overlapping filter dimensions.
 BURST_THRESHOLD = 50
 OVERLAP_DIMS = 3
-
-
-def _overlap_dims(a: dict, b: dict) -> int:
-    if not a or not b:
-        return 0
-    keys = set(a.keys()) & set(b.keys())
-    return sum(1 for k in keys if a[k] == b[k])
 
 
 @shared_task(name="data_explorer.refresh_matviews")
@@ -81,34 +73,45 @@ def detect_overlap_burst():
     for (actor, dataset_id), queries in bucket.items():
         if len(queries) <= BURST_THRESHOLD:
             continue
-        # Count pairs (i, j) with i<j whose overlap >= OVERLAP_DIMS.
-        # We use the geographic_scope + filter_variables list as the
-        # dimensions; cheap heuristic that matches the risk-probe pattern.
-        hashes = Counter(q["filter_hash"] for q in queries)
-        # If the burst has >= OVERLAP_DIMS recurring filter hashes the
-        # attacker is recycling filter dimensions — flag.
-        recurring_dims = sum(1 for h, c in hashes.items() if c >= 2)
-        if recurring_dims < OVERLAP_DIMS:
+        # Cell-probing recycles a narrow filter (same filter_hash) across
+        # many queries; that filter's dimension count is the length of its
+        # filter_variables. ADR-0023: flag an actor with >BURST_THRESHOLD
+        # queries that recycle a filter spanning >= OVERLAP_DIMS dimensions.
+        # Legitimate wide-ranging exploration recycles no single filter, so
+        # its dominant cluster stays size 1 and is not flagged.
+        hash_groups: dict[str, list[dict]] = {}
+        for q in queries:
+            hash_groups.setdefault(q["filter_hash"], []).append(q)
+        _dominant_hash, dominant = max(
+            hash_groups.items(), key=lambda kv: len(kv[1]),
+        )
+        overlap_dimensions = max(
+            (len(q.get("filter_variables") or []) for q in dominant),
+            default=0,
+        )
+        if len(dominant) < 2 or overlap_dimensions < OVERLAP_DIMS:
             continue
         flagged.append({
             "actor": actor,
             "dataset_id": dataset_id,
             "query_count": len(queries),
-            "recurring_dims": recurring_dims,
+            "overlap_dimensions": overlap_dimensions,
         })
 
+    flagged_at = datetime.now(UTC).isoformat()
     for f in flagged:
         emit_audit(
             "data_explorer.reidentification.suspected",
-            "explorer_actor", f["actor"],
+            "User", f["actor"],
             actor=f["actor"], actor_kind="system",
             reason=(
-                f"queries={f['query_count']} recurring_dims="
-                f"{f['recurring_dims']} dataset={f['dataset_id']}"
+                f"queries={f['query_count']} overlap_dimensions="
+                f"{f['overlap_dimensions']} dataset={f['dataset_id']}"
             ),
             field_changes={
+                "flagged_at": flagged_at,
+                "overlap_dimensions": f["overlap_dimensions"],
                 "query_count": f["query_count"],
-                "recurring_dims": f["recurring_dims"],
                 "dataset_id": f["dataset_id"],
             },
         )
@@ -123,18 +126,18 @@ def detect_overlap_burst():
                 body=(
                     f"Actor {f['actor']} ran {f['query_count']} aggregate "
                     f"queries against dataset {f['dataset_id']} in the "
-                    f"last 24h with {f['recurring_dims']} recurring "
-                    f"filter-hash dimensions. Review the AggregateQueryLog "
-                    f"rows for this actor before deciding whether to "
-                    f"throttle or revoke the EXPLORER role.\n"
+                    f"last 24h recycling a filter spanning "
+                    f"{f['overlap_dimensions']} dimensions. Review the "
+                    f"AggregateQueryLog rows for this actor before deciding "
+                    f"whether to throttle or revoke the EXPLORER role.\n"
                 ),
-                entity_type="explorer_actor",
+                entity_type="User",
                 entity_id=f["actor"],
                 audit_actor="system",
                 audit_action="data_explorer.reidentification.notified",
                 audit_reason=(
                     f"queries={f['query_count']} "
-                    f"recurring_dims={f['recurring_dims']}"
+                    f"overlap_dimensions={f['overlap_dimensions']}"
                 ),
             )
 
