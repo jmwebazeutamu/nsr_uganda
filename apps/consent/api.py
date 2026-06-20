@@ -228,6 +228,24 @@ class ConsentStatementVersionViewSet(viewsets.ModelViewSet):
 # ---------------------------------------------------------------------------
 
 
+def _require_member_scope(user, member_id):
+    """ABAC: an operator may only read/write a member's consent when the
+    member's household is in their geographic scope (national/superuser
+    see all). Raises Http404 — an out-of-scope member is indistinguishable
+    from a non-existent one.
+
+    NOTE this is the OPERATOR path. Citizen self-service (a data subject
+    acting on their own consent) authenticates via the deferred Keycloak
+    citizen realm and will carry its own self-access rule; until that
+    lands the callers here are operators.
+    """
+    from django.http import Http404
+
+    from apps.security.abac import user_can_access_member
+    if not user_can_access_member(user, member_id):
+        raise Http404
+
+
 class MemberConsentView(APIView):
     """GET the full per-purpose consent matrix for a member (US-CONSENT-05,
     -08). Returns every ACTIVE purpose with the member's current state."""
@@ -236,6 +254,7 @@ class MemberConsentView(APIView):
 
     def get(self, request, member_id):
         member = get_object_or_404(Member, pk=member_id)
+        _require_member_scope(request.user, member_id)
         records = {
             r.purpose_id: r for r in
             ConsentRecord.objects.filter(member=member).select_related("purpose")
@@ -267,6 +286,7 @@ class MemberConsentHistoryView(APIView):
 
     def get(self, request, member_id):
         get_object_or_404(Member, pk=member_id)
+        _require_member_scope(request.user, member_id)
         from .models import ConsentRecordVersion
         rows = (
             ConsentRecordVersion.objects
@@ -306,6 +326,7 @@ class MemberCaptureView(APIView):
 
     def post(self, request, member_id):
         member = get_object_or_404(Member, pk=member_id)
+        _require_member_scope(request.user, member_id)
         req = _CaptureRequest(data=request.data)
         req.is_valid(raise_exception=True)
         data = req.validated_data
@@ -349,6 +370,7 @@ class MemberWithdrawView(APIView):
 
     def post(self, request, member_id):
         member = get_object_or_404(Member, pk=member_id)
+        _require_member_scope(request.user, member_id)
         req = _WithdrawRequest(data=request.data)
         req.is_valid(raise_exception=True)
         data = req.validated_data
@@ -421,7 +443,16 @@ class WithdrawalTicketViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated, ConsentModuleEnabled]
 
     def get_queryset(self):
-        qs = ConsentWithdrawalTicket.objects.all().select_related("purpose")
+        # ABAC: the DPO withdrawal queue is scoped to the operator's
+        # geography via the ticket's member household. The DPO is a
+        # national role (wildcard); a regional reviewer sees only their
+        # area's tickets.
+        from apps.security.abac import scope_q_for_field
+        qs = (
+            ConsentWithdrawalTicket.objects
+            .filter(scope_q_for_field(self.request.user, "member__household__sub_region_code"))
+            .select_related("purpose")
+        )
         # Manual filtering — django-filter is not installed (see project memory).
         state = self.request.query_params.get("state")
         if state:

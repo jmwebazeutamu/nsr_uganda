@@ -120,6 +120,138 @@ class TestNationalScope:
         assert r.data["count"] == 2
 
 
+class TestMultiLevelScope:
+    """SAD §8.2: ABAC scope is enforced at region / sub_region / district /
+    sub_county / parish / village granularity, not sub_region alone. A
+    scope at level L grants visibility to every household whose unit at
+    level L matches scope_code — and, because Household denormalises every
+    level as an FK, containment is automatic (a district scope sees all
+    its sub-counties/parishes/villages)."""
+
+    @pytest.mark.parametrize(
+        ("level", "node_key"),
+        [
+            (ScopeLevel.REGION, "r"),
+            (ScopeLevel.SUB_REGION, "sr"),
+            (ScopeLevel.DISTRICT, "d"),
+            (ScopeLevel.SUB_COUNTY, "sc"),
+            (ScopeLevel.PARISH, "p"),
+            (ScopeLevel.VILLAGE, "v"),
+        ],
+    )
+    def test_scope_at_each_level_isolates_to_that_geography(
+        self, db, django_user_model, two_sub_regions, households_in_each, level, node_key,
+    ):
+        from apps.security.abac import scope_q_for_field
+
+        u = django_user_model.objects.create_user(username=f"op-{level}", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=level,
+            scope_code=two_sub_regions["SR-BUGANDA"][node_key].code,
+        )
+        visible = list(
+            Household.objects.filter(scope_q_for_field(u, "sub_region_code"))
+            .values_list("id", flat=True)
+        )
+        assert visible == [households_in_each["SR-BUGANDA"].id], (
+            f"{level} scope should see only the BUGANDA household, got {visible}"
+        )
+
+    def test_coarser_scope_contains_finer_units(
+        self, db, django_user_model, two_sub_regions, households_in_each,
+    ):
+        """A district scope sees households across DIFFERENT sub-counties /
+        parishes within that district — the containment guarantee."""
+        from apps.security.abac import scope_q_for_field
+
+        b = two_sub_regions["SR-BUGANDA"]
+        # A second BUGANDA household in the SAME district but a sibling
+        # sub_county / parish / village.
+        sc2 = GeographicUnit.objects.create(
+            level="sub_county", code="A-SR-BUGANDA-SC2", name="bug-sc2",
+            parent=b["c"], effective_from=date(2026, 1, 1),
+        )
+        p2 = GeographicUnit.objects.create(
+            level="parish", code="A-SR-BUGANDA-P2", name="bug-p2",
+            parent=sc2, effective_from=date(2026, 1, 1),
+        )
+        hh2 = Household.objects.create(
+            region=b["r"], sub_region=b["sr"], district=b["d"],
+            county=b["c"], sub_county=sc2, parish=p2, urban_rural="2",
+        )
+
+        u = django_user_model.objects.create_user(username="dist-op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.DISTRICT, scope_code=b["d"].code,
+        )
+        visible = set(
+            Household.objects.filter(scope_q_for_field(u, "sub_region_code"))
+            .values_list("id", flat=True)
+        )
+        assert visible == {households_in_each["SR-BUGANDA"].id, hh2.id}
+
+        # A parish scope on the ORIGINAL parish sees only the first household.
+        u2 = django_user_model.objects.create_user(username="parish-op", password="p")
+        OperatorScope.objects.create(
+            user=u2, scope_level=ScopeLevel.PARISH, scope_code=b["p"].code,
+        )
+        visible2 = set(
+            Household.objects.filter(scope_q_for_field(u2, "sub_region_code"))
+            .values_list("id", flat=True)
+        )
+        assert visible2 == {households_in_each["SR-BUGANDA"].id}
+        assert hh2.id not in visible2
+
+    def test_mixed_level_scopes_union(
+        self, db, django_user_model, two_sub_regions, households_in_each,
+    ):
+        """An operator carrying a district scope in one region and a parish
+        scope in another sees both households (OR semantics across levels)."""
+        from apps.security.abac import scope_q_for_field
+
+        u = django_user_model.objects.create_user(username="mixed", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.DISTRICT,
+            scope_code=two_sub_regions["SR-BUGANDA"]["d"].code,
+        )
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.PARISH,
+            scope_code=two_sub_regions["SR-KARAMOJA"]["p"].code,
+        )
+        visible = set(
+            Household.objects.filter(scope_q_for_field(u, "sub_region_code"))
+            .values_list("id", flat=True)
+        )
+        assert visible == {
+            households_in_each["SR-BUGANDA"].id,
+            households_in_each["SR-KARAMOJA"].id,
+        }
+
+    def test_member_scoped_via_household_path_at_district_level(
+        self, db, django_user_model, two_sub_regions, households_in_each,
+    ):
+        """Member rows reach geography through household__ — district scope
+        must still resolve through that prefix."""
+        from apps.data_management.models import Member
+        from apps.security.abac import scope_q_for_field
+
+        for idx, (sr_key, hh) in enumerate(households_in_each.items(), start=1):
+            Member.objects.create(
+                household=hh, line_number=idx, first_name="M", surname=sr_key,
+                sex="2", date_of_birth=date(2000, 1, 1),
+            )
+        u = django_user_model.objects.create_user(username="dist-mem", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.DISTRICT,
+            scope_code=two_sub_regions["SR-BUGANDA"]["d"].code,
+        )
+        visible = list(
+            Member.objects.filter(scope_q_for_field(u, "household__sub_region_code"))
+            .values_list("household__id", flat=True)
+        )
+        assert visible == [households_in_each["SR-BUGANDA"].id]
+
+
 class TestScopeAcrossFKRelations:
     """Verify the scope_field_path mechanism — a Referral row is scoped
     by its household's sub_region_code, not by anything on the Referral
@@ -517,3 +649,51 @@ class TestPmtResultFkScope:
         assert r.data["count"] == 1
         assert r.data["results"][0]["household"] == \
             households_in_each["SR-BUGANDA"].id
+
+
+class TestSingleEntityAccessHelpers:
+    """user_can_access_household / _member — for views that take an id by
+    URL/param instead of listing a queryset (consent, dqa, update_workflow)."""
+
+    def _member_in(self, hh):
+        from apps.data_management.models import Member
+        return Member.objects.create(
+            household=hh, line_number=1, first_name="X", surname="Y",
+            sex="2", date_of_birth=date(2000, 1, 1),
+        )
+
+    def test_scoped_operator_can_access_in_scope_household_only(
+        self, db, django_user_model, two_sub_regions, households_in_each,
+    ):
+        from apps.security.abac import user_can_access_household, user_can_access_member
+
+        u = django_user_model.objects.create_user(username="op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.DISTRICT,
+            scope_code=two_sub_regions["SR-BUGANDA"]["d"].code,
+        )
+        in_hh = households_in_each["SR-BUGANDA"]
+        out_hh = households_in_each["SR-KARAMOJA"]
+        assert user_can_access_household(u, in_hh.id) is True
+        assert user_can_access_household(u, out_hh.id) is False
+        assert user_can_access_member(u, self._member_in(in_hh).id) is True
+        assert user_can_access_member(u, self._member_in(out_hh).id) is False
+
+    def test_national_and_superuser_access_all(
+        self, db, django_user_model, households_in_each,
+    ):
+        from apps.security.abac import user_can_access_household
+
+        nat = django_user_model.objects.create_user(username="nat", password="p")
+        OperatorScope.objects.create(user=nat, scope_level=ScopeLevel.NATIONAL, scope_code="")
+        su = django_user_model.objects.create_user(username="su2", password="p", is_superuser=True)
+        for hh in households_in_each.values():
+            assert user_can_access_household(nat, hh.id) is True
+            assert user_can_access_household(su, hh.id) is True
+
+    def test_unscoped_user_denied(self, db, django_user_model, households_in_each):
+        from apps.security.abac import user_can_access_household
+
+        u = django_user_model.objects.create_user(username="noscope", password="p")
+        assert user_can_access_household(u, households_in_each["SR-BUGANDA"].id) is False
+        assert user_can_access_household(u, None) is False
