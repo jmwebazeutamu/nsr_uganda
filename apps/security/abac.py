@@ -21,21 +21,60 @@ from django.db.models import Q
 from .models import OperatorScope, ScopeLevel
 
 
-def scope_q_for_field(user, field: str = "sub_region_code") -> Q:
-    """Return a Q expression filtering rows whose <field> matches one of
-    the user's active sub_region scopes.
+# Denormalised sub_region partition column (ADR-0005). The mixin's
+# scope_field_path is this column optionally prefixed by a relation
+# (e.g. "household__sub_region_code"); we derive that prefix and apply
+# it to every level's column so one declaration covers all granularities.
+_SUB_REGION_DENORM = "sub_region_code"
 
-    `field` is a Django ORM lookup path on the model being queried. For
-    Household / Member it's the default 'sub_region_code'; for Referral
-    / ProgrammeEnrolment it's 'household__sub_region_code'; for any
-    model that lacks a direct sub_region attribute the path walks the
-    relation. The caller declares the path via
-    ScopedQuerysetMixin.scope_field_path.
+# ScopeLevel -> the Household column (relative to Household) that carries
+# that geographic unit's code. Household denormalises every UBOS level as
+# an FK, so a coarse scope (district) automatically contains its finer
+# units — no hierarchy walk needed. sub_region uses the denormalised
+# partition column; the rest go through the FK's `code`.
+_LEVEL_FIELD: dict[str, str] = {
+    ScopeLevel.REGION: "region__code",
+    ScopeLevel.SUB_REGION: _SUB_REGION_DENORM,
+    ScopeLevel.DISTRICT: "district__code",
+    ScopeLevel.SUB_COUNTY: "sub_county__code",
+    ScopeLevel.PARISH: "parish__code",
+    ScopeLevel.VILLAGE: "village__code",
+}
+
+
+def _relation_prefix(field: str) -> str:
+    """Derive the relation prefix from a scope_field_path.
+
+    "sub_region_code" -> "" (row is Household-shaped);
+    "household__sub_region_code" -> "household__" (row reaches geography
+    through a Household FK). The prefix is prepended to every level's
+    column so finer-grained scopes resolve through the same relation.
+    """
+    if field.endswith(_SUB_REGION_DENORM):
+        return field[: -len(_SUB_REGION_DENORM)]
+    return ""
+
+
+def scope_q_for_field(user, field: str = "sub_region_code") -> Q:
+    """Return a Q filtering rows to the operator's geographic scope, at
+    whatever granularity each active OperatorScope declares
+    (region / sub_region / district / sub_county / parish / village).
+
+    `field` is the sub_region partition column on the model being
+    queried — "sub_region_code" for Household/Member, or a relation path
+    like "household__sub_region_code" for Referral / ProgrammeEnrolment /
+    PMTResult. We derive the relation prefix from it and match each scope
+    against the corresponding level column (containment is automatic
+    because Household denormalises every level as an FK). The caller
+    declares the path via ScopedQuerysetMixin.scope_field_path.
 
     Fail-closed:
     - Anonymous user -> Q(pk__in=[]) (no rows visible).
     - Authenticated user with no active scopes -> Q(pk__in=[]).
-    - Superuser -> ~Q(pk__in=[]) (all rows visible).
+    - Authenticated user whose only scopes are non-geographic (PARTNER)
+      -> Q(pk__in=[]) (this resolver is geographic; partner visibility
+      is handled by PartnerScopedQuerysetMixin).
+    - National scope or superuser -> ~Q(pk__in=[]) (all rows visible).
     """
     if user is None or not getattr(user, "is_authenticated", False):
         return Q(pk__in=[])
@@ -47,15 +86,14 @@ def scope_q_for_field(user, field: str = "sub_region_code") -> Q:
     )
     if not scopes:
         return Q(pk__in=[])
+    prefix = _relation_prefix(field)
     q = Q(pk__in=[])
     for level, code in scopes:
         if level == ScopeLevel.NATIONAL:
             return ~Q(pk__in=[])
-        if level == ScopeLevel.SUB_REGION and code:
-            q |= Q(**{field: code})
-        # district/parish/village/region levels are modelled but require
-        # the denormalised matching column on the row; deferred to a
-        # follow-up when the next set of denormalised codes lands.
+        rel = _LEVEL_FIELD.get(level)
+        if rel and code:
+            q |= Q(**{f"{prefix}{rel}": code})
     return q
 
 
@@ -85,10 +123,44 @@ class ScopedQuerysetMixin:
         return scope_q_for_field(self.request.user, self.scope_field_path)
 
 
+def _scoped_household_ids(user) -> list[str] | None:
+    """Resolve a user to the Household PKs their active scopes cover,
+    across ALL granularities. Returns None for 'visible to all'
+    (superuser or national) and [] for fail-closed. Used by the
+    ID-subquery mixins (Submission/StageRecord, MatchPair, ChangeRequest)
+    which can't express geography as a single column on their own row.
+
+    Built on top of scope_q_for_field so the multi-level semantics live
+    in exactly one place.
+    """
+    if user is None or not getattr(user, "is_authenticated", False):
+        return []
+    if getattr(user, "is_superuser", False):
+        return None
+    scopes = list(
+        OperatorScope.objects.filter(user=user, active=True)
+        .values_list("scope_level", flat=True)
+    )
+    if not scopes:
+        return []
+    if any(level == ScopeLevel.NATIONAL for level in scopes):
+        return None
+    from apps.data_management.models import Household
+    return list(
+        Household.objects.filter(scope_q_for_field(user, _SUB_REGION_DENORM))
+        .values_list("id", flat=True)
+    )
+
+
 def _scoped_codes(user) -> list[str] | None:
     """Resolve a user to the list of sub_region_codes their active
     scopes cover. Returns None as a sentinel for 'visible to all' (i.e.,
-    superuser or national scope) and [] for fail-closed."""
+    superuser or national scope) and [] for fail-closed.
+
+    NOTE sub_region-granularity only — retained for the reporting
+    aggregates that GROUP BY sub_region_code. Row-level personal-data
+    enforcement goes through scope_q_for_field / _scoped_household_ids,
+    which are multi-level. See ADR-0026."""
     if user is None or not getattr(user, "is_authenticated", False):
         return []
     if getattr(user, "is_superuser", False):
@@ -122,19 +194,11 @@ class HouseholdIdScopedQuerysetMixin(ScopedQuerysetMixin):
     scope_field_path = "household_id"
 
     def _scope_q(self) -> Q:
-        codes = _scoped_codes(self.request.user)
-        if codes is None:
+        household_ids = _scoped_household_ids(self.request.user)
+        if household_ids is None:
             return ~Q(pk__in=[])  # wildcard
-        if not codes:
+        if not household_ids:
             return Q(pk__in=[])
-
-        # Imported lazily so apps.security doesn't depend on
-        # apps.data_management at module import (cycle safety).
-        from apps.data_management.models import Household
-        household_ids = list(
-            Household.objects.filter(sub_region_code__in=codes)
-            .values_list("id", flat=True)
-        )
         return Q(**{f"{self.scope_field_path}__in": household_ids})
 
 
@@ -203,15 +267,15 @@ class MatchPairScopedQuerysetMixin(ScopedQuerysetMixin):
     """
 
     def _scope_q(self) -> Q:
-        codes = _scoped_codes(self.request.user)
-        if codes is None:
+        household_ids = _scoped_household_ids(self.request.user)
+        if household_ids is None:
             return ~Q(pk__in=[])  # wildcard
-        if not codes:
+        if not household_ids:
             return Q(pk__in=[])
 
         from apps.data_management.models import Member
         member_ids = list(
-            Member.objects.filter(household__sub_region_code__in=codes)
+            Member.objects.filter(household_id__in=household_ids)
             .values_list("id", flat=True)
         )
         return Q(record_a_id__in=member_ids) & Q(record_b_id__in=member_ids)
@@ -230,17 +294,13 @@ class ChangeRequestScopedQuerysetMixin(ScopedQuerysetMixin):
     """
 
     def _scope_q(self) -> Q:
-        codes = _scoped_codes(self.request.user)
-        if codes is None:
+        household_ids = _scoped_household_ids(self.request.user)
+        if household_ids is None:
             return ~Q(pk__in=[])
-        if not codes:
+        if not household_ids:
             return Q(pk__in=[])
 
-        from apps.data_management.models import Household, Member
-        household_ids = list(
-            Household.objects.filter(sub_region_code__in=codes)
-            .values_list("id", flat=True)
-        )
+        from apps.data_management.models import Member
         member_ids = list(
             Member.objects.filter(household_id__in=household_ids)
             .values_list("id", flat=True)
