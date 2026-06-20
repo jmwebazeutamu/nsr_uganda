@@ -251,11 +251,17 @@ class MatchPairViewSet(
     list=extend_schema(tags=["ddup"], summary="List merge decisions"),
     retrieve=extend_schema(tags=["ddup"], summary="Retrieve a merge decision"),
 )
-class MergeDecisionViewSet(AuditReadMixin, viewsets.ReadOnlyModelViewSet):
+class MergeDecisionViewSet(
+    AuditReadMixin, MatchPairScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet,
+):
+    # ABAC: a merge decision is visible only when BOTH members of its
+    # pair fall in the operator's scope — same both-ends rule as the pair
+    # itself, reached through the match_pair FK. National/superuser see all.
     audit_entity_type = "merge_decision"
     queryset = MergeDecision.objects.all().order_by("-decided_at")
     serializer_class = MergeDecisionSerializer
     http_method_names = ["get", "post", "head", "options"]
+    pair_field_prefix = "match_pair__"
 
     @extend_schema(
         tags=["ddup"],

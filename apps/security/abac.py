@@ -312,7 +312,13 @@ class MatchPairScopedQuerysetMixin(ScopedQuerysetMixin):
     geography — the dedup workbench reveals enough identifying detail
     that a one-sided rule would amount to a covert read of the other
     side. National / superuser short-circuits remain.
+
+    `pair_field_prefix` lets rows that point at a MatchPair via FK reuse
+    this rule: MatchPair itself uses "" (record_a_id/record_b_id are its
+    own columns); MergeDecision uses "match_pair__".
     """
+
+    pair_field_prefix = ""
 
     def _scope_q(self) -> Q:
         household_ids = _scoped_household_ids(self.request.user)
@@ -326,7 +332,11 @@ class MatchPairScopedQuerysetMixin(ScopedQuerysetMixin):
             Member.objects.filter(household_id__in=household_ids)
             .values_list("id", flat=True)
         )
-        return Q(record_a_id__in=member_ids) & Q(record_b_id__in=member_ids)
+        p = self.pair_field_prefix
+        return (
+            Q(**{f"{p}record_a_id__in": member_ids})
+            & Q(**{f"{p}record_b_id__in": member_ids})
+        )
 
 
 class ChangeRequestScopedQuerysetMixin(ScopedQuerysetMixin):

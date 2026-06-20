@@ -1654,3 +1654,59 @@ class TestMatchPairListFiltering:
         # All seeded pairs are tier1 NIN-exact.
         body = r.json()
         assert body["count"] >= 3
+
+
+@pytest.mark.django_db
+class TestMergeDecisionAbacScope:
+    """ABAC: a merge decision is visible only when both members of its pair
+    fall in the operator's geographic scope (both-ends rule via match_pair)."""
+
+    def _make_merge(self, household, active_model):
+        from apps.ddup.services import merge_member_pair
+        from apps.security.hashing import nin_hash as _nin_hash
+        h = _nin_hash("CM7654321000ZZ")
+        Member.objects.create(household=household, line_number=1, surname="A",
+                              first_name="X", sex="1", nin_hash=h, nin_last4="00ZZ")
+        b = Member.objects.create(household=household, line_number=2, surname="B",
+                                  first_name="Y", sex="1", nin_hash=h, nin_last4="00ZZ")
+        pair = discover_nin_pairs(actor="system")[0]
+        return merge_member_pair(pair, surviving_id=b.id,
+                                 chosen_field_values={}, actor="op-1", note="")
+
+    def _client(self, django_user_model, *, scope_code):
+        from rest_framework.test import APIClient
+
+        from apps.security.models import OperatorScope, ScopeLevel
+        u = django_user_model.objects.create_user(
+            username=f"ddup-{scope_code}", password="p",
+        )
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION, scope_code=scope_code,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        return c
+
+    def test_in_scope_operator_sees_decision(
+        self, household, geo, active_model, django_user_model,
+    ):
+        decision = self._make_merge(household, active_model)
+        c = self._client(django_user_model, scope_code=geo["sr"].code)
+        r = c.get("/api/v1/ddup/merge-decisions/")
+        ids = {row["id"] for row in r.data["results"]}
+        assert decision.id in ids
+
+    def test_out_of_scope_operator_blind(
+        self, household, active_model, django_user_model,
+    ):
+        decision = self._make_merge(household, active_model)
+        c = self._client(django_user_model, scope_code="ELSEWHERE-SR")
+        r = c.get("/api/v1/ddup/merge-decisions/")
+        ids = {row["id"] for row in r.data["results"]}
+        assert decision.id not in ids
+        # And cannot reverse it — get_object() is scope-filtered → 404.
+        rev = c.post(
+            f"/api/v1/ddup/merge-decisions/{decision.id}/reverse/",
+            data={"actor": "x", "reason": "y"}, format="json",
+        )
+        assert rev.status_code == 404
