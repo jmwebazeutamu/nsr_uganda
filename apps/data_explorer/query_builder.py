@@ -175,11 +175,29 @@ class AggregateQueryService:
         against the matview, with the dataset's count column folded
         into the aggregation (Sum over the precomputed counts).
         """
+        from apps.data_management.matviews import is_matview_populated
+
         from . import services
 
         dataset = validated_query.dataset
         matview_model = validated_query.matview_model
         cadence_seconds = dataset.refresh_cadence.interval_seconds
+
+        # Population gate FIRST. A never-refreshed Postgres matview is
+        # WITH NO DATA and raises OperationalError on any SELECT —
+        # including the freshness probe just below. Treat "not yet
+        # populated" as data-not-ready → 503 (matview_stale), never a
+        # 500. The data_explorer.refresh_matviews beat task clears this
+        # on first run. On non-Postgres the matview is a concrete shadow
+        # table (always populated), so this is a no-op there.
+        if not is_matview_populated(dataset.source_matview):
+            raise StaleMatviewError(
+                matview=dataset.source_matview,
+                refreshed_at=None,
+                staleness_seconds=max(2 * cadence_seconds + 1, 1),
+                max_seconds=2 * cadence_seconds,
+            )
+
         # Stale matview fallback — 2x cadence. Staleness flows through
         # the services seam so the 503 branch is forceable in tests
         # without a populated matview; the freshness query for the
