@@ -30,10 +30,18 @@ COPY pyproject.toml ./
 COPY nsr_mis ./nsr_mis
 COPY apps ./apps
 COPY manage.py ./
+# Web-service entrypoint (migrate + collectstatic). Only the `web` service
+# uses it; worker/beat run celery directly. See compose.prod.yml.
+COPY infrastructure/docker/web-entrypoint.sh /usr/local/bin/web-entrypoint.sh
 
 RUN pip install .
 
-RUN groupadd --system app \
+# Create the static + media mountpoints owned by the runtime user BEFORE
+# the named volumes attach, so a fresh volume inherits app ownership and
+# collectstatic (run as `app`) can write to it.
+RUN chmod +x /usr/local/bin/web-entrypoint.sh \
+    && mkdir -p /app/staticfiles /app/media \
+    && groupadd --system app \
     && useradd --system --gid app --no-create-home --home-dir /app app \
     && chown -R app:app /app
 

@@ -1,0 +1,118 @@
+# NSR MIS — production stack (single-host Docker Compose).
+#
+# Core stack per ADR-0027: web (gunicorn) + Celery worker + beat +
+# PostgreSQL/PostGIS + Redis + Caddy (TLS-terminating reverse proxy).
+# Keycloak / OpenSearch / MinIO / RabbitMQ are a documented phase 2.
+#
+# The image is built + pushed to GHCR by CI; this file pulls it. db and
+# redis are NOT published — they live on the internal network only. Only
+# Caddy exposes ports (80/443).
+#
+#   docker compose -f compose.prod.yml --env-file .env pull
+#   docker compose -f compose.prod.yml --env-file .env up -d
+#
+# Migrations + collectstatic run in the web entrypoint (once per deploy).
+
+name: nsr-mis
+
+x-app-image: &app_image ${NSR_IMAGE:-ghcr.io/jmwebazeutamu/nsr_uganda:latest}
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  web:
+    image: *app_image
+    restart: unless-stopped
+    env_file: [.env]
+    entrypoint: ["/usr/local/bin/web-entrypoint.sh"]
+    command:
+      - gunicorn
+      - nsr_mis.wsgi:application
+      - --bind=0.0.0.0:8000
+      - --workers=3
+      - --timeout=60
+      - --access-logfile=-
+      - --error-logfile=-
+    volumes:
+      - static_data:/app/staticfiles
+      - media_data:/app/media
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  worker:
+    image: *app_image
+    restart: unless-stopped
+    env_file: [.env]
+    command: ["celery", "-A", "nsr_mis", "worker", "-l", "info", "--concurrency=4"]
+    volumes:
+      - media_data:/app/media
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      web: {condition: service_healthy}   # web runs migrate first
+
+  beat:
+    image: *app_image
+    restart: unless-stopped
+    env_file: [.env]
+    command: ["celery", "-A", "nsr_mis", "beat", "-l", "info"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      web: {condition: service_healthy}
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      NSR_DOMAIN: ${NSR_DOMAIN}
+    volumes:
+      - ./infrastructure/docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - static_data:/srv/static:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web: {condition: service_healthy}
+
+volumes:
+  pgdata:
+  redisdata:
+  static_data:
+  media_data:
+  caddy_data:
+  caddy_config:

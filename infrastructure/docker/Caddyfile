@@ -1,0 +1,28 @@
+# NSR MIS production reverse proxy.
+#
+# Caddy terminates TLS (automatic Let's Encrypt for {$NSR_DOMAIN}), serves
+# the collected static assets from the shared volume, and proxies
+# everything else to the Django web container. Caddy sets X-Forwarded-Proto
+# automatically; Django trusts it via SECURE_PROXY_SSL_HEADER (NSR_SECURE_SSL).
+#
+# Set NSR_DOMAIN in .env to the real hostname (DNS A record must already
+# resolve to this server) for a publicly-trusted cert. For a pre-DNS smoke
+# test you can set NSR_DOMAIN to the bare IP — Caddy then serves a
+# self-signed cert via its internal CA (browsers warn, which is fine for a
+# smoke test).
+
+{$NSR_DOMAIN} {
+	encode zstd gzip
+
+	# Sensitive media (evidence, DRS bundles) is NEVER served here — it is
+	# reached only through authenticated Django views. Only the public
+	# static bundle (admin CSS/JS, design harness, vendored libs) is served.
+	handle /static/* {
+		root * /srv
+		file_server
+	}
+
+	handle {
+		reverse_proxy web:8000
+	}
+}

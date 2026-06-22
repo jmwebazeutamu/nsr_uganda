@@ -192,7 +192,36 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+# collectstatic target. In the production image the web entrypoint runs
+# collectstatic into this dir on a shared volume; Caddy serves /static/*
+# from it. Overridable via env for non-container deploys.
+STATIC_ROOT = env("STATIC_ROOT", default=str(BASE_DIR / "staticfiles"))
+
+# Media (UPD evidence, consent evidence, DRS bundles default to file
+# storage). NOT publicly served — these are sensitive and reached only
+# through authenticated Django views; the dir lives on a persistent
+# volume in prod.
+MEDIA_URL = "media/"
+MEDIA_ROOT = env("MEDIA_ROOT", default=str(BASE_DIR / "media"))
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# --- Production TLS hardening ----------------------------------------------
+# Opt-in via NSR_SECURE_SSL so the test suite (which runs DEBUG=False but
+# over plain HTTP) is unaffected — only the prod .env sets it True. The
+# TLS-terminating reverse proxy (Caddy) forwards X-Forwarded-Proto and
+# performs the http->https redirect itself, so Django trusts the header
+# rather than issuing its own redirect.
+if env.bool("NSR_SECURE_SSL", default=False):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = False
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",

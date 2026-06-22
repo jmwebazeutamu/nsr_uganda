@@ -1,9 +1,16 @@
 from django.contrib import admin
+from django.http import HttpResponse
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.permissions import AllowAny
 
 from .views import console, home, manual
+
+
+def healthz(_request):
+    """Liveness probe — no DB, no auth. Used by the container healthcheck
+    and the reverse proxy; intentionally cheap so it stays green under load."""
+    return HttpResponse("ok", content_type="text/plain")
 
 # OpenAPI schema + Swagger UI stay browsable without login (developer
 # convenience). Every other DRF endpoint requires IsAuthenticated per
@@ -12,6 +19,7 @@ schema_view = SpectacularAPIView.as_view(permission_classes=[AllowAny])
 swagger_view = SpectacularSwaggerView.as_view(url_name="schema", permission_classes=[AllowAny])
 
 urlpatterns = [
+    path("healthz", healthz, name="healthz"),
     path("", home, name="home"),
     path("admin/", admin.site.urls),
     # React design harness served same-origin so fetch() inherits the
