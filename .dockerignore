@@ -38,8 +38,12 @@ Thumbs.db
 docs
 design
 tests
-infrastructure
 .claude
+# Exclude the heavy infra subdirs but KEEP infrastructure/docker/ — the
+# Dockerfile COPYs web-entrypoint.sh from there.
+infrastructure/helm
+infrastructure/terraform
+infrastructure/runbooks
 
 # Build artefacts
 dist
