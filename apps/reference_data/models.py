@@ -34,7 +34,9 @@ class GeographicUnit(models.Model):
         RETIRED = "retired"
 
     level = models.CharField(max_length=16, choices=Level.choices)
-    code = models.CharField(max_length=32)
+    # 48, not 32: village codes carry a dotted hierarchy + suffix and run to
+    # 33 chars in the UBOS frame (SQLite silently truncated; Postgres rejects).
+    code = models.CharField(max_length=48)
     name = models.CharField(max_length=128)
     parent = models.ForeignKey(
         "self", on_delete=models.PROTECT, null=True, blank=True, related_name="children"
