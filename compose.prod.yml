@@ -1,0 +1,106 @@
+# NSR MIS — production stack (single-host Docker Compose).
+#
+# Deploys ALONGSIDE the other services on this shared box (ADR-0027): the
+# host's Apache + certbot already own 80/443 and front several sites, so
+# this stack does NOT run its own TLS proxy. Instead `web` publishes
+# gunicorn on 127.0.0.1:8005 (localhost only) and a host Apache vhost
+# (nsr-sris-dev.quasar.ug) reverse-proxies to it with certbot TLS. Static
+# is served by WhiteNoise from inside gunicorn (NSR_WHITENOISE=True), so
+# Apache only needs to proxy the app.
+#
+# Core stack: web + Celery worker + beat + Postgres/PostGIS + Redis.
+# Keycloak / OpenSearch / MinIO / RabbitMQ are a documented phase 2.
+#
+#   docker compose -f compose.prod.yml --env-file .env pull   # (CD-built image)
+#   docker compose -f compose.prod.yml --env-file .env up -d
+#
+# db + redis are NEVER published to the host — they live on this project's
+# private network only (the box already runs other postgres/redis on
+# 5432/6379, and ufw DENYs those externally anyway).
+
+name: nsr-sris-dev
+
+x-app-image: &app_image ${NSR_IMAGE:-ghcr.io/jmwebazeutamu/nsr_uganda:latest}
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  web:
+    image: *app_image
+    restart: unless-stopped
+    env_file: [.env]
+    entrypoint: ["/usr/local/bin/web-entrypoint.sh"]
+    command:
+      - gunicorn
+      - nsr_mis.wsgi:application
+      - --bind=0.0.0.0:8000
+      - --workers=3
+      - --timeout=60
+      - --access-logfile=-
+      - --error-logfile=-
+    # Localhost-only publish: the host Apache vhost proxies to this.
+    ports:
+      - "127.0.0.1:8005:8000"
+    volumes:
+      - media_data:/app/media
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  worker:
+    image: *app_image
+    restart: unless-stopped
+    env_file: [.env]
+    command: ["celery", "-A", "nsr_mis", "worker", "-l", "info", "--concurrency=4"]
+    volumes:
+      - media_data:/app/media
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      web: {condition: service_healthy}   # web runs migrate once, first
+
+  beat:
+    image: *app_image
+    restart: unless-stopped
+    env_file: [.env]
+    command: ["celery", "-A", "nsr_mis", "beat", "-l", "info"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      web: {condition: service_healthy}
+
+volumes:
+  pgdata:
+  redisdata:
+  media_data:

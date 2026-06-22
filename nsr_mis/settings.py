@@ -128,6 +128,11 @@ CONSENT_EVIDENCE_DIR = env(
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # WhiteNoise serves collected static directly from gunicorn so the
+    # front proxy (Apache on the prod box) only needs to proxy the app —
+    # no static Alias / host bind-mount. Harmless in tests/dev (no-op when
+    # STATIC_ROOT is empty). Must sit right after SecurityMiddleware.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -192,7 +197,52 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+# collectstatic target. In the production image the web entrypoint runs
+# collectstatic into this dir on a shared volume; Caddy serves /static/*
+# from it. Overridable via env for non-container deploys.
+STATIC_ROOT = env("STATIC_ROOT", default=str(BASE_DIR / "staticfiles"))
+
+# Media (UPD evidence, consent evidence, DRS bundles default to file
+# storage). NOT publicly served — these are sensitive and reached only
+# through authenticated Django views; the dir lives on a persistent
+# volume in prod.
+MEDIA_URL = "media/"
+MEDIA_ROOT = env("MEDIA_ROOT", default=str(BASE_DIR / "media"))
+
+# WhiteNoise compressed+hashed manifest storage — opt-in via env so the
+# test suite (which never runs collectstatic, so has no manifest) keeps
+# the default storage. The prod image sets NSR_WHITENOISE=True; its
+# entrypoint runs collectstatic, producing the manifest WhiteNoise needs.
+if env.bool("NSR_WHITENOISE", default=False):
+    STORAGES = {
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        # Compressed but NOT manifest/hashed: the manifest backend rewrites
+        # url()/sourcemap refs and fails hard on any missing target (e.g.
+        # the vendored babel.min.js points at a .map we don't ship). For a
+        # proxied staging deploy, robust collectstatic beats hashed names.
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+        },
+    }
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# --- Production TLS hardening ----------------------------------------------
+# Opt-in via NSR_SECURE_SSL so the test suite (which runs DEBUG=False but
+# over plain HTTP) is unaffected — only the prod .env sets it True. The
+# TLS-terminating reverse proxy (Caddy) forwards X-Forwarded-Proto and
+# performs the http->https redirect itself, so Django trusts the header
+# rather than issuing its own redirect.
+if env.bool("NSR_SECURE_SSL", default=False):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = False
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",

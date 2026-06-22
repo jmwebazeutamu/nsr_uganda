@@ -30,10 +30,24 @@ COPY pyproject.toml ./
 COPY nsr_mis ./nsr_mis
 COPY apps ./apps
 COPY manage.py ./
+# Web-service entrypoint (migrate + collectstatic). Only the `web` service
+# uses it; worker/beat run celery directly. See compose.prod.yml.
+COPY infrastructure/docker/web-entrypoint.sh /usr/local/bin/web-entrypoint.sh
+
+# Install CPU-only torch FIRST so sentence-transformers (chatbot embeddings,
+# US-CHB) doesn't pull the ~2.5GB CUDA build — this box has no GPU. Cuts the
+# image from ~9GB to ~2GB and speeds up every CD build/pull. pip then sees
+# torch already satisfied when installing the project.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
 RUN pip install .
 
-RUN groupadd --system app \
+# Create the static + media mountpoints owned by the runtime user BEFORE
+# the named volumes attach, so a fresh volume inherits app ownership and
+# collectstatic (run as `app`) can write to it.
+RUN chmod +x /usr/local/bin/web-entrypoint.sh \
+    && mkdir -p /app/staticfiles /app/media \
+    && groupadd --system app \
     && useradd --system --gid app --no-create-home --home-dir /app app \
     && chown -R app:app /app
 
