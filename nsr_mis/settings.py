@@ -128,6 +128,11 @@ CONSENT_EVIDENCE_DIR = env(
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # WhiteNoise serves collected static directly from gunicorn so the
+    # front proxy (Apache on the prod box) only needs to proxy the app —
+    # no static Alias / host bind-mount. Harmless in tests/dev (no-op when
+    # STATIC_ROOT is empty). Must sit right after SecurityMiddleware.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -203,6 +208,22 @@ STATIC_ROOT = env("STATIC_ROOT", default=str(BASE_DIR / "staticfiles"))
 # volume in prod.
 MEDIA_URL = "media/"
 MEDIA_ROOT = env("MEDIA_ROOT", default=str(BASE_DIR / "media"))
+
+# WhiteNoise compressed+hashed manifest storage — opt-in via env so the
+# test suite (which never runs collectstatic, so has no manifest) keeps
+# the default storage. The prod image sets NSR_WHITENOISE=True; its
+# entrypoint runs collectstatic, producing the manifest WhiteNoise needs.
+if env.bool("NSR_WHITENOISE", default=False):
+    STORAGES = {
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        # Compressed but NOT manifest/hashed: the manifest backend rewrites
+        # url()/sourcemap refs and fails hard on any missing target (e.g.
+        # the vendored babel.min.js points at a .map we don't ship). For a
+        # proxied staging deploy, robust collectstatic beats hashed names.
+        "staticfiles": {
+            "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
+        },
+    }
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
