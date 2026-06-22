@@ -34,6 +34,12 @@ COPY manage.py ./
 # uses it; worker/beat run celery directly. See compose.prod.yml.
 COPY infrastructure/docker/web-entrypoint.sh /usr/local/bin/web-entrypoint.sh
 
+# Install CPU-only torch FIRST so sentence-transformers (chatbot embeddings,
+# US-CHB) doesn't pull the ~2.5GB CUDA build — this box has no GPU. Cuts the
+# image from ~9GB to ~2GB and speeds up every CD build/pull. pip then sees
+# torch already satisfied when installing the project.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
 RUN pip install .
 
 # Create the static + media mountpoints owned by the runtime user BEFORE
