@@ -225,6 +225,12 @@ MEDIA_ROOT = env("MEDIA_ROOT", default=str(BASE_DIR / "media"))
 #
 # update_workflow.E001 (apps/update_workflow/checks.py) fails `manage.py
 # check` if this drifts below what the evidence caps need.
+# Publish /api/schema/ and /api/docs/ without authentication. Defaults to
+# DEBUG, so local dev keeps the browsable spec while any deployed host
+# requires a login. Turning this on in production is a deliberate choice
+# (partner developer portal) and should be recorded in the threat model.
+NSR_PUBLIC_API_DOCS = env.bool("NSR_PUBLIC_API_DOCS", default=DEBUG)
+
 DATA_UPLOAD_MAX_MEMORY_SIZE = env.int(
     "DATA_UPLOAD_MAX_MEMORY_SIZE", default=25 * 1024 * 1024,
 )
