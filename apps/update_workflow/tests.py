@@ -1216,6 +1216,56 @@ class TestBundleEndpoint:
         assert r.status_code == 400
         assert "max per file" in str(r.data).lower()
 
+    def test_documents_accept_largest_permitted_file(self, household, api_client):
+        """The biggest document evidence_storage allows must actually get in.
+
+        Regression for the DATA_UPLOAD_MAX_MEMORY_SIZE mismatch: at Django's
+        2.5 MB default this raised RequestDataTooBig out of request.body, so
+        a document the API explicitly permits could never be uploaded — and
+        the sibling oversized-file test only passed because it happened to
+        trip Django's guard instead of our own validator.
+        """
+        import base64
+
+        from apps.update_workflow.evidence_storage import MAX_FILE_BYTES
+
+        body = b"%PDF-1.4" + b"x" * (MAX_FILE_BYTES - 8)
+        assert len(body) == MAX_FILE_BYTES
+        payload = self._payload(
+            household,
+            documents=[{
+                "filename": "at-the-limit.pdf",
+                "content_type": "application/pdf",
+                "data_base64": base64.b64encode(body).decode("ascii"),
+            }],
+        )
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 201, r.data
+        cr = ChangeRequest.objects.get(pk=r.data["cr_id"])
+        doc_row = next(e for e in cr.evidence if e["kind"] == "document")
+        assert doc_row["size"] == MAX_FILE_BYTES
+
+    def test_upload_ceiling_system_check(self):
+        """update_workflow.E001 must fire when the Django ceiling drops below
+        what the evidence caps need, and stay quiet otherwise."""
+        from django.test import override_settings
+
+        from apps.update_workflow.checks import evidence_upload_ceiling_check
+
+        # Django's default — the value that caused the original bug.
+        with override_settings(DATA_UPLOAD_MAX_MEMORY_SIZE=2621440):
+            errors = evidence_upload_ceiling_check(None)
+        assert [e.id for e in errors] == ["update_workflow.E001"]
+        assert "base64" in errors[0].msg
+
+        # The configured value must satisfy it.
+        assert evidence_upload_ceiling_check(None) == []
+
+        # No limit configured is not a blocking misconfiguration.
+        with override_settings(DATA_UPLOAD_MAX_MEMORY_SIZE=None):
+            assert evidence_upload_ceiling_check(None) == []
+
     def test_documents_reject_more_than_three(self, household, api_client):
         import base64
 

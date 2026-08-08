@@ -209,6 +209,26 @@ STATIC_ROOT = env("STATIC_ROOT", default=str(BASE_DIR / "staticfiles"))
 MEDIA_URL = "media/"
 MEDIA_ROOT = env("MEDIA_ROOT", default=str(BASE_DIR / "media"))
 
+# UPD evidence arrives as base64 INSIDE the JSON body, so it is bounded by
+# DATA_UPLOAD_MAX_MEMORY_SIZE (non-file POST data) rather than
+# FILE_UPLOAD_MAX_MEMORY_SIZE (multipart). Django's 2.5 MB default is smaller
+# than a single permitted document once encoded — apps.update_workflow
+# .evidence_storage allows 5 MiB per file, which is ~6.7 MiB on the wire — so
+# Django raised RequestDataTooBig out of request.body before DRF ever parsed.
+# The endpoint's own "max per file" / "max total" guards were therefore
+# unreachable and their 400s unreturnable, in production as well as in tests.
+#
+# Sized for the largest body the serializer will accept before its own
+# validation rejects it: MAX_FILES (3) x the per-document data_base64 field
+# cap (8 MiB) = 24 MiB, plus room for the surrounding JSON. Anything above
+# this is still refused by Django, which is the intended backstop.
+#
+# update_workflow.E001 (apps/update_workflow/checks.py) fails `manage.py
+# check` if this drifts below what the evidence caps need.
+DATA_UPLOAD_MAX_MEMORY_SIZE = env.int(
+    "DATA_UPLOAD_MAX_MEMORY_SIZE", default=25 * 1024 * 1024,
+)
+
 # WhiteNoise compressed+hashed manifest storage — opt-in via env so the
 # test suite (which never runs collectstatic, so has no manifest) keeps
 # the default storage. The prod image sets NSR_WHITENOISE=True; its
