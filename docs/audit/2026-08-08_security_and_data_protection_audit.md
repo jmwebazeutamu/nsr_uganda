@@ -15,12 +15,15 @@ Companion to `2026-08-08_delivery_and_code_health_audit.md`.
 encryption, ABAC enforced at every geographic level, no secrets ever committed,
 no PII in logs. The findings are at the **perimeter**, not in the code.
 
-One live issue: the complete API specification of the registry is published
-unauthenticated on the public internet.
+Two issues, both now fixed: the complete API specification was published
+unauthenticated on the public internet (F1), and the acting user for every
+approval and merge was taken from the request body rather than the session
+(F5) — which defeated segregation of duties and left the audit chain unable
+to support non-repudiation.
 
 ---
 
-## F1 — HIGH — Full OpenAPI spec is public on production
+## F1 — HIGH — Full OpenAPI spec is public on production *(FIXED)*
 
 `https://nsr-sris-dev.quasar.ug/api/schema/` returns **HTTP 200, 374,832 bytes,
 259 documented paths**, with no authentication. `/api/docs/` serves the Swagger
@@ -44,6 +47,48 @@ or a NITA-U review will raise.
 `DEBUG`, or restrict at Apache. Then add the decision (and its rationale) to the
 threat model either way — the current state is undocumented rather than
 accepted.
+
+## F5 — HIGH — The acting identity was taken from the request body *(FIXED)*
+
+Found while closing US-091. Approve / reject / hold / release / merge /
+promote endpoints read the actor out of the payload:
+
+```python
+actor = serializers.CharField(max_length=64)          # client-supplied
+commit_change_request(req, approver=ser.validated_data["actor"])
+```
+
+**30 call sites across six modules** — update_workflow (5), referral (5),
+grievance (4), ddup (4), ingestion_hub (11), data_requests (1).
+
+Two controls fell at once:
+
+1. **Segregation of duties.** `AC-UPD-NO-SELF-APPROVE` was implemented
+   correctly in `commit_change_request` — it compared `req.requester` against
+   the approver — but the approver was a string the caller chose. A requester
+   approved their own change request by sending somebody else's name. The same
+   applies to DDUP merge decisions and every other author-cannot-approve rule.
+2. **Non-repudiation.** `emit_audit(actor=...)` wrote that string into the
+   hash-chained AuditEvent log. The chain proves a row was not altered after
+   the fact; it could not prove the person named in it did anything. For a
+   registry whose audit trail is its primary DPPA compliance artefact, that is
+   the more serious half.
+
+This also makes US-091 doubly mis-tracked: the enforcement existed, and it was
+ineffective for a reason the story never described.
+
+**Fixed.** All 30 sites derive the actor from `request.user` via
+`apps.security.actor.actor_from_request`, which refuses anonymous callers
+rather than defaulting to a placeholder. The `actor` request fields are now
+`required=False` and documented as ignored. Regression tests in
+`tests/contract/test_actor_not_client_supplied.py` assert that a requester
+cannot self-approve by spoofing an actor, that the audit records the
+authenticated user, and that anonymous callers are refused.
+
+The correct pattern already existed — the UPD bundle endpoint and most of
+`data_requests` used `request.user.username`. It simply was not applied
+uniformly. That is the failure mode worth watching for: a control implemented
+once, correctly, then not carried across the whole surface it protects.
 
 ## F2 — MEDIUM (latent) — `/console/` and `/manual/` are unauthenticated routes
 
