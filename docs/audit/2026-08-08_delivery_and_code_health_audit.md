@@ -140,9 +140,13 @@ derived.
 - **CLAUDE.md is stale.** It states *"114 stories across 16 epics"*; the backlog
   is **138 stories across 19 epics**. Since CLAUDE.md is the file every session
   is primed with, this error propagates.
-- **Duplicate ADR numbers:** `0009` twice (`admin-and-console-ui-strategy`,
-  `dqa-rule-editor-ui`) and `0023` twice (`data-explorer`,
-  `data-explorer-risk-probe`).
+- **Duplicate ADR number:** `0009` twice (`admin-and-console-ui-strategy`,
+  `dqa-rule-editor-ui`) — two unrelated decisions sharing one number.
+  *(Correction, 2026-08-08: this originally also claimed `0023` was duplicated.
+  It is not — `0023-data-explorer-risk-probe.md` self-identifies as "ADR-0023
+  Appendix A" and "Companion to ADR-0023", which is an intentional appendix.
+  Resolved: `0009` disambiguated to `ADR-0009-dqa`, matching the identity the
+  user manual already publishes; ADR-0025 written.)*
 - **ADR-0025 does not exist** but is cited in five code locations
   (`apps/pmt/checks.py`, `engine.py`, `feature_evaluator.py`,
   `test_v1_active_seed.py`). The PMT feature-DSL decision is therefore

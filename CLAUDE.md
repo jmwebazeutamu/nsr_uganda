@@ -147,7 +147,7 @@ From SAD §11.5:
 |---|---|---|
 | `/docs/01_solution_architecture.docx` | SAD v0.6. 56 pages. Architecture, modules, ERD outline, NFRs, MVP scope, open items, risks. | Start. Refer back often. |
 | `/docs/02_erd.pdf` | Visual ERD over 5 clusters: Overview, Core, Workflow, Eligibility/Programmes/GRM/Sharing, DIH. | When modelling data. |
-| `/docs/03_backlog.xlsx` | 114 stories across 16 epics with acceptance criteria. | Picking stories. |
+| `/docs/03_backlog.xlsx` | 138 stories across 19 epics with acceptance criteria. Delivery status is NOT here — it lives in `/docs/08_sprint_plan.xlsx` (`Backlog Status` sheet), is hand-maintained, and drifts; verify against the code before trusting it. | Picking stories. |
 | `/docs/04_ui_design_brief.md` | UI tokens, components, screen specs, status vocabulary. | When building screens or admin views. |
 | `/docs/05_requirements.docx` | Functional + NFR baseline (v0.1, 13 May 2026). | Cross-check requirements. |
 | `/docs/06_questionnaire.docx` | The actual field instrument (v2, March 2026). | When modelling Member, Health, Education, Employment, Dwelling, Utilities, Food, Shock, Coping. |
