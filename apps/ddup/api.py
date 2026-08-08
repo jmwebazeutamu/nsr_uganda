@@ -4,6 +4,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 
 from apps.security.abac import MatchPairScopedQuerysetMixin
+from apps.security.actor import actor_from_request
 from apps.security.audit_views import AuditReadMixin
 
 from .models import DdupModelVersion, MatchPair, MergeDecision
@@ -54,7 +55,11 @@ class MergeDecisionSerializer(serializers.ModelSerializer):
 
 
 class _ReverseRequest(serializers.Serializer):
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     reason = serializers.CharField()
 
 
@@ -74,12 +79,20 @@ class _MergeRequest(serializers.Serializer):
     chosen_field_values = serializers.DictField(
         child=serializers.JSONField(), required=False, default=dict,
     )
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     note = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 class _RejectPairRequest(serializers.Serializer):
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     reason = serializers.CharField()
 
 
@@ -94,7 +107,11 @@ class _DiscardPairRequest(serializers.Serializer):
     """
 
     surviving_id = serializers.CharField(max_length=26)
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     reason = serializers.CharField(min_length=6)
 
 
@@ -178,7 +195,7 @@ class MatchPairViewSet(
                 pair,
                 surviving_id=ser.validated_data["surviving_id"],
                 chosen_field_values=ser.validated_data.get("chosen_field_values") or {},
-                actor=ser.validated_data["actor"],
+                actor=actor_from_request(request),
                 note=ser.validated_data.get("note") or "",
             )
         except MergeError as exc:
@@ -207,7 +224,7 @@ class MatchPairViewSet(
         try:
             decision = reject_pair(
                 pair,
-                actor=ser.validated_data["actor"],
+                actor=actor_from_request(request),
                 reason=ser.validated_data["reason"],
             )
         except MergeError as exc:
@@ -239,7 +256,7 @@ class MatchPairViewSet(
             decision = discard_duplicate(
                 pair,
                 surviving_id=ser.validated_data["surviving_id"],
-                actor=ser.validated_data["actor"],
+                actor=actor_from_request(request),
                 reason=ser.validated_data["reason"],
             )
         except MergeError as exc:
@@ -289,7 +306,7 @@ class MergeDecisionViewSet(
         try:
             reverse_merge_decision(
                 decision,
-                actor=ser.validated_data["actor"],
+                actor=actor_from_request(request),
                 reason=ser.validated_data["reason"],
             )
         except MergeError as e:

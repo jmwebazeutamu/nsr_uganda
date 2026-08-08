@@ -7,6 +7,7 @@ from apps.data_management.models import Household
 from apps.data_management.serializer_labels import attach_label_methodfields
 from apps.partners.models import Programme
 from apps.security.abac import ScopedQuerysetMixin
+from apps.security.actor import actor_from_request
 from apps.security.audit_views import AuditReadMixin
 
 from .choice_field_map import MODEL_FIELDS
@@ -69,22 +70,38 @@ attach_label_methodfields(EnrolmentSerializer, MODEL_FIELDS["ProgrammeEnrolment"
 class _SendReq(serializers.Serializer):
     programme_id = serializers.CharField()
     household_id = serializers.CharField()
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     eligibility_rule_version = serializers.IntegerField(default=1)
 
 
 class _AcceptReq(serializers.Serializer):
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     programme_side_id = serializers.CharField(required=False, allow_blank=True)
 
 
 class _RejectReq(serializers.Serializer):
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     reason = serializers.CharField()
 
 
 class _EnrolReq(serializers.Serializer):
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     effective_date = serializers.DateField(required=False)
     payment_metadata = serializers.JSONField(required=False)
 
@@ -116,7 +133,7 @@ class ReferralViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyMode
             household = Household.objects.get(pk=ser.validated_data["household_id"])
             referral = send_referral(
                 programme=programme, household=household,
-                actor=ser.validated_data["actor"],
+                actor=actor_from_request(request),
                 eligibility_rule_version=ser.validated_data["eligibility_rule_version"],
             )
             send_referral_webhook(referral)
@@ -133,7 +150,7 @@ class ReferralViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyMode
         ser = _AcceptReq(data=request.data)
         ser.is_valid(raise_exception=True)
         try:
-            r = accept_referral(self.get_object(), actor=ser.validated_data["actor"],
+            r = accept_referral(self.get_object(), actor=actor_from_request(request),
                                 programme_side_id=ser.validated_data.get("programme_side_id", ""))
         except ReferralError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -146,7 +163,7 @@ class ReferralViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyMode
         ser = _RejectReq(data=request.data)
         ser.is_valid(raise_exception=True)
         try:
-            r = reject_referral(self.get_object(), actor=ser.validated_data["actor"],
+            r = reject_referral(self.get_object(), actor=actor_from_request(request),
                                 reason=ser.validated_data["reason"])
         except ReferralError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -163,7 +180,7 @@ class ReferralViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyMode
         try:
             enrolment = enrol_household(
                 self.get_object(),
-                actor=ser.validated_data["actor"],
+                actor=actor_from_request(request),
                 effective_date=ser.validated_data.get("effective_date"),
                 payment_metadata=ser.validated_data.get("payment_metadata"),
             )
@@ -189,7 +206,7 @@ class ProgrammeEnrolmentViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.Re
         ser = _RejectReq(data=request.data)
         ser.is_valid(raise_exception=True)
         try:
-            e = exit_enrolment(self.get_object(), actor=ser.validated_data["actor"],
+            e = exit_enrolment(self.get_object(), actor=actor_from_request(request),
                                reason=ser.validated_data["reason"])
         except ReferralError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)

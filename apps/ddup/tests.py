@@ -618,12 +618,15 @@ class TestReverseMergeApi:
         c.force_authenticate(user=u)
         r = c.post(
             f"/api/v1/ddup/merge-decisions/{decision.id}/reverse/",
-            data={"actor": "reviewer-2", "reason": "id mismatch"},
+            data={"reason": "id mismatch"},
             format="json",
         )
         assert r.status_code == 200, r.data
         assert r.data["reversed_at"] is not None
-        assert r.data["reversed_by"] == "reviewer-2"
+        # Attributed to the authenticated user, not to a name supplied in
+        # the payload — a merge reversal is an audit-bearing act and must be
+        # traceable to a real account (see apps.security.actor).
+        assert r.data["reversed_by"] == u.username
         assert "mismatch" in r.data["reversed_reason"]
 
     def test_reverse_api_400_outside_window(

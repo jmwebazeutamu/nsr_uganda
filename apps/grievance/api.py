@@ -3,6 +3,7 @@ from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from apps.security.actor import actor_from_request
 from apps.security.audit_views import AuditReadMixin
 
 from .models import Grievance, GrievanceStatus, GrievanceTask, TaskStatus
@@ -53,17 +54,29 @@ class GrievanceSerializer(serializers.ModelSerializer):
 
 
 class _ActorReason(serializers.Serializer):
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     reason = serializers.CharField(required=False, allow_blank=True)
 
 
 class _Assign(serializers.Serializer):
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     assigned_to = serializers.CharField(max_length=64)
 
 
 class _Resolve(serializers.Serializer):
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     narrative = serializers.CharField()
     linked_change_request_id = serializers.CharField(required=False, allow_blank=True)
 
@@ -72,7 +85,11 @@ class _Close(serializers.Serializer):
     """US-S21-005 — close grievance with a captured narrative.
     `narrative` is the reason + note pair the closing operator gave;
     persisted on Grievance.closing_narrative."""
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     narrative = serializers.CharField(required=False, allow_blank=True)
 
 
@@ -175,7 +192,7 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
         ser.is_valid(raise_exception=True)
         try:
             g = assign(self.get_object(), assigned_to=ser.validated_data["assigned_to"],
-                       actor=ser.validated_data["actor"])
+                       actor=actor_from_request(request))
         except GrievanceError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(self.get_serializer(g).data)
@@ -187,7 +204,7 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
         ser = _ActorReason(data=request.data)
         ser.is_valid(raise_exception=True)
         try:
-            g = escalate(self.get_object(), actor=ser.validated_data["actor"],
+            g = escalate(self.get_object(), actor=actor_from_request(request),
                          reason=ser.validated_data.get("reason", ""))
         except GrievanceError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -202,7 +219,7 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
         try:
             g = resolve(
                 self.get_object(),
-                actor=ser.validated_data["actor"],
+                actor=actor_from_request(request),
                 narrative=ser.validated_data["narrative"],
                 linked_change_request_id=ser.validated_data.get("linked_change_request_id", ""),
             )
@@ -220,7 +237,7 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
         try:
             g = close(
                 self.get_object(),
-                actor=ser.validated_data["actor"],
+                actor=actor_from_request(request),
                 narrative=ser.validated_data.get("narrative", ""),
             )
         except GrievanceError as e:

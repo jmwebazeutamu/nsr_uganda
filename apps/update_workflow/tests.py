@@ -743,13 +743,18 @@ class TestBulkActions:
         a.refresh_from_db()
         assert a.status == ChangeStatus.REJECTED
 
-    def test_bulk_skips_self_approve(self, db, member, api_client):
-        """A row whose requester == actor must NOT be approved by the
-        same actor; it lands in `skipped`."""
-        a = self._submitted(member, requester="self")
+    def test_bulk_skips_self_approve(self, db, member, api_client, staff_user):
+        """A row raised by the logged-in operator must NOT be approved by
+        that same operator; it lands in `skipped`.
+
+        The actor is the authenticated user — it is no longer accepted from
+        the request body, so self-approval cannot be dodged by naming
+        somebody else (see apps.security.actor).
+        """
+        a = self._submitted(member, requester=staff_user.username)
         b = self._submitted(member, requester="someone-else")
         r = api_client.post("/api/v1/upd/change-requests/bulk-approve/",
-                             data={"ids": [a.id, b.id], "actor": "self"},
+                             data={"ids": [a.id, b.id]},
                              format="json")
         assert r.status_code == 200
         # 'b' acted (different requester), 'a' skipped (self-approve).
@@ -850,11 +855,11 @@ class TestHoldReleaseEndpoints:
         )
         assert r.status_code == 400
 
-    def test_hold_endpoint_400_on_self(self, db, member, api_client):
-        req = self._submitted(member, requester="self-actor")
+    def test_hold_endpoint_400_on_self(self, db, member, api_client, staff_user):
+        req = self._submitted(member, requester=staff_user.username)
         r = api_client.post(
             f"/api/v1/upd/change-requests/{req.id}/hold/",
-            data={"actor": "self-actor", "reason": "x"},
+            data={"reason": "x"},
             format="json",
         )
         assert r.status_code == 400

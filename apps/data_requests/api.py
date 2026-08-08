@@ -11,6 +11,7 @@ from rest_framework.throttling import UserRateThrottle
 
 from apps.data_management.models import Household
 from apps.security.abac import PartnerScopedQuerysetMixin
+from apps.security.actor import actor_from_request
 from apps.security.audit import emit as emit_audit
 from apps.security.audit_views import AuditReadMixin, _client_ip
 
@@ -108,7 +109,11 @@ class _Approver(serializers.Serializer):
 
 
 class _Deliver(serializers.Serializer):
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     manifest_sha256 = serializers.CharField(min_length=64, max_length=64)
     row_count = serializers.IntegerField(min_value=0)
 
@@ -246,7 +251,7 @@ class DataRequestViewSet(
             deliver_data_request(
                 req, manifest_sha256=ser.validated_data["manifest_sha256"],
                 row_count=ser.validated_data["row_count"],
-                actor=ser.validated_data["actor"],
+                actor=actor_from_request(request),
             )
         except DrsError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)

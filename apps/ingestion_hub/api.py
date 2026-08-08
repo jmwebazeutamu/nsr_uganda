@@ -4,6 +4,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 
 from apps.security.abac import HouseholdIdScopedQuerysetMixin
+from apps.security.actor import actor_from_request
 from apps.security.audit import emit as emit_audit
 from apps.security.audit_views import AuditReadMixin
 
@@ -87,7 +88,11 @@ class StageRecordSerializer(serializers.ModelSerializer):
 
 
 class PromoteRequestSerializer(serializers.Serializer):
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     reason = serializers.CharField(required=False, allow_blank=True)
     # US-S11-044 — documented justification for clearing
     # REJECT_WITH_OVERRIDE intra-household DQA violations during
@@ -96,12 +101,20 @@ class PromoteRequestSerializer(serializers.Serializer):
 
 
 class RejectRequestSerializer(serializers.Serializer):
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     reason = serializers.CharField()
 
 
 class ProcessRequestSerializer(serializers.Serializer):
-    actor = serializers.CharField(max_length=64, default="system")
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     allow_fast_track = serializers.BooleanField(default=True)
 
 
@@ -109,7 +122,11 @@ class ResolveIdvRequestSerializer(serializers.Serializer):
     """Operator decision on an IDV_PENDING record (US-S11-031). Mirrors
     the reject/promote shape — actor + reason are mandatory because
     the audit trail is the only paper record of the override."""
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     decision = serializers.ChoiceField(choices=["accept", "reject"])
     reason = serializers.CharField()
 
@@ -125,7 +142,11 @@ class ResolveDdupRequestSerializer(serializers.Serializer):
 
     `surviving_member_id` is required only for 'duplicate' decisions
     and must match one of the discovered candidates on the stage."""
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     decision = serializers.ChoiceField(choices=["duplicate", "not_duplicate"])
     reason = serializers.CharField()
     surviving_member_id = serializers.CharField(
@@ -145,7 +166,11 @@ class BulkStageActionRequestSerializer(serializers.Serializer):
         max_length=500,
         help_text="Up to 500 StageRecord ULIDs per call.",
     )
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     reason = serializers.CharField(required=False, allow_blank=True)
 
 
@@ -165,7 +190,11 @@ class BulkStageActionResponseSerializer(serializers.Serializer):
 
 class EditRequestSerializer(serializers.Serializer):
     """In-place correction of a StageRecord's canonical_payload."""
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     reason = serializers.CharField()
     field_changes = serializers.DictField(
         child=serializers.JSONField(),
@@ -544,7 +573,7 @@ class StageRecordViewSet(
         try:
             promote_stage_record(
                 stage,
-                actor=ser.validated_data["actor"],
+                actor=actor_from_request(request),
                 reason=ser.validated_data.get("reason", ""),
                 override_reason=ser.validated_data.get("override_reason", ""),
             )
@@ -553,7 +582,7 @@ class StageRecordViewSet(
             # report it (the promote txn rolled back, leaving the record at
             # its prior state with a stale summary otherwise).
             blocked = record_promote_dqa_block(
-                stage, actor=ser.validated_data["actor"], codes=e.codes,
+                stage, actor=actor_from_request(request), codes=e.codes,
             )
             return Response(
                 {
@@ -597,7 +626,7 @@ class StageRecordViewSet(
         try:
             process_stage_record(
                 stage,
-                actor=ser.validated_data["actor"],
+                actor=actor_from_request(request),
                 allow_fast_track=ser.validated_data["allow_fast_track"],
             )
         except DihError as e:
@@ -618,7 +647,7 @@ class StageRecordViewSet(
         ser.is_valid(raise_exception=True)
         stage = self.get_object()
         try:
-            reject_stage_record(stage, actor=ser.validated_data["actor"],
+            reject_stage_record(stage, actor=actor_from_request(request),
                                 reason=ser.validated_data["reason"])
         except DihError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -648,7 +677,7 @@ class StageRecordViewSet(
         try:
             quarantine_stage_record(
                 stage,
-                actor=ser.validated_data["actor"],
+                actor=actor_from_request(request),
                 reason=ser.validated_data["reason"],
             )
         except DihError as e:
@@ -684,7 +713,7 @@ class StageRecordViewSet(
         try:
             resolve_idv_pending(
                 stage,
-                actor=ser.validated_data["actor"],
+                actor=actor_from_request(request),
                 reason=ser.validated_data["reason"],
                 decision=ser.validated_data["decision"],
             )
@@ -728,7 +757,7 @@ class StageRecordViewSet(
             if decision == "duplicate":
                 resolve_ddup_as_duplicate(
                     stage,
-                    actor=ser.validated_data["actor"],
+                    actor=actor_from_request(request),
                     reason=ser.validated_data["reason"],
                     surviving_member_id=(
                         ser.validated_data.get("surviving_member_id") or ""
@@ -737,7 +766,7 @@ class StageRecordViewSet(
             else:
                 resolve_ddup_as_not_duplicate(
                     stage,
-                    actor=ser.validated_data["actor"],
+                    actor=actor_from_request(request),
                     reason=ser.validated_data["reason"],
                 )
         except DihError as e:
@@ -771,7 +800,7 @@ class StageRecordViewSet(
             edit_stage_record(
                 stage,
                 field_changes=ser.validated_data["field_changes"],
-                actor=ser.validated_data["actor"],
+                actor=actor_from_request(request),
                 reason=ser.validated_data["reason"],
             )
         except StageEditError as e:
@@ -837,7 +866,7 @@ class StageRecordViewSet(
     def bulk_promote(self, request):
         ser = BulkStageActionRequestSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
-        actor = ser.validated_data["actor"]
+        actor = actor_from_request(request)
         reason = ser.validated_data.get("reason", "") or ""
 
         def _run(stage):
@@ -879,7 +908,7 @@ class StageRecordViewSet(
         from .services import resolve_idv_pending
         ser = BulkStageActionRequestSerializer(data=request.data)
         ser.is_valid(raise_exception=True)
-        actor = ser.validated_data["actor"]
+        actor = actor_from_request(request)
         reason = (ser.validated_data.get("reason") or "").strip()
         if not reason:
             return Response(
