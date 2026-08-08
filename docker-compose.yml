@@ -64,5 +64,40 @@ services:
     volumes:
       - .:/app
 
+  # Identity provider for the operator console + admin (ADR-0006).
+  #
+  # Runs in dev mode with the embedded database and NO volume: the realm is
+  # re-imported from infrastructure/keycloak/realm-nsr-mis.json on every
+  # start, which makes that file the single source of truth. Changes made by
+  # clicking around the Keycloak admin UI are deliberately discarded on
+  # restart — export and commit the realm instead. This is the mitigation for
+  # the "realm drift" risk in docs/keycloak_oidc_scope.md §6.
+  #
+  # KC_HOSTNAME must be the URL the BROWSER uses, because the issuer in the
+  # token has to match what Django validates. Compose networking would let
+  # Django reach it at http://keycloak:8080, but a browser cannot resolve
+  # that name — so both sides use the published URL. Override KC_HOSTNAME per
+  # environment.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME: http://localhost:8080
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./infrastructure/keycloak:/opt/keycloak/data/import:ro
+    healthcheck:
+      # The image has no curl; a TCP connect via bash is enough for dev.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+
 volumes:
   pgdata:
