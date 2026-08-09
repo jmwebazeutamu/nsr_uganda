@@ -8,32 +8,110 @@
   "duplicateEmailsAllowed": false,
   "resetPasswordAllowed": true,
   "editUsernameAllowed": false,
-
   "accessTokenLifespan": 900,
   "ssoSessionIdleTimeout": 1800,
   "ssoSessionMaxLifespan": 36000,
-
   "bruteForceProtected": true,
   "failureFactor": 3,
   "waitIncrementSeconds": 60,
   "maxFailureWaitSeconds": 900,
   "permanentLockout": false,
-
   "roles": {
     "realm": [
-      { "name": "NSR_UNIT_COORDINATOR", "description": "National coordinator. is_superuser + NATIONAL scope." },
-      { "name": "DPO", "description": "Data Protection Officer. NATIONAL scope + is_staff; reads across geographies, does not write." },
-      { "name": "SA", "description": "System administrator. is_superuser; bypasses ABAC." },
-      { "name": "CDO", "description": "Community Development Officer. DISTRICT scope + GRM L2." },
-      { "name": "PARISH_CHIEF", "description": "PARISH scope + GRM L1." },
-      { "name": "FIELD_ENUMERATOR", "description": "PARISH scope; submits but cannot approve." },
-      { "name": "DISTRICT_M_AND_E", "description": "DISTRICT scope; routed for UPD escalation." },
-      { "name": "PARTNER_ANALYST", "description": "PARTNER scope (scope_code = Partner.code); own DSAs and DataRequests." },
-      { "name": "PARTNER_DPO", "description": "PARTNER scope + is_staff; read-only across the partner's own data." },
-      { "name": "connector:write", "description": "Service accounts only. DIH connector write access." }
+      {
+        "name": "nsr_admin",
+        "description": "Super Admin. Scope: national. ADR-0006: SA."
+      },
+      {
+        "name": "nsr_unit_coordinator",
+        "description": "SR Coordinator. Scope: national. ADR-0006: NSR_UNIT_COORDINATOR."
+      },
+      {
+        "name": "mis_specialist",
+        "description": "MIS Specialist. Scope: national."
+      },
+      {
+        "name": "systems_architect",
+        "description": "Systems Architect. Scope: national."
+      },
+      {
+        "name": "application_developer",
+        "description": "Application Developer. Scope: national."
+      },
+      {
+        "name": "nsr_dba",
+        "description": "DBA. Scope: national."
+      },
+      {
+        "name": "EXPLORER",
+        "description": "Data Analyst. Scope: national."
+      },
+      {
+        "name": "m_and_e_officer",
+        "description": "M&E Officer. Scope: district. ADR-0006: DISTRICT_M_AND_E."
+      },
+      {
+        "name": "GRM Officer",
+        "description": "Grievance Officer. Scope: national."
+      },
+      {
+        "name": "communications_officer",
+        "description": "Communications Officer. Scope: national."
+      },
+      {
+        "name": "admin_officer",
+        "description": "Admin Officer. Scope: district."
+      },
+      {
+        "name": "programme_manager",
+        "description": "Programme Manager (external). Scope: partner. External (partner-affiliated). ADR-0006: PARTNER_ANALYST."
+      },
+      {
+        "name": "programme_caseworker",
+        "description": "Programme Caseworker (external). Scope: partner. External (partner-affiliated)."
+      },
+      {
+        "name": "parish_chief",
+        "description": "Parish Chief. Scope: parish. ADR-0006: PARISH_CHIEF."
+      },
+      {
+        "name": "cdo",
+        "description": "CDO. Scope: district. ADR-0006: CDO."
+      },
+      {
+        "name": "enumerator",
+        "description": "Enumerator. Scope: parish. ADR-0006: FIELD_ENUMERATOR."
+      },
+      {
+        "name": "supervisor",
+        "description": "Supervisor. Scope: sub_county."
+      },
+      {
+        "name": "auditor",
+        "description": "Auditor. Scope: national."
+      },
+      {
+        "name": "dpo",
+        "description": "Data Protection Officer. Scope: national. Operational role, outside the TOR's 18. ADR-0006: DPO."
+      },
+      {
+        "name": "nsr_security",
+        "description": "Security Officer. Scope: national. Operational role, outside the TOR's 18."
+      },
+      {
+        "name": "mglsd_statistics",
+        "description": "MGLSD Statistics. Scope: national. Operational role, outside the TOR's 18."
+      },
+      {
+        "name": "partner_dpo",
+        "description": "Partner DPO (external). Scope: partner. External (partner-affiliated). Operational role, outside the TOR's 18. ADR-0006: PARTNER_DPO."
+      },
+      {
+        "name": "connector:write",
+        "description": "Service accounts only. DIH connector write access."
+      }
     ]
   },
-
   "clients": [
     {
       "clientId": "nsr-mis-web",
@@ -114,7 +192,10 @@
         "pkce.code.challenge.method": "S256",
         "oauth2.device.authorization.grant.enabled": "true"
       },
-      "redirectUris": ["http://localhost:*/*", "nsrmis://oidc/callback"]
+      "redirectUris": [
+        "http://localhost:*/*",
+        "nsrmis://oidc/callback"
+      ]
     },
     {
       "clientId": "nsr-mis-connector-pdm",
@@ -157,7 +238,6 @@
       "secret": "dev-only-connector-nira-secret"
     }
   ],
-
   "users": [
     {
       "username": "dev-coordinator",
@@ -167,10 +247,20 @@
       "firstName": "Dev",
       "lastName": "Coordinator",
       "credentials": [
-        { "type": "password", "value": "dev-only-password", "temporary": false }
+        {
+          "type": "password",
+          "value": "dev-only-password",
+          "temporary": false
+        }
       ],
-      "realmRoles": ["NSR_UNIT_COORDINATOR"],
-      "attributes": { "geographic_codes": ["national:"] }
+      "realmRoles": [
+        "nsr_unit_coordinator"
+      ],
+      "attributes": {
+        "geographic_codes": [
+          "national:"
+        ]
+      }
     },
     {
       "username": "dev-parish-chief",
@@ -180,10 +270,20 @@
       "firstName": "Dev",
       "lastName": "ParishChief",
       "credentials": [
-        { "type": "password", "value": "dev-only-password", "temporary": false }
+        {
+          "type": "password",
+          "value": "dev-only-password",
+          "temporary": false
+        }
       ],
-      "realmRoles": ["PARISH_CHIEF"],
-      "attributes": { "geographic_codes": ["parish:A-P"] }
+      "realmRoles": [
+        "parish_chief"
+      ],
+      "attributes": {
+        "geographic_codes": [
+          "parish:A-P"
+        ]
+      }
     }
   ]
 }

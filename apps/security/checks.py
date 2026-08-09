@@ -8,7 +8,7 @@ pipeline relies on.
 from __future__ import annotations
 
 from django.conf import settings
-from django.core.checks import Error, register
+from django.core.checks import Error, Warning, register
 
 # These constants are intentionally the dev-default values. The check below
 # refuses to boot when production env matches them — they are markers, not
@@ -64,3 +64,97 @@ def check_postgres_required_outside_dev(app_configs, **kwargs):
             id="security.E004",
         )]
     return []
+
+
+# --- role catalogue (US-063 / ADR-0006 / ADR-0028) --------------------------
+#
+# The Keycloak realm export and apps.security.roles must agree: Phase 1 maps a
+# `realm_access.roles` entry straight onto a Django Group of the same name, so
+# a role in one and not the other either grants nothing or silently fails to
+# grant something an operator was told they hold. Hand-maintained parallel
+# lists are what left Epic 17 five stories out of date; this makes the same
+# drift a failing build.
+
+#: Service-account roles have no human counterpart and so no Django Group.
+REALM_ONLY_ROLES = frozenset({"connector:write"})
+
+#: Keycloak adds these to every realm.
+KEYCLOAK_BUILTIN_PREFIXES = ("default-roles-", "offline_access", "uma_authorization")
+
+
+@register("security")
+def check_role_catalogue_matches_realm(app_configs, **kwargs):
+    import json
+    from pathlib import Path
+
+    from apps.security.roles import ROLE_CODES
+
+    path = Path(settings.BASE_DIR) / "infrastructure" / "keycloak" / "realm-nsr-mis.json"
+    if not path.exists():
+        # A deployment consuming an externally-provisioned realm (NITA-U) will
+        # not ship the export. Not an error.
+        return []
+
+    try:
+        realm = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        return [Error(
+            f"could not read the Keycloak realm export at {path}: {exc}",
+            hint="Fix the JSON, or remove it if this deployment uses an "
+                 "externally-provisioned realm.",
+            id="security.E005",
+        )]
+
+    declared = {
+        r.get("name", "")
+        for r in realm.get("roles", {}).get("realm", [])
+        if r.get("name")
+        and r["name"] not in REALM_ONLY_ROLES
+        and not r["name"].startswith(KEYCLOAK_BUILTIN_PREFIXES)
+    }
+
+    missing_in_realm = sorted(ROLE_CODES - declared)
+    missing_in_catalogue = sorted(declared - ROLE_CODES)
+    if not missing_in_realm and not missing_in_catalogue:
+        return []
+
+    parts = []
+    if missing_in_realm:
+        parts.append(f"in the catalogue but not the realm: {missing_in_realm}")
+    if missing_in_catalogue:
+        parts.append(f"in the realm but not the catalogue: {missing_in_catalogue}")
+
+    return [Error(
+        "The Keycloak realm export and apps.security.roles disagree — "
+        + "; ".join(parts) + ".",
+        hint="Both are version-controlled. Update apps/security/roles.py and "
+             "regenerate the realm role list from it.",
+        id="security.E005",
+    )]
+
+
+@register("security")
+def check_every_role_has_a_group(app_configs, **kwargs):
+    """Warn when a catalogue role has no Django Group yet.
+
+    A Warning, not an Error: on a fresh database `manage.py check` runs before
+    the migration that creates them.
+    """
+    from django.contrib.auth.models import Group
+
+    from apps.security.roles import ROLE_CODES
+
+    try:
+        existing = set(Group.objects.values_list("name", flat=True))
+    except Exception:
+        # Table not there yet (pre-migrate). Fail open.
+        return []
+
+    missing = sorted(ROLE_CODES - existing)
+    if not missing:
+        return []
+    return [Warning(
+        f"{len(missing)} role(s) in the catalogue have no Django Group: {missing}.",
+        hint="Run `manage.py migrate security` (or `manage.py sync_roles`).",
+        id="security.W001",
+    )]

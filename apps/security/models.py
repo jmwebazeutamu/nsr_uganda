@@ -125,3 +125,39 @@ class OperatorScope(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user_id}/{self.scope_level}={self.scope_code or '*'}"
+
+
+class AccessPolicy(models.Model):
+    """Anchor for the eight cross-cutting TOR permissions (US-063).
+
+    Django permissions must hang off a model, but "Data Approval" is not a
+    property of any one table — it is an action class that spans DAT, UPD,
+    DDUP and DIH. Rather than scatter eight near-duplicate permissions across
+    every model, they are declared once here and checked as
+    `user.has_perm("security.data_approve")`.
+
+    The table stays empty on purpose; the model exists so the permissions have
+    a ContentType. `default_permissions = ()` suppresses Django's usual
+    add/change/delete/view quartet, which would be meaningless for it.
+
+    The role -> permission matrix lives in apps.security.roles.
+    """
+
+    class Meta:
+        managed = True
+        default_permissions = ()
+        verbose_name = "Access policy"
+        verbose_name_plural = "Access policies"
+        permissions = [
+            ("data_view", "Data View — read personal data within scope"),
+            ("data_entry", "Data Entry — create new records"),
+            ("data_modify", "Data Modifier — amend existing records"),
+            ("data_delete", "Data Deletion — soft-delete records"),
+            ("data_approve", "Data Approval — approve a change raised by someone else"),
+            ("data_export", "Data Export — generate an extract"),
+            ("data_download", "Data Download — retrieve a generated extract"),
+            ("data_upload", "Data Upload — bulk-import a dataset"),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - never instantiated
+        return "access-policy"
