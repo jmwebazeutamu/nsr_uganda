@@ -7,13 +7,16 @@ user manual under /docs/user-manual/site/."""
 
 from pathlib import Path
 
+from django.contrib.auth.decorators import login_required
 from django.http import FileResponse, Http404, HttpResponse
+from django.shortcuts import render
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DESIGN_DIR = REPO_ROOT / "design"
 MANUAL_DIR = REPO_ROOT / "docs" / "user-manual" / "site"
 
 
+@login_required
 def console(_request, path: str = "nsr-mis-console.html"):
     """Serve files out of /design/ under /console/{path}. Dev-only
     convenience for US-S11-013 — the same files the static HTTP
@@ -34,6 +37,7 @@ def console(_request, path: str = "nsr-mis-console.html"):
     return FileResponse(open(target, "rb"))  # noqa: SIM115
 
 
+@login_required
 def manual(_request, path: str = ""):
     """Serve the MkDocs-built user manual under /manual/{path}.
 
@@ -114,5 +118,22 @@ HOME_HTML = """<!doctype html>
 """
 
 
-def home(_request):
-    return HttpResponse(HOME_HTML)
+def home(request):
+    """Public landing page — the only unauthenticated surface.
+
+    Everything else (console, admin console, manual, API) requires a session.
+    Signed-in users get role-appropriate entry points rather than a menu of
+    places they will be refused from.
+    """
+    from apps.admin_console.permissions import user_can_admin_console
+
+    roles_held: list[str] = []
+    can_admin = False
+    if request.user.is_authenticated:
+        roles_held = sorted(request.user.groups.values_list("name", flat=True))
+        can_admin = user_can_admin_console(request.user)
+
+    return render(request, "landing.html", {
+        "roles": roles_held,
+        "can_admin_console": can_admin,
+    })

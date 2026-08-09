@@ -166,6 +166,21 @@ def _estimate_match_count(criteria) -> dict[str, int]:
 class DataRequestViewSet(
     AuditReadMixin, PartnerScopedQuerysetMixin, viewsets.ModelViewSet,
 ):
+    # DRS actions concern extracts, not registry records. The default method
+    # mapping would demand Data Entry for every POST here, which neither the
+    # partner nor the approver holds -- correctly, since neither writes
+    # registry data. Raising or estimating a request is Data Export, the review
+    # verbs are Data Approval, and collecting the bundle is Data Download.
+    data_permission_map = {
+        "create": "data_export",
+        "estimate": "data_export",
+        "submit": "data_export",
+        "approve": "data_approve",
+        "reject": "data_approve",
+        "expire": "data_approve",
+        "deliver": "data_download",
+        "render_and_deliver": "data_download",
+    }
     audit_entity_type = "data_request"
     queryset = DataRequest.objects.all().order_by("-created_at")
     serializer_class = DataRequestSerializer

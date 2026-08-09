@@ -150,7 +150,9 @@ ROOT_URLCONF = "nsr_mis.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        # Project-level templates (landing page, sign-in). App templates
+        # still resolve via APP_DIRS.
+        "DIRS": [BASE_DIR / "nsr_mis" / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -251,6 +253,19 @@ if env.bool("NSR_WHITENOISE", default=False):
         },
     }
 
+# Auth routing. Unauthenticated access to any resource lands on the
+# branded sign-in page rather than Django admin's.
+LOGIN_URL = "/login/"
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/"
+
+# Enforce the eight TOR data permissions (ADR-0028) at the API layer.
+# Superusers always pass. Turn off only to debug an authorisation
+# problem — never in a deployed environment.
+NSR_ENFORCE_DATA_PERMISSIONS = env.bool(
+    "NSR_ENFORCE_DATA_PERMISSIONS", default=True,
+)
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- Production TLS hardening ----------------------------------------------
@@ -281,6 +296,10 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
+        # Whether you are anybody (IsAuthenticated), then what kind of
+        # action your role may take (ADR-0028). ABAC still decides which
+        # rows you see.
+        "apps.security.permissions.HasDataPermission",
     ),
     # Lists return {count, next, previous, results}. DefaultPagination
     # honours `?page_size=` up to MAX_PAGE_SIZE (500) per ADR-0008.

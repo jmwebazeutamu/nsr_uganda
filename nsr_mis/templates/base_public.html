@@ -1,0 +1,86 @@
+{% load i18n %}<!DOCTYPE html>
+<html lang="{{ LANGUAGE_CODE|default:'en' }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{% block title %}{% trans "National Social Registry" %}{% endblock %}</title>
+<style>
+  /* Mirrors design/v0.1/tokens.css and the .topbar masthead in
+     design/styles.css — navy bar, 3px national gold rule — so the public
+     pages and the console read as one system. Inlined rather than served
+     from /design/ because that directory is not in the production image. */
+  :root{
+    --navy:#1F3864; --navy-700:#2E74B5; --tint:#F1F6FC; --gold:#FCDC04;
+    --ink:#212121; --muted:#5F6B7A; --line:#DDE3EA; --white:#fff;
+    --radius:8px;
+    --font:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font);color:var(--ink);background:var(--tint);
+       -webkit-font-smoothing:antialiased}
+  .masthead{background:var(--navy);border-bottom:3px solid var(--gold);
+       min-height:84px;display:flex;align-items:center;gap:16px;padding:12px 20px;
+       flex-wrap:wrap}
+  .crest{width:44px;height:44px;border-radius:4px;background:var(--white);
+       display:grid;place-items:center;font-size:22px;flex:none}
+  .brand{color:var(--white);min-width:0}
+  .brand b{display:block;font-size:17px;font-weight:700;letter-spacing:.01em}
+  .brand span{display:block;font-size:12.5px;opacity:.85;margin-top:2px}
+  .masthead-right{margin-left:auto;display:flex;align-items:center;gap:12px}
+  .who{color:#fff;font-size:13px;opacity:.9}
+  main{max-width:1040px;margin:0 auto;padding:40px 20px 64px}
+  .card{background:var(--white);border:1px solid var(--line);
+       border-radius:var(--radius);padding:28px}
+  h1{font-size:30px;line-height:1.2;margin:0 0 10px;color:var(--navy)}
+  .lede{font-size:16px;color:var(--muted);margin:0 0 24px;max-width:62ch}
+  .btn{display:inline-block;background:var(--navy);color:#fff;border:1px solid var(--navy);
+       text-decoration:none;padding:11px 20px;border-radius:4px;font-weight:600;
+       font-size:15px;cursor:pointer}
+  .btn:hover{background:#16294a}
+  .btn.secondary{background:transparent;color:var(--navy)}
+  .btn.secondary:hover{background:var(--tint)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:8px}
+  .tile{display:block;background:var(--white);border:1px solid var(--line);
+       border-left:4px solid var(--navy-700);border-radius:var(--radius);
+       padding:18px 20px;text-decoration:none;color:inherit}
+  .tile:hover{border-color:var(--navy);background:var(--tint)}
+  .tile b{display:block;color:var(--navy);font-size:15.5px;margin-bottom:4px}
+  .tile span{font-size:13.5px;color:var(--muted)}
+  .notice{background:#FFF8DC;border:1px solid #E6D08A;border-radius:4px;
+       padding:12px 14px;font-size:13.5px;color:#5b4708;margin-bottom:22px}
+  label{display:block;font-size:13.5px;font-weight:600;margin:0 0 6px}
+  input[type=text],input[type=password]{width:100%;padding:10px 12px;font-size:15px;
+       border:1px solid var(--line);border-radius:4px;font-family:inherit}
+  input:focus{outline:2px solid var(--navy-700);outline-offset:1px;border-color:var(--navy-700)}
+  .field{margin-bottom:16px}
+  .errors{background:#FFF0F0;border:1px solid #E0A9A2;color:#A93226;
+       border-radius:4px;padding:10px 12px;font-size:13.5px;margin-bottom:16px}
+  footer{max-width:1040px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font-size:12.5px}
+  a{color:var(--navy-700)}
+  @media (max-width:600px){ h1{font-size:24px} main{padding:26px 16px 44px} }
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="crest" aria-hidden="true">🇺🇬</div>
+  <div class="brand">
+    <b>{% trans "National Social Registry" %}</b>
+    <span>{% trans "Ministry of Gender, Labour and Social Development" %}</span>
+  </div>
+  <div class="masthead-right">
+    {% if user.is_authenticated %}
+      <span class="who">{{ user.get_username }}</span>
+      <form method="post" action="{% url 'logout' %}" style="margin:0">
+        {% csrf_token %}
+        <button class="btn secondary" style="background:#fff" type="submit">{% trans "Sign out" %}</button>
+      </form>
+    {% endif %}
+  </div>
+</header>
+<main>{% block content %}{% endblock %}</main>
+<footer>
+  {% blocktrans %}Authorised use only. Activity on this system is logged and auditable under the Data Protection and Privacy Act, 2019.{% endblocktrans %}
+</footer>
+</body>
+</html>

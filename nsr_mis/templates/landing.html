@@ -1,0 +1,58 @@
+{% extends "base_public.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "National Social Registry — MGLSD" %}{% endblock %}
+
+{% block content %}
+
+{% if not user.is_authenticated %}
+  <div class="card">
+    <h1>{% trans "National Social Registry" %}</h1>
+    <p class="lede">
+      {% blocktrans %}The single, authoritative record of socio-economic data on Ugandan households — used to identify, verify and refer people to social protection programmes.{% endblocktrans %}
+    </p>
+    <p class="lede">
+      {% blocktrans %}This system holds personal data. You must sign in before you can reach any part of it.{% endblocktrans %}
+    </p>
+    <a class="btn" href="{% url 'login' %}">{% trans "Sign in" %}</a>
+  </div>
+
+{% else %}
+  <div class="card">
+    <h1>{% blocktrans with name=user.get_username %}Welcome, {{ name }}{% endblocktrans %}</h1>
+    <p class="lede">{% trans "Choose where to go. You are shown only the areas your role allows." %}</p>
+
+    <div class="grid">
+      <a class="tile" href="/console/">
+        <b>{% trans "Operator Console" %}</b>
+        <span>{% blocktrans %}Households and members, data quality, updates, deduplication, grievances and referrals.{% endblocktrans %}</span>
+      </a>
+
+      {% if can_admin_console %}
+        <a class="tile" href="/admin-console/">
+          <b>{% trans "Admin Console" %}</b>
+          <span>{% blocktrans %}Reference data, PMT model versions, connectors, partners and system configuration.{% endblocktrans %}</span>
+        </a>
+      {% endif %}
+
+      {% if user.is_staff %}
+        <a class="tile" href="/admin/">
+          <b>{% trans "Django Admin" %}</b>
+          <span>{% trans "Low-level record administration and the audit trail." %}</span>
+        </a>
+      {% endif %}
+    </div>
+
+    {% if roles %}
+      <p class="lede" style="margin-top:26px;margin-bottom:0;font-size:13.5px">
+        {% trans "Your roles:" %} {{ roles|join:", " }}
+      </p>
+    {% else %}
+      <p class="notice" style="margin-top:26px;margin-bottom:0">
+        {% blocktrans %}No role has been assigned to your account yet, so most areas will be unavailable. Ask a System Administrator to assign one.{% endblocktrans %}
+      </p>
+    {% endif %}
+  </div>
+{% endif %}
+
+{% endblock %}

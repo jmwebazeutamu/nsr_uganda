@@ -130,8 +130,10 @@ ROLES: tuple[Role, ...] = (
     _r("communications_officer", "Communications Officer", _READ, NATIONAL),
     _r("admin_officer", "Admin Officer", _CAPTURE, DISTRICT),
     _r("programme_manager", "Programme Manager (external)",
-       (DATA_VIEW, DATA_DOWNLOAD), PARTNER, adr0006="PARTNER_ANALYST",
-       external=True),
+       (DATA_VIEW, DATA_EXPORT, DATA_DOWNLOAD), PARTNER,
+       adr0006="PARTNER_ANALYST", external=True,
+       notes="Raises DataRequests under a DSA (Data Export) and collects the "
+             "resulting bundle (Data Download). No write access to the registry."),
     _r("programme_caseworker", "Programme Caseworker (external)", _READ,
        PARTNER, external=True),
     _r("parish_chief", "Parish Chief", _CAPTURE_EDIT, PARISH,

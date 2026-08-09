@@ -1683,6 +1683,9 @@ class TestMergeDecisionAbacScope:
         u = django_user_model.objects.create_user(
             username=f"ddup-{scope_code}", password="p",
         )
+        from django.contrib.auth.models import Group
+        # A dedup reviewer acting on merge decisions holds an operational role.
+        u.groups.add(Group.objects.get(name="cdo"))
         OperatorScope.objects.create(
             user=u, scope_level=ScopeLevel.SUB_REGION, scope_code=scope_code,
         )

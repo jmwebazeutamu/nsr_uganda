@@ -1,0 +1,45 @@
+{% extends "base_public.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Sign in — National Social Registry" %}{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width:440px;margin:0 auto">
+  <h1 style="font-size:23px">{% trans "Sign in" %}</h1>
+  <p class="lede" style="font-size:14.5px;margin-bottom:20px">
+    {% trans "Use your National Social Registry account." %}
+  </p>
+
+  {% if form.errors %}
+    <div class="errors" role="alert">
+      {% trans "That username and password did not match an active account. Please try again." %}
+    </div>
+  {% endif %}
+
+  {% if next and user.is_authenticated %}
+    <div class="errors" role="alert">
+      {% trans "Your account does not have access to that page. Sign in with an account that does." %}
+    </div>
+  {% endif %}
+
+  <form method="post" action="{% url 'login' %}">
+    {% csrf_token %}
+    <div class="field">
+      <label for="id_username">{% trans "Username" %}</label>
+      <input type="text" name="username" id="id_username" autocomplete="username"
+             autocapitalize="none" autofocus required>
+    </div>
+    <div class="field">
+      <label for="id_password">{% trans "Password" %}</label>
+      <input type="password" name="password" id="id_password"
+             autocomplete="current-password" required>
+    </div>
+    <input type="hidden" name="next" value="{{ next }}">
+    <button class="btn" type="submit" style="width:100%">{% trans "Sign in" %}</button>
+  </form>
+
+  <p style="margin:20px 0 0;font-size:12.5px;color:var(--muted)">
+    {% blocktrans %}Sign-in attempts are recorded. Contact a System Administrator if you cannot get in.{% endblocktrans %}
+  </p>
+</div>
+{% endblock %}

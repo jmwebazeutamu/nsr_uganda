@@ -152,6 +152,8 @@ def partner_client(db, partner_and_dsa):
     user = user_cls.objects.create_user(
         username="partner-analyst-1", password="x",
     )
+    from django.contrib.auth.models import Group
+    user.groups.add(Group.objects.get(name="programme_manager"))
     OperatorScope.objects.create(
         user=user, scope_level=ScopeLevel.PARTNER, scope_code="E2E-OPM",
         active=True,
@@ -173,6 +175,8 @@ def operator_client(db):
     user = user_cls.objects.create_user(
         username="nsr-unit-approver", password="x",
     )
+    from django.contrib.auth.models import Group
+    user.groups.add(Group.objects.get(name="nsr_unit_coordinator"))
     OperatorScope.objects.create(
         user=user, scope_level=ScopeLevel.NATIONAL, scope_code="",
         active=True,
@@ -450,6 +454,47 @@ def test_drs_partner_cannot_self_approve(
     r = partner_api.post(
         f"{LIST_URL}{req_id}/approve/",
         {"approver": partner_user.username, "reason": "trying"},
+        format="json",
+    )
+    # 403, not 400: since ADR-0028 the partner is stopped at the role layer
+    # before the no-self-approve business rule is even reached. Programme
+    # Manager carries Data Export and Data Download but not Data Approval, so
+    # a partner cannot approve ANY request, not merely their own — a strictly
+    # stronger guarantee than the one this test was written for.
+    assert r.status_code == 403, r.data
+    assert "data approve" in str(r.data).lower()
+
+
+def test_drs_approver_cannot_self_approve(
+    operator_client, partner_and_dsa, household,
+):
+    """AC-DRS-NO-SELF-APPROVE itself, reached by someone who *can* approve.
+
+    Since ADR-0028 a partner is refused at the role layer, so the business rule
+    can only be exercised by a principal holding Data Approval who is also the
+    requester. That is the case the rule actually exists for: an NSR Unit
+    approver must not wave through a request they raised themselves.
+    """
+    api, user = operator_client
+    _, dsa = partner_and_dsa
+
+    r = api.post(LIST_URL, {
+        "dsa": str(dsa.id),
+        "request_payload": {
+            "fields": ["household.id"],
+            "sub_region_codes": ["SR-DRS-IN"],
+            "max_rows": 25,
+        },
+    }, format="json")
+    assert r.status_code == 201, r.data
+    req_id = r.data["id"]
+
+    r = api.post(f"{LIST_URL}{req_id}/submit/", {}, format="json")
+    assert r.status_code == 200, r.data
+
+    r = api.post(
+        f"{LIST_URL}{req_id}/approve/",
+        {"approver": user.username, "reason": "trying"},
         format="json",
     )
     assert r.status_code == 400, r.data

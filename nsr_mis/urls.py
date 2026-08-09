@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.contrib import admin
+from django.contrib.auth import views as auth_views
 from django.http import HttpResponse
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
@@ -37,6 +38,13 @@ swagger_view = SpectacularSwaggerView.as_view(
 
 urlpatterns = [
     path("healthz", healthz, name="healthz"),
+    # Branded sign-in. LOGIN_URL points here, so @login_required and
+    # the DRF session flow both land on the same page.
+    path("login/", auth_views.LoginView.as_view(
+        template_name="registration/login.html",
+        redirect_authenticated_user=True,
+    ), name="login"),
+    path("logout/", auth_views.LogoutView.as_view(), name="logout"),
     path("", home, name="home"),
     path("admin/", admin.site.urls),
     # React design harness served same-origin so fetch() inherits the

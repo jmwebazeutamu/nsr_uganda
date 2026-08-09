@@ -284,9 +284,13 @@ class TestGrievanceVisibility:
         regular = django_user_model.objects.create_user(
             username="parish-chief-1", password="p", is_staff=True,
         )
+        regular.groups.add(Group.objects.get(name="parish_chief"))
         outsider = django_user_model.objects.create_user(
             username="outsider", password="p", is_staff=True,
         )
+        # Also given the role, so the assignee rule below is what the test
+        # exercises rather than a missing permission.
+        outsider.groups.add(Group.objects.get(name="parish_chief"))
         return officer, regular, outsider
 
     @pytest.fixture
@@ -350,6 +354,9 @@ class TestGrievanceTaskApi:
         regular = django_user_model.objects.create_user(
             username="assignee-1", password="p", is_staff=True,
         )
+        # A task assignee transitions their own task -- a write, so under
+        # ADR-0028 they hold an operational role.
+        regular.groups.add(Group.objects.get(name="parish_chief"))
         return officer, regular
 
     @pytest.fixture

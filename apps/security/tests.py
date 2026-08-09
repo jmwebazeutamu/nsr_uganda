@@ -285,7 +285,10 @@ class TestAuditChainVerifier:
         from apps.security.models import AuditEvent
 
         AuditEvent.objects.all().delete()
+        from django.contrib.auth.models import Group
         user = django_user_model.objects.create_user(username="audit-admin")
+        # Re-verifying the hash chain is what the Auditor role is for.
+        user.groups.add(Group.objects.get(name="auditor"))
         client = APIClient()
         client.force_authenticate(user)
 

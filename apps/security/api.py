@@ -57,6 +57,11 @@ class AuditEventSerializer(serializers.ModelSerializer):
     retrieve=extend_schema(tags=["security"], summary="Retrieve an audit event"),
 )
 class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
+    # verify-chain is a POST only because it is expensive and must not be
+    # cached; it writes nothing. An auditor re-verifying the hash chain
+    # should not need a data-entry role.
+    data_permission_map = {"verify_chain": "data_view"}
+
     """Append-only audit chain. SAD §8.4."""
 
     queryset = AuditEvent.objects.all().order_by("-occurred_at")
