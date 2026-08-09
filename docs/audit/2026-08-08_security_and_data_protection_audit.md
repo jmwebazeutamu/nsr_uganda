@@ -90,7 +90,7 @@ The correct pattern already existed — the UPD bundle endpoint and most of
 uniformly. That is the failure mode worth watching for: a control implemented
 once, correctly, then not carried across the whole surface it protects.
 
-## F2 — MEDIUM (latent) — `/console/` and `/manual/` are unauthenticated routes
+## F2 — MEDIUM (latent) — `/console/` and `/manual/` are unauthenticated routes *(FIXED)*
 
 `nsr_mis/urls.py` registers `console/` and `manual/` unconditionally. Their own
 comments say *"Dev-only — production serves the built React app through nginx
@@ -109,8 +109,11 @@ built console, which is the stated plan — the whole design tree becomes world
 
 Path traversal *is* correctly defended (`resolve()` + `relative_to()`).
 
-**Fix:** wrap both in `if settings.DEBUG:` or `@staff_member_required`. One line,
-removes the latent trap.
+**Fixed 2026-08-09** — both now carry `@login_required`, so the trap closes
+regardless of what the image ships. Verified: `/console/` 302s to
+`/login/?next=`, `/admin-console/` 403s anonymously, `/healthz` stays open for
+the container healthcheck. Regression guards in
+`tests/contract/test_landing_and_access.py`.
 
 ## F3 — MEDIUM — Production TLS is not captured in the repo
 
