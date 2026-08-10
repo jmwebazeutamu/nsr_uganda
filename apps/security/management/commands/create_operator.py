@@ -116,10 +116,15 @@ class Command(BaseCommand):
             user.set_unusable_password()
             user.save(update_fields=["password"])
             user.groups.add(group)
-            OperatorScope.objects.create(
+            # get_or_create, not create: for a national role the m2m signal
+            # (apps.security.signals) has already provisioned this exact row.
+            OperatorScope.objects.get_or_create(
                 user=user, scope_level=level, scope_code=scope_code,
-                granted_by="create_operator", active=True,
-                note=f"seeded with role {role.code}",
+                defaults={
+                    "granted_by": "create_operator",
+                    "active": True,
+                    "note": f"seeded with role {role.code}",
+                },
             )
 
         if o["set_password"]:

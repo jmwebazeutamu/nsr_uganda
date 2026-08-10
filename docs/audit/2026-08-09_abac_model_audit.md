@@ -133,15 +133,14 @@ by which a DPO or an identity-verification officer could be granted the
 plaintext where an enumerator is not. Any future "role X may see field Y"
 requirement has nowhere to attach.
 
-### G7 — Assigning a role grants no scope
+### G7 — Assigning a role grants no scope *(FIXED 2026-08-09)*
 
 The catalogue records a `default_scope` per role, and it is **documentation
 only** — nothing applies it. Create a user, give them `cdo`, and they see
 nothing until someone separately creates an OperatorScope. The mixins fail
 closed, so the symptom is an empty screen, not an error.
 
-This is the single most likely operational mistake in the current model, and
-it is now mitigated (§3) rather than fixed at the model level.
+**Fixed.** A role grant now applies the catalogue default scope, but only where the role fully determines it: `national` is created and audited; `district`/`parish`/`partner` are reported, never invented, because an empty `scope_code` at a non-national level matches nothing and would swap a visible “no scope” for an invisible “scope that matches nothing”. `manage.py audit_operator_scopes [--fix]` reports blind accounts, level mismatches and orphaned scopes. Removal is still left to the ADR-0006 DPO sweep.
 
 ### G8 — Policy is code, not data
 

@@ -285,10 +285,15 @@ class TestAuditChainVerifier:
         from apps.security.models import AuditEvent
 
         AuditEvent.objects.all().delete()
-        from django.contrib.auth.models import Group
-        user = django_user_model.objects.create_user(username="audit-admin")
-        # Re-verifying the hash chain is what the Auditor role is for.
-        user.groups.add(Group.objects.get(name="auditor"))
+        # A superuser, not an auditor-role grant: granting a role now emits
+        # an AuditEvent (national scope provisioning), which would make the
+        # chain non-empty and defeat the 'empty' assertion below. Deleting that
+        # row afterwards is not possible -- AuditEvent is append-only and the
+        # Postgres trigger refuses DELETE. This test is about chain
+        # verification, not authorisation.
+        user = django_user_model.objects.create_user(
+            username="audit-admin", is_superuser=True,
+        )
         client = APIClient()
         client.force_authenticate(user)
 

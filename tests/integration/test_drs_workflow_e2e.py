@@ -154,7 +154,9 @@ def partner_client(db, partner_and_dsa):
     )
     from django.contrib.auth.models import Group
     user.groups.add(Group.objects.get(name="programme_manager"))
-    OperatorScope.objects.create(
+    # get_or_create: granting a national role auto-provisions this row
+    # via apps.security.signals, so create() would collide.
+    OperatorScope.objects.get_or_create(
         user=user, scope_level=ScopeLevel.PARTNER, scope_code="E2E-OPM",
         active=True,
     )
@@ -177,7 +179,9 @@ def operator_client(db):
     )
     from django.contrib.auth.models import Group
     user.groups.add(Group.objects.get(name="nsr_unit_coordinator"))
-    OperatorScope.objects.create(
+    # get_or_create: granting a national role auto-provisions this row
+    # via apps.security.signals, so create() would collide.
+    OperatorScope.objects.get_or_create(
         user=user, scope_level=ScopeLevel.NATIONAL, scope_code="",
         active=True,
     )
