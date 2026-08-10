@@ -39,18 +39,62 @@ not *complete* ABAC.
 
 ## 2. Gaps against "full ABAC"
 
-### G1 — Consent is not an access attribute *(highest value)*
+### G1 — Consent as an access attribute *(CORRECTED 2026-08-09; now closed)*
 
-`apps/security/abac.py` contains **zero** references to consent. The consent
-module (Epic 19, 17 stories, `apps/consent/`) records purpose-scoped consent
-and withdrawal with a 30-day SLA — and none of it constrains a read.
+**The original finding was overstated.** It said consent had no effect at the
+point of access, on the strength of `apps/security/abac.py` containing zero
+references to it. That grep was accurate and the conclusion drawn from it was
+not: consent was already enforced, just not in `abac.py`.
 
-A household that has withdrawn consent for, say, `RESEARCH` is today just as
-visible to an analyst as one that has not. The withdrawal is recorded,
-audited, and has no effect at the point of access.
+Enforced before this audit:
 
-For a registry governed by DPPA 2019 this is the gap that matters most: consent
-state is the canonical example of an attribute an ABAC policy should consult.
+* `apps/referral/services.py` — a new referral is refused when the household
+  **head** has withdrawn or refused `REFERRAL` consent;
+* `apps/data_requests/bundles.py` — members who withdrew any purpose mapped by
+  the DSA are excluded from extract bundles at the SQL layer.
+
+Correctly *not* gated: Data Explorer aggregates run under `STATISTICS`, whose
+`lawful_basis` is `STATISTICAL_EXEMPTION` and which is `withdrawable=False`.
+Filtering it would bias the statistics without a legal basis for doing so.
+Ordinary registry reads are likewise not consent-gated: the core function does
+not rest on consent, and withdrawing `REGISTRATION` (the one non-optional
+consent purpose) is an erasure workflow, not a read filter. Gating those would
+deny people their benefits for opting out of a secondary use.
+
+**What was genuinely wrong — and is now fixed.** The DRS gate excluded blocked
+members from the *embedded member list* only. The household row — location,
+GPS, PMT band, assets — was emitted regardless. So:
+
+* an extract that did not embed members was **not consent-filtered at all**;
+* an extract whose **head** had withdrawn still disclosed that household.
+
+The existing test covered a non-head member withdrawing, which is exactly the
+case that already worked, so the hole was invisible.
+
+Fixed by `apps/consent/access.py`, which adds the household-level rule and one
+idiom for both:
+
+* `blocked_member_ids(purposes)` / `blocked_household_ids(purposes)`
+* `exclude_blocked_members(qs, ...)` / `exclude_blocked_households(qs, ...)`
+
+A household is blocked when its **head** is blocked — the rule
+`apps/referral/services.py` already used, rather than a second one. "Any member
+blocked" would over-block a household because one adult opted out; "all members
+blocked" would let a single consenting member expose the rest.
+
+Deliberately narrow, and pinned by tests: un-captured consent does **not**
+block (`ConsentRecord` is empty for every household captured before consent
+capture existed — blocking on absence would empty the registry), `PENDING_REVIEW`
+does not block, only `WITHDRAWN`/`REFUSED` do, and a withdrawal for one purpose
+does not affect an extract scoped to another.
+
+Verified by reverting the fix: the new integration test fails `assert 1 == 0`
+without it and passes with it.
+
+**Still open in this area:** the DRS gate is inert when a DSA omits
+`consent_purposes` from its `entities_scope` JSON, and nothing validates that a
+record-level DSA declares any. That is a silent opt-out via a free-text field
+and deserves a check on DSA activation.
 
 ### G2 — No purpose limitation
 
@@ -155,7 +199,7 @@ with an unusable password and set via `changepassword`.
 ## 4. Recommended order
 
 1. **G1 consent-as-attribute.** Highest compliance value, and the consent data
-   already exists — it is a matter of joining it at the policy point.
+   overstated; see G1). Next open item there: validate that a record-level DSA declares consent_purposes.
 2. **G7 role → default scope.** Cheap; apply the catalogue's `default_scope`
    when a role is granted. Also removes work from Keycloak Phase 1, which will
    otherwise have to do it from claims.

@@ -346,6 +346,45 @@ def test_drs_bundle_excludes_members_without_research_consent(geo):
 
 
 @pytest.mark.django_db
+def test_drs_bundle_excludes_the_household_when_its_head_withdraws(geo):
+    """The household ROW, not just the embedded members.
+
+    The original gate excluded blocked members from the embedded member list
+    only, so the household row -- location, GPS, PMT band, assets -- was
+    emitted regardless, and an extract without embed_members was not
+    consent-filtered at all. The existing test above covers a NON-head member,
+    which is precisely the case that already worked.
+    """
+    from apps.data_requests.bundles import render_bundle
+    from apps.data_requests.models import DataRequest
+    from apps.data_requests.test_helpers import make_dsa, make_partner
+
+    hh, head = _household_with_head(geo)
+    services.capture_consent(
+        member=head, purpose=_purpose("RESEARCH"), state=ConsentState.WITHDRAWN,
+        captured_via="WEB_INTAKE", captured_by="op1")
+
+    partner = make_partner(code="RES-OPM3", name="Research OPM3")
+    dsa = make_dsa(
+        partner=partner, reference="DSA-RES-003", status="active",
+        allowed_scopes={"fields": ["household.id", "member.surname"]})
+    dsa.entities_scope = {**(dsa.entities_scope or {}),
+                          "consent_purposes": ["RESEARCH"]}
+    dsa.save(update_fields=["entities_scope"])
+
+    req = DataRequest.objects.create(
+        dsa=dsa, requester="partner-x",
+        request_payload={"fields": ["household.id", "member.surname"]})
+
+    body, count = render_bundle(req)
+    assert count == 0, (
+        "the household of a head who withdrew RESEARCH consent was still "
+        "exported -- household-level data is not covered by the member filter"
+    )
+    assert hh.id not in body.decode("utf-8")
+
+
+@pytest.mark.django_db
 def test_drs_bundle_ungated_when_dsa_declares_no_consent_purposes(geo):
     from apps.data_management.models import Member
     from apps.data_requests.bundles import render_bundle

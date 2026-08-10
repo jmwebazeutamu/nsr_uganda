@@ -192,11 +192,16 @@ def render_bundle(req: DataRequest) -> tuple[bytes, int]:
     # DSA declares no consent_purposes or CONSENT_MODULE_ENABLED is off. A
     # STATISTICS-scoped DSA serves aggregates only (Data Explorer), so it never
     # reaches this record-level path and declares no consent_purposes here.
-    from apps.consent import services as consent_services
+    from apps.consent import access as consent_access
     consent_purposes = list((dsa.entities_scope or {}).get("consent_purposes", []))
-    blocked_member_ids: set[str] = set()
-    for _pc in consent_purposes:
-        blocked_member_ids.update(consent_services.blocked_member_ids(_pc))
+    blocked_member_ids = consent_access.blocked_member_ids(consent_purposes)
+
+    # The household ROW carries location, GPS, PMT band and assets. Excluding
+    # only the embedded members left that row in the extract, so an extract
+    # without embed_members was not consent-filtered at all. A household is
+    # dropped when its head is blocked — the same rule apps.referral.services
+    # already applies to new referrals.
+    qs = consent_access.exclude_blocked_households(qs, consent_purposes)
 
     rows: list[dict] = []
     for hh in qs:
