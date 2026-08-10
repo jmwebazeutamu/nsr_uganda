@@ -10,6 +10,8 @@ behind after a role is dropped grants visibility nobody is tracking.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 
@@ -38,14 +40,14 @@ class Command(BaseCommand):
 
             codes = set(user.groups.values_list("name", flat=True))
             known = {c for c in codes if c in role_catalogue.ROLE_CODES}
-            scopes = list(OperatorScope.objects.filter(user=user, active=True))
+            scopes = list(OperatorScope.objects.effective().filter(user=user))
 
             if opts["fix"] and known:
                 result = ensure_default_scopes(user, actor="audit_operator_scopes")
                 if result.granted:
                     fixed.append((user.get_username(), result.granted))
                     scopes = list(
-                        OperatorScope.objects.filter(user=user, active=True))
+                        OperatorScope.objects.effective().filter(user=user))
 
             if known and not scopes:
                 blind.append((user.get_username(), sorted(known)))
@@ -78,6 +80,34 @@ class Command(BaseCommand):
         for name, code, level in manual:
             self.stdout.write(f"  {name:24} {code} expects {level}")
         if not manual:
+            self.stdout.write("  none")
+
+        from django.utils import timezone
+        lapsed = list(
+            OperatorScope.objects.expired().filter(active=True)
+            .select_related("user").order_by("user__username"))
+        soon = list(
+            OperatorScope.objects.effective()
+            .filter(expires_at__isnull=False,
+                    expires_at__lte=timezone.now() + timedelta(days=14))
+            .select_related("user").order_by("expires_at"))
+
+        self.stdout.write(self.style.MIGRATE_HEADING(
+            "\nLAPSED — past expires_at, still flagged active"))
+        for s in lapsed:
+            self.stdout.write(
+                f"  {s.user.get_username():24} {s.scope_level}:"
+                f"{s.scope_code or '*'} expired {s.expires_at:%Y-%m-%d}")
+        if not lapsed:
+            self.stdout.write("  none")
+
+        self.stdout.write(self.style.MIGRATE_HEADING(
+            "\nEXPIRING WITHIN 14 DAYS"))
+        for s in soon:
+            self.stdout.write(
+                f"  {s.user.get_username():24} {s.scope_level}:"
+                f"{s.scope_code or '*'} expires {s.expires_at:%Y-%m-%d}")
+        if not soon:
             self.stdout.write("  none")
 
         self.stdout.write(self.style.MIGRATE_HEADING(

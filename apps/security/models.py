@@ -85,6 +85,28 @@ class ScopeLevel(models.TextChoices):
     PARTNER = "partner"
 
 
+class OperatorScopeQuerySet(models.QuerySet):
+    """`effective()` is the single definition of "this scope is in force now".
+
+    Every authorisation path must go through it. Eight call sites used to
+    filter `active=True` by hand; adding expiry to a model without moving the
+    predicate here would have left a field that looks like a control and is not
+    enforced — worse than not having it.
+    """
+
+    def effective(self, at=None):
+        from django.utils import timezone
+        now = at or timezone.now()
+        return self.filter(active=True).filter(
+            models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=now),
+        )
+
+    def expired(self, at=None):
+        from django.utils import timezone
+        now = at or timezone.now()
+        return self.filter(expires_at__isnull=False, expires_at__lte=now)
+
+
 class OperatorScope(models.Model):
     """ABAC geographic scope per SAD §8.2.
 
@@ -107,9 +129,19 @@ class OperatorScope(models.Model):
     scope_level = models.CharField(max_length=16, choices=ScopeLevel.choices)
     scope_code = models.CharField(max_length=64, blank=True)  # empty for 'national'
     active = models.BooleanField(default=True)
+    # Validity window (G5). NULL means open-ended, which is the norm for a
+    # substantive posting; a date is for secondments, contractors and
+    # emergency elevations. Expiry takes effect the moment it passes —
+    # `effective()` filters on it — so it does not depend on a sweep running.
+    expires_at = models.DateTimeField(
+        null=True, blank=True, db_index=True,
+        help_text="After this moment the scope grants nothing. Blank = open-ended.",
+    )
     granted_at = models.DateTimeField(auto_now_add=True)
     granted_by = models.CharField(max_length=64, blank=True)
     note = models.TextField(blank=True)
+
+    objects = OperatorScopeQuerySet.as_manager()
 
     class Meta:
         verbose_name = "Operator scope"

@@ -52,6 +52,12 @@ class Command(BaseCommand):
                             help="Grant Django admin access (is_staff).")
         parser.add_argument("--set-password", action="store_true",
                             help="Prompt for a password interactively.")
+        parser.add_argument(
+            "--expires", default=None,
+            help="ISO date/datetime after which the scope grants nothing "
+                 "(e.g. 2026-12-31). Blank = open-ended. Use it for "
+                 "secondments, contractors and emergency elevations.",
+        )
         parser.add_argument("--dry-run", action="store_true")
 
     def handle(self, *args, **o):
@@ -85,6 +91,38 @@ class Command(BaseCommand):
                 "(the ABAC mixins fail closed).",
             )
 
+        expires = None
+        if o["expires"]:
+            from django.utils import timezone as _tz
+            from django.utils.dateparse import parse_date, parse_datetime
+            raw = o["expires"].strip()
+            # Check for a bare date FIRST. Django's parse_datetime accepts
+            # "2026-09-30" and returns MIDNIGHT, so relying on it to fail would
+            # make --expires 2026-09-30 lapse at the start of the 30th — a day
+            # short, silently.
+            if "T" in raw or " " in raw:
+                expires = parse_datetime(raw)
+            else:
+                day = parse_date(raw)
+                if day is not None:
+                    import datetime as _dt
+                    # A bare date means the END of that day.
+                    expires = _dt.datetime.combine(day, _dt.time.max)
+                else:
+                    expires = None
+            if expires is None:
+                raise CommandError(
+                    f"could not parse --expires {o['expires']!r}; "
+                    "use YYYY-MM-DD or an ISO datetime",
+                )
+            if _tz.is_naive(expires):
+                expires = _tz.make_aware(expires)
+            if expires <= _tz.now():
+                raise CommandError(
+                    "--expires is in the past; the account would be created "
+                    "already unable to see anything",
+                )
+
         user_model = get_user_model()
         if user_model.objects.filter(username=username).exists():
             raise CommandError(f"user {username!r} already exists")
@@ -102,6 +140,7 @@ class Command(BaseCommand):
         self.stdout.write(f"scope         : {level}={scope_code or '*'}")
         self.stdout.write(f"permissions   : {', '.join(perms) or 'none'}")
         self.stdout.write(f"django admin  : {'yes' if o['staff'] else 'no'}")
+        self.stdout.write(f"expires       : {expires or 'never (open-ended)'}")
 
         if o["dry_run"]:
             self.stdout.write(self.style.WARNING("dry run — nothing written"))
@@ -123,6 +162,7 @@ class Command(BaseCommand):
                 defaults={
                     "granted_by": "create_operator",
                     "active": True,
+                    "expires_at": expires,
                     "note": f"seeded with role {role.code}",
                 },
             )

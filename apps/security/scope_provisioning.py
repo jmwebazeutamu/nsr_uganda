@@ -66,8 +66,8 @@ def ensure_default_scopes(user, *, actor: str = "role-sync",
 
         if role.default_scope != NATIONAL:
             # Cannot be derived — needs the district/parish/partner code.
-            if not OperatorScope.objects.filter(
-                user=user, scope_level=role.default_scope, active=True,
+            if not OperatorScope.objects.effective().filter(
+                user=user, scope_level=role.default_scope,
             ).exists():
                 result.needs_manual_scope.append((role.code, role.default_scope))
             continue

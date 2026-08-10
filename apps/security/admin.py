@@ -45,11 +45,22 @@ class OperatorScopeAdmin(admin.ModelAdmin):
     and the (level, code) pair that matches the GeographicUnit they
     cover. `national` is the wildcard for NSR Unit Coordinator / DPO."""
 
-    list_display = ("user", "scope_level", "scope_code", "active", "granted_at", "granted_by")
+    list_display = ("user", "scope_level", "scope_code", "active",
+                    "expires_at", "in_force", "granted_at", "granted_by")
     list_filter = ("scope_level", "active")
     search_fields = ("user__username", "scope_code", "granted_by")
     readonly_fields = ("granted_at",)
     raw_id_fields = ("user",)
+
+    @admin.display(boolean=True, description="In force now?")
+    def in_force(self, obj):
+        """Expiry takes effect the moment it passes, so `active` alone no
+        longer tells you whether a scope grants anything."""
+        from django.utils import timezone
+        return bool(
+            obj.active
+            and (obj.expires_at is None or obj.expires_at > timezone.now()),
+        )
 
 
 # --- operator administration -------------------------------------------------
@@ -76,7 +87,8 @@ class OperatorScopeInline(admin.TabularInline):
 
     model = OperatorScope
     extra = 0
-    fields = ("scope_level", "scope_code", "active", "granted_by", "note")
+    fields = ("scope_level", "scope_code", "active", "expires_at",
+              "granted_by", "note")
     readonly_fields = ("granted_at",)
     verbose_name = "ABAC scope"
     verbose_name_plural = "ABAC scopes (attributes)"
@@ -142,9 +154,8 @@ class OperatorAdmin(DjangoUserAdmin):
 
     @admin.display(description="ABAC scopes")
     def scopes_display(self, obj):
-        rows = obj.operator_scopes.filter(active=True) if hasattr(
-            obj, "operator_scopes") else OperatorScope.objects.filter(
-            user=obj, active=True)
+        rows = obj.operator_scopes.effective() if hasattr(
+            obj, "operator_scopes") else OperatorScope.objects.effective().filter(user=obj)
         parts = [f"{s.scope_level}:{s.scope_code or '*'}" for s in rows]
         return ", ".join(parts) if parts else "—"
 
@@ -153,7 +164,7 @@ class OperatorAdmin(DjangoUserAdmin):
         if obj.is_superuser:
             return format_html('<span style="color:#B8741A">superuser '
                                '(bypasses ABAC)</span>')
-        has_scope = OperatorScope.objects.filter(user=obj, active=True).exists()
+        has_scope = OperatorScope.objects.effective().filter(user=obj).exists()
         has_role = obj.groups.exists()
         if has_scope and has_role:
             return format_html('<span style="color:#2E7D32">yes</span>')

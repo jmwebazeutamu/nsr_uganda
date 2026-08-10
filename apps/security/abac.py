@@ -82,7 +82,7 @@ def scope_q_for_field(user, field: str = "sub_region_code") -> Q:
     if getattr(user, "is_superuser", False):
         return ~Q(pk__in=[])
     scopes = list(
-        OperatorScope.objects.filter(user=user, active=True)
+        OperatorScope.objects.effective().filter(user=user)
         .values_list("scope_level", "scope_code")
     )
     if not scopes:
@@ -115,8 +115,8 @@ def _is_wildcard(user) -> bool:
         return False
     if getattr(user, "is_superuser", False):
         return True
-    return OperatorScope.objects.filter(
-        user=user, active=True, scope_level=ScopeLevel.NATIONAL,
+    return OperatorScope.objects.effective().filter(
+        user=user, scope_level=ScopeLevel.NATIONAL,
     ).exists()
 
 
@@ -186,7 +186,7 @@ def _scoped_household_ids(user) -> list[str] | None:
     if getattr(user, "is_superuser", False):
         return None
     scopes = list(
-        OperatorScope.objects.filter(user=user, active=True)
+        OperatorScope.objects.effective().filter(user=user)
         .values_list("scope_level", flat=True)
     )
     if not scopes:
@@ -214,7 +214,7 @@ def _scoped_codes(user) -> list[str] | None:
     if getattr(user, "is_superuser", False):
         return None  # superuser sees everything
     scopes = list(
-        OperatorScope.objects.filter(user=user, active=True)
+        OperatorScope.objects.effective().filter(user=user)
         .values_list("scope_level", "scope_code")
     )
     if not scopes:
@@ -262,7 +262,7 @@ def _scoped_partner_codes(user) -> list[str] | None:
     if getattr(user, "is_superuser", False):
         return None
     scopes = list(
-        OperatorScope.objects.filter(user=user, active=True)
+        OperatorScope.objects.effective().filter(user=user)
         .values_list("scope_level", "scope_code")
     )
     if not scopes:

@@ -117,9 +117,11 @@ No condition on time of day, source network, device, or session risk. A
 Parish Chief's credential works identically at 03:00 from an unknown IP as at
 noon from the district office.
 
-### G5 — Scopes have no validity window
+### G5 — Scopes have no validity window *(FIXED 2026-08-09)*
 
-`OperatorScope` has `active`, `granted_at`, `granted_by`, `note` — but **no
+**Fixed.** `expires_at` added, and — more importantly — the definition of "in force now" moved onto `OperatorScope.objects.effective()`, with all 15 scope-resolution sites routed through it. Expiry bites the moment it passes; no sweep required. `create_operator --expires`, an "In force now?" admin column, and LAPSED / EXPIRING sections in `audit_operator_scopes`. Deactivating lapsed rows stays manual, with the ADR-0006 DPO sweep.
+
+Originally: `OperatorScope` had `active`, `granted_at`, `granted_by`, `note` — but **no
 `expires_at`**. A secondment, an emergency elevation or a contractor's access
 cannot be time-boxed; it is revoked only when someone remembers to flip
 `active`. ADR-0006 already flags the related question of stale scopes after a
