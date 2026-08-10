@@ -28,7 +28,9 @@ class Command(BaseCommand):
                 continue
             try:
                 module = __import__(f"{cfg.name}.api", fromlist=["api"])
-            except Exception:
+            except ModuleNotFoundError:
+                # Not every app exposes an api module. Narrow on purpose: a
+                # broken api module should surface here, not be swallowed.
                 continue
             for attr in sorted(dir(module)):
                 obj = getattr(module, attr, None)
