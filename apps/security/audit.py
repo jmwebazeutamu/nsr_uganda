@@ -19,10 +19,18 @@ def emit(
     actor: str,
     actor_kind: str = "user",
     reason: str = "",
+    purpose: str = "",
     field_changes: dict | None = None,
     ip_address: str | None = None,
     user_agent: str = "",
 ) -> AuditEvent:
+    # Fold the purpose into `reason` as well as the column. `reason` is inside
+    # the trigger's hashed payload, so this is what makes the purpose
+    # tamper-evident; the column exists to make it queryable.
+    if purpose:
+        marker = f"purpose={purpose}"
+        reason = f"{marker} {reason}".strip() if reason else marker
+
     return AuditEvent.objects.create(
         actor_id=actor,
         actor_kind=actor_kind,
@@ -30,6 +38,7 @@ def emit(
         entity_type=entity_type,
         entity_id=entity_id,
         reason=reason,
+        purpose=purpose,
         field_changes=field_changes,
         ip_address=ip_address,
         user_agent=user_agent[:255] if user_agent else "",

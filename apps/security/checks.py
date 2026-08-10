@@ -158,3 +158,58 @@ def check_every_role_has_a_group(app_configs, **kwargs):
         hint="Run `manage.py migrate security` (or `manage.py sync_roles`).",
         id="security.W001",
     )]
+
+
+@register("security")
+def check_access_purposes_are_known(app_configs, **kwargs):
+    """A viewset's `access_purpose` must be a real, ACTIVE ConsentPurpose.
+
+    Purpose limitation is only meaningful if the vocabulary is the agreed one.
+    A typo would write an audit trail attributing access to a purpose nobody
+    approved — which reads as evidence and is not.
+    """
+    from apps.security.purpose import known_purpose_codes
+
+    known = known_purpose_codes()
+    if not known:
+        # Pre-migrate, or the consent catalogue is not seeded. Fail open.
+        return []
+
+    declared: dict[str, set[str]] = {}
+    try:
+        from django.apps import apps as django_apps
+        for cfg in django_apps.get_app_configs():
+            if not cfg.name.startswith("apps."):
+                continue
+            try:
+                module = __import__(f"{cfg.name}.api", fromlist=["api"])
+            except Exception:
+                continue
+            for attr in dir(module):
+                obj = getattr(module, attr, None)
+                if not isinstance(obj, type):
+                    continue
+                codes = set()
+                one = getattr(obj, "access_purpose", None)
+                if isinstance(one, str) and one:
+                    codes.add(one)
+                many = getattr(obj, "access_purpose_map", None)
+                if isinstance(many, dict):
+                    codes |= {v for v in many.values() if v}
+                for c in codes:
+                    declared.setdefault(c, set()).add(f"{cfg.label}.{attr}")
+    except Exception:
+        return []
+
+    unknown = {c: v for c, v in declared.items() if c not in known}
+    if not unknown:
+        return []
+    return [Error(
+        "access_purpose values that are not ACTIVE ConsentPurpose codes: "
+        + "; ".join(f"{c} ({', '.join(sorted(v))})" for c, v in sorted(unknown.items()))
+        + ".",
+        hint="Purposes come from the ConsentPurpose catalogue (DEP-22). Add the "
+             "purpose there, or correct the declaration — do not start a second "
+             "vocabulary beside the consent one.",
+        id="security.E006",
+    )]

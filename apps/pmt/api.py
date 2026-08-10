@@ -42,6 +42,10 @@ class PMTModelVersionViewSet(viewsets.ReadOnlyModelViewSet):
     retrieve=extend_schema(tags=["pmt"], summary="Retrieve a PMT result"),
 )
 class PMTResultViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
+    # PMT scoring exists to determine programme eligibility.
+    # Vocabulary is the ConsentPurpose catalogue (DEP-22), not a
+    # second list of purposes beside the consent one.
+    access_purpose = "ELIGIBILITY"
     audit_entity_type = "pmt_result"
     scope_field_path = "household__sub_region_code"
     queryset = PMTResult.objects.all().order_by("-computed_at")

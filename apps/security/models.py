@@ -54,6 +54,14 @@ class AuditEvent(models.Model):
     field_changes = models.JSONField(null=True, blank=True)
     reason = models.TextField(blank=True)
 
+    # Purpose limitation (G2 / US-014). Indexed so "every access under
+    # RESEARCH" is a real query. The value is ALSO written into `reason`,
+    # which is inside the trigger's hashed payload — this column is a
+    # denormalisation for querying, `reason` is the tamper-evident record.
+    # Not added to the payload itself: that is a fixed column list, and
+    # extending it would invalidate every existing self_hash.
+    purpose = models.CharField(max_length=32, blank=True, db_index=True)
+
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.CharField(max_length=256, blank=True)
 

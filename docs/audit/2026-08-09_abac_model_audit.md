@@ -96,9 +96,22 @@ without it and passes with it.
 record-level DSA declares any. That is a silent opt-out via a free-text field
 and deserves a check on DSA activation.
 
-### G2 — No purpose limitation
+### G2 — No purpose limitation *(PARTLY FIXED 2026-08-10)*
 
-US-014 ("Restricted fields require role + purpose justification") is *Not
+**Partly fixed.** Access purpose is now recorded: surfaces declare
+`access_purpose` from the ConsentPurpose vocabulary (DEP-22, already
+DPO-agreed — the earlier note that this needed DPO input was wrong), and it
+is written into both the hashed `reason` and an indexed `AuditEvent.purpose`
+column. `security.E006` rejects unknown codes; `manage.py
+audit_access_purposes` reports coverage (4/15). Household/Member reads are
+deliberately unattributed — the core read serves several purposes at once and
+its lawful basis is not consent, so naming one code would be a fiction.
+
+**Still open:** US-014's other half — the schema-level
+mandatory/optional/restricted field flag, and restricted fields requiring a
+role + purpose justification. That needs a field-sensitivity model.
+
+Originally: US-014 ("Restricted fields require role + purpose justification") was *Not
 started*. Nothing captures **why** an operator is accessing a record, so no
 policy can condition on it and the audit trail cannot record it. Purpose is the
 attribute that distinguishes ABAC from role-scoped RBAC, and it is absent.

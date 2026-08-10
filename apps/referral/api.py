@@ -116,6 +116,10 @@ class _EnrolReq(serializers.Serializer):
     retrieve=extend_schema(tags=["ref"], summary="Retrieve a referral"),
 )
 class ReferralViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
+    # Referring a household to a programme is the REFERRAL purpose.
+    # Vocabulary is the ConsentPurpose catalogue (DEP-22), not a
+    # second list of purposes beside the consent one.
+    access_purpose = "REFERRAL"
     audit_entity_type = "referral"
     scope_field_path = "household__sub_region_code"
     queryset = Referral.objects.all().order_by("-sent_at")
@@ -193,6 +197,10 @@ class ReferralViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyMode
     list=extend_schema(tags=["ref"], summary="List programme enrolments"),
 )
 class ProgrammeEnrolmentViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
+    # Enrolment is the downstream half of a referral.
+    # Vocabulary is the ConsentPurpose catalogue (DEP-22), not a
+    # second list of purposes beside the consent one.
+    access_purpose = "REFERRAL"
     audit_entity_type = "programme_enrolment"
     scope_field_path = "household__sub_region_code"
     queryset = ProgrammeEnrolment.objects.all().order_by("-effective_date")

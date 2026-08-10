@@ -99,6 +99,10 @@ class _Close(serializers.Serializer):
     create=extend_schema(tags=["grm"], summary="Open a new grievance"),
 )
 class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
+    # Grievance handling contacts the citizen about their case.
+    # Vocabulary is the ConsentPurpose catalogue (DEP-22), not a
+    # second list of purposes beside the consent one.
+    access_purpose = "GRIEVANCE_CONTACT"
     audit_entity_type = "grievance"
     queryset = Grievance.objects.all().order_by("-opened_at")
     serializer_class = GrievanceSerializer
