@@ -1,7 +1,7 @@
 # F6 — HIGH — The audit hash chain forks under concurrent writes
 
 **Date:** 2026-08-10
-**Status:** open, not fixed
+**Status:** FIXED 2026-08-10 (ADR-0029). Existing forks deliberately left in place.
 **Found:** while re-verifying the chain after an unrelated schema change (G2).
 
 ---

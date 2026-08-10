@@ -80,6 +80,47 @@ class AuditEvent(models.Model):
         return f"{self.action} {self.entity_type}:{self.entity_id} @ {self.occurred_at}"
 
 
+class AuditChainHead(models.Model):
+    """The tail of the audit hash chain, in a row of its own (F6).
+
+    The trigger used to find the tail with `ORDER BY occurred_at DESC, id DESC
+    LIMIT 1` over the event table. Two transactions inserting at the same
+    moment both read the same tail before either committed and both linked to
+    it, forking the chain.
+
+    Locking this single row with `SELECT ... FOR UPDATE` fixes it where an
+    advisory lock could not: in READ COMMITTED a waiter on FOR UPDATE re-reads
+    the latest committed version of the row once the lock is released, whereas
+    a plain SELECT inside a trigger uses the calling statement's snapshot and
+    would still see a stale tail.
+
+    A managed model rather than a bare table so the test runner truncates it
+    together with the events. Otherwise a test that clears AuditEvent would
+    leave this row pointing at a hash that no longer exists, and the next
+    insert would chain to a dangling predecessor. The trigger also recreates
+    the row if it is missing, so truncation in either order is safe.
+
+    Never written from Python — the trigger owns it.
+    """
+
+    id = models.SmallIntegerField(primary_key=True, default=1)
+    last_hash = models.BinaryField(max_length=32, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Audit chain head"
+        verbose_name_plural = "Audit chain head"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(id=1),
+                name="audit_chain_head_singleton",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"chain head: {self.last_hash.hex() if self.last_hash else '(empty)'}"
+
+
 class ScopeLevel(models.TextChoices):
     NATIONAL = "national"
     REGION = "region"
