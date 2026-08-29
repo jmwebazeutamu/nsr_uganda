@@ -56,7 +56,7 @@ def _beneficiary_scope_q(user, *, programme_partner_field: str,
         return ~Q(pk__in=[])
 
     scopes = list(
-        OperatorScope.objects.filter(user=user, active=True)
+        OperatorScope.objects.effective().filter(user=user)
         .values_list("scope_level", "scope_code"),
     )
     if not scopes:

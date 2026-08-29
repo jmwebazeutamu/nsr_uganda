@@ -5,15 +5,22 @@ the existing Django session cookie (no CORS dance required).
 The /manual/ route mirrors the same pattern for the MkDocs-built
 user manual under /docs/user-manual/site/."""
 
+import logging
 from pathlib import Path
 
+from django.contrib.auth import views as auth_views
+from django.contrib.auth.decorators import login_required
 from django.http import FileResponse, Http404, HttpResponse
+from django.shortcuts import redirect, render
+
+logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DESIGN_DIR = REPO_ROOT / "design"
 MANUAL_DIR = REPO_ROOT / "docs" / "user-manual" / "site"
 
 
+@login_required
 def console(_request, path: str = "nsr-mis-console.html"):
     """Serve files out of /design/ under /console/{path}. Dev-only
     convenience for US-S11-013 — the same files the static HTTP
@@ -34,6 +41,7 @@ def console(_request, path: str = "nsr-mis-console.html"):
     return FileResponse(open(target, "rb"))  # noqa: SIM115
 
 
+@login_required
 def manual(_request, path: str = ""):
     """Serve the MkDocs-built user manual under /manual/{path}.
 
@@ -114,5 +122,112 @@ HOME_HTML = """<!doctype html>
 """
 
 
-def home(_request):
-    return HttpResponse(HOME_HTML)
+def home(request):
+    """Public landing page — the only unauthenticated surface.
+
+    Everything else (console, admin console, manual, API) requires a session.
+    Signed-in users get role-appropriate entry points rather than a menu of
+    places they will be refused from.
+
+    Registry figures are rendered for signed-in users ONLY. Household
+    counts and sub-region coverage are official statistics about a
+    named population; publishing them on the unauthenticated surface
+    would be an outbound disclosure decision for the DPO and a DSA, not
+    a layout choice. The anonymous page therefore stays figure-free.
+
+    The signed-in figures come from the same ABAC-scoped aggregator the
+    /api/v1/reporting/dashboards/operator-kpis/ endpoint uses, so a
+    sub-region operator sees their sub-region and a national role sees
+    the nation — the page cannot widen anyone's view.
+    """
+    from apps.admin_console.permissions import user_can_admin_console
+
+    roles_held: list[str] = []
+    can_admin = False
+    kpis = None
+    coverage: list[dict] = []
+    coverage_max = 0
+    scope_label = None
+
+    if request.user.is_authenticated:
+        roles_held = sorted(request.user.groups.values_list("name", flat=True))
+        can_admin = user_can_admin_console(request.user)
+
+        from apps.reporting.dashboard_views import (
+            compute_operator_kpis,
+            households_by_sub_region,
+        )
+        from apps.security.audit import emit as emit_audit
+        from apps.security.audit_views import _client_ip
+
+        try:
+            kpis = compute_operator_kpis(request.user)
+            coverage = households_by_sub_region(request.user)
+            coverage_max = max((r["count"] for r in coverage), default=0)
+            # Say out loud whose numbers these are. A sub-region operator
+            # reading "Households registered" must not take it for the
+            # national figure.
+            from apps.security.abac import _scoped_codes
+            codes = _scoped_codes(request.user)
+            scope_label = None if codes is None else ", ".join(sorted(codes))
+        except Exception:
+            # This route is also the sign-in gate's destination. A
+            # failing aggregate must degrade to a figure-free page
+            # rather than 500 somebody out of the system; the console
+            # dashboards surface the error properly.
+            logger.exception("landing KPIs unavailable; rendering without figures")
+            kpis = None
+            coverage = []
+        else:
+            emit_audit(
+                "dashboard_read", "rpt_dashboard", "landing_kpis",
+                actor=request.user.get_username(),
+                reason=f"households_total={kpis['households_total']}",
+                ip_address=_client_ip(request),
+                user_agent=request.META.get("HTTP_USER_AGENT", ""),
+            )
+
+    return render(request, "landing.html", {
+        "roles": roles_held,
+        "can_admin_console": can_admin,
+        "kpis": kpis,
+        "coverage": coverage,
+        "coverage_max": coverage_max,
+        "scope_label": scope_label,
+    })
+
+
+class LogoutConfirmView(auth_views.LogoutView):
+    """Sign out, with a GET that renders a confirmation instead of a 405.
+
+    Django 5 dropped GET logout, correctly: a link-prefetching browser or
+    an <img> tag could otherwise sign a user out. But the bare 405 that
+    replaces it is what a person sees whenever they bookmark /logout/ or
+    type it, which they do. So GET renders a one-button page carrying a
+    fresh CSRF token, and only POST actually ends the session.
+
+    A fresh token also happens to be the cure for the other way people
+    reach this URL in a broken state: a tab left open long enough for its
+    token to go stale, whose Sign out then fails CSRF.
+    """
+
+    http_method_names = ["get", "post", "options"]
+    template_name = "registration/logout_confirm.html"
+
+    def get(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return redirect("/")
+        return render(request, self.template_name)
+
+
+def csrf_failure(request, reason=""):
+    """Friendly CSRF failure page.
+
+    Django's default is a bare 403 that tells a district officer their
+    "Referer header" was wrong. The common cause is mundane — a page left
+    open until its token expired — so say that, and give them the link
+    that fixes it. `reason` is deliberately not echoed: it is diagnostic
+    text, and it belongs in the log rather than on the screen.
+    """
+    logger.warning("CSRF failure on %s: %s", request.path, reason)
+    return render(request, "csrf_failure.html", {"path": request.path}, status=403)

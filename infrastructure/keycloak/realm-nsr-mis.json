@@ -1,0 +1,289 @@
+{
+  "realm": "nsr-mis",
+  "displayName": "NSR MIS (development)",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "bruteForceProtected": true,
+  "failureFactor": 3,
+  "waitIncrementSeconds": 60,
+  "maxFailureWaitSeconds": 900,
+  "permanentLockout": false,
+  "roles": {
+    "realm": [
+      {
+        "name": "nsr_admin",
+        "description": "Super Admin. Scope: national. ADR-0006: SA."
+      },
+      {
+        "name": "nsr_unit_coordinator",
+        "description": "SR Coordinator. Scope: national. ADR-0006: NSR_UNIT_COORDINATOR."
+      },
+      {
+        "name": "mis_specialist",
+        "description": "MIS Specialist. Scope: national."
+      },
+      {
+        "name": "systems_architect",
+        "description": "Systems Architect. Scope: national."
+      },
+      {
+        "name": "application_developer",
+        "description": "Application Developer. Scope: national."
+      },
+      {
+        "name": "nsr_dba",
+        "description": "DBA. Scope: national."
+      },
+      {
+        "name": "EXPLORER",
+        "description": "Data Analyst. Scope: national."
+      },
+      {
+        "name": "m_and_e_officer",
+        "description": "M&E Officer. Scope: district. ADR-0006: DISTRICT_M_AND_E."
+      },
+      {
+        "name": "GRM Officer",
+        "description": "Grievance Officer. Scope: national."
+      },
+      {
+        "name": "communications_officer",
+        "description": "Communications Officer. Scope: national."
+      },
+      {
+        "name": "admin_officer",
+        "description": "Admin Officer. Scope: district."
+      },
+      {
+        "name": "programme_manager",
+        "description": "Programme Manager (external). Scope: partner. External (partner-affiliated). ADR-0006: PARTNER_ANALYST."
+      },
+      {
+        "name": "programme_caseworker",
+        "description": "Programme Caseworker (external). Scope: partner. External (partner-affiliated)."
+      },
+      {
+        "name": "parish_chief",
+        "description": "Parish Chief. Scope: parish. ADR-0006: PARISH_CHIEF."
+      },
+      {
+        "name": "cdo",
+        "description": "CDO. Scope: district. ADR-0006: CDO."
+      },
+      {
+        "name": "enumerator",
+        "description": "Enumerator. Scope: parish. ADR-0006: FIELD_ENUMERATOR."
+      },
+      {
+        "name": "supervisor",
+        "description": "Supervisor. Scope: sub_county."
+      },
+      {
+        "name": "auditor",
+        "description": "Auditor. Scope: national."
+      },
+      {
+        "name": "dpo",
+        "description": "Data Protection Officer. Scope: national. Operational role, outside the TOR's 18. ADR-0006: DPO."
+      },
+      {
+        "name": "nsr_security",
+        "description": "Security Officer. Scope: national. Operational role, outside the TOR's 18."
+      },
+      {
+        "name": "mglsd_statistics",
+        "description": "MGLSD Statistics. Scope: national. Operational role, outside the TOR's 18."
+      },
+      {
+        "name": "partner_dpo",
+        "description": "Partner DPO (external). Scope: partner. External (partner-affiliated). Operational role, outside the TOR's 18. ADR-0006: PARTNER_DPO."
+      },
+      {
+        "name": "connector:write",
+        "description": "Service accounts only. DIH connector write access."
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "nsr-mis-web",
+      "name": "NSR MIS console + admin (Django server-side OIDC client)",
+      "description": "Confidential: Django runs the code exchange and issues its own session. ADR-0006 said public+PKCE; see the runbook for why this is confidential.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "secret": "dev-only-nsr-mis-web-secret",
+      "redirectUris": [
+        "http://localhost:8004/oidc/callback/",
+        "http://localhost:8005/oidc/callback/",
+        "http://127.0.0.1:8004/oidc/callback/",
+        "http://127.0.0.1:8005/oidc/callback/",
+        "http://192.168.*/oidc/callback/"
+      ],
+      "webOrigins": [
+        "http://localhost:8004",
+        "http://localhost:8005",
+        "http://192.168.*"
+      ],
+      "protocolMappers": [
+        {
+          "name": "geographic_codes",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "geographic_codes",
+            "claim.name": "geographic_codes",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "partner_code",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "partner_code",
+            "claim.name": "partner_code",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "nsr-mis-api",
+      "name": "NSR MIS backend (service-to-service / token introspection)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "dev-only-nsr-mis-api-secret"
+    },
+    {
+      "clientId": "nsr-mis-capi",
+      "name": "CAPI tablets (public, PKCE + device flow)",
+      "description": "Device flow lets the offline tablet UI bootstrap an operator without a browser.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "oauth2.device.authorization.grant.enabled": "true"
+      },
+      "redirectUris": [
+        "http://localhost:*/*",
+        "nsrmis://oidc/callback"
+      ]
+    },
+    {
+      "clientId": "nsr-mis-connector-pdm",
+      "name": "DIH connector service account — PDM",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "dev-only-connector-pdm-secret"
+    },
+    {
+      "clientId": "nsr-mis-connector-nusaf",
+      "name": "DIH connector service account — NUSAF",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "dev-only-connector-nusaf-secret"
+    },
+    {
+      "clientId": "nsr-mis-connector-wfp",
+      "name": "DIH connector service account — WFP",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "dev-only-connector-wfp-secret"
+    },
+    {
+      "clientId": "nsr-mis-connector-nira",
+      "name": "DIH connector service account — NIRA (reverse push)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "dev-only-connector-nira-secret"
+    }
+  ],
+  "users": [
+    {
+      "username": "dev-coordinator",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "dev-coordinator@example.invalid",
+      "firstName": "Dev",
+      "lastName": "Coordinator",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "nsr_unit_coordinator"
+      ],
+      "attributes": {
+        "geographic_codes": [
+          "national:"
+        ]
+      }
+    },
+    {
+      "username": "dev-parish-chief",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "dev-parish-chief@example.invalid",
+      "firstName": "Dev",
+      "lastName": "ParishChief",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "parish_chief"
+      ],
+      "attributes": {
+        "geographic_codes": [
+          "parish:A-P"
+        ]
+      }
+    }
+  ]
+}

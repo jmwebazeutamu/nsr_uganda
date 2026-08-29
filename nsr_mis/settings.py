@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.humanize",
     "rest_framework",
     "drf_spectacular",
     # NSR functional modules
@@ -147,10 +148,17 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = "nsr_mis.urls"
 
+# Django's stock CSRF page tells a district officer their "Referer header"
+# was wrong. The usual cause is a page left open until its token expired,
+# so say that instead and give them the way back.
+CSRF_FAILURE_VIEW = "nsr_mis.views.csrf_failure"
+
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        # Project-level templates (landing page, sign-in). App templates
+        # still resolve via APP_DIRS.
+        "DIRS": [BASE_DIR / "nsr_mis" / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -209,6 +217,32 @@ STATIC_ROOT = env("STATIC_ROOT", default=str(BASE_DIR / "staticfiles"))
 MEDIA_URL = "media/"
 MEDIA_ROOT = env("MEDIA_ROOT", default=str(BASE_DIR / "media"))
 
+# UPD evidence arrives as base64 INSIDE the JSON body, so it is bounded by
+# DATA_UPLOAD_MAX_MEMORY_SIZE (non-file POST data) rather than
+# FILE_UPLOAD_MAX_MEMORY_SIZE (multipart). Django's 2.5 MB default is smaller
+# than a single permitted document once encoded — apps.update_workflow
+# .evidence_storage allows 5 MiB per file, which is ~6.7 MiB on the wire — so
+# Django raised RequestDataTooBig out of request.body before DRF ever parsed.
+# The endpoint's own "max per file" / "max total" guards were therefore
+# unreachable and their 400s unreturnable, in production as well as in tests.
+#
+# Sized for the largest body the serializer will accept before its own
+# validation rejects it: MAX_FILES (3) x the per-document data_base64 field
+# cap (8 MiB) = 24 MiB, plus room for the surrounding JSON. Anything above
+# this is still refused by Django, which is the intended backstop.
+#
+# update_workflow.E001 (apps/update_workflow/checks.py) fails `manage.py
+# check` if this drifts below what the evidence caps need.
+# Publish /api/schema/ and /api/docs/ without authentication. Defaults to
+# DEBUG, so local dev keeps the browsable spec while any deployed host
+# requires a login. Turning this on in production is a deliberate choice
+# (partner developer portal) and should be recorded in the threat model.
+NSR_PUBLIC_API_DOCS = env.bool("NSR_PUBLIC_API_DOCS", default=DEBUG)
+
+DATA_UPLOAD_MAX_MEMORY_SIZE = env.int(
+    "DATA_UPLOAD_MAX_MEMORY_SIZE", default=25 * 1024 * 1024,
+)
+
 # WhiteNoise compressed+hashed manifest storage — opt-in via env so the
 # test suite (which never runs collectstatic, so has no manifest) keeps
 # the default storage. The prod image sets NSR_WHITENOISE=True; its
@@ -224,6 +258,19 @@ if env.bool("NSR_WHITENOISE", default=False):
             "BACKEND": "whitenoise.storage.CompressedStaticFilesStorage",
         },
     }
+
+# Auth routing. Unauthenticated access to any resource lands on the
+# branded sign-in page rather than Django admin's.
+LOGIN_URL = "/login/"
+LOGIN_REDIRECT_URL = "/"
+LOGOUT_REDIRECT_URL = "/"
+
+# Enforce the eight TOR data permissions (ADR-0028) at the API layer.
+# Superusers always pass. Turn off only to debug an authorisation
+# problem — never in a deployed environment.
+NSR_ENFORCE_DATA_PERMISSIONS = env.bool(
+    "NSR_ENFORCE_DATA_PERMISSIONS", default=True,
+)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -255,6 +302,10 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
+        # Whether you are anybody (IsAuthenticated), then what kind of
+        # action your role may take (ADR-0028). ABAC still decides which
+        # rows you see.
+        "apps.security.permissions.HasDataPermission",
     ),
     # Lists return {count, next, previous, results}. DefaultPagination
     # honours `?page_size=` up to MAX_PAGE_SIZE (500) per ADR-0008.

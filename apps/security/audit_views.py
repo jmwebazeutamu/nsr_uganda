@@ -97,6 +97,8 @@ class AuditReadMixin:
             getattr(user, "username", "") or "anonymous"
             if user is not None else "anonymous"
         )
+        from apps.security.purpose import resolve_purpose
+
         emit(
             action=action,
             entity_type=self.audit_entity_type or getattr(self, "basename", "unknown"),
@@ -104,6 +106,9 @@ class AuditReadMixin:
             actor=actor,
             actor_kind="user",
             reason=_build_reason(request),
+            # Why this record was read. Declared by the viewset via
+            # access_purpose / access_purpose_map; "" when undeclared.
+            purpose=resolve_purpose(request, self),
             ip_address=_client_ip(request),
             user_agent=request.META.get("HTTP_USER_AGENT", ""),
         )

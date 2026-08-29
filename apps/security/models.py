@@ -54,6 +54,14 @@ class AuditEvent(models.Model):
     field_changes = models.JSONField(null=True, blank=True)
     reason = models.TextField(blank=True)
 
+    # Purpose limitation (G2 / US-014). Indexed so "every access under
+    # RESEARCH" is a real query. The value is ALSO written into `reason`,
+    # which is inside the trigger's hashed payload — this column is a
+    # denormalisation for querying, `reason` is the tamper-evident record.
+    # Not added to the payload itself: that is a fixed column list, and
+    # extending it would invalidate every existing self_hash.
+    purpose = models.CharField(max_length=32, blank=True, db_index=True)
+
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.CharField(max_length=256, blank=True)
 
@@ -72,6 +80,47 @@ class AuditEvent(models.Model):
         return f"{self.action} {self.entity_type}:{self.entity_id} @ {self.occurred_at}"
 
 
+class AuditChainHead(models.Model):
+    """The tail of the audit hash chain, in a row of its own (F6).
+
+    The trigger used to find the tail with `ORDER BY occurred_at DESC, id DESC
+    LIMIT 1` over the event table. Two transactions inserting at the same
+    moment both read the same tail before either committed and both linked to
+    it, forking the chain.
+
+    Locking this single row with `SELECT ... FOR UPDATE` fixes it where an
+    advisory lock could not: in READ COMMITTED a waiter on FOR UPDATE re-reads
+    the latest committed version of the row once the lock is released, whereas
+    a plain SELECT inside a trigger uses the calling statement's snapshot and
+    would still see a stale tail.
+
+    A managed model rather than a bare table so the test runner truncates it
+    together with the events. Otherwise a test that clears AuditEvent would
+    leave this row pointing at a hash that no longer exists, and the next
+    insert would chain to a dangling predecessor. The trigger also recreates
+    the row if it is missing, so truncation in either order is safe.
+
+    Never written from Python — the trigger owns it.
+    """
+
+    id = models.SmallIntegerField(primary_key=True, default=1)
+    last_hash = models.BinaryField(max_length=32, null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Audit chain head"
+        verbose_name_plural = "Audit chain head"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(id=1),
+                name="audit_chain_head_singleton",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"chain head: {self.last_hash.hex() if self.last_hash else '(empty)'}"
+
+
 class ScopeLevel(models.TextChoices):
     NATIONAL = "national"
     REGION = "region"
@@ -83,6 +132,28 @@ class ScopeLevel(models.TextChoices):
     # Non-geographic — a partner-affiliated user who sees DataRequests
     # under DSAs belonging to their Partner (scope_code = Partner.code).
     PARTNER = "partner"
+
+
+class OperatorScopeQuerySet(models.QuerySet):
+    """`effective()` is the single definition of "this scope is in force now".
+
+    Every authorisation path must go through it. Eight call sites used to
+    filter `active=True` by hand; adding expiry to a model without moving the
+    predicate here would have left a field that looks like a control and is not
+    enforced — worse than not having it.
+    """
+
+    def effective(self, at=None):
+        from django.utils import timezone
+        now = at or timezone.now()
+        return self.filter(active=True).filter(
+            models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=now),
+        )
+
+    def expired(self, at=None):
+        from django.utils import timezone
+        now = at or timezone.now()
+        return self.filter(expires_at__isnull=False, expires_at__lte=now)
 
 
 class OperatorScope(models.Model):
@@ -107,9 +178,19 @@ class OperatorScope(models.Model):
     scope_level = models.CharField(max_length=16, choices=ScopeLevel.choices)
     scope_code = models.CharField(max_length=64, blank=True)  # empty for 'national'
     active = models.BooleanField(default=True)
+    # Validity window (G5). NULL means open-ended, which is the norm for a
+    # substantive posting; a date is for secondments, contractors and
+    # emergency elevations. Expiry takes effect the moment it passes —
+    # `effective()` filters on it — so it does not depend on a sweep running.
+    expires_at = models.DateTimeField(
+        null=True, blank=True, db_index=True,
+        help_text="After this moment the scope grants nothing. Blank = open-ended.",
+    )
     granted_at = models.DateTimeField(auto_now_add=True)
     granted_by = models.CharField(max_length=64, blank=True)
     note = models.TextField(blank=True)
+
+    objects = OperatorScopeQuerySet.as_manager()
 
     class Meta:
         verbose_name = "Operator scope"
@@ -125,3 +206,39 @@ class OperatorScope(models.Model):
 
     def __str__(self) -> str:
         return f"{self.user_id}/{self.scope_level}={self.scope_code or '*'}"
+
+
+class AccessPolicy(models.Model):
+    """Anchor for the eight cross-cutting TOR permissions (US-063).
+
+    Django permissions must hang off a model, but "Data Approval" is not a
+    property of any one table — it is an action class that spans DAT, UPD,
+    DDUP and DIH. Rather than scatter eight near-duplicate permissions across
+    every model, they are declared once here and checked as
+    `user.has_perm("security.data_approve")`.
+
+    The table stays empty on purpose; the model exists so the permissions have
+    a ContentType. `default_permissions = ()` suppresses Django's usual
+    add/change/delete/view quartet, which would be meaningless for it.
+
+    The role -> permission matrix lives in apps.security.roles.
+    """
+
+    class Meta:
+        managed = True
+        default_permissions = ()
+        verbose_name = "Access policy"
+        verbose_name_plural = "Access policies"
+        permissions = [
+            ("data_view", "Data View — read personal data within scope"),
+            ("data_entry", "Data Entry — create new records"),
+            ("data_modify", "Data Modifier — amend existing records"),
+            ("data_delete", "Data Deletion — soft-delete records"),
+            ("data_approve", "Data Approval — approve a change raised by someone else"),
+            ("data_export", "Data Export — generate an extract"),
+            ("data_download", "Data Download — retrieve a generated extract"),
+            ("data_upload", "Data Upload — bulk-import a dataset"),
+        ]
+
+    def __str__(self) -> str:  # pragma: no cover - never instantiated
+        return "access-policy"

@@ -743,13 +743,18 @@ class TestBulkActions:
         a.refresh_from_db()
         assert a.status == ChangeStatus.REJECTED
 
-    def test_bulk_skips_self_approve(self, db, member, api_client):
-        """A row whose requester == actor must NOT be approved by the
-        same actor; it lands in `skipped`."""
-        a = self._submitted(member, requester="self")
+    def test_bulk_skips_self_approve(self, db, member, api_client, staff_user):
+        """A row raised by the logged-in operator must NOT be approved by
+        that same operator; it lands in `skipped`.
+
+        The actor is the authenticated user — it is no longer accepted from
+        the request body, so self-approval cannot be dodged by naming
+        somebody else (see apps.security.actor).
+        """
+        a = self._submitted(member, requester=staff_user.username)
         b = self._submitted(member, requester="someone-else")
         r = api_client.post("/api/v1/upd/change-requests/bulk-approve/",
-                             data={"ids": [a.id, b.id], "actor": "self"},
+                             data={"ids": [a.id, b.id]},
                              format="json")
         assert r.status_code == 200
         # 'b' acted (different requester), 'a' skipped (self-approve).
@@ -850,11 +855,11 @@ class TestHoldReleaseEndpoints:
         )
         assert r.status_code == 400
 
-    def test_hold_endpoint_400_on_self(self, db, member, api_client):
-        req = self._submitted(member, requester="self-actor")
+    def test_hold_endpoint_400_on_self(self, db, member, api_client, staff_user):
+        req = self._submitted(member, requester=staff_user.username)
         r = api_client.post(
             f"/api/v1/upd/change-requests/{req.id}/hold/",
-            data={"actor": "self-actor", "reason": "x"},
+            data={"reason": "x"},
             format="json",
         )
         assert r.status_code == 400
@@ -1215,6 +1220,56 @@ class TestBundleEndpoint:
                              data=payload, format="json")
         assert r.status_code == 400
         assert "max per file" in str(r.data).lower()
+
+    def test_documents_accept_largest_permitted_file(self, household, api_client):
+        """The biggest document evidence_storage allows must actually get in.
+
+        Regression for the DATA_UPLOAD_MAX_MEMORY_SIZE mismatch: at Django's
+        2.5 MB default this raised RequestDataTooBig out of request.body, so
+        a document the API explicitly permits could never be uploaded — and
+        the sibling oversized-file test only passed because it happened to
+        trip Django's guard instead of our own validator.
+        """
+        import base64
+
+        from apps.update_workflow.evidence_storage import MAX_FILE_BYTES
+
+        body = b"%PDF-1.4" + b"x" * (MAX_FILE_BYTES - 8)
+        assert len(body) == MAX_FILE_BYTES
+        payload = self._payload(
+            household,
+            documents=[{
+                "filename": "at-the-limit.pdf",
+                "content_type": "application/pdf",
+                "data_base64": base64.b64encode(body).decode("ascii"),
+            }],
+        )
+        r = api_client.post("/api/v1/upd/change-requests/bundle/",
+                             data=payload, format="json")
+        assert r.status_code == 201, r.data
+        cr = ChangeRequest.objects.get(pk=r.data["cr_id"])
+        doc_row = next(e for e in cr.evidence if e["kind"] == "document")
+        assert doc_row["size"] == MAX_FILE_BYTES
+
+    def test_upload_ceiling_system_check(self):
+        """update_workflow.E001 must fire when the Django ceiling drops below
+        what the evidence caps need, and stay quiet otherwise."""
+        from django.test import override_settings
+
+        from apps.update_workflow.checks import evidence_upload_ceiling_check
+
+        # Django's default — the value that caused the original bug.
+        with override_settings(DATA_UPLOAD_MAX_MEMORY_SIZE=2621440):
+            errors = evidence_upload_ceiling_check(None)
+        assert [e.id for e in errors] == ["update_workflow.E001"]
+        assert "base64" in errors[0].msg
+
+        # The configured value must satisfy it.
+        assert evidence_upload_ceiling_check(None) == []
+
+        # No limit configured is not a blocking misconfiguration.
+        with override_settings(DATA_UPLOAD_MAX_MEMORY_SIZE=None):
+            assert evidence_upload_ceiling_check(None) == []
 
     def test_documents_reject_more_than_three(self, household, api_client):
         import base64

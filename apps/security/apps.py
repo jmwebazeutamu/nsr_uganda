@@ -8,5 +8,6 @@ class SecurityConfig(AppConfig):
     verbose_name = "Security (SEC)"
 
     def ready(self) -> None:
-        # Register production-secret system checks.
-        from . import checks  # noqa: F401
+        # Register production-secret system checks, and the m2m hook that
+        # applies a role default scope when the role is granted (G7).
+        from . import checks, signals  # noqa: F401

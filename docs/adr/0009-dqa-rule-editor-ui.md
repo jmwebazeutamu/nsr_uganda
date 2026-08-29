@@ -1,4 +1,10 @@
-# ADR-0009: DQA Rule Editor admin UI + write surface
+# ADR-0009-dqa: DQA Rule Editor admin UI + write surface
+
+> Numbered `0009-dqa`, not `0009`. ADR-0009 proper is
+> [Admin and console UI strategy](0009-admin-and-console-ui-strategy.md); this ADR was
+> authored against the same number. The user manual already cites the two as `ADR-0009`
+> and `ADR-0009-dqa`, and every bare `ADR-0009` reference in the tree means the UI
+> strategy, so the suffix is adopted here rather than renumbering.
 
 - **Status**: Accepted
 - **Date**: 2026-05-15

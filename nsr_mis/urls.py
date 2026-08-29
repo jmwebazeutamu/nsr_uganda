@@ -1,10 +1,12 @@
+from django.conf import settings
 from django.contrib import admin
+from django.contrib.auth import views as auth_views
 from django.http import HttpResponse
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 
-from .views import console, home, manual
+from .views import LogoutConfirmView, console, home, manual
 
 
 def healthz(_request):
@@ -12,14 +14,37 @@ def healthz(_request):
     and the reverse proxy; intentionally cheap so it stays green under load."""
     return HttpResponse("ok", content_type="text/plain")
 
-# OpenAPI schema + Swagger UI stay browsable without login (developer
-# convenience). Every other DRF endpoint requires IsAuthenticated per
-# the global DEFAULT_PERMISSION_CLASSES in settings.py.
-schema_view = SpectacularAPIView.as_view(permission_classes=[AllowAny])
-swagger_view = SpectacularSwaggerView.as_view(url_name="schema", permission_classes=[AllowAny])
+# OpenAPI schema + Swagger UI.
+#
+# These were unconditionally AllowAny for developer convenience, which on a
+# deployed host published the complete API surface of the registry to anyone:
+# 259 paths, ~375 KB, including the nin / nin_value / date_of_birth / surname
+# / gps_lat / gps_lng field names. The endpoints themselves were still
+# authenticated, so this was disclosure rather than a breach — but it removed
+# all reconnaissance cost against a system holding household PII, and the
+# threat model never recorded it as an accepted risk.
+#
+# Default is now: browsable in DEBUG (local dev), authenticated otherwise.
+# Set NSR_PUBLIC_API_DOCS=True to deliberately publish them — e.g. a partner
+# developer portal — so that exposure is an explicit, reviewable decision
+# rather than a default nobody chose.
+_PUBLIC_API_DOCS = settings.NSR_PUBLIC_API_DOCS
+_docs_permissions = [AllowAny] if _PUBLIC_API_DOCS else [IsAuthenticated]
+
+schema_view = SpectacularAPIView.as_view(permission_classes=_docs_permissions)
+swagger_view = SpectacularSwaggerView.as_view(
+    url_name="schema", permission_classes=_docs_permissions,
+)
 
 urlpatterns = [
     path("healthz", healthz, name="healthz"),
+    # Branded sign-in. LOGIN_URL points here, so @login_required and
+    # the DRF session flow both land on the same page.
+    path("login/", auth_views.LoginView.as_view(
+        template_name="registration/login.html",
+        redirect_authenticated_user=True,
+    ), name="login"),
+    path("logout/", LogoutConfirmView.as_view(), name="logout"),
     path("", home, name="home"),
     path("admin/", admin.site.urls),
     # React design harness served same-origin so fetch() inherits the

@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.security.abac import ChangeRequestScopedQuerysetMixin
+from apps.security.actor import actor_from_request
 from apps.security.audit_views import AuditReadMixin
 from apps.security.models import AuditEvent
 
@@ -408,7 +409,11 @@ class CurrentValuesView(APIView):
 
 
 class _ActorReason(serializers.Serializer):
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     reason = serializers.CharField(required=False, allow_blank=True)
 
 
@@ -424,7 +429,11 @@ class _BulkRequest(serializers.Serializer):
         child=serializers.CharField(max_length=26, min_length=26),
         min_length=1, max_length=200,
     )
-    actor = serializers.CharField(max_length=64)
+    actor = serializers.CharField(
+        max_length=64,
+        required=False,
+        help_text="Ignored - the acting user comes from the authenticated session.",
+    )
     reason = serializers.CharField(required=False, allow_blank=True)
 
 
@@ -688,7 +697,7 @@ class ChangeRequestViewSet(
         ser.is_valid(raise_exception=True)
         req = self.get_object()
         try:
-            commit_change_request(req, approver=ser.validated_data["actor"])
+            commit_change_request(req, approver=actor_from_request(request))
         except UpdError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         req.refresh_from_db()
@@ -707,7 +716,7 @@ class ChangeRequestViewSet(
         reason = ser.validated_data.get("reason", "")
         req = self.get_object()
         try:
-            reject_change_request(req, approver=ser.validated_data["actor"], reason=reason)
+            reject_change_request(req, approver=actor_from_request(request), reason=reason)
         except UpdError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         req.refresh_from_db()
@@ -728,7 +737,7 @@ class ChangeRequestViewSet(
         reason = ser.validated_data.get("reason", "")
         req = self.get_object()
         try:
-            hold_change_request(req, approver=ser.validated_data["actor"], reason=reason)
+            hold_change_request(req, approver=actor_from_request(request), reason=reason)
         except UpdError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         req.refresh_from_db()
@@ -747,7 +756,7 @@ class ChangeRequestViewSet(
         reason = ser.validated_data.get("reason", "")
         req = self.get_object()
         try:
-            release_change_request(req, approver=ser.validated_data["actor"], reason=reason)
+            release_change_request(req, approver=actor_from_request(request), reason=reason)
         except UpdError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         req.refresh_from_db()
@@ -905,7 +914,7 @@ class ChangeRequestViewSet(
         """Shared dispatcher for the three bulk endpoints."""
         ser = _BulkRequest(data=request.data)
         ser.is_valid(raise_exception=True)
-        actor = ser.validated_data["actor"]
+        actor = actor_from_request(request)
         reason = ser.validated_data.get("reason", "")
         if requires_reason and not reason:
             return Response(

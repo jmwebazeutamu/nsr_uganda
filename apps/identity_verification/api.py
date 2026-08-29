@@ -23,6 +23,12 @@ class NiraVerifyRequestSerializer(serializers.Serializer):
 
 
 class NiraMockVerifyView(APIView):
+    # POST, but semantically a read: it asks NIRA whether a NIN matches.
+    # Inheriting Data Entry from the method would demand a capture role of
+    # anyone merely verifying an identity, and reads are not action-gated
+    # (IsAuthenticated plus ABAC already bound them). Explicit None = abstain.
+    data_permission = None
+
     """Sandbox-only; refuses to serve when DEBUG is False."""
 
     @extend_schema(

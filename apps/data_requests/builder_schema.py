@@ -446,8 +446,8 @@ def _active_partner_dsa(user) -> DataSharingAgreement | None:
         return None
     from apps.security.models import OperatorScope, ScopeLevel
     partner_codes = list(
-        OperatorScope.objects.filter(
-            user=user, active=True, scope_level=ScopeLevel.PARTNER,
+        OperatorScope.objects.effective().filter(
+            user=user, scope_level=ScopeLevel.PARTNER,
         ).exclude(scope_code="").values_list("scope_code", flat=True),
     )
     if not partner_codes:
@@ -476,8 +476,8 @@ def _available_dsas_for_user(user) -> list[DataSharingAgreement]:
     qs = DataSharingAgreement.objects.filter(status="active").select_related("partner")
     from apps.security.models import OperatorScope, ScopeLevel
     partner_codes = list(
-        OperatorScope.objects.filter(
-            user=user, active=True, scope_level=ScopeLevel.PARTNER,
+        OperatorScope.objects.effective().filter(
+            user=user, scope_level=ScopeLevel.PARTNER,
         ).exclude(scope_code="").values_list("scope_code", flat=True),
     )
     if partner_codes:
