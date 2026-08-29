@@ -1,0 +1,20 @@
+"""URLconf for the public site process.
+
+The public zone routes the public landing page and its static assets and
+nothing else. No console, no admin, no /api/. Spec LP-O-10 recommends the
+public site sit in a network zone with no route to the registry network;
+this is the application-level half of that guarantee, and
+tests/contract/test_public_site.py asserts it.
+
+Run it with:
+    ROOT_URLCONF=nsr_mis.urls_public python manage.py runserver 0.0.0.0:8020
+"""
+
+from django.urls import path
+
+from apps.reporting.public_views import public_landing
+
+urlpatterns = [
+    path("", public_landing, name="public-landing"),
+    path("public-site/01_landing_page_mockup.html", public_landing),
+]

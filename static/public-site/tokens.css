@@ -1,0 +1,181 @@
+/* ============================================================
+   NSR MIS — Design Tokens (v0.1)
+   Source: NSR_MIS_UI_Design_Brief.md §4
+   Place at: /design/v0.1/tokens.css
+   Imported by every operator console screen and every CAPI page.
+   Do not hard-code any colour, font, or spacing outside this file.
+   ============================================================ */
+
+:root {
+  /* ----- Primary brand ----- */
+  --primary-900: #1F3864;   /* Headings, primary nav background, primary button */
+  --primary-700: #2E74B5;   /* Secondary headings, INT module accent */
+  --primary-100: #F1F6FC;   /* Primary surface tint, INT module backgrounds */
+
+  /* ----- Module accents (match SAD and ERD) ----- */
+  --accent-data:        #2E7D32;   /* DAT — Data Management */
+  --accent-data-bg:     #E8F4EA;
+  --accent-quality:     #B8741A;   /* DAT-DQA — Data Quality */
+  --accent-quality-bg:  #FFF5E6;
+  --accent-danger:      #A93226;   /* DAT-DDUP — Deduplication, errors */
+  --accent-danger-bg:   #FFF0F0;
+  --accent-identity:    #6A1B9A;   /* IDV — NIRA identity verification */
+  --accent-identity-bg: #F0E8F7;
+  --accent-update:      #1565C0;   /* UPD — Update workflow */
+  --accent-update-bg:   #E8F1FA;
+  --accent-eligibility: #8B6914;   /* PMT — Proxy Means Test */
+  --accent-eligibility-bg: #FFF8DC;
+  --accent-programme:   #0277BD;   /* REF — Programme referral and enrolment */
+  --accent-programme-bg: #E8F4F8;
+  --accent-grm:         #D84315;   /* GRM — Grievance redress */
+  --accent-grm-bg:      #FFEFE0;
+  --accent-reference:   #4527A0;   /* REF-DATA */
+  --accent-reference-bg: #EDE7F6;
+  --accent-system:      #37474F;   /* API / SEC / RPT */
+  --accent-system-bg:   #F0F4F8;
+
+  /* ----- Neutrals ----- */
+  --neutral-900: #212121;
+  --neutral-700: #444444;
+  --neutral-500: #666666;
+  --neutral-300: #BFBFBF;
+  --neutral-100: #F5F5F5;
+  --neutral-0:   #FFFFFF;
+
+  /* ----- Typography ----- */
+  --font-primary: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-document: 'Calibri', sans-serif;
+  --font-mobile: 'Roboto', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --fs-display: 32px;
+  --lh-display: 40px;
+  --fs-h1: 24px; --lh-h1: 32px;
+  --fs-h2: 20px; --lh-h2: 28px;
+  --fs-h3: 16px; --lh-h3: 24px;
+  --fs-body: 14px; --lh-body: 20px;
+  --fs-body-sm: 13px; --lh-body-sm: 18px;
+  --fs-caption: 12px; --lh-caption: 16px;
+  --fs-mono: 13px; --lh-mono: 18px;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* ----- Spacing (4-point base) ----- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+  --space-10: 64px;
+
+  /* ----- Shape ----- */
+  --radius-tag: 2px;
+  --radius-default: 4px;
+  --radius-card: 8px;
+
+  /* ----- Elevation ----- */
+  --shadow-card: 0 1px 2px rgba(0,0,0,0.04), 0 0 0 1px var(--neutral-300);
+
+  /* ----- Layout ----- */
+  --layout-rail-collapsed: 64px;
+  --layout-rail-expanded: 240px;
+  --layout-topbar: 56px;
+  --layout-content-max: 1440px;
+  --layout-audit-panel: 360px;
+
+  /* ----- Focus ring ----- */
+  --focus-ring: 2px solid var(--primary-700);
+  --focus-offset: 2px;
+}
+
+/* ============================================================
+   Status badge utilities
+   Background and foreground per Section 8 of the brief.
+   ============================================================ */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+  line-height: 1;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+
+/* Registry ID lifecycle */
+.chip--provisional { color: var(--accent-update);      background: var(--accent-update-bg); }
+.chip--pending     { color: var(--accent-quality);     background: var(--accent-quality-bg); }
+.chip--registered  { color: var(--accent-data);        background: var(--accent-data-bg); }
+.chip--rejected    { color: var(--accent-danger);      background: var(--accent-danger-bg); }
+.chip--voided      { color: var(--neutral-700);        background: var(--neutral-100); }
+
+/* DQA severity */
+.chip--blocking { color: var(--accent-danger);  background: var(--accent-danger-bg); }
+.chip--warning  { color: var(--accent-quality); background: var(--accent-quality-bg); }
+.chip--info     { color: var(--accent-system);  background: var(--accent-system-bg); }
+
+/* DRS sensitivity */
+.chip--public    { color: var(--accent-system);      background: var(--accent-system-bg); }
+.chip--internal  { color: var(--accent-programme);   background: var(--accent-programme-bg); }
+.chip--personal  { color: var(--accent-eligibility); background: var(--accent-eligibility-bg); }
+.chip--sensitive { color: var(--accent-danger);      background: var(--accent-danger-bg); }
+.chip--sensitive::before { content: "🔒"; font-size: 10px; }
+
+/* Module identification */
+.chip--int { color: var(--primary-700);        background: var(--primary-100); }
+.chip--dat { color: var(--accent-data);        background: var(--accent-data-bg); }
+.chip--dqa { color: var(--accent-quality);     background: var(--accent-quality-bg); }
+.chip--ddup { color: var(--accent-danger);     background: var(--accent-danger-bg); }
+.chip--idv { color: var(--accent-identity);    background: var(--accent-identity-bg); }
+.chip--upd { color: var(--accent-update);      background: var(--accent-update-bg); }
+.chip--pmt { color: var(--accent-eligibility); background: var(--accent-eligibility-bg); }
+.chip--ref { color: var(--accent-programme);   background: var(--accent-programme-bg); }
+.chip--grm { color: var(--accent-grm);         background: var(--accent-grm-bg); }
+.chip--api { color: var(--accent-system);      background: var(--accent-system-bg); }
+.chip--sec { color: var(--neutral-900);        background: var(--neutral-100); }
+.chip--dih { color: var(--accent-system);      background: var(--accent-system-bg); }
+
+/* ============================================================
+   Base typography defaults
+   ============================================================ */
+
+body {
+  font-family: var(--font-primary);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  color: var(--neutral-900);
+  background: var(--neutral-0);
+}
+
+h1 { font-size: var(--fs-h1); line-height: var(--lh-h1); font-weight: var(--fw-bold); color: var(--primary-900); }
+h2 { font-size: var(--fs-h2); line-height: var(--lh-h2); font-weight: var(--fw-semibold); color: var(--primary-900); }
+h3 { font-size: var(--fs-h3); line-height: var(--lh-h3); font-weight: var(--fw-semibold); color: var(--neutral-900); }
+
+code, pre, .mono { font-family: var(--font-mono); font-size: var(--fs-mono); line-height: var(--lh-mono); }
+
+/* Focus styles */
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

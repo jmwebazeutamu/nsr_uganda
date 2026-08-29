@@ -146,7 +146,12 @@ MIDDLEWARE = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-ROOT_URLCONF = "nsr_mis.urls"
+# The public site runs as its own process with ROOT_URLCONF pointed at
+# nsr_mis.urls_public, which routes the public page and nothing else — no
+# console, no API, no admin. Spec LP-O-10 recommends the public site sit
+# in a network zone with no route to the registry; a separate URLconf is
+# the application-level half of that, and is testable.
+ROOT_URLCONF = env("ROOT_URLCONF", default="nsr_mis.urls")
 
 # Django's stock CSRF page tells a district officer their "Referer header"
 # was wrong. The usual cause is a page left open until its token expired,
@@ -209,6 +214,24 @@ STATIC_URL = "static/"
 # collectstatic into this dir on a shared volume; Caddy serves /static/*
 # from it. Overridable via env for non-container deploys.
 STATIC_ROOT = env("STATIC_ROOT", default=str(BASE_DIR / "staticfiles"))
+
+# Project-level static source: the public site's tokens and self-hosted
+# Inter face. Self-hosted rather than a CDN per spec §12, and because a
+# Google-hosted face would disclose every citizen visitor's IP to a third
+# party — avoidable processing under the DPPA 2019.
+STATICFILES_DIRS = [BASE_DIR / "static"]
+
+# --- Public site -------------------------------------------------------
+# LP-O-06: the DPO has not signed off the §8.3 disclosure floor. Until
+# they do, the public page renders its placeholder slots rather than real
+# registry figures. Turning this on is a data-protection decision, not a
+# deployment convenience.
+NSR_PUBLIC_STATS_LIVE = env.bool("NSR_PUBLIC_STATS_LIVE", default=False)
+
+# Where the public site's "Staff sign in" link points. The public zone is
+# a separate origin from the operator MIS, so this is absolute in any
+# real deployment.
+NSR_STAFF_SIGNIN_URL = env("NSR_STAFF_SIGNIN_URL", default="/login/")
 
 # Media (UPD evidence, consent evidence, DRS bundles default to file
 # storage). NOT publicly served — these are sensitive and reached only
