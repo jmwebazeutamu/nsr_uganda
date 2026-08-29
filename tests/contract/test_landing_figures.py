@@ -16,11 +16,10 @@ cosmetics:
 from datetime import date
 
 import pytest
-from django.contrib.auth.models import Group
-
 from apps.data_management.models import Household
 from apps.reference_data.models import GeographicUnit
 from apps.security.models import AuditEvent, OperatorScope, ScopeLevel
+from django.contrib.auth.models import Group
 
 
 @pytest.fixture
