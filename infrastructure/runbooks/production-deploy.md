@@ -61,6 +61,55 @@ manual *Run workflow*): builds `linux/amd64`, pushes to GHCR, SSHes in to
 `docker compose pull && up -d`. Repo secrets: `DEPLOY_SSH_KEY`,
 `DEPLOY_HOST`, `DEPLOY_USER`. Watch: `gh run watch` / the Actions tab.
 
+## Public site (`public` container)
+
+The public site runs as a **separate container from the same image**, with
+`ROOT_URLCONF=nsr_mis.urls_public`, published on `127.0.0.1:8006`. That
+URLconf carries the landing page and `/healthz` and nothing else — no
+console, no admin, no `/api/`, no `/login/`. Spec LP-O-10 wants the public
+site in a zone with no route to the registry; on a single shared box the
+strongest available form of that is a process in which those routes do not
+exist. `tests/contract/test_public_site.py` asserts they 404.
+
+**It is deliberately not reachable from the internet yet.** CD brings the
+container up (`up -d --remove-orphans` picks up the new service), but
+nothing proxies to 8006 until someone installs the vhost and points DNS.
+That is the intended posture: the container can be running and verified
+while the site stays dark.
+
+Before it goes public, three things must close:
+
+| | |
+|---|---|
+| LP-O-01 / LP-O-02 | Does this replace `nsr.mglsd.go.ug` or run beside it? The hostname in `nsr-public.conf` is a placeholder until this is answered. Do not point a `.go.ug` name at it first. |
+| LP-O-06 | The DPO signs off the §8.3 disclosure floor. Until then `NSR_PUBLIC_STATS_LIVE` stays `False` and the page renders placeholder slots. |
+| Copy | The spec is a draft. The page still carries ~59 `{{slot}}` placeholders awaiting approved MGLSD wording. |
+
+Verify the container without exposing it:
+
+```bash
+docker compose -f compose.prod.yml ps public
+curl -fsS http://127.0.0.1:8006/healthz          # -> ok
+curl -s http://127.0.0.1:8006/ | head -40        # the landing page
+# the zone must NOT route the registry:
+for p in console admin api/v1/data-management/households login; do
+  printf '%s -> %s\n' "$p" "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8006/$p/)"
+done                                             # all 404
+```
+
+Expose it, once the three rows above are closed:
+
+```bash
+sudo cp infrastructure/apache/nsr-public.conf /etc/apache2/sites-available/
+sudo a2ensite nsr-public && sudo apache2ctl configtest && sudo systemctl reload apache2
+sudo certbot --apache -d <the agreed hostname>
+# then add RequestHeader set X-Forwarded-Proto "https" to the -le-ssl.conf
+```
+
+Turning figures on is a separate, deliberate act with an owner — set
+`NSR_PUBLIC_STATS_LIVE=True` in the box's `.env` and restart `public`.
+Do not set it in `compose.prod.yml`.
+
 ## Rollback
 
 ```bash

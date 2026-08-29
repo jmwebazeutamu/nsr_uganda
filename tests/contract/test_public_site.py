@@ -30,7 +30,7 @@ class TestTheZoneRoutesNothingElse:
     @pytest.mark.parametrize("path", [
         "/console/", "/admin/", "/admin-console/", "/manual/",
         "/api/v1/data-management/households/", "/api/v1/security/audit-events/",
-        "/login/", "/healthz",
+        "/login/", "/logout/",
     ])
     def test_registry_routes_are_absent_from_the_public_zone(self, public, path):
         with pytest.raises(Resolver404):
@@ -38,6 +38,12 @@ class TestTheZoneRoutesNothingElse:
 
     def test_the_landing_page_itself_resolves(self, public):
         assert resolve("/", urlconf=PUBLIC_URLCONF) is not None
+
+    def test_healthz_is_the_only_other_route_and_reads_nothing(self, public, client):
+        """The container healthcheck needs an endpoint; it must stay inert."""
+        r = client.get("/healthz")
+        assert r.status_code == 200
+        assert r.content == b"ok"
 
     def test_the_page_is_served_to_an_anonymous_caller(self, public, client):
         assert client.get("/").status_code == 200
@@ -84,7 +90,9 @@ class TestNoPersonalData:
 
     def test_every_published_count_is_floored(self, client):
         from apps.reporting.public_aggregates import (
-            ROUND_TO, SUPPRESSION_THRESHOLD, coverage_by_sub_region,
+            ROUND_TO,
+            SUPPRESSION_THRESHOLD,
+            coverage_by_sub_region,
         )
         for cell in coverage_by_sub_region().cells:
             if cell.suppressed:

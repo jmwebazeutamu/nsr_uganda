@@ -7,7 +7,6 @@ floor exists to close.
 """
 
 import pytest
-
 from apps.reporting.public_aggregates import (
     ROUND_TO,
     SUPPRESSION_THRESHOLD,

@@ -78,6 +78,47 @@ services:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}
 
+  # The public site. Same image, its own process, and ROOT_URLCONF pointed
+  # at nsr_mis.urls_public so the registry routes do not exist in it at all
+  # — spec LP-O-10 asks for a public zone with no route to the registry,
+  # and this is the application-level half of that. It publishes on
+  # 127.0.0.1:8006 for a separate Apache vhost.
+  #
+  # No web-entrypoint.sh here: `web` owns migrate + collectstatic, and two
+  # containers racing migrations on one deploy is exactly the failure that
+  # entrypoint comment warns about.
+  public:
+    image: *app_image
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      ROOT_URLCONF: nsr_mis.urls_public
+      # Figures stay OFF until the DPO signs the §8.3 disclosure floor
+      # (LP-O-06). With this false the page renders its placeholder slots.
+      # Do not flip it in compose — set it in .env when sign-off lands, so
+      # the change is a deliberate act with an owner.
+      NSR_PUBLIC_STATS_LIVE: ${NSR_PUBLIC_STATS_LIVE:-False}
+      NSR_STAFF_SIGNIN_URL: ${NSR_STAFF_SIGNIN_URL:-https://nsr-sris-dev.quasar.ug/login/}
+    command:
+      - gunicorn
+      - nsr_mis.wsgi:application
+      - --bind=0.0.0.0:8000
+      - --workers=2
+      - --timeout=60
+      - --access-logfile=-
+      - --error-logfile=-
+    ports:
+      - "127.0.0.1:8006:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      db: {condition: service_healthy}
+      web: {condition: service_healthy}   # web migrates first
+
   worker:
     image: *app_image
     restart: unless-stopped
