@@ -3,26 +3,61 @@
 
 {% block title %}{% trans "Sign in — National Social Registry" %}{% endblock %}
 
+{% block extra_head %}
+<style>
+  /* Sign-in page only. The plate, eyebrow and type roles are shared and
+     live in base_public.html; what is here is the form set on a navy
+     cover — light labels, paper inputs, a gold focus ring that stays
+     visible against the plate. */
+  .auth{max-width:470px;margin:0 auto}
+  .plate.auth h1{font-size:clamp(28px,5vw,35px);margin-bottom:14px}
+  .plate.auth p.lede{font-size:15px;margin-bottom:26px}
+
+  .plate--cover label{
+    color:rgba(255,255,255,.86);
+    font-family:var(--mono);font-size:10.5px;font-weight:600;
+    letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px;
+  }
+  .plate--cover input[type=text],
+  .plate--cover input[type=password]{
+    background:var(--white);border-color:transparent;padding:12px 13px;
+  }
+  /* The base focus ring is navy — invisible on a navy plate. */
+  .plate--cover input:focus{outline:2px solid var(--gold);outline-offset:2px;
+    border-color:transparent}
+  .plate--cover .field{margin-bottom:18px}
+
+  .plate--cover .errors{
+    background:rgba(169,50,38,.22);border-color:#C97B72;color:#FFDBD6;
+    line-height:1.5;
+  }
+  .sign-note{
+    margin:22px 0 0;font-size:12.5px;line-height:1.55;
+    color:rgba(255,255,255,.70);
+  }
+  .btn.gold.wide{width:100%;text-align:center}
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="card" style="max-width:440px;margin:0 auto">
-  <h1 style="font-size:23px">{% trans "Sign in" %}</h1>
-  <p class="lede" style="font-size:14.5px;margin-bottom:20px">
-    {% trans "Use your National Social Registry account." %}
-  </p>
+<div class="plate plate--cover auth">
+  <p class="eyebrow rise d1">{% trans "Controlled access" %}</p>
+  <h1 class="rise d2">{% trans "Sign in" %}</h1>
+  <p class="lede rise d3">{% trans "Use your National Social Registry account." %}</p>
 
   {% if form.errors %}
-    <div class="errors" role="alert">
+    <div class="errors rise" role="alert">
       {% trans "That username and password did not match an active account. Please try again." %}
     </div>
   {% endif %}
 
   {% if next and user.is_authenticated %}
-    <div class="errors" role="alert">
+    <div class="errors rise" role="alert">
       {% trans "Your account does not have access to that page. Sign in with an account that does." %}
     </div>
   {% endif %}
 
-  <form method="post" action="{% url 'login' %}">
+  <form class="rise d4" method="post" action="{% url 'login' %}">
     {% csrf_token %}
     <div class="field">
       <label for="id_username">{% trans "Username" %}</label>
@@ -35,10 +70,10 @@
              autocomplete="current-password" required>
     </div>
     <input type="hidden" name="next" value="{{ next }}">
-    <button class="btn" type="submit" style="width:100%">{% trans "Sign in" %}</button>
+    <button class="btn gold wide" type="submit">{% trans "Sign in" %}</button>
   </form>
 
-  <p style="margin:20px 0 0;font-size:12.5px;color:var(--muted)">
+  <p class="sign-note rise d5">
     {% blocktrans %}Sign-in attempts are recorded. Contact a System Administrator if you cannot get in.{% endblocktrans %}
   </p>
 </div>

@@ -15,6 +15,12 @@
     --ink:#212121; --muted:#5F6B7A; --line:#DDE3EA; --white:#fff;
     --radius:8px;
     --font:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    /* Display and utility voices. No webfont is fetched: the production
+       image runs inside the NITA-U data centre, where egress to
+       fonts.googleapis.com is neither available nor desirable. Georgia
+       is present on the Windows estate the ministry runs. */
+    --serif:ui-serif,Georgia,'Times New Roman',serif;
+    --mono:ui-monospace,'JetBrains Mono','Cascadia Mono',Consolas,monospace;
   }
   *{box-sizing:border-box}
   body{margin:0;font-family:var(--font);color:var(--ink);background:var(--tint);
@@ -59,7 +65,51 @@
   footer{max-width:1040px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font-size:12.5px}
   a{color:var(--navy-700)}
   @media (max-width:600px){ h1{font-size:24px} main{padding:26px 16px 44px} }
+
+  /* --- Plate: the shared public-page surface -----------------------
+     The masthead's horizontal national rule turned 90 degrees into a
+     bound left edge. Signed out the plate is navy (a closed cover);
+     signed in it is paper. Page-specific rules live in each template's
+     own extra_head block. */
+  .plate{
+    border-radius:var(--radius);
+    border-left:4px solid var(--gold);
+    padding:clamp(26px,4vw,52px);
+    overflow:hidden;
+  }
+  .plate--cover{background:var(--navy);color:#fff}
+  .plate--paper{background:var(--white);border:1px solid var(--line);
+       border-left:4px solid var(--gold)}
+  .eyebrow{
+    font-family:var(--mono);font-size:11px;font-weight:600;
+    letter-spacing:.18em;text-transform:uppercase;margin:0 0 18px;
+  }
+  .plate--cover .eyebrow{color:var(--gold)}
+  .plate--paper .eyebrow{color:var(--muted)}
+  .plate h1{
+    font-family:var(--serif);font-weight:400;
+    font-size:clamp(31px,5.4vw,50px);line-height:1.06;letter-spacing:-.015em;
+    margin:0 0 20px;text-wrap:balance;
+  }
+  .plate--cover h1{color:#fff}
+  .plate--paper h1{color:var(--navy)}
+  .plate p.lede{font-size:16.5px;line-height:1.62;max-width:46ch;margin:0 0 26px}
+  .plate--cover p.lede{color:rgba(255,255,255,.80)}
+  .btn.gold{background:var(--gold);border-color:var(--gold);color:var(--navy);
+       padding:13px 26px}
+  .btn.gold:hover{background:#ffe94a;border-color:#ffe94a}
+  .plate a:focus-visible{outline:2px solid var(--navy-700);outline-offset:2px}
+  .plate--cover a:focus-visible{outline-color:var(--gold)}
+
+  /* One orchestrated entrance, nothing scattered. */
+  @media (prefers-reduced-motion: no-preference){
+    .rise{animation:rise .5s cubic-bezier(.2,.7,.3,1) backwards}
+    .d1{animation-delay:.04s}.d2{animation-delay:.10s}.d3{animation-delay:.16s}
+    .d4{animation-delay:.22s}.d5{animation-delay:.30s}
+    @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  }
 </style>
+{% block extra_head %}{% endblock %}
 </head>
 <body>
 <header class="masthead">

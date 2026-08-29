@@ -3,54 +3,225 @@
 
 {% block title %}{% trans "National Social Registry — MGLSD" %}{% endblock %}
 
+{% block extra_head %}
+<style>
+  /* ------------------------------------------------------------------
+     Landing page only. The plate, eyebrow, type roles and entrance
+     motion are shared with the sign-in page and live in base_public.html.
+     What is here is what only this page has: the specimen record and the
+     routing entries. Scoped class names, so nothing collides with the
+     .card/.tile/.grid rules base_public also carries.
+
+     Signed out, the specimen record shows its personal fields struck
+     out — the redaction is the argument for the gate, rather than a
+     sentence claiming one. Signed in, the plate turns to paper and the
+     redaction has lifted.
+     ------------------------------------------------------------------ */
+  :root{--acc-data:#2E7D32; --acc-reference:#4527A0; --acc-system:#37474F}
+
+  .gate-note{
+    font-size:13.5px;line-height:1.55;margin:18px 0 0;max-width:42ch;
+    color:rgba(255,255,255,.70);
+  }
+
+  /* --- Cover layout: argument left, specimen right ------------------ */
+  .cover-cols{display:grid;grid-template-columns:1.1fr .9fr;gap:clamp(28px,5vw,56px);align-items:start}
+  @media (max-width:840px){ .cover-cols{grid-template-columns:1fr} }
+
+  /* --- The specimen record ----------------------------------------- */
+  .specimen{
+    background:var(--white);border-radius:6px;
+    box-shadow:0 10px 30px rgba(0,0,0,.28);
+    font-size:13.5px;color:var(--ink);
+  }
+  .specimen-head{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:11px 16px;border-bottom:1px solid var(--line);
+    font-family:var(--mono);font-size:10px;font-weight:600;
+    letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
+  }
+  .specimen-body{margin:0;padding:6px 16px 14px}
+  .row{display:grid;grid-template-columns:11em 1fr;gap:12px;align-items:center;
+       padding:9px 0;border-bottom:1px solid var(--tint)}
+  .row:last-child{border-bottom:0}
+  .row dt{
+    font-family:var(--mono);font-size:10.5px;font-weight:600;
+    letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0;
+  }
+  .row dd{margin:0;min-width:0}
+  .val{font-variant-numeric:tabular-nums}
+  .val.code{font-family:var(--mono);font-size:12.5px;letter-spacing:.01em}
+  /* Redaction: solid ink where a personal field would sit. */
+  .redact{display:inline-block;height:12px;border-radius:1px;
+          background:var(--navy);opacity:.9;vertical-align:-1px}
+  .r-1{width:9.5em}.r-2{width:12em}.r-3{width:6.5em}
+  .state{
+    display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 10px;
+    border-radius:999px;border:1px solid var(--acc-data);
+    background:#E8F4EA;color:var(--acc-data);
+    font-size:11.5px;font-weight:600;
+  }
+
+  /* --- Signed-in routing entries ----------------------------------- */
+  .routes{margin:30px 0 0;border-top:1px solid var(--line)}
+  .route{
+    display:grid;grid-template-columns:1fr auto;align-items:center;gap:20px;
+    padding:20px 20px 20px 22px;border-bottom:1px solid var(--line);
+    border-left:3px solid var(--accent,var(--navy-700));
+    text-decoration:none;color:inherit;background:var(--white);
+  }
+  .route:hover,.route:focus-visible{background:var(--tint)}
+  .route-codes{
+    font-family:var(--mono);font-size:10.5px;font-weight:600;
+    letter-spacing:.12em;text-transform:uppercase;color:var(--accent,var(--navy-700));
+    display:block;margin-bottom:7px;
+  }
+  .route-name{
+    font-family:var(--serif);font-size:21px;line-height:1.2;color:var(--navy);
+    display:block;margin-bottom:5px;
+  }
+  .route-what{font-size:13.5px;line-height:1.5;color:var(--muted);display:block;max-width:60ch}
+  .arrow{font-size:19px;color:var(--navy-700);transition:transform .18s ease}
+  .route:hover .arrow{transform:translateX(4px)}
+
+  /* --- Roles ------------------------------------------------------- */
+  .roles{margin:28px 0 0}
+  .role-chips{display:flex;flex-wrap:wrap;gap:8px;margin:0;padding:0;list-style:none}
+  .role-chips li{
+    font-family:var(--mono);font-size:11.5px;font-weight:600;letter-spacing:.04em;
+    padding:5px 11px;border-radius:999px;
+    border:1px solid var(--line);background:var(--tint);color:var(--navy);
+  }
+  .roleless{
+    margin:28px 0 0;padding:16px 18px;border-radius:var(--radius);
+    background:#FFF8DC;border:1px solid #E6D08A;color:#5b4708;
+    font-size:13.5px;line-height:1.55;
+  }
+  .roleless .eyebrow{color:#8B6914;margin-bottom:8px}
+  .roleless p{margin:0;max-width:58ch}
+
+  @media (max-width:600px){
+    .row{grid-template-columns:1fr;gap:4px}
+    .route{grid-template-columns:1fr;gap:12px}
+    .arrow{display:none}
+  }
+</style>
+{% endblock %}
+
 {% block content %}
 
 {% if not user.is_authenticated %}
-  <div class="card">
-    <h1>{% trans "National Social Registry" %}</h1>
-    <p class="lede">
-      {% blocktrans %}The single, authoritative record of socio-economic data on Ugandan households — used to identify, verify and refer people to social protection programmes.{% endblocktrans %}
-    </p>
-    <p class="lede">
-      {% blocktrans %}This system holds personal data. You must sign in before you can reach any part of it.{% endblocktrans %}
-    </p>
-    <a class="btn" href="{% url 'login' %}">{% trans "Sign in" %}</a>
+  <div class="plate plate--cover">
+    <div class="cover-cols">
+
+      <div>
+        <p class="eyebrow rise d1">{% trans "Controlled access" %}</p>
+        <h1 class="rise d2">{% trans "Uganda's households, on the record." %}</h1>
+        <p class="lede rise d3">
+          {% blocktrans %}The single, authoritative record of socio-economic data on Ugandan households — used to identify, verify and refer people to social protection programmes.{% endblocktrans %}
+        </p>
+        <div class="rise d4">
+          <a class="btn gold" href="{% url 'login' %}">{% trans "Sign in" %}</a>
+          <p class="gate-note">
+            {% blocktrans %}This system holds personal data. You must sign in before you can reach any part of it.{% endblocktrans %}
+          </p>
+        </div>
+      </div>
+
+      <!-- The specimen is the argument for the gate: it shows the
+           disclosure boundary rather than describing it. No field below
+           is drawn from the registry. -->
+      <div class="specimen rise d5">
+        <div class="specimen-head">
+          <span>{% trans "Specimen record" %}</span>
+          <span>{% trans "Not real data" %}</span>
+        </div>
+        <dl class="specimen-body">
+          <div class="row">
+            <dt>{% trans "Registry ID" %}</dt>
+            <dd><span class="val code">NSR-01HQ7</span><span class="redact r-3"></span></dd>
+          </div>
+          <div class="row">
+            <dt>{% trans "Household head" %}</dt>
+            <dd><span class="redact r-1"></span></dd>
+          </div>
+          <div class="row">
+            <dt>{% trans "NIN" %}</dt>
+            <dd><span class="redact r-2"></span></dd>
+          </div>
+          <div class="row">
+            <dt>{% trans "Sub-region" %}</dt>
+            <dd><span class="val">{% trans "Karamoja" %}</span></dd>
+          </div>
+          <div class="row">
+            <dt>{% trans "District" %}</dt>
+            <dd><span class="redact r-3"></span></dd>
+          </div>
+          <div class="row">
+            <dt>{% trans "Members" %}</dt>
+            <dd><span class="val">7</span></dd>
+          </div>
+          <div class="row">
+            <dt>{% trans "Status" %}</dt>
+            <dd><span class="state">{% trans "Registered" %}</span></dd>
+          </div>
+        </dl>
+      </div>
+
+    </div>
   </div>
 
 {% else %}
-  <div class="card">
-    <h1>{% blocktrans with name=user.get_username %}Welcome, {{ name }}{% endblocktrans %}</h1>
-    <p class="lede">{% trans "Choose where to go. You are shown only the areas your role allows." %}</p>
+  <div class="plate plate--paper">
+    <p class="eyebrow rise d1">{% trans "Your access" %}</p>
+    <h1 class="rise d2">{% blocktrans with name=user.get_username %}Welcome, {{ name }}{% endblocktrans %}</h1>
+    <p class="lede rise d3">{% trans "Choose where to go. You are shown only the areas your role allows." %}</p>
 
-    <div class="grid">
-      <a class="tile" href="/console/">
-        <b>{% trans "Operator Console" %}</b>
-        <span>{% blocktrans %}Households and members, data quality, updates, deduplication, grievances and referrals.{% endblocktrans %}</span>
+    <div class="routes rise d4">
+      <a class="route" style="--accent:var(--acc-data)" href="/console/">
+        <span>
+          <span class="route-codes">DAT · DQA · DDUP · UPD · GRM · REF</span>
+          <span class="route-name">{% trans "Operator Console" %}</span>
+          <span class="route-what">{% blocktrans %}Households and members, data quality, updates, deduplication, grievances and referrals.{% endblocktrans %}</span>
+        </span>
+        <span class="arrow" aria-hidden="true">→</span>
       </a>
 
       {% if can_admin_console %}
-        <a class="tile" href="/admin-console/">
-          <b>{% trans "Admin Console" %}</b>
-          <span>{% blocktrans %}Reference data, PMT model versions, connectors, partners and system configuration.{% endblocktrans %}</span>
+        <a class="route" style="--accent:var(--acc-reference)" href="/admin-console/">
+          <span>
+            <span class="route-codes">REF-DATA · PMT · DIH · API</span>
+            <span class="route-name">{% trans "Admin Console" %}</span>
+            <span class="route-what">{% blocktrans %}Reference data, PMT model versions, connectors, partners and system configuration.{% endblocktrans %}</span>
+          </span>
+          <span class="arrow" aria-hidden="true">→</span>
         </a>
       {% endif %}
 
       {% if user.is_staff %}
-        <a class="tile" href="/admin/">
-          <b>{% trans "Django Admin" %}</b>
-          <span>{% trans "Low-level record administration and the audit trail." %}</span>
+        <a class="route" style="--accent:var(--acc-system)" href="/admin/">
+          <span>
+            <span class="route-codes">SEC</span>
+            <span class="route-name">{% trans "Django Admin" %}</span>
+            <span class="route-what">{% trans "Low-level record administration and the audit trail." %}</span>
+          </span>
+          <span class="arrow" aria-hidden="true">→</span>
         </a>
       {% endif %}
     </div>
 
     {% if roles %}
-      <p class="lede" style="margin-top:26px;margin-bottom:0;font-size:13.5px">
-        {% trans "Your roles:" %} {{ roles|join:", " }}
-      </p>
+      <div class="roles rise d5">
+        <p class="eyebrow" style="margin-bottom:10px">{% trans "Roles held" %}</p>
+        <ul class="role-chips">
+          {% for role in roles %}<li>{{ role }}</li>{% endfor %}
+        </ul>
+      </div>
     {% else %}
-      <p class="notice" style="margin-top:26px;margin-bottom:0">
-        {% blocktrans %}No role has been assigned to your account yet, so most areas will be unavailable. Ask a System Administrator to assign one.{% endblocktrans %}
-      </p>
+      <div class="roleless rise d5">
+        <p class="eyebrow">{% trans "Action needed" %}</p>
+        <p>{% blocktrans %}No role has been assigned to your account yet, so most areas will be unavailable. Ask a System Administrator to assign one.{% endblocktrans %}</p>
+      </div>
     {% endif %}
   </div>
 {% endif %}
