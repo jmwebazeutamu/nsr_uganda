@@ -36,6 +36,12 @@
     color:rgba(255,255,255,.70);
   }
   .btn.gold.wide{width:100%;text-align:center}
+  .plate--cover .errors b{display:block;margin-bottom:6px;font-size:15px}
+  .plate--cover .errors ul{margin:0;padding-left:18px}
+  .plate--cover .errors li{margin-bottom:3px}
+  .plate--cover .errors a{color:inherit;font-weight:600}
+  .field-error{display:block;font-weight:600;margin:0 0 6px;color:#FFDBD6}
+  .field.has-error input{outline:2px solid #C97B72;outline-offset:1px}
 </style>
 {% endblock %}
 
@@ -45,29 +51,53 @@
   <h1 class="rise d2">{% trans "Sign in" %}</h1>
   <p class="lede rise d3">{% trans "Use your National Social Registry account." %}</p>
 
-  {% if form.errors %}
-    <div class="errors rise" role="alert">
-      {% trans "That username and password did not match an active account. Please try again." %}
-    </div>
-  {% endif %}
-
-  {% if next and user.is_authenticated %}
-    <div class="errors rise" role="alert">
-      {% trans "Your account does not have access to that page. Sign in with an account that does." %}
+  {% if form.errors or next and user.is_authenticated %}
+    {% comment %}
+      Report the error that actually occurred. The old copy asserted a
+      credential mismatch even for an empty submit. Each item links to the
+      field it is about; the summary is focusable so the keyboard lands on
+      the problem. {% comment %} rather than {# #}, which is single-line
+      only and leaks its body into the response when spanned.
+    {% endcomment %}
+    <div class="errors rise" role="alert" tabindex="-1" autofocus
+         aria-labelledby="error-summary-title">
+      <b id="error-summary-title">{% trans "There is a problem" %}</b>
+      <ul>
+        {% for field in form %}
+          {% for err in field.errors %}
+            <li><a href="#{{ field.auto_id }}">{{ err }}</a></li>
+          {% endfor %}
+        {% endfor %}
+        {% for err in form.non_field_errors %}
+          <li><a href="#id_username">{{ err }}</a></li>
+        {% endfor %}
+        {% if next and user.is_authenticated %}
+          <li><a href="#id_username">{% trans "Your account does not have access to that page. Sign in with an account that does." %}</a></li>
+        {% endif %}
+      </ul>
     </div>
   {% endif %}
 
   <form class="rise d4" method="post" action="{% url 'login' %}">
     {% csrf_token %}
-    <div class="field">
+    <div class="field{% if form.username.errors %} has-error{% endif %}">
       <label for="id_username">{% trans "Username" %}</label>
+      {% if form.username.errors %}
+        <span class="field-error" id="username-error">{{ form.username.errors|join:" " }}</span>
+      {% endif %}
       <input type="text" name="username" id="id_username" autocomplete="username"
-             autocapitalize="none" autofocus required>
+             autocapitalize="none" spellcheck="false" required
+             value="{{ form.username.value|default:'' }}"
+             {% if form.username.errors %}aria-describedby="username-error"{% endif %}>
     </div>
-    <div class="field">
+    <div class="field{% if form.password.errors %} has-error{% endif %}">
       <label for="id_password">{% trans "Password" %}</label>
+      {% if form.password.errors %}
+        <span class="field-error" id="password-error">{{ form.password.errors|join:" " }}</span>
+      {% endif %}
       <input type="password" name="password" id="id_password"
-             autocomplete="current-password" required>
+             autocomplete="current-password" required
+             {% if form.password.errors %}aria-describedby="password-error"{% endif %}>
     </div>
     <input type="hidden" name="next" value="{{ next }}">
     <button class="btn gold wide" type="submit">{% trans "Sign in" %}</button>

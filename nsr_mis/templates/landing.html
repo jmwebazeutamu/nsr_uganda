@@ -1,5 +1,5 @@
 {% extends "base_public.html" %}
-{% load i18n %}
+{% load i18n humanize %}
 
 {% block title %}{% trans "National Social Registry — MGLSD" %}{% endblock %}
 
@@ -60,6 +60,58 @@
     border-radius:999px;border:1px solid var(--acc-data);
     background:#E8F4EA;color:var(--acc-data);
     font-size:11.5px;font-weight:600;
+  }
+
+  /* --- Figures -----------------------------------------------------
+     Set as a return in the register: mono marginal labels, ruled rows,
+     tabular figures. These are current counts, not distributions, so
+     they are stat cells rather than charts — no pie of queue states, no
+     sparkline under a single number. The one genuinely chart-shaped
+     series, coverage by sub-region, is a bar chart built as a real
+     table, so the chart and its accessible equivalent are one object
+     and cannot drift apart. One series, so one hue and no legend. */
+  .figures{margin:34px 0 0}
+  .fig-head{
+    font-family:var(--mono);font-size:10.5px;font-weight:600;
+    letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
+    margin:0 0 4px;
+  }
+  .fig-scope{font-size:13px;color:var(--muted);margin:0 0 14px;max-width:56ch}
+  .cells{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    gap:1px;background:var(--line);border:1px solid var(--line);margin:0 0 26px;
+    list-style:none;padding:0;
+  }
+  .cells li{background:var(--white);padding:14px 16px 13px}
+  .cell-n{
+    display:block;font-family:var(--serif);font-size:29px;line-height:1.05;
+    color:var(--navy);font-variant-numeric:tabular-nums;
+  }
+  .cell-l{display:block;font-size:12.5px;line-height:1.35;color:var(--muted);margin-top:6px}
+  .cells--queue li{border-left:3px solid var(--navy-700)}
+  .cells--queue li.is-clear{border-left-color:var(--line)}
+
+  .coverage{width:100%;border-collapse:separate;border-spacing:0 3px;font-size:13px}
+  .coverage caption{
+    text-align:left;font-size:12.5px;color:var(--muted);
+    margin-bottom:10px;max-width:58ch;
+  }
+  .coverage th{
+    text-align:left;font-weight:400;padding:0 12px 0 0;white-space:nowrap;
+    width:1%;color:var(--ink);
+  }
+  .coverage td.track{width:100%;padding:0}
+  .coverage .bar{display:block;height:18px;background:var(--navy);
+       border-radius:0 3px 3px 0;min-width:2px}
+  .coverage td.n{
+    padding-left:12px;text-align:right;width:1%;white-space:nowrap;
+    font-variant-numeric:tabular-nums;font-weight:600;color:var(--navy);
+  }
+  .fig-empty{font-size:13px;color:var(--muted);margin:0}
+  @media (max-width:520px){
+    .coverage,.coverage tbody,.coverage tr,.coverage th,.coverage td{display:block;width:auto}
+    .coverage th{padding:6px 0 3px}
+    .coverage td.n{text-align:left;padding:2px 0 8px}
   }
 
   /* --- Signed-in routing entries ----------------------------------- */
@@ -209,6 +261,65 @@
         </a>
       {% endif %}
     </div>
+
+    {% if kpis %}
+      <div class="figures rise d5">
+        <p class="fig-head">{% trans "Registry at a glance" %}</p>
+        <p class="fig-scope">
+          {% if scope_label %}
+            {% blocktrans %}Figures cover {{ scope_label }} — the area your role allows.{% endblocktrans %}
+          {% else %}
+            {% trans "Figures cover the whole country." %}
+          {% endif %}
+        </p>
+        <ul class="cells">
+          <li><span class="cell-n">{{ kpis.households_total|intcomma }}</span>
+              <span class="cell-l">{% trans "Households registered" %}</span></li>
+          <li><span class="cell-n">{{ kpis.households_with_pmt|intcomma }}</span>
+              <span class="cell-l">{% trans "Scored by the PMT" %}</span></li>
+          <li><span class="cell-n">{{ kpis.grievances_open|intcomma }}</span>
+              <span class="cell-l">{% trans "Grievances open" %}</span></li>
+          <li><span class="cell-n">{{ kpis.change_requests_pending|intcomma }}</span>
+              <span class="cell-l">{% trans "Changes awaiting approval" %}</span></li>
+        </ul>
+
+        <p class="fig-head">{% trans "Waiting in the intake hub" %}</p>
+        <p class="fig-scope">{% trans "Records held in DIH before they reach the registry." %}</p>
+        <ul class="cells cells--queue">
+          <li{% if not kpis.stages_pending_promotion %} class="is-clear"{% endif %}>
+            <span class="cell-n">{{ kpis.stages_pending_promotion|intcomma }}</span>
+            <span class="cell-l">{% trans "Ready to promote" %}</span></li>
+          <li{% if not kpis.stages_quality_failed %} class="is-clear"{% endif %}>
+            <span class="cell-n">{{ kpis.stages_quality_failed|intcomma }}</span>
+            <span class="cell-l">{% trans "Failed data quality" %}</span></li>
+          <li{% if not kpis.stages_ddup_review %} class="is-clear"{% endif %}>
+            <span class="cell-n">{{ kpis.stages_ddup_review|intcomma }}</span>
+            <span class="cell-l">{% trans "In duplicate review" %}</span></li>
+          <li{% if not kpis.stages_idv_pending %} class="is-clear"{% endif %}>
+            <span class="cell-n">{{ kpis.stages_idv_pending|intcomma }}</span>
+            <span class="cell-l">{% trans "Awaiting NIRA verification" %}</span></li>
+        </ul>
+
+        <p class="fig-head">{% trans "Households by sub-region" %}</p>
+        {% if coverage %}
+          <table class="coverage">
+            <caption>{% trans "Registered households in each sub-region you can see, largest first." %}</caption>
+            <tbody>
+              {% for row in coverage %}
+                <tr>
+                  <th scope="row">{{ row.name }}</th>
+                  <td class="track"><span class="bar" aria-hidden="true"
+                      style="width:{% widthratio row.count coverage_max 100 %}%"></span></td>
+                  <td class="n">{{ row.count|intcomma }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="fig-empty">{% trans "No households have been registered in your area yet. Counts appear here once intake begins." %}</p>
+        {% endif %}
+      </div>
+    {% endif %}
 
     {% if roles %}
       <div class="roles rise d5">

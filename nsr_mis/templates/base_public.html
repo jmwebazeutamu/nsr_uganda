@@ -64,6 +64,11 @@
        border-radius:4px;padding:10px 12px;font-size:13.5px;margin-bottom:16px}
   footer{max-width:1040px;margin:0 auto;padding:0 20px 40px;color:var(--muted);font-size:12.5px}
   a{color:var(--navy-700)}
+  /* Keyboard users should not tab the masthead on every page. Invisible
+     until focused, so it changes nothing visually. */
+  .skip{position:absolute;left:-9999px;top:0;z-index:20;background:var(--gold);
+        color:var(--ink);padding:12px 18px;font-weight:700;text-decoration:none}
+  .skip:focus{left:0}
   @media (max-width:600px){ h1{font-size:24px} main{padding:26px 16px 44px} }
 
   /* --- Plate: the shared public-page surface -----------------------
@@ -112,6 +117,7 @@
 {% block extra_head %}{% endblock %}
 </head>
 <body>
+<a class="skip" href="#main">{% trans "Skip to main content" %}</a>
 <header class="masthead">
   <div class="crest" aria-hidden="true">🇺🇬</div>
   <div class="brand">
@@ -128,7 +134,7 @@
     {% endif %}
   </div>
 </header>
-<main>{% block content %}{% endblock %}</main>
+<main id="main">{% block content %}{% endblock %}</main>
 <footer>
   {% blocktrans %}Authorised use only. Activity on this system is logged and auditable under the Data Protection and Privacy Act, 2019.{% endblocktrans %}
 </footer>
