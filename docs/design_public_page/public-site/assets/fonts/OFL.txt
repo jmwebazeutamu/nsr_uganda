@@ -1,0 +1,4 @@
+Inter — Copyright (c) The Inter Project Authors. SIL Open Font License 1.1.
+Latin subset (U+0000-00FF) of v20, variable weight axis 100-900.
+One file covers the 400 and 700 the spec asks for (§12: 2 weights, WOFF2,
+subset Latin, font-display: swap).
