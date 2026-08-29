@@ -1,0 +1,31 @@
+{% extends "base_public.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Sign out — National Social Registry" %}{% endblock %}
+
+{% block extra_head %}
+<style>
+  .auth{max-width:30em}
+  .auth .actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:26px}
+  .auth .quiet{color:rgba(255,255,255,.78);text-decoration:underline}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="plate plate--cover auth">
+  <p class="eyebrow rise d1">{% trans "Controlled access" %}</p>
+  <h1 class="rise d2">{% trans "Sign out?" %}</h1>
+  <p class="lede rise d3">
+    {% blocktrans with name=user.get_username %}You are signed in as {{ name }}. Signing out ends this session on this device.{% endblocktrans %}
+  </p>
+  {# The token is minted with this page, so a session left open until its
+     old token expired is signed out correctly by coming here. #}
+  <form class="rise d4" method="post" action="{% url 'logout' %}">
+    {% csrf_token %}
+    <div class="actions">
+      <button class="btn gold" type="submit">{% trans "Sign out" %}</button>
+      <a class="quiet" href="/">{% trans "Stay signed in" %}</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

@@ -148,6 +148,11 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = "nsr_mis.urls"
 
+# Django's stock CSRF page tells a district officer their "Referer header"
+# was wrong. The usual cause is a page left open until its token expired,
+# so say that instead and give them the way back.
+CSRF_FAILURE_VIEW = "nsr_mis.views.csrf_failure"
+
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",

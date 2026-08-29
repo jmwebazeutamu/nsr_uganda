@@ -6,7 +6,7 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
-from .views import console, home, manual
+from .views import LogoutConfirmView, console, home, manual
 
 
 def healthz(_request):
@@ -44,7 +44,7 @@ urlpatterns = [
         template_name="registration/login.html",
         redirect_authenticated_user=True,
     ), name="login"),
-    path("logout/", auth_views.LogoutView.as_view(), name="logout"),
+    path("logout/", LogoutConfirmView.as_view(), name="logout"),
     path("", home, name="home"),
     path("admin/", admin.site.urls),
     # React design harness served same-origin so fetch() inherits the

@@ -1,0 +1,36 @@
+{% extends "base_public.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "Page expired — National Social Registry" %}{% endblock %}
+
+{% block extra_head %}
+<style>
+  .auth{max-width:34em}
+  .auth ul{margin:0 0 6px;padding-left:20px;color:rgba(255,255,255,.80);font-size:15px;line-height:1.6}
+  .auth .actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:26px}
+  .auth .quiet{color:rgba(255,255,255,.78);text-decoration:underline;align-self:center}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="plate plate--cover auth">
+  <p class="eyebrow rise d1">{% trans "Page expired" %}</p>
+  <h1 class="rise d2">{% trans "This page had been open too long." %}</h1>
+  <p class="lede rise d3">
+    {% blocktrans %}Nothing was saved and nothing is wrong with your account. Pages carry a security token that expires, and this one had gone stale before you submitted it.{% endblocktrans %}
+  </p>
+  <ul class="rise d4">
+    <li>{% trans "Open the page again and redo the last step." %}</li>
+    <li>{% trans "If you were signing out, use the button below." %}</li>
+    <li>{% trans "If it keeps happening, check that your browser accepts cookies from this site." %}</li>
+  </ul>
+  <div class="actions rise d5">
+    <a class="btn gold" href="/">{% trans "Back to the start" %}</a>
+    {% if user.is_authenticated %}
+      <a class="quiet" href="{% url 'logout' %}">{% trans "Sign out" %}</a>
+    {% else %}
+      <a class="quiet" href="{% url 'login' %}">{% trans "Sign in" %}</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
