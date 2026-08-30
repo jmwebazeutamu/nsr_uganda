@@ -71,11 +71,28 @@ site in a zone with no route to the registry; on a single shared box the
 strongest available form of that is a process in which those routes do not
 exist. `tests/contract/test_public_site.py` asserts they 404.
 
-**It is deliberately not reachable from the internet yet.** CD brings the
+**One hostname, two containers.** `nsr-sris-dev.quasar.ug` serves the
+public site at `/` from the `public` container, and Apache path-routes
+`/login/`, `/logout/`, `/home/`, `/console/`, `/admin-console/`,
+`/admin/`, `/api/`, `/manual/`, `/static/` and `/healthz` to `web`. Staff
+sign in at `/login/` on the same host. Order matters in that vhost: the
+catch-all `/` must stay last.
+
+Two consequences worth holding in mind:
+
+* `LOGIN_REDIRECT_URL` is `/home/`, not `/`, because `/` is now the
+  public page. Signing **out** still goes to `/`, which is the right
+  place to land once a session is gone.
+* The two sites now share an origin, which is a step away from LP-O-10.
+  The vhost strips `Cookie` on public routes so an operator session never
+  reaches the public process, and that process still has no registry
+  routes. What is lost is browser-level origin separation — if the public
+  site ever echoes user-supplied content, move it to its own hostname.
+
+**Until the vhost is installed the public site is dark.** CD brings the
 container up (`up -d --remove-orphans` picks up the new service), but
-nothing proxies to 8006 until someone installs the vhost and points DNS.
-That is the intended posture: the container can be running and verified
-while the site stays dark.
+nothing proxies to 8006 until someone installs the updated vhost. The
+container can be running and verified while the site stays unreachable.
 
 Before it goes public, three things must close:
 
@@ -97,13 +114,25 @@ for p in console admin api/v1/data-management/households login; do
 done                                             # all 404
 ```
 
-Expose it, once the three rows above are closed:
+Expose it, once the three rows above are closed. This REPLACES the
+existing vhost, so config-test before reloading — a bad file on this box
+breaks every site Apache fronts:
 
 ```bash
-sudo cp infrastructure/apache/nsr-public.conf /etc/apache2/sites-available/
-sudo a2ensite nsr-public && sudo apache2ctl configtest && sudo systemctl reload apache2
-sudo certbot --apache -d <the agreed hostname>
-# then add RequestHeader set X-Forwarded-Proto "https" to the -le-ssl.conf
+sudo cp infrastructure/apache/nsr-sris-dev.conf /etc/apache2/sites-available/
+sudo apache2ctl configtest          # must pass BEFORE the reload
+sudo systemctl reload apache2
+# certbot has already run for this hostname; it rewrites the :443 vhost
+# from the :80 one, so re-run it after changing the routes:
+sudo certbot --apache -d nsr-sris-dev.quasar.ug
+```
+
+Check the split landed, from the box:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://nsr-sris-dev.quasar.ug/         # public page
+curl -s -o /dev/null -w '%{http_code}\n' https://nsr-sris-dev.quasar.ug/login/   # registry
+curl -s https://nsr-sris-dev.quasar.ug/ | grep -c 'Staff sign in'                 # 1
 ```
 
 Turning figures on is a separate, deliberate act with an owner — set

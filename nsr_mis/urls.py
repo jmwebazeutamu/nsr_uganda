@@ -46,6 +46,12 @@ urlpatterns = [
     ), name="login"),
     path("logout/", LogoutConfirmView.as_view(), name="logout"),
     path("", home, name="home"),
+    # The operator home also answers at /home/. On the deployed box the
+    # public site owns "/" of the hostname and Apache path-routes the
+    # registry paths to this container, so "/" here is only reachable in
+    # local dev. LOGIN_REDIRECT_URL points at /home/ so signing in lands
+    # an operator on their console hub rather than the public front door.
+    path("home/", home, name="home-alt"),
     path("admin/", admin.site.urls),
     # React design harness served same-origin so fetch() inherits the
     # Django session cookie (US-S11-013). Dev-only — production serves

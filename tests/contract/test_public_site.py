@@ -116,3 +116,40 @@ class TestStaffSignIn:
         public.NSR_STAFF_SIGNIN_URL = "https://mis.example.go.ug/login/"
         html = client.get("/").content.decode()
         assert "https://mis.example.go.ug/login/" in html
+
+
+class TestTheTwoSitesShareAHostname:
+    """nsr-sris-dev.quasar.ug serves the public site at / and the registry
+    at /login/, /home/, /console/ ... Apache does the split; these pin the
+    Django-side assumptions it depends on."""
+
+    def test_the_operator_home_answers_at_home(self, client, django_user_model):
+        """Apache routes /home/ to the registry container, so it must exist."""
+        from django.contrib.auth.models import Group
+        u = django_user_model.objects.create_user(username="home-op", password="pw")
+        u.groups.add(Group.objects.get(name="enumerator"))
+        client.force_login(u)
+        r = client.get("/home/")
+        assert r.status_code == 200
+        assert b"Welcome" in r.content
+
+    def test_signing_in_lands_on_home_not_the_public_root(self, client, django_user_model):
+        """/ is the public page on the box; landing there after sign-in
+        would drop an operator on the public front door."""
+        from django.conf import settings
+        assert settings.LOGIN_REDIRECT_URL == "/home/"
+        django_user_model.objects.create_user(username="redir-op", password="pw")
+        r = client.post("/login/", {"username": "redir-op", "password": "pw"})
+        assert r.status_code == 302
+        assert r["Location"] == "/home/"
+
+    def test_signing_out_goes_to_the_public_front_door(self, client, django_user_model):
+        from django.conf import settings
+        assert settings.LOGOUT_REDIRECT_URL == "/"
+
+    def test_the_public_page_links_to_login_relatively(self, public, client):
+        """Same origin now, so a relative link survives a hostname change."""
+        public.NSR_STAFF_SIGNIN_URL = "/login/"
+        html = client.get("/").content.decode()
+        assert 'href="/login/"' in html
+        assert "Staff sign in" in html

@@ -79,10 +79,11 @@ services:
       redis: {condition: service_healthy}
 
   # The public site. Same image, its own process, and ROOT_URLCONF pointed
-  # at nsr_mis.urls_public so the registry routes do not exist in it at all
-  # — spec LP-O-10 asks for a public zone with no route to the registry,
-  # and this is the application-level half of that. It publishes on
-  # 127.0.0.1:8006 for a separate Apache vhost.
+  # at nsr_mis.urls_public so the registry routes do not exist in it at
+  # all. It publishes on 127.0.0.1:8006 and serves "/" of the hostname;
+  # Apache path-routes /login/, /console/, /api/ and friends to `web`.
+  # See infrastructure/apache/nsr-sris-dev.conf, including the note on
+  # what sharing one origin costs against LP-O-10.
   #
   # No web-entrypoint.sh here: `web` owns migrate + collectstatic, and two
   # containers racing migrations on one deploy is exactly the failure that
@@ -98,7 +99,9 @@ services:
       # Do not flip it in compose — set it in .env when sign-off lands, so
       # the change is a deliberate act with an owner.
       NSR_PUBLIC_STATS_LIVE: ${NSR_PUBLIC_STATS_LIVE:-False}
-      NSR_STAFF_SIGNIN_URL: ${NSR_STAFF_SIGNIN_URL:-https://nsr-sris-dev.quasar.ug/login/}
+      # Same hostname now: Apache path-routes /login/ to the registry
+      # container, so a relative link is correct and survives a rename.
+      NSR_STAFF_SIGNIN_URL: ${NSR_STAFF_SIGNIN_URL:-/login/}
     command:
       - gunicorn
       - nsr_mis.wsgi:application

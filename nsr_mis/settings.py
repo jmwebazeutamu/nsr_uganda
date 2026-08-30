@@ -285,7 +285,11 @@ if env.bool("NSR_WHITENOISE", default=False):
 # Auth routing. Unauthenticated access to any resource lands on the
 # branded sign-in page rather than Django admin's.
 LOGIN_URL = "/login/"
-LOGIN_REDIRECT_URL = "/"
+# /home/ not "/": on the deployed box "/" is the public site, so an
+# operator signing in must land on their console hub, not the public
+# front door. Signing OUT deliberately does go to "/" — the public site
+# is the right place to end up once your session is gone.
+LOGIN_REDIRECT_URL = "/home/"
 LOGOUT_REDIRECT_URL = "/"
 
 # Enforce the eight TOR data permissions (ADR-0028) at the API layer.
