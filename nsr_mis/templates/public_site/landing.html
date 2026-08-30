@@ -115,8 +115,34 @@ input:focus-visible,select:focus-visible,[tabindex]:focus-visible{
    reviewer can never mistake draft copy for signed-off copy. */
 .slot{
   background:var(--accent-quality-bg);
+  /* Explicit, never inherited. This class carries its own fill, so it must
+     carry its own foreground: on the dark hero it inherited
+     --public-hero-fg (white) onto a cream fill — 1.08:1, invisible. */
+  color:var(--public-accent-fg);
   box-shadow:0 1px 0 0 var(--accent-quality);
   padding:0 2px;
+}
+
+/* On the two dark surfaces a light fill cannot work: white on cream is
+   1.08:1, and darkening the text to suit the fill would fight the surface.
+   Mark "unfilled" with a translucent fill and an accent rule instead,
+   keeping the surface's own white foreground at 11.6:1+. Spec §6 S1 wants
+   a plain dark hero with no decorative light blocks. */
+.hero .slot,
+.dark .slot{
+  background:var(--public-glass-bg);
+  color:var(--public-hero-fg);
+  box-shadow:0 1px 0 0 var(--public-accent);
+}
+
+/* Per spec §6 S1 the counters are white on the navy card with NO fill
+   behind the number. A placeholder marker there was never in the design
+   and is what rendered as a solid cream block. */
+.counter .slot{
+  background:none;
+  color:var(--public-hero-fg);
+  box-shadow:none;
+  padding:0;
 }
 
 /* ---- L1 · Government identity strip (decorative) ---- */
@@ -130,7 +156,7 @@ input:focus-visible,select:focus-visible,[tabindex]:focus-visible{
 .gov-banner{background:var(--neutral-100);border-bottom:1px solid var(--neutral-300)}
 .gov-banner .wrap{display:flex;align-items:center;gap:var(--space-4);
      padding-top:var(--space-3);padding-bottom:var(--space-3);flex-wrap:wrap}
-.arms{width:48px;height:48px;flex:none;object-fit:contain}
+.arms{width:48px;height:auto;flex:none;object-fit:contain}
 .arms-fallback{
   width:48px;height:48px;flex:none;display:grid;place-items:center;
   border:1px dashed var(--neutral-300);background:var(--neutral-0);
@@ -465,10 +491,16 @@ dialog.drawer::backdrop{background:var(--public-scrim)}
 <!-- ============ L2 · Government banner ============ -->
 <div class="gov-banner">
   <div class="wrap">
-    <!-- LP-O-08: Coat of Arms usage approval + an SVG asset are still open.
-         The repo only carries a 188KB 500x536 PNG, which blows the §12
-         budget for a 48px slot, so the mockup shows the slot, not a fake. -->
-    <div class="arms-fallback" role="img" aria-label="Uganda Coat of Arms placeholder">Arms<br>LP-O-08</div>
+    {% comment %}
+      Coat of Arms of Uganda. INTERIM asset: the SVG from Wikimedia Commons
+      by user Sodacan, CC BY-SA 3.0, attributed in the legal bar. LP-O-08
+      stays open — a government site should carry the official emblem
+      supplied by MGLSD ICT, not a third-party redrawing under a
+      share-alike licence. Swap the file, keep the markup.
+    {% endcomment %}
+    <img class="arms" src="{% static 'public-site/img/uganda-coat-of-arms.svg' %}"
+         width="48" height="52" decoding="async"
+         alt="{% trans 'Coat of Arms of the Republic of Uganda' %}">
     <div class="gov-banner-text">
       <b>Republic of Uganda</b>
       Ministry of Gender, Labour and Social Development
@@ -1011,6 +1043,7 @@ dialog.drawer::backdrop{background:var(--public-scrim)}
       <a href="#">Accessibility statement</a>
       <span>Page created <span class="slot">&#123;&#123;date&#125;&#125;</span> ·
             Last updated <span class="slot">&#123;&#123;date&#125;&#125;</span></span>
+      <span>{% blocktrans %}Coat of Arms rendering by Sodacan, CC BY-SA 3.0 — interim asset pending the official emblem.{% endblocktrans %}</span>
     </div>
   </div>
 </footer>
