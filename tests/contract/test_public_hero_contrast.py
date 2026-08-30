@@ -56,7 +56,10 @@ def _hex(h):
 def _over(fg_rgba, bg):
     """Composite rgba(...) over an opaque background."""
     (r, g, b, a) = fg_rgba
-    return tuple(round(a * c + (1 - a) * d) for c, d in zip((r, g, b), bg))
+    return tuple(
+        round(a * c + (1 - a) * d)
+        for c, d in zip((r, g, b), bg, strict=True)
+    )
 
 
 # --- token resolution -----------------------------------------------------
