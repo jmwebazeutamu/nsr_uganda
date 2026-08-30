@@ -30,6 +30,12 @@ COPY pyproject.toml ./
 COPY nsr_mis ./nsr_mis
 COPY apps ./apps
 COPY manage.py ./
+# Project-level static source (the public site's tokens + self-hosted Inter).
+# STATICFILES_DIRS points here; without this COPY the directory is simply
+# absent in the image, collectstatic finds nothing, and every /static/
+# public-site URL 404s while Django only WARNS. tests/contract/
+# test_static_is_in_the_image.py fails the build path instead.
+COPY static ./static
 # Web-service entrypoint (migrate + collectstatic). Only the `web` service
 # uses it; worker/beat run celery directly. See compose.prod.yml.
 COPY infrastructure/docker/web-entrypoint.sh /usr/local/bin/web-entrypoint.sh
