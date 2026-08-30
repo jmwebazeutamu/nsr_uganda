@@ -61,6 +61,84 @@ manual *Run workflow*): builds `linux/amd64`, pushes to GHCR, SSHes in to
 `docker compose pull && up -d`. Repo secrets: `DEPLOY_SSH_KEY`,
 `DEPLOY_HOST`, `DEPLOY_USER`. Watch: `gh run watch` / the Actions tab.
 
+## Public site (`public` container)
+
+The public site runs as a **separate container from the same image**, with
+`ROOT_URLCONF=nsr_mis.urls_public`, published on `127.0.0.1:8006`. That
+URLconf carries the landing page and `/healthz` and nothing else — no
+console, no admin, no `/api/`, no `/login/`. Spec LP-O-10 wants the public
+site in a zone with no route to the registry; on a single shared box the
+strongest available form of that is a process in which those routes do not
+exist. `tests/contract/test_public_site.py` asserts they 404.
+
+**One hostname, two containers.** `nsr-sris-dev.quasar.ug` serves the
+public site at `/` from the `public` container, and Apache path-routes
+`/login/`, `/logout/`, `/home/`, `/console/`, `/admin-console/`,
+`/admin/`, `/api/`, `/manual/`, `/static/` and `/healthz` to `web`. Staff
+sign in at `/login/` on the same host. Order matters in that vhost: the
+catch-all `/` must stay last.
+
+Two consequences worth holding in mind:
+
+* `LOGIN_REDIRECT_URL` is `/home/`, not `/`, because `/` is now the
+  public page. Signing **out** still goes to `/`, which is the right
+  place to land once a session is gone.
+* The two sites now share an origin, which is a step away from LP-O-10.
+  The vhost strips `Cookie` on public routes so an operator session never
+  reaches the public process, and that process still has no registry
+  routes. What is lost is browser-level origin separation — if the public
+  site ever echoes user-supplied content, move it to its own hostname.
+
+**Until the vhost is installed the public site is dark.** CD brings the
+container up (`up -d --remove-orphans` picks up the new service), but
+nothing proxies to 8006 until someone installs the updated vhost. The
+container can be running and verified while the site stays unreachable.
+
+Before it goes public, three things must close:
+
+| | |
+|---|---|
+| LP-O-01 / LP-O-02 | Does this replace `nsr.mglsd.go.ug` or run beside it? The hostname in `nsr-public.conf` is a placeholder until this is answered. Do not point a `.go.ug` name at it first. |
+| LP-O-06 | The DPO signs off the §8.3 disclosure floor. Until then `NSR_PUBLIC_STATS_LIVE` stays `False` and the page renders placeholder slots. |
+| Copy | The spec is a draft. The page still carries ~59 `{{slot}}` placeholders awaiting approved MGLSD wording. |
+
+Verify the container without exposing it:
+
+```bash
+docker compose -f compose.prod.yml ps public
+curl -fsS http://127.0.0.1:8006/healthz          # -> ok
+curl -s http://127.0.0.1:8006/ | head -40        # the landing page
+# the zone must NOT route the registry:
+for p in console admin api/v1/data-management/households login; do
+  printf '%s -> %s\n' "$p" "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8006/$p/)"
+done                                             # all 404
+```
+
+Expose it, once the three rows above are closed. This REPLACES the
+existing vhost, so config-test before reloading — a bad file on this box
+breaks every site Apache fronts:
+
+```bash
+sudo cp infrastructure/apache/nsr-sris-dev.conf /etc/apache2/sites-available/
+sudo apache2ctl configtest          # must pass BEFORE the reload
+sudo systemctl reload apache2
+# certbot has already run for this hostname; it rewrites the :443 vhost
+# from the :80 one, so re-run it after changing the routes:
+sudo certbot --apache -d nsr-sris-dev.quasar.ug
+```
+
+Check the split landed, from the box:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://nsr-sris-dev.quasar.ug/         # public page
+curl -s -o /dev/null -w '%{http_code}\n' https://nsr-sris-dev.quasar.ug/login/   # registry
+curl -s https://nsr-sris-dev.quasar.ug/ | grep -c 'Staff sign in'                 # 1
+```
+
+Turning figures on is a separate, deliberate act with an owner — set
+`NSR_PUBLIC_STATS_LIVE=True` in the box's `.env` and restart `public`.
+Do not set it in `compose.prod.yml`.
+
 ## Rollback
 
 ```bash

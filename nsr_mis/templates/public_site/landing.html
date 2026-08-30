@@ -1,0 +1,1046 @@
+{% load i18n static humanize %}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>NSR MIS — Public landing page mockup v0.1</title>
+
+<!-- Binding token source, per 01_landing_page_spec.md §4.2 and the folder
+     README ("It does import v0.1/tokens.css"). Nothing below hardcodes a
+     colour, size or spacing value: acceptance gate §15.1. -->
+<link rel="stylesheet" href="{% static 'public-site/tokens.css' %}">
+
+<style>
+/* ===================================================================
+   NSR MIS PUBLIC LANDING PAGE — clickable mockup, v0.1
+   Built to docs/design_public_page/public-site/01_landing_page_spec.md,
+   which is a DRAFT: every &#123;&#123;slot&#125;&#125; below is placeholder copy awaiting
+   approved MGLSD wording, and every figure is placeholder data.
+
+   This is spec §17 step 3 ("Build a clickable HTML mockup of S1 to S6
+   against the §4.2 tokens"), extended to the full page minus S9 News,
+   which §6/LP-O-05 says stays hidden until a content owner is named.
+
+   It is deliberately NOT wired into the Django app: §1 lists "no login
+   to the operator console from this page" as a non-goal, and LP-O-10
+   recommends the public site sit in a separate network zone.
+   =================================================================== */
+
+/* ---- §4.2 token additions. The only place these are defined. ---- */
+:root{
+  /* Government identity (public site only) */
+  --gov-black:#000000;
+  --gov-yellow:#FCDC04;
+  --gov-red:#D90000;
+
+  /* Public site surfaces */
+  --public-hero-bg:var(--primary-900);
+  --public-hero-bg-deep:#172B4D;
+  --public-hero-fg:var(--neutral-0);
+  --public-accent:#C8912A;
+  --public-accent-fg:#1A1A1A;
+  --public-surface-alt:#F7F9FC;
+  --public-band-helpline:#FFF8E7;
+
+  /* Public site surfaces, on dark. NOT in the spec's §4.2 block and not in
+     tokens.css — proposed addition, so that gate §15.1 ("no hardcoded
+     colour") holds for the glass, scrim and rule values the dark sections
+     need. Raised in the review note. */
+  --public-glass-bg:rgba(255,255,255,.07);
+  --public-glass-border:rgba(255,255,255,.16);
+  --public-ghost-hover:rgba(255,255,255,.12);
+  --public-rule-on-dark:rgba(255,255,255,.18);
+  --public-scrim:rgba(0,0,0,.5);
+  --public-shadow-raised:0 8px 24px rgba(0,0,0,.28);
+
+  /* Public site layout */
+  --public-content-max:1200px;
+  --public-section-y:var(--space-10);
+
+  /* §4.3 — two display steps above the console scale */
+  --fs-hero:clamp(32px,5vw,56px);    --lh-hero:1.1;
+  --fs-section:clamp(24px,3vw,36px); --lh-section:1.2;
+}
+
+/* §12 — self-hosted, WOFF2, Latin subset, font-display swap. Inter ships
+   one variable file covering the 400 and 700 the spec asks for. */
+@font-face{
+  font-family:'Inter';font-style:normal;font-weight:100 900;
+  font-display:swap;src:url('{% static 'public-site/fonts/inter-latin-var.woff2' %}') format('woff2');
+}
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;font-family:var(--font-primary);
+  font-size:var(--fs-body);line-height:var(--lh-body);
+  color:var(--neutral-900);background:var(--neutral-0);
+  -webkit-font-smoothing:antialiased;
+}
+img{max-width:100%;height:auto}
+h1,h2,h3{margin:0}
+p{margin:0}
+a{color:var(--primary-700)}
+
+/* §11.2 — first focusable element. */
+.skip{
+  position:absolute;left:-9999px;top:0;z-index:100;
+  background:var(--gov-yellow);color:var(--gov-black);
+  padding:var(--space-3) var(--space-5);font-weight:var(--fw-bold);
+}
+.skip:focus{left:0}
+
+/* §11.2 — visible focus ring from the token. */
+a:focus-visible,button:focus-visible,summary:focus-visible,
+input:focus-visible,select:focus-visible,[tabindex]:focus-visible{
+  outline:var(--focus-ring);outline-offset:var(--focus-offset);
+}
+
+.wrap{max-width:var(--public-content-max);margin:0 auto;
+      padding-left:var(--space-5);padding-right:var(--space-5)}
+.section{padding-top:var(--public-section-y);padding-bottom:var(--public-section-y)}
+.section--alt{background:var(--public-surface-alt)}
+.eyebrow{
+  font-size:var(--fs-caption);line-height:var(--lh-caption);
+  font-weight:var(--fw-bold);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--primary-700);margin-bottom:var(--space-3);
+}
+.h2{font-size:var(--fs-section);line-height:var(--lh-section);
+    font-weight:var(--fw-bold);margin-bottom:var(--space-4)}
+.standfirst{font-size:var(--fs-h3);line-height:var(--lh-h3);
+    color:var(--neutral-700);max-width:62ch}
+
+/* Placeholder marker. Every unapproved string and figure wears one, so a
+   reviewer can never mistake draft copy for signed-off copy. */
+.slot{
+  background:var(--accent-quality-bg);
+  box-shadow:0 1px 0 0 var(--accent-quality);
+  padding:0 2px;
+}
+
+/* ---- L1 · Government identity strip (decorative) ---- */
+.gov-strip{height:4px;display:flex}
+.gov-strip i{flex:1}
+.gov-strip i:nth-child(1){background:var(--gov-black)}
+.gov-strip i:nth-child(2){background:var(--gov-yellow)}
+.gov-strip i:nth-child(3){background:var(--gov-red)}
+
+/* ---- L2 · Government banner ---- */
+.gov-banner{background:var(--neutral-100);border-bottom:1px solid var(--neutral-300)}
+.gov-banner .wrap{display:flex;align-items:center;gap:var(--space-4);
+     padding-top:var(--space-3);padding-bottom:var(--space-3);flex-wrap:wrap}
+.arms{width:48px;height:48px;flex:none;object-fit:contain}
+.arms-fallback{
+  width:48px;height:48px;flex:none;display:grid;place-items:center;
+  border:1px dashed var(--neutral-300);background:var(--neutral-0);
+  font-size:var(--fs-caption);color:var(--neutral-500);text-align:center;
+}
+.gov-banner-text{font-size:var(--fs-body-sm);line-height:var(--lh-body-sm);
+     color:var(--neutral-700);min-width:0}
+.gov-banner-text b{display:block;color:var(--neutral-900)}
+.utility{margin-left:auto;display:flex;align-items:center;gap:var(--space-4);
+     font-size:var(--fs-body-sm);flex-wrap:wrap}
+.utility a,.utility button{color:var(--neutral-700);background:none;border:0;
+     font:inherit;cursor:pointer;text-decoration:underline;padding:var(--space-2) 0}
+
+/* ---- L3 · Site header ---- */
+.site-header{background:var(--neutral-0);border-bottom:1px solid var(--neutral-300);
+     position:sticky;top:0;z-index:50}
+.site-header .wrap{display:flex;align-items:center;gap:var(--space-5);
+     min-height:var(--layout-topbar)}
+.wordmark{font-weight:var(--fw-bold);font-size:var(--fs-h3);color:var(--primary-900);
+     text-decoration:none;white-space:nowrap}
+.wordmark span{display:block;font-size:var(--fs-caption);font-weight:var(--fw-regular);
+     color:var(--neutral-500)}
+.nav{margin-left:auto;display:flex;gap:var(--space-5);align-items:center}
+.nav a{color:var(--neutral-900);text-decoration:none;font-size:var(--fs-body);
+     padding:var(--space-4) 0;border-bottom:2px solid transparent}
+.nav a:hover{border-bottom-color:var(--neutral-300)}
+.nav a[aria-current="page"]{border-bottom-color:var(--gov-yellow);
+     font-weight:var(--fw-semibold)}
+.nav-toggle{display:none}
+
+/* Buttons. 44px minimum target (§9). */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:var(--space-2);
+  min-height:44px;padding:var(--space-3) var(--space-6);
+  border-radius:var(--radius-default);font-weight:var(--fw-semibold);
+  font-size:var(--fs-body);text-decoration:none;cursor:pointer;
+  border:1px solid transparent;transition:filter .15s ease;
+}
+.btn--cta{background:var(--public-accent);color:var(--public-accent-fg);
+     border-color:var(--public-accent)}
+.btn--cta:hover{filter:brightness(1.07)}
+.btn--ghost{background:transparent;color:var(--public-hero-fg);
+     border-color:var(--public-hero-fg)}
+.btn--ghost:hover{background:var(--public-ghost-hover)}
+.btn--solid{background:var(--primary-900);color:var(--neutral-0);
+     border-color:var(--primary-900)}
+
+/* ---- S1 · Hero ---- */
+.hero{
+  background:linear-gradient(160deg,var(--public-hero-bg),var(--public-hero-bg-deep));
+  color:var(--public-hero-fg);min-height:560px;display:flex;align-items:center;
+  position:relative;overflow:hidden;
+}
+/* 4% dot pattern, per §6 S1. Decorative. */
+.hero::before{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:radial-gradient(var(--neutral-0) 1px,transparent 1px);
+  background-size:22px 22px;opacity:.04;
+}
+.hero .wrap{position:relative;padding-top:var(--space-10);padding-bottom:var(--space-10)}
+.hero-grid{display:grid;grid-template-columns:7fr 5fr;gap:var(--space-9);align-items:center}
+.hero-chip{
+  display:inline-block;font-size:var(--fs-caption);letter-spacing:.12em;
+  text-transform:uppercase;font-weight:var(--fw-bold);
+  border:1px solid var(--public-accent);color:var(--public-accent);
+  padding:var(--space-1) var(--space-3);border-radius:var(--radius-tag);
+  margin-bottom:var(--space-5);
+}
+.hero h1{font-size:var(--fs-hero);line-height:var(--lh-hero);
+     font-weight:var(--fw-bold);margin-bottom:var(--space-5);text-wrap:balance}
+/* §6 S1: one word may take the accent, as GNHR does with "trusted".
+   4.17:1 — hero size only, never body text (§4.2 ratio table). */
+.hero h1 em{color:var(--public-accent);font-style:italic}
+.hero-standfirst{font-size:var(--fs-h3);line-height:1.55;
+     color:var(--public-hero-fg);opacity:.92;max-width:52ch;margin-bottom:var(--space-7)}
+.hero-actions{display:flex;gap:var(--space-4);flex-wrap:wrap}
+
+/* Counter cards, 2x2 */
+.counters{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)}
+.counter{
+  background:var(--public-glass-bg);border:1px solid var(--public-glass-border);
+  border-radius:var(--radius-card);padding:var(--space-5);
+}
+.counter-n{
+  display:block;font-size:var(--fs-display);line-height:var(--lh-display);
+  font-weight:var(--fw-bold);font-variant-numeric:tabular-nums;
+  color:var(--public-hero-fg);
+}
+.counter-l{display:block;font-size:var(--fs-body-sm);line-height:var(--lh-body-sm);
+     color:var(--public-hero-fg);opacity:.86;margin-top:var(--space-1)}
+.counter-asat{display:block;font-size:var(--fs-caption);line-height:var(--lh-caption);
+     color:var(--public-hero-fg);opacity:.7;margin-top:var(--space-2)}
+
+/* ---- S2 · Trust bar ---- */
+.trustbar{background:var(--neutral-0);border-bottom:1px solid var(--neutral-300)}
+.trustbar .wrap{min-height:72px;display:flex;align-items:center;
+     gap:var(--space-7);flex-wrap:wrap;padding-top:var(--space-4);
+     padding-bottom:var(--space-4)}
+.trust{display:flex;align-items:center;gap:var(--space-3);
+     color:var(--neutral-900);text-decoration:none;font-size:var(--fs-body-sm)}
+.trust:hover{text-decoration:underline}
+.trust svg{flex:none;color:var(--primary-700)}
+
+/* ---- S3 · About ---- */
+.about-intro{text-align:center;max-width:70ch;margin:0 auto var(--space-8)}
+.about-intro .eyebrow{text-align:center}
+.cards4{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--space-5)}
+.card{
+  background:var(--neutral-0);border-radius:var(--radius-card);
+  box-shadow:var(--shadow-card);padding:var(--space-6);
+  transition:transform .15s ease;
+}
+.card:hover{transform:translateY(-2px)}
+.card-icon{
+  width:40px;height:40px;border-radius:var(--radius-default);
+  display:grid;place-items:center;margin-bottom:var(--space-4);
+}
+.card h3{font-size:var(--fs-h3);line-height:var(--lh-h3);
+     font-weight:var(--fw-semibold);margin-bottom:var(--space-2)}
+.card p{font-size:var(--fs-body-sm);line-height:var(--lh-body-sm);color:var(--neutral-700)}
+.ic-data{background:var(--accent-data-bg);color:var(--accent-data)}
+.ic-identity{background:var(--accent-identity-bg);color:var(--accent-identity)}
+.ic-elig{background:var(--accent-eligibility-bg);color:var(--accent-eligibility)}
+.ic-sys{background:var(--accent-system-bg);color:var(--accent-system)}
+
+/* ---- S4 · Statistics ---- */
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:var(--space-4);
+      margin-bottom:var(--space-8)}
+.kpi{background:var(--neutral-0);border-radius:var(--radius-card);
+     box-shadow:var(--shadow-card);padding:var(--space-5)}
+.kpi-n{display:block;font-size:var(--fs-h1);line-height:var(--lh-h1);
+     font-weight:var(--fw-bold);font-variant-numeric:tabular-nums}
+.kpi-l{display:block;font-size:var(--fs-caption);line-height:var(--lh-caption);
+     color:var(--neutral-500);margin-top:var(--space-1)}
+.chart-head{display:flex;justify-content:space-between;align-items:flex-end;
+     gap:var(--space-5);flex-wrap:wrap;margin-bottom:var(--space-4)}
+.chart-title{font-size:var(--fs-h2);line-height:var(--lh-h2);font-weight:var(--fw-semibold)}
+.chart-meta{font-size:var(--fs-caption);line-height:var(--lh-caption);
+     color:var(--neutral-500);max-width:60ch;margin-top:var(--space-1)}
+.chart-dl{font-size:var(--fs-body-sm);white-space:nowrap}
+
+/* Bar chart built as a real table: the accessible equivalent (§11.3) and
+   the chart are one object, so they cannot drift apart. No library (§12). */
+.bars{width:100%;border-collapse:separate;border-spacing:0 var(--space-2);
+      font-size:var(--fs-body-sm)}
+.bars caption{text-align:left;font-size:var(--fs-caption);color:var(--neutral-500);
+      margin-bottom:var(--space-3)}
+.bars th{text-align:left;font-weight:var(--fw-regular);padding-right:var(--space-4);
+      white-space:nowrap;width:1%;vertical-align:middle}
+.bars td.track{width:100%;padding:0}
+.bars .bar{display:block;height:28px;
+      border-radius:0 var(--radius-default) var(--radius-default) 0;min-width:2px}
+/* Colour by band per §6 S4b, but the value label sits in its own cell
+   rather than inside the bar. §6 S4b asks for it inside; that cannot clear
+   WCAG 1.4.3 against this palette — white is 3.78:1 on --accent-quality and
+   ink is 2.31:1 on --accent-danger, so no single label colour passes on all
+   five bands. Spec amendment raised in the review note.
+   Never colour alone still holds: the row header names the band and the
+   cell carries the count. */
+.b1{background:var(--accent-danger)}
+.b2{background:var(--accent-quality)}
+.b3{background:var(--accent-eligibility)}
+.b4{background:var(--accent-data)}
+.b5{background:var(--accent-update)}
+.bars td.n{padding-left:var(--space-4);text-align:right;white-space:nowrap;
+      font-variant-numeric:tabular-nums;width:1%}
+
+.stat-cols{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-8);
+      margin-top:var(--space-9)}
+.map-slot{
+  border:1px dashed var(--neutral-300);border-radius:var(--radius-card);
+  background:var(--neutral-100);padding:var(--space-8) var(--space-6);
+  text-align:center;color:var(--neutral-500);font-size:var(--fs-body-sm);
+}
+details.table-toggle{margin-top:var(--space-4)}
+details.table-toggle summary{cursor:pointer;font-size:var(--fs-body-sm);
+      font-weight:var(--fw-semibold);color:var(--primary-700);padding:var(--space-2) 0}
+.datatable{width:100%;border-collapse:collapse;font-size:var(--fs-body-sm);
+      margin-top:var(--space-3)}
+.datatable th,.datatable td{text-align:left;padding:var(--space-2) var(--space-3);
+      border-bottom:1px solid var(--neutral-300)}
+.datatable td.num{text-align:right;font-variant-numeric:tabular-nums}
+.bar-inline{display:inline-block;height:10px;background:var(--primary-700);
+     border-radius:0 var(--radius-tag) var(--radius-tag) 0;min-width:2px;
+     vertical-align:middle}
+.demog{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--space-5);
+      margin-top:var(--space-9)}
+.demog div{border-left:3px solid var(--primary-700);padding-left:var(--space-4)}
+.demog b{display:block;font-size:var(--fs-h2);line-height:var(--lh-h2)}
+.demog span{font-size:var(--fs-caption);color:var(--neutral-500)}
+
+/* ---- S5 · How it works ---- */
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-5)}
+.step{background:var(--neutral-0);border-radius:var(--radius-card);
+      box-shadow:var(--shadow-card);padding:var(--space-6)}
+.step-n{
+  width:36px;height:36px;border-radius:50%;display:grid;place-items:center;
+  background:var(--primary-900);color:var(--neutral-0);
+  font-weight:var(--fw-bold);font-size:var(--fs-body-sm);margin-bottom:var(--space-4);
+}
+.step:last-child .step-n{background:var(--public-accent);color:var(--public-accent-fg)}
+.step h3{font-size:var(--fs-h3);font-weight:var(--fw-semibold);margin-bottom:var(--space-2)}
+.step p{font-size:var(--fs-body-sm);line-height:var(--lh-body-sm);color:var(--neutral-700)}
+.step-mod{display:inline-block;margin-top:var(--space-3);font-size:var(--fs-caption);
+      font-family:var(--font-mono);color:var(--neutral-500)}
+
+/* ---- S6 · Public services ---- */
+.services{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-5)}
+.service{background:var(--neutral-0);border-radius:var(--radius-card);
+      box-shadow:var(--shadow-card);padding:var(--space-6);display:flex;
+      flex-direction:column;gap:var(--space-3)}
+.service h3{font-size:var(--fs-h2);line-height:var(--lh-h2);font-weight:var(--fw-bold)}
+.service p{font-size:var(--fs-body-sm);line-height:var(--lh-body-sm);color:var(--neutral-700)}
+.service .btn{margin-top:auto;align-self:flex-start}
+.rel{font-size:var(--fs-caption);color:var(--neutral-500);font-family:var(--font-mono)}
+
+/* ---- S7 · Data access (dark) ---- */
+.dark{background:var(--public-hero-bg);color:var(--public-hero-fg)}
+.dark .h2,.dark .eyebrow{color:var(--public-hero-fg)}
+.dark .eyebrow{opacity:.75}
+.access{display:grid;grid-template-columns:7fr 5fr;gap:var(--space-9);align-items:start}
+.numsteps{margin-top:var(--space-6);display:grid;gap:var(--space-5)}
+.numstep{display:flex;gap:var(--space-4);align-items:flex-start}
+.numstep b{
+  flex:none;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;
+  border:1px solid var(--public-accent);color:var(--public-accent);
+  font-size:var(--fs-body-sm);
+}
+.numstep p{font-size:var(--fs-body);line-height:var(--lh-body);opacity:.9;max-width:52ch}
+.numstep h3{font-size:var(--fs-h3);font-weight:var(--fw-semibold);margin-bottom:var(--space-1)}
+.quickcard{background:var(--neutral-0);color:var(--neutral-900);
+      border-radius:var(--radius-card);padding:var(--space-6);
+      box-shadow:var(--public-shadow-raised)}
+.quickcard h3{font-size:var(--fs-h2);font-weight:var(--fw-bold);margin-bottom:var(--space-2)}
+.quickcard p{font-size:var(--fs-body-sm);color:var(--neutral-700);margin-bottom:var(--space-5)}
+.turnaround{margin-top:var(--space-5);font-size:var(--fs-body-sm);opacity:.9}
+
+/* ---- S8 · Publications ---- */
+.pubs{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-5)}
+.pub{background:var(--neutral-0);border-radius:var(--radius-card);
+     box-shadow:var(--shadow-card);padding:var(--space-5);display:grid;gap:var(--space-2)}
+.pub h3{font-size:var(--fs-h3);font-weight:var(--fw-semibold)}
+.pub-meta{font-size:var(--fs-caption);color:var(--neutral-500);
+     display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center}
+.badge{border:1px solid var(--neutral-300);border-radius:var(--radius-tag);
+     padding:0 var(--space-2);font-family:var(--font-mono);font-size:var(--fs-caption)}
+
+/* ---- S10 · Partners ---- */
+.partners{display:flex;flex-wrap:wrap;gap:var(--space-7);align-items:center;
+     justify-content:center}
+.partner{
+  filter:grayscale(1);opacity:.65;transition:filter .2s ease,opacity .2s ease;
+  font-weight:var(--fw-bold);color:var(--neutral-700);font-size:var(--fs-body);
+  border:1px solid var(--neutral-300);border-radius:var(--radius-default);
+  padding:var(--space-3) var(--space-5);
+}
+.partner:hover{filter:grayscale(0);opacity:1}
+
+/* ---- S11 · Helpline ---- */
+.helpline{background:var(--public-band-helpline);
+     border-top:1px solid var(--accent-quality);
+     border-bottom:1px solid var(--accent-quality)}
+.helpline .wrap{display:flex;align-items:center;gap:var(--space-5);
+     padding-top:var(--space-6);padding-bottom:var(--space-6);flex-wrap:wrap}
+.helpline svg{flex:none;color:var(--accent-quality)}
+.helpline-num{font-size:var(--fs-section);line-height:1.1;font-weight:var(--fw-bold);
+     color:var(--neutral-900)}
+.helpline-meta{font-size:var(--fs-body-sm);color:var(--neutral-700)}
+
+/* ---- S12 · Footer ---- */
+.footer{background:var(--primary-900);color:var(--neutral-0)}
+.footer .wrap{padding-top:var(--space-9);padding-bottom:var(--space-7)}
+.footcols{display:grid;grid-template-columns:2fr 1fr 1fr 1.4fr;gap:var(--space-7)}
+.footer h3{font-size:var(--fs-body);font-weight:var(--fw-bold);
+     margin-bottom:var(--space-4)}
+.footer ul{list-style:none;margin:0;padding:0;display:grid;gap:var(--space-2)}
+.footer a{color:var(--neutral-0);opacity:.85;font-size:var(--fs-body-sm);
+     text-decoration:none}
+.footer a:hover{opacity:1;text-decoration:underline}
+.footer p{font-size:var(--fs-body-sm);line-height:var(--lh-body-sm);opacity:.85}
+.ownership{margin-top:var(--space-4);opacity:.85;max-width:46ch}
+.legalbar{border-top:1px solid var(--public-rule-on-dark);margin-top:var(--space-7);
+     padding-top:var(--space-5);display:flex;gap:var(--space-5);flex-wrap:wrap;
+     font-size:var(--fs-caption);opacity:.8}
+
+/* ---- §9 Responsive ---- */
+@media (max-width:1279px){ .wrap{padding-left:var(--space-6);padding-right:var(--space-6)} }
+@media (max-width:1023px){
+  .hero-grid,.access,.stat-cols{grid-template-columns:1fr}
+  .counters{grid-template-columns:repeat(4,1fr)}
+  .cards4,.steps,.services,.pubs{grid-template-columns:repeat(2,1fr)}
+  .kpis{grid-template-columns:repeat(3,1fr)}
+  .footcols{grid-template-columns:1fr 1fr}
+}
+@media (max-width:767px){
+  .nav{display:none}
+  .nav-toggle{display:inline-flex}
+  .counters{grid-template-columns:1fr 1fr}
+  .demog{grid-template-columns:1fr 1fr}
+}
+@media (max-width:479px){
+  .section{padding-top:var(--space-7);padding-bottom:var(--space-7)}
+  .counters,.cards4,.steps,.services,.pubs,.kpis,.demog{grid-template-columns:1fr}
+  .footcols{grid-template-columns:1fr}
+  .bars th{white-space:normal}
+}
+
+/* ---- §10 Motion: minimal, and all of it opt-out ---- */
+@media (prefers-reduced-motion: reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001ms!important;
+       transition-duration:.001ms!important}
+  .card:hover{transform:none}
+}
+
+/* Nav drawer (§9: a real <dialog>, ESC to close) */
+dialog.drawer{border:0;padding:0;width:min(360px,90vw);height:100%;
+     max-height:100%;margin:0 0 0 auto;background:var(--neutral-0)}
+dialog.drawer::backdrop{background:var(--public-scrim)}
+.drawer-in{padding:var(--space-6);display:grid;gap:var(--space-4)}
+.drawer-in a{font-size:var(--fs-h3);color:var(--neutral-900);text-decoration:none;
+     padding:var(--space-3) 0;border-bottom:1px solid var(--neutral-300)}
+</style>
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<!-- ============ L1 · Government identity strip (decorative) ============ -->
+<div class="gov-strip" aria-hidden="true"><i></i><i></i><i></i></div>
+
+<!-- ============ L2 · Government banner ============ -->
+<div class="gov-banner">
+  <div class="wrap">
+    <!-- LP-O-08: Coat of Arms usage approval + an SVG asset are still open.
+         The repo only carries a 188KB 500x536 PNG, which blows the §12
+         budget for a 48px slot, so the mockup shows the slot, not a fake. -->
+    <div class="arms-fallback" role="img" aria-label="Uganda Coat of Arms placeholder">Arms<br>LP-O-08</div>
+    <div class="gov-banner-text">
+      <b>Republic of Uganda</b>
+      Ministry of Gender, Labour and Social Development
+    </div>
+    <div class="utility">
+      <a href="#">Search</a>
+      <a href="#">English</a>
+      <a href="#">Contact</a>
+      <button type="button">Text size</button>
+      <button type="button">High visibility</button>
+      <a href="{{ signin_url }}" rel="noopener">{% trans "Staff sign in" %}</a>
+    </div>
+  </div>
+</div>
+
+<!-- ============ L3 · Site header ============ -->
+<header class="site-header">
+  <div class="wrap">
+    <a class="wordmark" href="#">National Social Registry<span>nsr.mglsd.go.ug</span></a>
+    <nav class="nav" aria-label="Primary">
+      <a href="#" aria-current="page">Home</a>
+      <a href="#about">About</a>
+      <a href="#statistics">Statistics</a>
+      <a href="#services">Services</a>
+      <a href="#publications">Publications</a>
+    </nav>
+    <a class="btn btn--cta" href="#data-access" style="margin-left:auto">Request data</a>
+    <button class="btn btn--solid nav-toggle" type="button" id="navOpen"
+            aria-haspopup="dialog">Menu</button>
+  </div>
+</header>
+
+<dialog class="drawer" id="navDrawer" aria-label="Menu">
+  <div class="drawer-in">
+    <button class="btn btn--solid" type="button" id="navClose" autofocus>Close</button>
+    <a href="#">Home</a>
+    <a href="#about">About</a>
+    <a href="#statistics">Statistics</a>
+    <a href="#services">Services</a>
+    <a href="#publications">Publications</a>
+  </div>
+</dialog>
+
+<main id="main">
+
+<!-- ============ S1 · Hero ============ -->
+<section class="hero">
+  <div class="wrap">
+    <div class="hero-grid">
+      <div>
+        <span class="hero-chip"><span class="slot">Uganda's National Social Registry</span></span>
+        <h1><span class="slot">One register. Every household. <em>Fair</em> targeting.</span></h1>
+        <p class="hero-standfirst"><span class="slot">40 to 55 words on what the registry
+          is and who it serves. Placeholder standfirst: the National Social Registry is the
+          single authoritative record of socio-economic data on Ugandan households, used by
+          government programmes to identify, verify and refer people to social protection.</span></p>
+        <div class="hero-actions">
+          <a class="btn btn--cta" href="#data-access">Request data</a>
+          <a class="btn btn--ghost" href="#services">Check my status</a>
+        </div>
+      </div>
+
+      <!-- §6 S1: server-render these. No client fetch on first paint; a stale
+           or failed aggregate renders the last good value with its date,
+           never a spinner and never zero (gate §15.5). -->
+      <div class="counters">
+        <div class="counter">
+          {% if counters %}
+            <span class="counter-n">{{ counters.households|intcomma|default:".." }}</span>
+          {% else %}<span class="counter-n slot">0,000,000</span>{% endif %}
+          <span class="counter-l">{% trans "Households registered" %}</span>
+          <span class="counter-asat">{% trans "as at" %}
+            {% if counters %}{{ counters.as_at }}{% else %}<span class="slot">&#123;&#123;date&#125;&#125;</span>{% endif %}</span>
+        </div>
+        <div class="counter">
+          {% if counters %}
+            <span class="counter-n">{{ counters.people|intcomma|default:".." }}</span>
+          {% else %}<span class="counter-n slot">0,000,000</span>{% endif %}
+          <span class="counter-l">{% trans "People covered" %}</span>
+          <span class="counter-asat">{% trans "as at" %}
+            {% if counters %}{{ counters.as_at }}{% else %}<span class="slot">&#123;&#123;date&#125;&#125;</span>{% endif %}</span>
+        </div>
+        <div class="counter">
+          <!-- Spec §6 hardcodes 9. REF-DATA currently holds 15 distinct
+               sub-regions (19 rows, incl. duplicate seed entries). Left as a
+               slot until that is reconciled — see the review note. -->
+          {% if counters %}
+            <span class="counter-n">{{ counters.sub_regions }}</span>
+          {% else %}<span class="counter-n slot">00</span>{% endif %}
+          <span class="counter-l">{% trans "Sub-regions" %}</span>
+          <span class="counter-asat">{% trans "distinct names in REF-DATA" %}</span>
+        </div>
+        <div class="counter">
+          {% if counters %}
+            <span class="counter-n">{{ counters.districts_hit|default:".." }} <span style="font-size:var(--fs-h3)">{% trans "of" %} {{ counters.districts_total }}</span></span>
+          {% else %}<span class="counter-n slot">000 of 000</span>{% endif %}
+          <span class="counter-l">{% trans "Districts reached" %}</span>
+          <span class="counter-asat">{% trans "as at" %}
+            {% if counters %}{{ counters.as_at }}{% else %}<span class="slot">&#123;&#123;date&#125;&#125;</span>{% endif %}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ S2 · Trust bar ============ -->
+<section class="trustbar">
+  <div class="wrap">
+    <a class="trust" href="#about">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M10 2l6 3v5c0 4-2.6 6.6-6 8-3.4-1.4-6-4-6-8V5l6-3z" stroke="currentColor" stroke-width="1.6"/>
+      </svg><span class="slot">Backed by law</span></a>
+    <a class="trust" href="#about">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M6.5 10.2l2.4 2.4 4.6-4.8" stroke="currentColor" stroke-width="1.8"/>
+      </svg><span class="slot">Verified against NIRA</span></a>
+    <a class="trust" href="#about">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <rect x="4" y="8.5" width="12" height="8" rx="1.5" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M7 8.5V6.6a3 3 0 016 0v1.9" stroke="currentColor" stroke-width="1.6"/>
+      </svg><span class="slot">Your data is protected</span></a>
+    <a class="trust" href="#about">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M4 15V8m4 7V5m4 10V9m4 6V6" stroke="currentColor" stroke-width="1.8"/>
+      </svg><span class="slot">Independently audited</span></a>
+  </div>
+</section>
+
+<!-- ============ S3 · About ============ -->
+<section class="section" id="about">
+  <div class="wrap">
+    <div class="about-intro">
+      <p class="eyebrow">About the NSR</p>
+      <h2 class="h2"><span class="slot">A single register for social protection</span></h2>
+      <p class="standfirst" style="margin:0 auto"><span class="slot">45 words. Name the
+        mandate, the ministry, and the PMT method. Placeholder: the registry is maintained by
+        the NSR Unit under MGLSD, collects socio-economic data on households nationwide, and
+        scores welfare using a Proxy Means Test approved under dual authority.</span></p>
+    </div>
+    <div class="cards4">
+      <div class="card">
+        <div class="card-icon ic-data">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <ellipse cx="10" cy="5.5" rx="6" ry="2.5" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M4 5.5v9c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5v-9" stroke="currentColor" stroke-width="1.6"/>
+          </svg>
+        </div>
+        <h3>One national register</h3>
+        <p><span class="slot">25 words on scale and single source of truth.</span></p>
+      </div>
+      <div class="card">
+        <div class="card-icon ic-identity">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <circle cx="10" cy="7" r="3" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M4 16c1.2-2.6 3.4-4 6-4s4.8 1.4 6 4" stroke="currentColor" stroke-width="1.6"/>
+          </svg>
+        </div>
+        <h3>Verified identity</h3>
+        <p><span class="slot">25 words on NIRA validation and deduplication.</span></p>
+      </div>
+      <div class="card">
+        <div class="card-icon ic-elig">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <path d="M3 12l4-4 3 3 6-6" stroke="currentColor" stroke-width="1.8"/>
+          </svg>
+        </div>
+        <h3>Objective targeting</h3>
+        <p><span class="slot">25 words on the PMT, dual approval, and no discretion.</span></p>
+      </div>
+      <div class="card">
+        <div class="card-icon ic-sys">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <rect x="4" y="4" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M7.5 10.2l1.8 1.8 3.4-3.6" stroke="currentColor" stroke-width="1.7"/>
+          </svg>
+        </div>
+        <h3>Protected by law</h3>
+        <p><span class="slot">25 words on the DPPA 2019, consent, and the audit chain.</span></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ S4 · Statistics ============ -->
+<section class="section section--alt" id="statistics">
+  <div class="wrap">
+    <p class="eyebrow">Statistics at a glance</p>
+    <h2 class="h2"><span class="slot">What the register knows</span></h2>
+    {% if kpis %}
+      {# §8.4: a number without a date and a method is a liability. #}
+      <p class="chart-meta" style="max-width:70ch">
+        {% blocktrans %}Figures are drawn live from the registry and passed through the
+        §8.3 disclosure floor before publication: counts below 100 are rounded to the
+        nearest 5, and any cell built on fewer than 10 households is withheld. The floor
+        is awaiting the Data Protection Officer's sign-off (LP-O-06).{% endblocktrans %}
+        {% trans "as at" %} {{ kpis.as_at }}
+      </p>
+    {% endif %}
+
+    <!-- 4a · KPI row -->
+    <div class="kpis" style="margin-top:var(--space-6)">
+      {% if kpis %}
+        <div class="kpi"><span class="kpi-n">{{ kpis.households|intcomma|default:".." }}</span><span class="kpi-l">{% trans "Households registered" %}</span></div>
+        <div class="kpi"><span class="kpi-n">{{ kpis.people|intcomma|default:".." }}</span><span class="kpi-l">{% trans "People covered" %}</span></div>
+        <div class="kpi"><span class="kpi-n">{{ kpis.avg_household_size|default:".." }}</span><span class="kpi-l">{% trans "Average household size" %}</span></div>
+        <div class="kpi"><span class="kpi-n">{{ kpis.districts|intcomma }}</span><span class="kpi-l">{% trans "Districts" %}</span></div>
+        <div class="kpi"><span class="kpi-n">{{ kpis.sub_counties|intcomma }}</span><span class="kpi-l">{% trans "Sub-counties" %}</span></div>
+        <div class="kpi"><span class="kpi-n">{{ kpis.parishes|intcomma }}</span><span class="kpi-l">{% trans "Parishes" %}</span></div>
+      {% else %}
+        <div class="kpi"><span class="kpi-n slot">0,000,000</span><span class="kpi-l">Households registered</span></div>
+        <div class="kpi"><span class="kpi-n slot">0,000,000</span><span class="kpi-l">People covered</span></div>
+        <div class="kpi"><span class="kpi-n slot">0.0</span><span class="kpi-l">Average household size</span></div>
+        <div class="kpi"><span class="kpi-n slot">000</span><span class="kpi-l">Districts</span></div>
+        <div class="kpi"><span class="kpi-n slot">0,000</span><span class="kpi-l">Sub-counties</span></div>
+        <div class="kpi"><span class="kpi-n slot">00,000</span><span class="kpi-l">Parishes</span></div>
+      {% endif %}
+    </div>
+
+    <!-- 4b · Coverage by band -->
+    <div class="chart-head">
+      <div>
+        <div class="chart-title">Coverage by band</div>
+        <p class="chart-meta">Method: registered households as a share of projected households
+          per district. <span class="slot">Placeholder figures.</span> as at <span class="slot">&#123;&#123;date&#125;&#125;</span></p>
+      </div>
+      <a class="chart-dl" href="#">Download CSV</a>
+    </div>
+    <table class="bars">
+      <caption>Districts by share of projected households registered. The band name is in the
+        row header and the count is in its own column, so the chart never relies on colour
+        alone and needs no legend.</caption>
+      <tbody>
+        <tr><th scope="row">Above 100%</th>
+            <td class="track"><div class="bar b5" style="width:18%"></div></td>
+            <td class="n slot">00</td></tr>
+        <tr><th scope="row">75 to 100%</th>
+            <td class="track"><div class="bar b4" style="width:46%"></div></td>
+            <td class="n slot">00</td></tr>
+        <tr><th scope="row">50 to 75%</th>
+            <td class="track"><div class="bar b3" style="width:72%"></div></td>
+            <td class="n slot">00</td></tr>
+        <tr><th scope="row">25 to 50%</th>
+            <td class="track"><div class="bar b2" style="width:100%"></div></td>
+            <td class="n slot">00</td></tr>
+        <tr><th scope="row">Below 25%</th>
+            <td class="track"><div class="bar b1" style="width:34%"></div></td>
+            <td class="n slot">00</td></tr>
+      </tbody>
+    </table>
+
+    <div class="stat-cols">
+      <!-- 4c · Choropleth -->
+      <div>
+        <div class="chart-head"><div>
+          <div class="chart-title">Coverage by sub-region</div>
+          <p class="chart-meta">Static SVG, no tile provider and no API key (§2, §12).</p>
+        </div></div>
+        <!-- The repo's only geometry is design/assets/maps/uganda-adm2.geojson:
+             151 ADM2 features carrying shapeName alone, with no sub-region
+             attribute to dissolve on. Drawing a sub-region choropleth from it
+             would mean inventing the district-to-sub-region mapping, so the
+             slot stays a slot. The table below is the real content and is the
+             keyboard-operable equivalent §11.7 requires. -->
+        <div class="map-slot">
+          Static SVG choropleth of Uganda's sub-regions.<br>
+          <strong>Asset required.</strong> The ADM2 GeoJSON in the repo has no
+          sub-region attribute to dissolve on.
+        </div>
+        <details class="table-toggle" open>
+          <summary>{% trans "Show as table" %}</summary>
+          <table class="datatable">
+            <caption class="chart-meta" style="text-align:left;margin-bottom:var(--space-2)">
+              {% if coverage %}
+                {% trans "Registered households per sub-region. Counts below 100 are rounded to the nearest 5 and cells built on fewer than 10 households are shown as .. — the §8.3 disclosure floor." %}
+              {% else %}
+                <span class="slot">Placeholder rows. Sub-region names from REF-DATA.</span>
+              {% endif %}
+            </caption>
+            <thead><tr><th scope="col">{% trans "Sub-region" %}</th>
+                       <th scope="col">{% trans "Households" %}</th>
+                       <th scope="col">{% trans "Share" %}</th></tr></thead>
+            <tbody>
+              {% if coverage %}
+                {% for c in coverage.cells %}
+                  <tr>
+                    <td>{{ c.label }}</td>
+                    <td class="num">{{ c.display }}</td>
+                    <td class="num">
+                      {% if c.suppressed %}..{% else %}
+                        <span class="bar-inline" aria-hidden="true"
+                              style="width:{% widthratio c.value coverage.max_value 100 %}%"></span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+                {% if coverage.any_suppressed %}
+                  <tr><td colspan="3" style="color:var(--neutral-500)">
+                    {% trans ".. means the cell was suppressed under the §8.3 disclosure floor. Where one cell is suppressed a second is suppressed with it, so the first cannot be recovered by subtraction." %}
+                  </td></tr>
+                {% endif %}
+              {% else %}
+                <tr><td>Acholi</td><td class="num slot">00,000</td><td class="num slot">00.0%</td></tr>
+                <tr><td>Karamoja</td><td class="num slot">00,000</td><td class="num slot">00.0%</td></tr>
+                <tr><td>Busoga</td><td class="num slot">00,000</td><td class="num slot">00.0%</td></tr>
+                <tr><td colspan="3" style="color:var(--neutral-500)">
+                  <span class="slot">Cells built on fewer than 10 households show <code>..</code>
+                  per the §8.3 disclosure floor, pending DPO sign-off (LP-O-06).</span></td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </details>
+      </div>
+
+      <!-- 4d · Demographics -->
+      <div>
+        <div class="chart-head"><div>
+          <div class="chart-title">Who is on the register</div>
+          <p class="chart-meta">Percentages to one decimal, with absolute values (§8.3).</p>
+        </div></div>
+        <div class="demog" style="margin-top:0">
+          {% if demog %}
+            <div><b>{% if demog.female_pct %}{{ demog.female_pct }}%{% else %}..{% endif %}</b><span>{% trans "Female" %}</span></div>
+            <div><b>{% if demog.male_pct %}{{ demog.male_pct }}%{% else %}..{% endif %}</b><span>{% trans "Male" %}</span></div>
+            <div><b>..</b><span>{% trans "Under 18 — method note pending" %}</span></div>
+            <div><b>..</b><span>{% trans "Disability — not published below district (§8.3)" %}</span></div>
+          {% else %}
+            <div><b class="slot">00.0%</b><span>Female</span></div>
+            <div><b class="slot">00.0%</b><span>Under 18</span></div>
+            <div><b class="slot">00.0%</b><span>Living with a disability</span></div>
+            <div><b class="slot">00.0%</b><span>Female-headed households</span></div>
+          {% endif %}
+        </div>
+        <p class="chart-meta" style="margin-top:var(--space-5)">
+          No disability, health or other special-category breakdown is published below
+          district level (§8.3).
+        </p>
+      </div>
+    </div>
+
+    <p style="margin-top:var(--space-8)">
+      <a class="btn btn--solid" href="#">See full statistics</a>
+    </p>
+  </div>
+</section>
+
+<!-- ============ S5 · How it works ============ -->
+<section class="section">
+  <div class="wrap">
+    <p class="eyebrow">How it works</p>
+    <h2 class="h2"><span class="slot">From the household to the programme</span></h2>
+    <div class="steps" style="margin-top:var(--space-6)">
+      <div class="step"><div class="step-n">1</div><h3>Community entry and sensitisation</h3>
+        <p><span class="slot">25 words.</span></p><span class="step-mod">Field operations</span></div>
+      <div class="step"><div class="step-n">2</div><h3>Household data collection</h3>
+        <p><span class="slot">25 words.</span></p><span class="step-mod">INT — CAPI, web, USSD</span></div>
+      <div class="step"><div class="step-n">3</div><h3>Quality checks and identity verification</h3>
+        <p><span class="slot">25 words.</span></p><span class="step-mod">DAT-DQA · DAT-DDUP · IDV</span></div>
+      <div class="step"><div class="step-n">4</div><h3>Welfare scoring</h3>
+        <p><span class="slot">25 words.</span></p><span class="step-mod">PMT</span></div>
+      <div class="step"><div class="step-n">5</div><h3>The register</h3>
+        <p><span class="slot">25 words.</span></p><span class="step-mod">DAT</span></div>
+      <div class="step"><div class="step-n">6</div><h3>Programme targeting and referral</h3>
+        <p><span class="slot">25 words.</span></p><span class="step-mod">REF</span></div>
+    </div>
+    <p style="margin-top:var(--space-6)"><a href="#">Read the detailed process</a></p>
+  </div>
+</section>
+
+<!-- ============ S6 · Public services ============ -->
+<section class="section section--alt" id="services">
+  <div class="wrap">
+    <p class="eyebrow">Public services</p>
+    <h2 class="h2"><span class="slot">Three things you can do here</span></h2>
+    <div class="services" style="margin-top:var(--space-6)">
+      <div class="service">
+        <h3>Check my registration status</h3>
+        <p><span class="slot">Confirm if your household is on the register and what stage it
+          has reached.</span></p>
+        <p class="rel">DAT read-only · Release 1</p>
+        <p class="chart-meta">Needs your reference code and the phone number recorded at
+          capture. We send a one-time code to that phone. A NIN alone is never accepted (§7.1).</p>
+        <a class="btn btn--solid" href="#">Check status</a>
+      </div>
+      <div class="service">
+        <h3>Lodge a grievance</h3>
+        <p><span class="slot">Report a wrong record, an exclusion, or a complaint. Track it
+          with a reference code.</span></p>
+        <p class="rel">GRM · Release 1</p>
+        <p class="chart-meta">No CAPTCHA stands between a citizen and a complaint (§7.2).</p>
+        <a class="btn btn--solid" href="#">Lodge or track</a>
+      </div>
+      <div class="service">
+        <h3>Request registry data</h3>
+        <p><span class="slot">Government agencies, programmes and researchers can request
+          data under a signed agreement.</span></p>
+        <p class="rel">API-DRS · Release 1</p>
+        <p class="chart-meta">Aggregates are public. Row-level data needs a Data Sharing
+          Agreement and DPO approval.</p>
+        <a class="btn btn--solid" href="#data-access">Start a request</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ S7 · Data access explainer ============ -->
+<section class="section dark" id="data-access">
+  <div class="wrap">
+    <div class="access">
+      <div>
+        <p class="eyebrow">Data access</p>
+        <h2 class="h2"><span class="slot">Access registry data</span></h2>
+        <p class="hero-standfirst" style="margin-bottom:0"><span class="slot">35 words on who
+          may request data, what a Data Sharing Agreement requires, and what arrives.</span></p>
+        <div class="numsteps">
+          <div class="numstep"><b>1</b><div><h3>Submit a request</h3>
+            <p><span class="slot">Complete the online form. Name your organisation, the data
+              you need, and your purpose.</span></p></div></div>
+          <div class="numstep"><b>2</b><div><h3>Review and agreement</h3>
+            <p><span class="slot">The NSR Unit and the Data Protection Officer review the
+              request against your Data Sharing Agreement.</span></p></div></div>
+          <div class="numstep"><b>3</b><div><h3>Secure delivery</h3>
+            <p><span class="slot">Approved extracts arrive encrypted and watermarked, or
+              through a paginated API.</span></p></div></div>
+        </div>
+        <p class="turnaround">Typical turnaround:
+          <span class="slot">&#123;&#123;n&#125;&#125; working days</span> from a complete request.
+          <span style="opacity:.7">— owner needed, LP-O-03</span></p>
+      </div>
+      <div class="quickcard">
+        <h3>Quick data request</h3>
+        <p><span class="slot">One short form. We reply with a reference code and the next
+          step.</span></p>
+        <a class="btn btn--cta" href="#">Start a request</a>
+        <p class="chart-meta" style="margin-top:var(--space-4);margin-bottom:0">
+          <a href="#">Browse the data catalogue</a> to see which fields exist and which need
+          a DSA before you ask.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ S8 · Publications ============ -->
+<section class="section" id="publications">
+  <div class="wrap">
+    <p class="eyebrow">Publications</p>
+    <h2 class="h2"><span class="slot">Reports, policy and the data catalogue</span></h2>
+    <div class="pubs" style="margin-top:var(--space-6)">
+      <div class="pub"><h3><span class="slot">Annual registry report &#123;&#123;year&#125;&#125;</span></h3>
+        <div class="pub-meta"><span class="badge">PDF</span><span class="slot">0.0 MB</span>
+          <span class="slot">&#123;&#123;date&#125;&#125;</span></div>
+        <a href="#">Download</a></div>
+      <div class="pub"><h3><span class="slot">Targeting and PMT methodology note</span></h3>
+        <div class="pub-meta"><span class="badge">PDF</span><span class="slot">0.0 MB</span>
+          <span class="slot">&#123;&#123;date&#125;&#125;</span></div>
+        <a href="#">Download</a></div>
+      <div class="pub"><h3>Data catalogue</h3>
+        <div class="pub-meta"><span class="badge">HTML</span><span class="slot">&#123;&#123;date&#125;&#125;</span></div>
+        <a href="#">Browse fields and sensitivity</a></div>
+    </div>
+  </div>
+</section>
+
+<!-- S9 · News and events — intentionally absent. §6 and LP-O-05: no content
+     owner named, and a stale news section damages a government site more
+     than a missing one. -->
+
+<!-- ============ S10 · Partners ============ -->
+<section class="section section--alt">
+  <div class="wrap">
+    <p class="eyebrow" style="text-align:center">Partners</p>
+    <div class="partners" style="margin-top:var(--space-6)">
+      <span class="partner">MGLSD</span><span class="partner">NITA-U</span>
+      <span class="partner">NIRA</span><span class="partner">UBOS</span>
+      <span class="partner">OPM</span><span class="partner">World Bank</span>
+      <span class="partner">SAGE</span><span class="partner">NUSAF</span>
+      <span class="partner">PDM</span>
+    </div>
+    <p class="chart-meta" style="text-align:center;margin-top:var(--space-5)">
+      <span class="slot">Wordmarks stand in for logo assets.</span>
+    </p>
+  </div>
+</section>
+
+<!-- ============ S11 · Helpline ============ -->
+<section class="helpline">
+  <div class="wrap">
+    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M6.5 3h3l1.5 4-2 1.4a12 12 0 006.6 6.6L17 13l4 1.5v3a2 2 0 01-2.2 2A17 17 0 014.5 5.2 2 2 0 016.5 3z"
+            stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+    </svg>
+    <div>
+      <div class="helpline-num"><span class="slot">0800 000 000</span></div>
+      <div class="helpline-meta">NSR Helpline · Toll free ·
+        <span class="slot">&#123;&#123;operating hours&#125;&#125;</span>
+        <span style="opacity:.7">— LP-O-07</span></div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ============ S12 · Footer ============ -->
+<footer class="footer">
+  <div class="wrap">
+    <div class="footcols">
+      <div>
+        <h3>National Social Registry</h3>
+        <p><span class="slot">One paragraph describing the registry.</span></p>
+        <p class="ownership">This website belongs to the National Social Registry Unit,
+          Ministry of Gender, Labour and Social Development.</p>
+      </div>
+      <div>
+        <h3>Quick links</h3>
+        <ul>
+          <li><a href="#about">About</a></li><li><a href="#statistics">Statistics</a></li>
+          <li><a href="#publications">Publications</a></li><li><a href="#">FAQ</a></li>
+          <li><a href="#">Sitemap</a></li><li><a href="#">Feedback</a></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Services</h3>
+        <ul>
+          <li><a href="#">Check status</a></li><li><a href="#">Lodge a grievance</a></li>
+          <li><a href="#data-access">Request data</a></li><li><a href="#">Developer portal</a></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Contact</h3>
+        <ul>
+          <li><a href="#"><span class="slot">0800 000 000</span> (toll free)</a></li>
+          <li><a href="mailto:nsr@mglsd.go.ug">nsr@mglsd.go.ug</a></li>
+          <li><span class="slot">&#123;&#123;postal address&#125;&#125;</span></li>
+        </ul>
+      </div>
+    </div>
+    <div class="legalbar">
+      <span>© <span class="slot">&#123;&#123;year&#125;&#125;</span> Republic of Uganda</span>
+      <a href="#">Privacy notice</a><a href="#">Terms</a><a href="#">Disclaimer</a>
+      <a href="#">Accessibility statement</a>
+      <span>Page created <span class="slot">&#123;&#123;date&#125;&#125;</span> ·
+            Last updated <span class="slot">&#123;&#123;date&#125;&#125;</span></span>
+    </div>
+  </div>
+</footer>
+
+<script>
+/* §9 — the nav drawer is a real <dialog>, so ESC and focus trapping are the
+   platform's job rather than ours. */
+(function () {
+  var d = document.getElementById('navDrawer');
+  var open = document.getElementById('navOpen');
+  var close = document.getElementById('navClose');
+  if (!d || !open || !close) return;
+  open.addEventListener('click', function () { d.showModal(); });
+  close.addEventListener('click', function () { d.close(); });
+})();
+
+/* §6 S1 / §10 — count-up runs once per session and is skipped entirely under
+   prefers-reduced-motion. The numbers are already in the HTML, so this only
+   ever animates toward a value that is present without JS. sessionStorage
+   holds nothing but the "already played" flag. */
+(function () {
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var played;
+  try { played = sessionStorage.getItem('nsr-counters'); } catch (e) { played = '1'; }
+  if (reduce || played) return;
+  try { sessionStorage.setItem('nsr-counters', '1'); } catch (e) {}
+  /* Placeholder figures are not numeric, so there is nothing to count yet.
+     Wired for the real server-rendered values: read data-count, ease to it,
+     and leave the final text exactly as rendered. */
+})();
+</script>
+</body>
+</html>
