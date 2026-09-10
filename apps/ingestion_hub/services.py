@@ -1656,7 +1656,10 @@ def resolve_pinned_form_uid(source) -> str | None:
     )
     if last_good_run is None:
         return None
-    return last_good_run.connector.config.get("kobo_form_uid") or None
+    cfg = last_good_run.connector.config
+    # `form_uid` is the kind-neutral key (UBOS writes the file name);
+    # `kobo_form_uid` is what pre-US-114 Kobo runs recorded.
+    return cfg.get("form_uid") or cfg.get("kobo_form_uid") or None
 
 
 def trigger_connector_pull(
@@ -1669,10 +1672,12 @@ def trigger_connector_pull(
 ) -> dict:
     """Pull submissions for `source` and return a summary dict.
 
-    Kobo-only for v1 — non-Kobo kinds raise TriggerError. The shared
-    pull body is otherwise the same as the admin action (US-S11-014):
-    open a ConnectorRun, list deployed forms, pull the chosen one, land
-    + process each row, geo-backfill, close the run.
+    Pull-capable kinds only (connection_test.PULL_KINDS: Kobo, UBOS
+    bulk) — anything else raises TriggerError. For UBOS a "form" is a
+    file in the drop directory; the body is otherwise the same as the
+    admin action (US-S11-014): open a ConnectorRun, list deployed
+    forms, pull the chosen one, land + process each row, geo-backfill,
+    close the run.
 
     Form selection precedence (US-S11-022 + US-S11-025):
       1. Explicit `form_uid` from the caller — wins if it appears in
@@ -1700,16 +1705,20 @@ def trigger_connector_pull(
     exists for the source, raise TriggerError. Two operators clicking
     "Run" at the same time should not produce two overlapping pulls.
     """
-    from .connection_test import CredentialMissingError, credentials_for
+    from .connection_test import (
+        PULL_KINDS,
+        CredentialMissingError,
+        credentials_for,
+    )
     from .connectors.base import get_connector
     from .geo_backfill import backfill_missing_geo_from_stages
     from .models import Connector as ConnectorModel
-    from .models import ConnectorRunType, SourceSystemKind
+    from .models import ConnectorRunType
 
-    if source.kind != SourceSystemKind.KOBO:
+    if source.kind not in PULL_KINDS:
         raise TriggerError(
-            f"{source.code}: only Kobo sources can be triggered today "
-            f"(got kind={source.kind})",
+            f"{source.code}: only {' / '.join(sorted(PULL_KINDS))} sources "
+            f"can be pulled on demand (got kind={source.kind})",
         )
 
     # Concurrency guard. start_connector_run() already opens the new
@@ -1728,7 +1737,7 @@ def trigger_connector_pull(
         )
 
     connector_impl = get_connector(source.code)
-    if connector_impl is None or connector_impl.pull_submissions is None:
+    if connector_impl is None or getattr(connector_impl, "pull_submissions", None) is None:
         raise TriggerError(
             f"{source.code}: no live connector registered",
         )
@@ -1772,14 +1781,20 @@ def trigger_connector_pull(
         else:
             form = forms[0]
 
+    # One Connector row per (source, form/file). Kobo keeps its
+    # historical `kobo-<uid>` naming + `kobo_form_uid` key so existing
+    # rows and pins keep resolving; other kinds use the neutral form.
+    is_kobo = source.kind == "kobo"
+    row_name = f"kobo-{form['uid']}" if is_kobo else f"{source.kind}-{form['uid']}"
+    pin_key = "kobo_form_uid" if is_kobo else "form_uid"
     connector_row, _ = ConnectorModel.objects.get_or_create(
-        source_system=source, name=f"kobo-{form['uid']}",
-        defaults={"config": {"kobo_form_uid": form["uid"]}},
+        source_system=source, name=row_name,
+        defaults={"config": {pin_key: form["uid"]}},
     )
     # Pin the chosen form back to the Connector so next pull defaults
     # to it — even an explicit pick should persist as operator intent.
-    if connector_row.config.get("kobo_form_uid") != form["uid"]:
-        connector_row.config["kobo_form_uid"] = form["uid"]
+    if connector_row.config.get(pin_key) != form["uid"]:
+        connector_row.config[pin_key] = form["uid"]
         connector_row.save(update_fields=("config", "updated_at"))
 
     # start_connector_run() enforces AC-DIH-DPA-REQUIRED (raises

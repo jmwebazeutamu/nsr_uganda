@@ -337,17 +337,31 @@ const ModelVersionsTab = () => {
 // back-to-mock pattern in screens-dih.jsx).
 const MOCK_SOURCE_SYSTEMS = [
   { id: "01SS2026010100001", code: "KOBO-PILOT",     name: "Kobo pilot",      kind: "kobo",      is_active: true },
+  { id: "01SS2026010100005", code: "UBOS-BULK",      name: "UBOS mass enumeration", kind: "ubos", is_active: true },
+  { id: "01SS2026010100006", code: "NIRA-REVERSE",   name: "NIRA reverse-feed (vital events)", kind: "nira", is_active: true },
   { id: "01SS2026010100002", code: "PDM-MIS",        name: "PDM MIS",         kind: "partner_mis", is_active: true },
   { id: "01SS2026010100003", code: "NUSAF-MIS",      name: "NUSAF MIS",       kind: "partner_mis", is_active: true },
   { id: "01SS2026010100004", code: "WFP-SCOPE",      name: "WFP SCOPE",       kind: "wfp_scope", is_active: true },
 ];
 
-// ── Run-connector modal (US-S11-021, US-S11-022) ──────────────────────
-// Operator picks a SourceSystem + form_uid + dry-run flag, posts to
+// Kinds the trigger endpoint accepts (mirrors connection_test.PULL_KINDS).
+// NIRA is live but push-based — its events arrive on the vital-events
+// webhook, so it is listed for visibility but cannot be pulled here.
+const PULL_KINDS = new Set(["kobo", "ubos"]);
+const _sourceOptionSuffix = (s) => {
+  if (!s.is_active) return " (inactive)";
+  if (PULL_KINDS.has(s.kind)) return "";
+  if (s.kind === "nira") return " (inbound feed — no manual pull)";
+  return " (coming soon)";
+};
+
+// ── Run-connector modal (US-S11-021, US-S11-022, US-114) ──────────────
+// Operator picks a SourceSystem + form/file + dry-run flag, posts to
 // /api/v1/dih/source-systems/{id}/trigger-run/. On success the new
-// ConnectorRun row appears at the top of the runs table. Kobo is the
-// only kind wired today — the rest stay disabled with a "(coming
-// soon)" suffix to keep the UI honest.
+// ConnectorRun row appears at the top of the runs table. Kobo (forms)
+// and UBOS bulk (drop files) are pullable; NIRA is inbound-only; the
+// rest stay disabled with a "(coming soon)" suffix to keep the UI
+// honest.
 //
 // The form-picker dropdown is the US-S11-022 fix for the
 // 2026-05-26 incident: when a Kobo workspace carries multiple
@@ -356,11 +370,11 @@ const MOCK_SOURCE_SYSTEMS = [
 // 100% of rows to KeyError → "quarantined" tally with zero
 // StageRecords created. The picker makes the choice explicit.
 const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
-  const koboSources = useMemoAdmin(
-    () => sources.filter(s => s.kind === "kobo" && s.is_active),
+  const pullSources = useMemoAdmin(
+    () => sources.filter(s => PULL_KINDS.has(s.kind) && s.is_active),
     [sources],
   );
-  const [sourceId, setSourceId] = useStateAdmin(koboSources[0]?.id || "");
+  const [sourceId, setSourceId] = useStateAdmin(pullSources[0]?.id || "");
   const [dryRun, setDryRun] = useStateAdmin(false);
   // Per-pull row cap (US-S11-033). Bounded 1..500 — must match the
   // serializer min/max in apps/ingestion_hub/api.py. 50 matches the
@@ -376,8 +390,8 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
   const [formsError, setFormsError] = useStateAdmin("");
 
   useEffectAdmin(() => {
-    if (!sourceId && koboSources.length > 0) setSourceId(koboSources[0].id);
-  }, [koboSources, sourceId]);
+    if (!sourceId && pullSources.length > 0) setSourceId(pullSources[0].id);
+  }, [pullSources, sourceId]);
 
   // Fetch the form list — extracted so the "Retry" button can call it
   // again after an upstream 5xx (e.g. Kobo Toolbox 503 outage) without
@@ -414,11 +428,12 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
       });
   };
 
-  // Auto-fetch the form list whenever the picked source changes. Only
-  // fires for Kobo sources because non-Kobo kinds 400 the endpoint.
+  // Auto-fetch the form / file list whenever the picked source
+  // changes. Only fires for pull-capable kinds because the others 400
+  // the endpoint.
   useEffectAdmin(() => {
     const src = sources.find(s => s.id === sourceId);
-    if (!src || src.kind !== "kobo") {
+    if (!src || !PULL_KINDS.has(src.kind)) {
       setForms([]); setFormUid(""); setFormsError("");
       return;
     }
@@ -454,8 +469,9 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
       >
         <h3 className="t-h3" style={{marginTop:0}}>Run connector</h3>
         <p className="t-bodysm muted" style={{marginTop:4, marginBottom:16}}>
-          Triggers a Kobo pull through the same path the scheduled Celery
-          beat uses. Requires an active DPA and stored credentials.
+          Pulls a Kobo form or a UBOS drop file through the same path the
+          scheduled Celery beat uses. Requires an active DPA and stored
+          credentials. NIRA events arrive on the inbound webhook instead.
         </p>
 
         <label className="t-cap" style={{display:"block", marginBottom:4}}>
@@ -470,11 +486,11 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
           disabled={submitting}
         >
           {sources.map(s => {
-            const kobo = s.kind === "kobo" && s.is_active;
+            const pullable = PULL_KINDS.has(s.kind) && s.is_active;
             return (
-              <option key={s.id} value={s.id} disabled={!kobo}>
+              <option key={s.id} value={s.id} disabled={!pullable}>
                 {s.code} — {s.name}
-                {kobo ? "" : " (coming soon)"}
+                {_sourceOptionSuffix(s)}
               </option>
             );
           })}
@@ -487,7 +503,7 @@ const RunConnectorModal = ({ sources, onClose, onSubmit, submitting }) => {
         {(forms.length > 0 || formsLoading) && (
           <>
             <label className="t-cap" style={{display:"block", marginBottom:4}}>
-              Form {formsLoading && <span className="muted">(loading…)</span>}
+              Form / file {formsLoading && <span className="muted">(loading…)</span>}
             </label>
             <select
               value={formUid}

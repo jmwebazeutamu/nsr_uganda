@@ -6,9 +6,10 @@ for a SourceSystem, decrypts the credential row, calls
 `connector.test_connection(creds)`, records a ConnectorRun row of
 type TEST, and emits an AuditEvent.
 
-NIRA + UBOS will land sibling credential models (NiraCredential,
-UbosCredential) following the KoboCredential pattern. The dispatch
-function gains an elif branch when each ships — see ADR-0007.
+Three credential models sit behind the dispatch today (ADR-0007):
+KoboCredential (token), UbosCredential (drop directory + checksum
+policy) and NiraCredential (webhook signing secret). PDM / NUSAF /
+WFP SCOPE stay "coming soon" until theirs land.
 """
 
 from __future__ import annotations
@@ -29,8 +30,10 @@ from .models import (
     ConnectorRunStatus,
     ConnectorRunType,
     KoboCredential,
+    NiraCredential,
     SourceSystem,
     SourceSystemKind,
+    UbosCredential,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,28 +44,84 @@ class CredentialMissingError(Exception):
 
 
 class UnsupportedConnectorError(Exception):
-    """The SourceSystem's kind has no live test_connection implementation
-    yet (NIRA and UBOS are 'coming soon' per the dropdown)."""
+    """The SourceSystem's kind has no credential model / live connector
+    yet (PDM, NUSAF, WFP SCOPE are 'coming soon' per the dropdown)."""
+
+
+# Kinds with a credential model + live connector. Single source of
+# truth for the admin dropdown gate, the console modal and the
+# trigger/forms endpoints.
+SUPPORTED_KINDS = frozenset({
+    SourceSystemKind.KOBO, SourceSystemKind.UBOS, SourceSystemKind.NIRA,
+})
+# Subset that can be *pulled* on demand (Run connector / beat). NIRA
+# is push-based — its rows arrive through the vital-events webhook.
+PULL_KINDS = frozenset({SourceSystemKind.KOBO, SourceSystemKind.UBOS})
+
+_CREDENTIAL_ATTR = {
+    SourceSystemKind.KOBO: "kobo_credential",
+    SourceSystemKind.UBOS: "ubos_credential",
+    SourceSystemKind.NIRA: "nira_credential",
+}
+
+
+def _secret_text(value) -> str:
+    """EncryptedBinaryField hands back bytes when loaded from the DB,
+    but an instance that was just created in-process still carries
+    whatever the caller assigned (str or bytes)."""
+    if isinstance(value, str):
+        return value
+    return bytes(value).decode("utf-8")
+
+
+def credential_row_for(source_system: SourceSystem):
+    """The `*Credential` row for the source's kind, or None when the
+    kind is supported but no row has been saved yet. Raises
+    UnsupportedConnectorError for kinds without a credential model."""
+    attr = _CREDENTIAL_ATTR.get(source_system.kind)
+    if attr is None:
+        raise UnsupportedConnectorError(
+            f"source kind {source_system.kind!r} has no credential model yet",
+        )
+    try:
+        return getattr(source_system, attr)
+    except (KoboCredential.DoesNotExist, UbosCredential.DoesNotExist,
+            NiraCredential.DoesNotExist):
+        return None
 
 
 def credentials_for(source_system: SourceSystem) -> dict:
     """Decrypt the credential row that matches the SourceSystem's kind.
     The returned dict matches the shape each connector documents in
-    its module docstring (Kobo: {server_url, token})."""
+    its module docstring:
+
+        Kobo: {server_url, token}
+        UBOS: {drop_path, require_checksum}
+        NIRA: {webhook_secret}
+    """
+    cred = credential_row_for(source_system)
+    if cred is None:
+        raise CredentialMissingError(
+            f"no {source_system.get_kind_display()} credential for source "
+            f"{source_system.code}",
+        )
     if source_system.kind == SourceSystemKind.KOBO:
-        try:
-            cred = source_system.kobo_credential
-        except KoboCredential.DoesNotExist as exc:
-            raise CredentialMissingError(
-                f"no Kobo credential for source {source_system.code}",
-            ) from exc
         return {
             "server_url": cred.server_url,
             # EncryptedBinaryField returns decrypted bytes; the Kobo
             # connector expects str.
-            "token": bytes(cred.token_encrypted).decode("utf-8"),
+            "token": _secret_text(cred.token_encrypted),
         }
-    raise UnsupportedConnectorError(
+    if source_system.kind == SourceSystemKind.UBOS:
+        return {
+            "drop_path": cred.drop_path,
+            "require_checksum": cred.require_checksum,
+        }
+    if source_system.kind == SourceSystemKind.NIRA:
+        return {
+            "webhook_secret": _secret_text(cred.webhook_secret_encrypted),
+        }
+    raise UnsupportedConnectorError(  # pragma: no cover — guarded above
         f"source kind {source_system.kind!r} has no credential model yet",
     )
 
@@ -95,7 +154,7 @@ def run_test_connection(
     (no credential row, no connector registered).
     """
     connector_impl = get_connector(source_system.code)
-    if connector_impl is None or connector_impl.test_connection is None:
+    if connector_impl is None or getattr(connector_impl, "test_connection", None) is None:
         raise UnsupportedConnectorError(
             f"no live connector registered for code {source_system.code!r}",
         )
@@ -129,15 +188,14 @@ def run_test_connection(
     )
     run.save(update_fields=("finished_at", "status", "note"))
 
-    # Bookkeep the freshness signal on KoboCredential so the admin
+    # Bookkeep the freshness signal on the credential row so the admin
     # list_display can show "last tested" without a JOIN to runs.
-    if source_system.kind == SourceSystemKind.KOBO:
+    cred = credential_row_for(source_system)
+    if cred is not None:
         # Updating through the related row; same transaction.
-        source_system.kobo_credential.last_test_at = run.finished_at
-        source_system.kobo_credential.last_test_ok = result.ok
-        source_system.kobo_credential.save(
-            update_fields=("last_test_at", "last_test_ok"),
-        )
+        cred.last_test_at = run.finished_at
+        cred.last_test_ok = result.ok
+        cred.save(update_fields=("last_test_at", "last_test_ok"))
 
     emit_audit(
         "test_connection", "source_system", source_system.id, actor=actor,

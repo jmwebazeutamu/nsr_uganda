@@ -1380,22 +1380,24 @@ class TestTriggerRunEndpoint:
 
     # --- rejections ----------------------------------------------------
 
-    def test_non_kobo_kind_is_rejected(
+    def test_non_pull_kind_is_rejected(
         self, django_user_model,
     ):
-        ubos = SourceSystem.objects.create(
-            code="UBOS-1", name="UBOS", kind=SourceSystemKind.UBOS,
+        # PARTNER_MIS (PDM / NUSAF) has no live pull connector; UBOS
+        # bulk and Kobo are the pull-capable kinds since US-114.
+        pdm = SourceSystem.objects.create(
+            code="PDM-1", name="PDM", kind=SourceSystemKind.PARTNER_MIS,
         )
         DataProvisionAgreement.objects.create(
-            source_system=ubos, reference="DPA-UBOS",
+            source_system=pdm, reference="DPA-PDM",
             valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
         )
         user = self._in_group(django_user_model, "nsr_admin")
         client = APIClient()
         client.force_authenticate(user)
-        resp = client.post(self._url(ubos), {}, format="json")
+        resp = client.post(self._url(pdm), {}, format="json")
         assert resp.status_code == 400
-        assert "only Kobo" in resp.json()["detail"]
+        assert "can be pulled on demand" in resp.json()["detail"]
         # Rejection still emits both audit events.
         actions = set(
             AuditEvent.objects.filter(
@@ -1501,16 +1503,16 @@ class TestFormsEndpoint:
         assert uids["F1"]["deployed"] is True
         assert uids["F3"]["deployed"] is False
 
-    def test_non_kobo_returns_400(self, django_user_model):
-        ubos = SourceSystem.objects.create(
-            code="UBOS-2", name="UBOS", kind=SourceSystemKind.UBOS,
+    def test_non_pull_kind_returns_400(self, django_user_model):
+        pdm = SourceSystem.objects.create(
+            code="PDM-2", name="PDM", kind=SourceSystemKind.PARTNER_MIS,
         )
         user = self._in_group(django_user_model, "nsr_admin")
         client = APIClient()
         client.force_authenticate(user)
-        resp = client.get(self._url(ubos))
+        resp = client.get(self._url(pdm))
         assert resp.status_code == 400
-        assert "only Kobo" in resp.json()["detail"]
+        assert "form / file list" in resp.json()["detail"]
 
     def test_anonymous_caller_gets_403(self, trigger_kobo_source):
         client = APIClient()

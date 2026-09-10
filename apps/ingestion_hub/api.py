@@ -1,6 +1,13 @@
+from django.db.models import F
+from django.utils import timezone
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import permissions, serializers, status, viewsets
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import (
+    action,
+    api_view,
+    authentication_classes,
+    permission_classes,
+)
 from rest_framework.response import Response
 
 from apps.security.abac import HouseholdIdScopedQuerysetMixin
@@ -11,6 +18,7 @@ from apps.security.audit_views import AuditReadMixin
 from .models import (
     Connector,
     ConnectorRun,
+    ConnectorRunStatus,
     SourceSystem,
     StageRecord,
     StageRecordState,
@@ -208,7 +216,8 @@ class EditRequestSerializer(serializers.Serializer):
 
 
 class TriggerRunRequestSerializer(serializers.Serializer):
-    """Operator-initiated Kobo pull from the System Admin console."""
+    """Operator-initiated pull (Kobo form / UBOS drop file) from the
+    System Admin console."""
     dry_run = serializers.BooleanField(
         default=False,
         help_text=(
@@ -219,9 +228,9 @@ class TriggerRunRequestSerializer(serializers.Serializer):
         ),
     )
     form_uid = serializers.CharField(
-        required=False, allow_blank=True, max_length=64,
+        required=False, allow_blank=True, max_length=255,
         help_text=(
-            "Optional Kobo form UID. When omitted, the connector picks "
+            "Optional Kobo form UID or UBOS drop file name. When omitted, the connector picks "
             "the first deployed form (or the previously-pulled form "
             "stored on Connector.config). US-S11-022 added this so "
             "operators can disambiguate when a workspace carries "
@@ -305,12 +314,13 @@ class SourceSystemViewSet(viewsets.ReadOnlyModelViewSet):
 
     @extend_schema(
         tags=["dih"],
-        summary="Trigger an operator-initiated connector pull (US-S11-021)",
+        summary="Trigger an operator-initiated connector pull (US-S11-021, US-114)",
         description=(
             "Pulls submissions for this source system through the same "
             "code path as the `pull_kobo_submissions_action` admin "
-            "action, so console and admin behave identically. Kobo-only "
-            "for v1. Guarded by IsDihTrigger (Sys Admin or NSR Unit "
+            "action, so console and admin behave identically. Kobo and "
+            "UBOS bulk (file drop) today; NIRA is push-based and lands "
+            "through /nira/vital-events/. Guarded by IsDihTrigger (Sys Admin or NSR Unit "
             "Coordinator) and refuses when another run is "
             "pending/running, when no active DPA exists "
             "(AC-DIH-DPA-REQUIRED), or when the source has no "
@@ -372,16 +382,18 @@ class SourceSystemViewSet(viewsets.ReadOnlyModelViewSet):
 
     @extend_schema(
         tags=["dih"],
-        summary="List deployed forms for a Kobo SourceSystem (US-S11-022)",
+        summary="List deployed forms / drop files for a pull-capable SourceSystem (US-S11-022, US-114)",
         description=(
-            "Returns the upstream form catalogue that an operator can "
-            "select from in the Run-connector modal. Kobo-only for v1 "
-            "— non-Kobo kinds 400. Guarded by IsDihTrigger so the data "
-            "isn't exposed beyond the operator surface that uses it."
+            "Returns the catalogue an operator can select from in the "
+            "Run-connector modal: Kobo forms, or UBOS bulk files in the "
+            "drop directory (`deployed` = passes the checksum gate). "
+            "Kinds outside PULL_KINDS 400. Guarded by IsDihTrigger so "
+            "the data isn't exposed beyond the operator surface that "
+            "uses it."
         ),
         responses={
             200: FormListItemSerializer(many=True),
-            400: OpenApiResponse(description="non-Kobo / missing credentials"),
+            400: OpenApiResponse(description="not pull-capable / missing credentials"),
             403: OpenApiResponse(description="caller lacks trigger permission"),
         },
     )
@@ -390,18 +402,24 @@ class SourceSystemViewSet(viewsets.ReadOnlyModelViewSet):
         permission_classes=[IsDihTrigger],
     )
     def forms(self, request, pk=None):
-        from .connection_test import CredentialMissingError, credentials_for
+        from .connection_test import (
+            PULL_KINDS,
+            CredentialMissingError,
+            credentials_for,
+        )
         from .connectors.base import get_connector
-        from .models import SourceSystemKind
 
         source = self.get_object()
-        if source.kind != SourceSystemKind.KOBO:
+        if source.kind not in PULL_KINDS:
             return Response(
-                {"detail": f"{source.code}: only Kobo sources expose a form list"},
+                {"detail": (
+                    f"{source.code}: only {' / '.join(sorted(PULL_KINDS))} "
+                    "sources expose a form / file list"
+                )},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         connector_impl = get_connector(source.code)
-        if connector_impl is None or connector_impl.list_forms is None:
+        if connector_impl is None or getattr(connector_impl, "list_forms", None) is None:
             return Response(
                 {"detail": f"{source.code}: no live connector registered"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -984,3 +1002,238 @@ def walk_in_submit(request):
         StageRecordSerializer(stage).data,
         status=status.HTTP_201_CREATED,
     )
+
+
+# --- NIRA reverse-feed webhook (US-096, US-S7-002, US-114 restore) ---------
+#
+# NIRA pushes one vital event per request. The endpoint is machine-
+# to-machine: no session, no Basic auth — the request proves itself
+# with an HMAC-SHA256 signature over the raw body under the shared
+# secret stored (encrypted) on the NIRA-REVERSE SourceSystem's
+# NiraCredential. Every accepted event lands as a RawLanding under
+# its own ConnectorRun (AC-DIH-LANDING-IMMUTABLE), then routes through
+# the NIRA connector's process() — the UPD vital-event auto-commit
+# with its 1% audit sample (S3-003). Events the connector cannot
+# route (births until NIRA-O-01, unknown NINs) are quarantined, not
+# dropped.
+
+class NiraVitalEventRequestSerializer(serializers.Serializer):
+    """Documents the NIRA push shape (MoU draft; finalised when
+    NIRA-O-01 closes). Validation of the *content* happens in the
+    connector's canonicalize so the raw payload lands untouched."""
+    event_type = serializers.ChoiceField(choices=("death", "birth"))
+    nin = serializers.CharField(max_length=32)
+    event_date = serializers.DateField()
+    registration_ref = serializers.CharField(max_length=64)
+    event_id = serializers.CharField(
+        required=False, max_length=64,
+        help_text="Idempotency key; defaults to registration_ref.",
+    )
+    demographics = serializers.DictField(required=False)
+
+
+class NiraVitalEventResponseSerializer(serializers.Serializer):
+    outcome = serializers.ChoiceField(
+        choices=("committed", "noop", "quarantined", "duplicate"),
+    )
+    event_ref = serializers.CharField()
+    run_id = serializers.CharField(allow_blank=True)
+    landing_id = serializers.CharField(allow_blank=True)
+    change_request_id = serializers.CharField(allow_blank=True)
+    detail = serializers.CharField(allow_blank=True)
+
+
+def _nira_source():
+    from .models import SourceSystemKind
+    return (
+        SourceSystem.objects
+        .filter(kind=SourceSystemKind.NIRA, is_active=True)
+        .order_by("code")
+        .first()
+    )
+
+
+@extend_schema(
+    tags=["dih"],
+    summary="Receive a NIRA vital event (reverse feed)",
+    description=(
+        "Inbound webhook for NIRA births/deaths. Authenticated by the "
+        "`X-NIRA-Signature: sha256=<hmac>` header (HMAC-SHA256 of the "
+        "raw body under the secret on the NIRA-REVERSE source's "
+        "credential). Idempotent on `event_id` (falls back to "
+        "`registration_ref`): a repeat returns outcome=duplicate "
+        "without landing again. Deaths auto-commit through UPD "
+        "(AC-UPD-NIRA-AUTO); births and unknown NINs are landed and "
+        "quarantined for the NSR Unit."
+    ),
+    request=NiraVitalEventRequestSerializer,
+    responses={
+        200: NiraVitalEventResponseSerializer,
+        400: OpenApiResponse(description="malformed event (landed + quarantined)"),
+        401: OpenApiResponse(description="missing / invalid signature"),
+        503: OpenApiResponse(description="NIRA source, credential or DPA not configured"),
+    },
+)
+@api_view(["POST"])
+@authentication_classes([])
+@permission_classes([permissions.AllowAny])
+def nira_vital_event(request):
+    import json
+
+    from .connection_test import CredentialMissingError, credentials_for
+    from .connectors.base import get_connector
+    from .connectors.nira_vital import (
+        SIGNATURE_HEADER,
+        NiraVitalEventError,
+        verify_signature,
+    )
+    from .models import Quarantine, RawLanding
+    from .services import land_payload, start_connector_run
+
+    actor = "nira-reverse-feed"
+    source = _nira_source()
+    if source is None:
+        return Response(
+            {"detail": "NIRA reverse-feed source is not configured"},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    try:
+        creds = credentials_for(source)
+    except CredentialMissingError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    body = request.body or b""
+    if not verify_signature(creds["webhook_secret"], body, request.headers.get(SIGNATURE_HEADER)):
+        emit_audit(
+            "dih.nira.signature_rejected", "source_system", source.id,
+            actor=actor, actor_kind="system",
+            reason="X-NIRA-Signature missing or invalid",
+            ip_address=request.META.get("REMOTE_ADDR"),
+        )
+        return Response(
+            {"detail": "invalid or missing X-NIRA-Signature"},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    try:
+        payload = json.loads(body.decode("utf-8")) if body else None
+    except (UnicodeDecodeError, ValueError):
+        payload = None
+    if not isinstance(payload, dict) or not payload:
+        return Response(
+            {"detail": "body must be a JSON object"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    event_ref = str(payload.get("event_id") or payload.get("registration_ref") or "").strip()
+    if not event_ref:
+        return Response(
+            {"detail": "event_id or registration_ref is required (idempotency key)"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    # Idempotency (US-096): a landing for this event that reached a
+    # terminal, non-failed run is the record of truth — do not land or
+    # process again. A FAILED run means *we* broke, so a retry may
+    # proceed.
+    prior = (
+        RawLanding.objects
+        .filter(connector_run__connector__source_system=source, source_reference=event_ref)
+        .exclude(connector_run__status=ConnectorRunStatus.FAILED)
+        .order_by("-received_at")
+        .first()
+    )
+    if prior is not None:
+        emit_audit(
+            "dih.nira.event_duplicate", "raw_landing", prior.id,
+            actor=actor, actor_kind="system", reason=f"event {event_ref} already landed",
+        )
+        return Response(NiraVitalEventResponseSerializer({
+            "outcome": "duplicate", "event_ref": event_ref,
+            "run_id": prior.connector_run_id, "landing_id": prior.id,
+            "change_request_id": "", "detail": "event already received",
+        }).data)
+
+    connector_impl = get_connector(source.code)
+    if connector_impl is None:
+        return Response(
+            {"detail": f"{source.code}: no connector registered"},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    connector_row = source.connectors.order_by("created_at").first()
+    if connector_row is None:
+        connector_row = Connector.objects.create(
+            source_system=source, name="nira-vital-events",
+            config={"created_by": "nira webhook"},
+        )
+    try:
+        run = start_connector_run(connector_row, actor=actor)
+    except DihError as exc:  # no active DPA (AC-DIH-DPA-REQUIRED)
+        emit_audit(
+            "dih.nira.event_refused", "source_system", source.id,
+            actor=actor, actor_kind="system", reason=str(exc),
+        )
+        return Response({"detail": str(exc)}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+    landing = land_payload(run, payload, source_reference=event_ref)
+
+    def _close(run_status, *, note: str, quarantined: int = 0, promoted: int = 0):
+        ConnectorRun.objects.filter(pk=run.pk).update(
+            status=run_status, finished_at=timezone.now(), note=note,
+            records_quarantined=F("records_quarantined") + quarantined,
+            records_promoted=F("records_promoted") + promoted,
+        )
+
+    def _quarantine(reason: str, detail: str, http_status):
+        Quarantine.objects.create(
+            connector_run=run, raw_landing=landing, reason=reason,
+            detail=detail, payload=payload,
+        )
+        _close(ConnectorRunStatus.QUARANTINED, note=f"{reason}: {detail}", quarantined=1)
+        emit_audit(
+            "dih.nira.event_quarantined", "raw_landing", landing.id,
+            actor=actor, actor_kind="system", reason=f"{reason}: {detail}",
+        )
+        return Response(NiraVitalEventResponseSerializer({
+            "outcome": "quarantined", "event_ref": event_ref,
+            "run_id": run.id, "landing_id": landing.id,
+            "change_request_id": "", "detail": detail,
+        }).data, status=http_status)
+
+    try:
+        connector_impl.canonicalize(payload)
+    except (KeyError, ValueError) as exc:
+        # Malformed per the MoU schema — landed for the record, but
+        # tell NIRA the payload is wrong rather than pretend success.
+        return _quarantine("nira_malformed", f"{type(exc).__name__}: {exc}", status.HTTP_400_BAD_REQUEST)
+
+    try:
+        change_request = connector_impl.process(payload, actor=actor)
+    except NiraVitalEventError as exc:
+        return _quarantine("nira_unroutable", str(exc), status.HTTP_200_OK)
+    except Exception as exc:  # noqa: BLE001 — our failure; let NIRA retry
+        _close(ConnectorRunStatus.FAILED, note=f"processing error: {exc}")
+        emit_audit(
+            "dih.nira.event_failed", "raw_landing", landing.id,
+            actor=actor, actor_kind="system", reason=str(exc),
+        )
+        return Response(
+            {"detail": f"event landed but processing failed: {exc}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    if change_request is None:
+        _close(ConnectorRunStatus.SUCCEEDED, note="no-op: member already in the pushed state")
+        outcome, cr_id, detail = "noop", "", "member already in the pushed state"
+    else:
+        _close(ConnectorRunStatus.SUCCEEDED, note=f"auto-committed ChangeRequest {change_request.id}", promoted=1)
+        outcome, cr_id, detail = "committed", change_request.id, "vital event auto-committed"
+    emit_audit(
+        "dih.nira.event_received", "raw_landing", landing.id,
+        actor=actor, actor_kind="system",
+        reason=f"{outcome}: {detail}",
+        field_changes={"run_id": run.id, "change_request_id": cr_id, "event_ref": event_ref},
+    )
+    return Response(NiraVitalEventResponseSerializer({
+        "outcome": outcome, "event_ref": event_ref, "run_id": run.id,
+        "landing_id": landing.id, "change_request_id": cr_id, "detail": detail,
+    }).data)

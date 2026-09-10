@@ -39,9 +39,37 @@ trivially unit-testable.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import time
 from typing import Any
 
-from .base import register_connector
+from .base import ConnectionTestResult, register_connector
+
+# Header NIRA signs each push with: "sha256=<hex HMAC-SHA256 of the raw
+# body under the shared secret>". The secret lives (encrypted) on the
+# NiraCredential row of the NIRA-REVERSE SourceSystem.
+SIGNATURE_HEADER = "X-NIRA-Signature"
+SIGNATURE_PREFIX = "sha256="
+
+# NIN the connection probe verifies through the IDV client seam. The
+# mock answers "match" for any well-formed NIN whose suffix is not a
+# special-case code; the live client will answer for a real test NIN
+# once NIRA-O-01 closes.
+PROBE_NIN = "CM00000000PROBE"[:14]
+
+
+def sign_body(secret: str, body: bytes) -> str:
+    """Return the header value NIRA (or a test) sends for `body`."""
+    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return f"{SIGNATURE_PREFIX}{digest}"
+
+
+def verify_signature(secret: str, body: bytes, header_value: str | None) -> bool:
+    """Constant-time check of an inbound `X-NIRA-Signature` header."""
+    if not secret or not header_value:
+        return False
+    return hmac.compare_digest(sign_body(secret, body), header_value.strip())
 
 
 def nira_vital_to_canonical(raw: dict) -> dict:
@@ -140,6 +168,56 @@ class _NiraVitalConnector:
 
     def process(self, raw: dict, *, actor: str = "nira-reverse-feed") -> Any:
         return process_nira_vital_event(raw, actor=actor)
+
+    def test_connection(self, credentials: dict) -> ConnectionTestResult:
+        """Probe for the admin "Test connection" button.
+
+        NIRA pushes at us, so there is no upstream endpoint of *ours*
+        to call for the reverse feed. What can be checked is (a) the
+        webhook secret is configured, so inbound pushes will verify,
+        and (b) the NIRA verification channel the IDV module uses is
+        answering — through the same provider seam (mock today, live
+        once NIRA-O-01 closes), so the probe is honest about which one
+        it reached.
+        """
+        from django.conf import settings
+
+        from apps.identity_verification.client import get_nira_client
+
+        started = time.monotonic()
+
+        def _ms() -> int:
+            return int((time.monotonic() - started) * 1000)
+
+        if not (credentials or {}).get("webhook_secret"):
+            return ConnectionTestResult(
+                ok=False, latency_ms=_ms(),
+                error="webhook secret is not configured — inbound pushes cannot be verified",
+            )
+        provider = (getattr(settings, "NIRA_PROVIDER", "mock") or "mock").lower()
+        try:
+            outcome = get_nira_client().verify_nin(PROBE_NIN)
+        except NotImplementedError as exc:
+            return ConnectionTestResult(
+                ok=False, latency_ms=_ms(), server_version=f"nira:{provider}",
+                error=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001 — NiraError or transport failure
+            return ConnectionTestResult(
+                ok=False, latency_ms=_ms(), server_version=f"nira:{provider}",
+                error=f"NIRA verification channel unavailable: {exc}",
+            )
+        status = (outcome or {}).get("status", "")
+        return ConnectionTestResult(
+            ok=status in {"match", "no_match", "mismatch"},
+            latency_ms=_ms(),
+            server_version=f"nira:{provider}",
+            error=None if status else "NIRA probe returned no status",
+        )
+
+    # Push-based: nothing to enumerate or pull.
+    list_forms = None
+    pull_submissions = None
 
 
 register_connector(_NiraVitalConnector())

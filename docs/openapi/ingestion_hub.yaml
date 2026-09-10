@@ -63,7 +63,7 @@ paths:
         "404":
           description: Source system not found
         "409":
-          description: Source kind has no live test_connection (NIRA/UBOS today)
+          description: Source kind has no live test_connection (partner MIS / ODK today)
         "412":
           description: No *Credential row exists yet for this SourceSystem
 
@@ -93,10 +93,12 @@ components:
       type: string
       description: |
         Locked enum mirroring `ingestion_hub.models.SourceSystemKind`.
-        Kinds NOT in `SUPPORTED_KINDS` (see admin_credentials.py) appear in
-        the admin dropdown with a "(coming soon)" suffix and reject any
-        credentialing attempt.
-      enum: [ubos, capi_walkin, web, kobo, wfp_scope, odk, partner_mis]
+        Kinds NOT in `SUPPORTED_KINDS` (connection_test.py: kobo, ubos,
+        nira) appear in the admin dropdown with a "(coming soon)" suffix
+        and reject any credentialing attempt. `PULL_KINDS` (kobo, ubos)
+        can be pulled on demand; `nira` is push-based (see
+        /api/v1/dih/nira/vital-events/).
+      enum: [ubos, capi_walkin, web, kobo, wfp_scope, odk, partner_mis, nira]
 
     SourceSystem:
       type: object
@@ -332,12 +334,14 @@ paths_appended_2026_05_25:
   /api/v1/dih/source-systems/{id}/forms/:
     get:
       tags: [dih]
-      summary: List deployed forms for a Kobo SourceSystem (US-S11-022)
+      summary: List deployed forms / drop files for a pull-capable SourceSystem (US-S11-022, US-114)
       description: |
         Feeds the Run-connector modal's form-picker dropdown. Returns
-        every form the upstream Kobo workspace exposes; the client
-        filters to `deployed: true` for the picker. Kobo-only for v1;
-        non-Kobo kinds 400. Guarded by IsDihTrigger.
+        every form the upstream Kobo workspace exposes, or every data
+        file in the UBOS drop directory (`deployed` = passes the
+        checksum gate); the client filters to `deployed: true` for the
+        picker. Kinds outside PULL_KINDS (kobo, ubos) 400. Guarded by
+        IsDihTrigger.
       parameters:
         - in: path
           name: id
@@ -367,7 +371,9 @@ paths_appended_2026_05_25:
       description: |
         Pulls submissions for this SourceSystem through the same code
         path as the `pull_kobo_submissions_action` admin action.
-        Kobo-only for v1 — non-Kobo kinds 400. Guarded by IsDihTrigger
+        Kobo forms and UBOS bulk drop files (US-114); other kinds 400.
+        NIRA is push-based and lands through /nira/vital-events/.
+        Guarded by IsDihTrigger
         (Sys Admin or NSR Unit Coordinator). Refuses when another run
         is pending/running, when no active DPA exists
         (AC-DIH-DPA-REQUIRED), or when the source has no credential or
@@ -442,7 +448,7 @@ paths_appended_2026_05_25:
                   geo_backfill_created: { type: integer, minimum: 0 }
                   batch_cap_hit: { type: boolean }
                   note: { type: string }
-        "400": { description: precondition unmet (non-Kobo / no DPA / no credentials / concurrent run) }
+        "400": { description: precondition unmet (not pull-capable / no DPA / no credentials / concurrent run / checksum) }
         "403": { description: caller lacks IsDihTrigger permission }
   /api/v1/dih/stage-records/{id}/resolve-idv/:
     post:
@@ -517,3 +523,99 @@ paths_appended_2026_05_25:
       responses:
         "200": { description: Updated StageRecord }
         "400": { description: state guard / whitelist / shape violation }
+
+# ---------------------------------------------------------------------------
+# Appended 2026-09-10 — US-114 restore: UBOS bulk + NIRA reverse-feed live.
+# The NIRA webhook is the first machine-to-machine DIH endpoint: no
+# session, HMAC signature over the raw body instead.
+# ---------------------------------------------------------------------------
+paths_appended_2026_09_10:
+  /api/v1/dih/nira/vital-events/:
+    post:
+      tags: [dih]
+      summary: Receive a NIRA vital event (reverse feed)
+      description: |
+        Inbound webhook for NIRA births / deaths (SAD §4.4 "NIRA vital
+        event webhook", US-096, AC-UPD-NIRA-AUTO). Authenticated by
+        `X-NIRA-Signature: sha256=<hex>` — HMAC-SHA256 of the raw
+        request body under the shared secret stored (encrypted) on
+        the NIRA-REVERSE SourceSystem's NiraCredential.
+
+        Every accepted event lands as an immutable RawLanding under its
+        own ConnectorRun, then routes through the NIRA connector:
+        deaths auto-commit a VITAL_EVENT ChangeRequest through UPD
+        (with the 1% audit sample); births (until NIRA-O-01 closes)
+        and unknown NINs are quarantined for the NSR Unit, never
+        dropped. Idempotent on `event_id` (falls back to
+        `registration_ref`): a replay answers `outcome: duplicate`
+        without landing again.
+      parameters:
+        - in: header
+          name: X-NIRA-Signature
+          required: true
+          schema: { type: string, pattern: "^sha256=[0-9a-f]{64}$" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [event_type, nin, event_date, registration_ref]
+              properties:
+                event_type: { type: string, enum: [death, birth] }
+                nin: { type: string, description: NIRA NIN (CM/CF + 12) }
+                event_date: { type: string, format: date }
+                registration_ref: { type: string, maxLength: 64 }
+                event_id:
+                  type: string
+                  maxLength: 64
+                  description: Idempotency key; defaults to registration_ref.
+                demographics:
+                  type: object
+                  description: Birth only — surname, first_name, sex, date_of_birth.
+      responses:
+        "200":
+          description: Event recorded (committed / noop / quarantined / duplicate)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [outcome, event_ref]
+                properties:
+                  outcome: { type: string, enum: [committed, noop, quarantined, duplicate] }
+                  event_ref: { type: string }
+                  run_id: { type: string }
+                  landing_id: { type: string }
+                  change_request_id: { type: string }
+                  detail: { type: string }
+        "400": { description: malformed event — landed and quarantined (nira_malformed), or no idempotency key }
+        "401": { description: missing / invalid X-NIRA-Signature (audited) }
+        "500": { description: landed but processing failed — NIRA may retry }
+        "503": { description: NIRA source, credential or DPA not configured }
+
+  components_appended_2026_09_10:
+    UbosCredentialAdminWrite:
+      type: object
+      description: |
+        Django admin inline on a `kind=ubos` SourceSystem (US-114 file-drop
+        cut — SFTP transport pending). No secret today.
+      required: [drop_path]
+      properties:
+        drop_path:
+          type: string
+          description: Absolute directory on the DIH host holding the UBOS export files + `.sha256` sidecars.
+        require_checksum:
+          type: boolean
+          default: true
+          description: Refuse to pull a file without a matching `.sha256` sidecar.
+    NiraCredentialAdminWrite:
+      type: object
+      description: |
+        Django admin inline on a `kind=nira` SourceSystem. The secret is
+        write-only and stored through `EncryptedBinaryField`.
+      required: [webhook_secret]
+      properties:
+        webhook_secret:
+          type: string
+          format: password
+          description: Shared HMAC-SHA256 secret NIRA signs pushes with.

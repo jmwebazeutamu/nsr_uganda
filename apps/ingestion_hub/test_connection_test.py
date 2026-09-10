@@ -54,9 +54,10 @@ def kobo_source_with_creds(kobo_source):
 
 
 @pytest.fixture
-def ubos_source(db):
+def partner_source(db):
+    """A kind with no credential model yet (PDM / NUSAF share it)."""
     return SourceSystem.objects.create(
-        code="UBOS-BULK", name="UBOS bulk", kind=SourceSystemKind.UBOS,
+        code="PDM-MIS", name="PDM MIS", kind=SourceSystemKind.PARTNER_MIS,
     )
 
 
@@ -115,9 +116,9 @@ class TestRunTestConnection:
         with pytest.raises(CredentialMissingError):
             run_test_connection(kobo_source, actor="admin-user")
 
-    def test_unsupported_kind_raises(self, ubos_source):
+    def test_unsupported_kind_raises(self, partner_source):
         with pytest.raises(UnsupportedConnectorError):
-            run_test_connection(ubos_source, actor="admin-user")
+            run_test_connection(partner_source, actor="admin-user")
 
     @responses.activate
     def test_creates_placeholder_connector_row_when_none_exists(
@@ -571,22 +572,26 @@ class TestKoboPullActions:
 
 
 # --------------------------------------------------------------------
-# Source-system form choices — "coming soon" suffix on NIRA/UBOS.
+# Source-system form choices — "coming soon" suffix on kinds without
+# a credential model. Kobo, UBOS bulk and NIRA are live (US-114).
 # --------------------------------------------------------------------
 
 class TestSourceSystemForm:
-    def test_kobo_choice_unchanged(self):
+    def test_live_kinds_unchanged(self):
         from .admin_credentials import SourceSystemForm
         form = SourceSystemForm()
         labels = dict(form.fields["kind"].choices)
         assert labels[SourceSystemKind.KOBO] == "KoboToolbox"
+        assert labels[SourceSystemKind.UBOS] == "UBOS bulk"
+        assert labels[SourceSystemKind.NIRA] == "NIRA reverse-feed (vital events)"
 
-    def test_ubos_and_partner_choices_marked_coming_soon(self):
+    def test_partner_and_odk_choices_marked_coming_soon(self):
         from .admin_credentials import SourceSystemForm
         form = SourceSystemForm()
         labels = dict(form.fields["kind"].choices)
-        assert "(coming soon)" in labels[SourceSystemKind.UBOS]
         assert "(coming soon)" in labels[SourceSystemKind.PARTNER_MIS]
+        assert "(coming soon)" in labels[SourceSystemKind.ODK]
+        assert "(coming soon)" in labels[SourceSystemKind.WFP_SCOPE]
 
 
 # --- US-S12-004 — Celery beat for pending Kobo landings ---------------

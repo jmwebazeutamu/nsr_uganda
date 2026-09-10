@@ -6,6 +6,7 @@ from .api import (
     ConnectorViewSet,
     SourceSystemViewSet,
     StageRecordViewSet,
+    nira_vital_event,
     walk_in_submit,
 )
 
@@ -17,5 +18,6 @@ router.register(r"stage-records", StageRecordViewSet, basename="stage-record")
 
 urlpatterns = [
     path("walk-in-submissions/", walk_in_submit, name="dih-walk-in-submit"),
+    path("nira/vital-events/", nira_vital_event, name="dih-nira-vital-event"),
     *router.urls,
 ]

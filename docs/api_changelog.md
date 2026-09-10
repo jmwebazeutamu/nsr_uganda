@@ -4,6 +4,32 @@ Notable changes to outbound API contracts. Entries are dated and tied to the com
 
 ---
 
+## 2026-09-10 — US-114 — UBOS bulk and NIRA reverse-feed connectors go live
+
+**Affected endpoints**:
+- `POST /api/v1/dih/nira/vital-events/` — **new**. Inbound NIRA webhook (births / deaths), authenticated by `X-NIRA-Signature` (HMAC-SHA256 over the raw body). Idempotent on `event_id` / `registration_ref`. Outcomes: `committed`, `noop`, `quarantined`, `duplicate`.
+- `GET /api/v1/dih/source-systems/{id}/forms/` — now answers for `kind=ubos` too: one row per data file in the drop directory, `deployed` = passes the `.sha256` checksum gate. Non-pull kinds still 400; the message no longer says "only Kobo".
+- `POST /api/v1/dih/source-systems/{id}/trigger-run/` — accepts `kind=ubos`. `form_uid` is the drop file name (max length raised 64 → 255). Response shape unchanged.
+- `SourceSystemKind` enum — new value `nira`. The seeded `NIRA-REVERSE` source moves from `partner_mis` to `nira` (`scripts/seed_dih_sources.py` repairs it in place).
+
+### What changed
+
+- **`connection_test.SUPPORTED_KINDS` / `PULL_KINDS`** are the single gate. Kobo, UBOS bulk and NIRA are supported; Kobo and UBOS bulk are pull-capable; NIRA is push-only. The admin kind dropdown, the console *Run connector* modal, the trigger / forms endpoints and the Celery beat all read these sets. Partner MIS (PDM / NUSAF), WFP SCOPE and ODK stay "(coming soon)".
+- **UBOS bulk connector** (`connectors/ubos.py`, US-114 first cut). Reads `.json` / `.jsonl` / `.csv` household files from a drop directory configured on the new `UbosCredential` row, refuses files whose `.sha256` sidecar is missing or wrong, lands one row per household with a `<sha256>#<row>` reference so re-pulls skip already-landed rows, and stages through the normal DQA → IDV → DDUP → NSR Unit queue. Rows are expected in the canonical household shape; the UBOS-native → canonical MappingRule waits on the UBOS export dictionary. SFTP transport and the 50,000-row batch job are still open (see the story's ACs).
+- **NIRA reverse feed** (`connectors/nira_vital.py`). Gains `test_connection` (probes the IDV NIRA provider seam — reports `nira:mock` / `nira:live`), HMAC signing helpers and the new `NiraCredential` (write-only webhook secret, encrypted at rest). The webhook lands every accepted event immutably under its own `ConnectorRun`, auto-commits deaths through UPD (1% audit sample), and quarantines births / unknown NINs instead of dropping them.
+- **Connector row naming**: Kobo keeps `kobo-<uid>` + `kobo_form_uid`; other kinds use `<kind>-<uid>` + `form_uid`. `resolve_pinned_form_uid` reads both keys.
+
+### Audit events added
+
+`dih.nira.event_received`, `dih.nira.event_duplicate`, `dih.nira.event_quarantined`, `dih.nira.event_failed`, `dih.nira.event_refused`, `dih.nira.signature_rejected`.
+
+### What hasn't changed
+
+- Kobo behaviour, the trigger response shape, the DPA-required gate, the concurrency guard.
+- No partner-facing (DRS) contract is affected.
+
+---
+
 ## 2026-05-21 — US-S27-016 — DRS query builder exposes every UBOS geographic level
 
 **Affected endpoints**:

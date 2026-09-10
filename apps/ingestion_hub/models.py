@@ -30,6 +30,10 @@ class SourceSystemKind(models.TextChoices):
     WFP_SCOPE = "wfp_scope", "WFP SCOPE"
     ODK = "odk", "ODK forms"
     PARTNER_MIS = "partner_mis", "Partner programme MIS"
+    # NIRA pushes vital events (births, deaths) at the DIH webhook; the
+    # connector never pulls. Distinct from PARTNER_MIS so the credential
+    # dropdown and the "coming soon" gate can treat it on its own.
+    NIRA = "nira", "NIRA reverse-feed (vital events)"
 
 
 class SourceSystem(models.Model):
@@ -189,6 +193,90 @@ class KoboCredential(models.Model):
 
     def __str__(self) -> str:
         return f"kobo cred for {self.source_system_id}"
+
+
+class UbosCredential(models.Model):
+    """Access configuration for the UBOS bulk (historic-load) SourceSystem.
+
+    US-114 asks for the UBOS CSV/JSON export to arrive over SFTP with
+    checksums verified before landing. The SFTP leg is not provisioned
+    yet (no host, no key exchange agreed with UBOS), so the first cut
+    reads from a **drop directory on the DIH host** — an operator (or a
+    scheduled SFTP mirror) places the export files plus a `.sha256`
+    sidecar there. The connector refuses to pull a file whose sidecar
+    is missing or does not match when `require_checksum` is on.
+
+    Follows the ADR-0007 `*Credential` pattern (OneToOne on
+    SourceSystem, `last_test_*` freshness) so the admin, the
+    connection-test service and the console treat it like Kobo's row.
+    There is no secret column today; the SFTP secret lands with the
+    transport.
+    """
+
+    id = ULIDField(primary_key=True)
+    source_system = models.OneToOneField(
+        SourceSystem, on_delete=models.CASCADE, related_name="ubos_credential",
+    )
+    drop_path = models.CharField(
+        max_length=512,
+        help_text=(
+            "Absolute directory on the DIH host where UBOS export files "
+            "(.csv, .json, .jsonl) are dropped, each with a sibling "
+            "<file>.sha256 checksum."
+        ),
+    )
+    require_checksum = models.BooleanField(
+        default=True,
+        help_text=(
+            "Refuse to pull a file without a matching .sha256 sidecar "
+            "(US-114: checksums verified before landing)."
+        ),
+    )
+    last_test_at = models.DateTimeField(null=True, blank=True)
+    last_test_ok = models.BooleanField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "UBOS bulk credential"
+
+    def __str__(self) -> str:
+        return f"ubos drop for {self.source_system_id}"
+
+
+class NiraCredential(models.Model):
+    """Shared secret NIRA signs its vital-event pushes with.
+
+    The reverse feed is push-based (SAD §4.4 "NIRA vital event
+    webhook"), so what the registry holds is not a token *we* present
+    upstream but the HMAC-SHA256 secret used to verify the
+    `X-NIRA-Signature` header on every inbound event (US-096:
+    "inbound webhook validated for signature, schema, and event ID").
+    Stored encrypted through the same Fernet/KMS seam as the Kobo
+    token; the plaintext is only ever compared in memory.
+    """
+
+    id = ULIDField(primary_key=True)
+    source_system = models.OneToOneField(
+        SourceSystem, on_delete=models.CASCADE, related_name="nira_credential",
+    )
+    webhook_secret_encrypted = EncryptedBinaryField()
+    # Who pasted / rotated the secret, for audit lineage. Never used to
+    # re-authenticate.
+    configured_by_username = models.CharField(max_length=128, blank=True)
+    configured_at = models.DateTimeField(auto_now_add=True)
+    last_test_at = models.DateTimeField(null=True, blank=True)
+    last_test_ok = models.BooleanField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "NIRA credential"
+
+    def __str__(self) -> str:
+        return f"nira secret for {self.source_system_id}"
 
 
 # --- Mapping rules --------------------------------------------------------

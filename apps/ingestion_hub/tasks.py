@@ -1,8 +1,10 @@
 """Celery tasks for the DIH pipeline (US-S12-004).
 
 `process_pending_kobo_landings_task` mirrors the manual
-`process_pending_landings_action` admin action: walks every Kobo
-SourceSystem, drives RawLandings without a StageRecord through the
+`process_pending_landings_action` admin action: walks every pull-
+capable SourceSystem (Kobo, UBOS bulk — connection_test.PULL_KINDS;
+the task keeps its historical name so the beat schedule and its
+tests stay stable), drives RawLandings without a StageRecord through the
 canonicalize → stage → DQA/IDV/DDUP pipeline, and runs the geo
 backfill so the next promotion attempt finds the new GeographicUnit
 rows. Scheduled on the beat in nsr_mis/celery.py.
@@ -34,18 +36,18 @@ def process_pending_kobo_landings_task(self) -> dict:
     (e.g., a SourceSystem disappears mid-run).
     """
     from .admin_credentials import _process_one_landing
-    from .connection_test import CredentialMissingError, credentials_for
+    from .connection_test import PULL_KINDS, CredentialMissingError, credentials_for
     from .connectors.base import get_connector
     from .geo_backfill import backfill_missing_geo_from_stages
-    from .models import RawLanding, SourceSystem, SourceSystemKind, StageRecord
+    from .models import RawLanding, SourceSystem, StageRecord
 
     actor = "celery-beat"
     summary: dict[str, dict] = {}
     for source in SourceSystem.objects.filter(
-        kind=SourceSystemKind.KOBO, is_active=True,
-    ):
+        kind__in=sorted(PULL_KINDS), is_active=True,
+    ).order_by("code"):
         connector_impl = get_connector(source.code)
-        if connector_impl is None or connector_impl.canonicalize is None:
+        if connector_impl is None or getattr(connector_impl, "canonicalize", None) is None:
             summary[source.code] = {"skipped": "no connector"}
             continue
         try:

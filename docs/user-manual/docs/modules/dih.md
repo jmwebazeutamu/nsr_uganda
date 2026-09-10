@@ -45,16 +45,15 @@ Pulls records from partner sources via Connectors. Lands raw payloads. Applies M
 
 ## Connectors
 
-| Source kind | Class | Status |
+| Source kind | Module | Status |
 |---|---|---|
-| `ubos` | `ubos.UbosBulkConnector` | Built |
-| `capi_walkin` | (default) | Built |
-| `web` | (default) | Built |
-| `kobo` | `kobo.KoboConnector` | Built |
-| `pdm` | `pdm.PdmConnector` | Built |
-| `nusaf` | `nusaf.NusafConnector` | Built |
-| `wfp_scope` | `wfp_scope.WfpScopeConnector` | Built |
-| `nira_vital` | `nira_vital.NiraVitalConnector` | Built |
+| `ubos` | `ubos.UbosBulkConnector` | Live — file-drop pull, checksum-gated (US-114 first cut) |
+| `capi_walkin` | (channel — walk-in endpoint) | Built |
+| `web` | (channel — walk-in endpoint) | Built |
+| `kobo` | `kobo.KoboConnector` | Live — API pull |
+| `nira` | `nira_vital._NiraVitalConnector` | Live — inbound webhook `/api/v1/dih/nira/vital-events/` |
+| `partner_mis` (PDM, NUSAF) | `pdm.py`, `nusaf.py` | Canonicalise only — no credential form ("coming soon") |
+| `wfp_scope` | `wfp_scope.py` | Canonicalise only — no credential form ("coming soon") |
 
 ## ADRs
 

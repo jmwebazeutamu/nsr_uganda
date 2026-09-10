@@ -8,7 +8,10 @@
 Each gets a SourceSystem + an active DataProvisionAgreement so connector
 runs can start (AC-DIH-DPA-REQUIRED).
 
-Idempotent: re-runs leave existing rows alone.
+Idempotent: re-runs leave existing rows alone — with one repair: a
+NIRA-REVERSE row seeded before the `nira` kind existed (it was
+`partner_mis`) is moved to the new kind so the credential admin and
+the vital-events webhook can find it.
 """
 
 from __future__ import annotations
@@ -51,18 +54,26 @@ SOURCES = [
      "kind": SourceSystemKind.WFP_SCOPE,
      "connector": "wfp-scope-pull", "residence_days": 30},
     {"code": "NIRA-REVERSE", "name": "NIRA reverse-feed (vital events)",
-     "kind": SourceSystemKind.PARTNER_MIS,
+     "kind": SourceSystemKind.NIRA,
      "connector": "nira-vital-events", "residence_days": 90},
 ]
 
 
-def seed() -> int:
+def seed(only: set[str] | None = None) -> int:
+    """Seed every source, or just the codes in `only` (e.g. restoring
+    one connector without adding the "coming soon" partner rows)."""
     created = 0
     for spec in SOURCES:
+        if only and spec["code"] not in only:
+            continue
         src, src_new = SourceSystem.objects.get_or_create(
             code=spec["code"],
             defaults={"name": spec["name"], "kind": spec["kind"]},
         )
+        if spec["kind"] == SourceSystemKind.NIRA and src.kind != spec["kind"]:
+            src.kind = spec["kind"]
+            src.save(update_fields=("kind", "updated_at"))
+            print(f"  {spec['code']}: kind repaired -> {spec['kind']}")
         dpa, dpa_new = DataProvisionAgreement.objects.get_or_create(
             source_system=src,
             reference=f"DPA-{spec['code']}-2026",
@@ -85,5 +96,13 @@ def seed() -> int:
 
 
 if __name__ == "__main__":
-    n = seed()
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--only", nargs="+", metavar="CODE",
+        help="seed only these source codes (default: all)",
+    )
+    args = parser.parse_args()
+    n = seed(set(args.only) if args.only else None)
     print(f"\nseeded {n} new source(s); total: {SourceSystem.objects.count()}")

@@ -56,14 +56,35 @@ const defaultProps = (over = {}) => ({
 const _kobo = () => MOCK_SOURCE_SYSTEMS.find(s => s.kind === "kobo");
 
 describe("RunConnectorModal — source picker", () => {
-  it("renders the Kobo source as the default selection, others disabled", () => {
+  it("renders the Kobo source as the default selection; UBOS pullable; others disabled", () => {
     render(<RunConnectorModal {...defaultProps()} />);
     const select = screen.getAllByRole("combobox")[0];
     expect(select.value).toBe(_kobo().id);
-    MOCK_SOURCE_SYSTEMS.filter(s => s.kind !== "kobo").forEach(s => {
-      const opt = Array.from(select.options).find(o => o.value === s.id);
-      expect(opt.textContent).toMatch(/coming soon/);
-      expect(opt.disabled).toBe(true);
+    const optFor = (s) => Array.from(select.options).find(o => o.value === s.id);
+    // US-114: UBOS bulk (file drop) is a second pull-capable kind.
+    const ubos = MOCK_SOURCE_SYSTEMS.find(s => s.kind === "ubos");
+    expect(optFor(ubos).disabled).toBe(false);
+    expect(optFor(ubos).textContent).not.toMatch(/coming soon/);
+    // NIRA is live but inbound-only — visible, not pullable.
+    const nira = MOCK_SOURCE_SYSTEMS.find(s => s.kind === "nira");
+    expect(optFor(nira).disabled).toBe(true);
+    expect(optFor(nira).textContent).toMatch(/inbound feed/);
+    MOCK_SOURCE_SYSTEMS.filter(s => !["kobo", "ubos", "nira"].includes(s.kind)).forEach(s => {
+      expect(optFor(s).textContent).toMatch(/coming soon/);
+      expect(optFor(s).disabled).toBe(true);
+    });
+  });
+
+  it("selecting the UBOS source fetches its file list from /forms/", async () => {
+    const user = userEvent.setup();
+    const calls = [];
+    globalThis.fetch = vi.fn((url) => { calls.push(url); return Promise.reject(new Error("network")); });
+    render(<RunConnectorModal {...defaultProps()} />);
+    const select = screen.getAllByRole("combobox")[0];
+    const ubos = MOCK_SOURCE_SYSTEMS.find(s => s.kind === "ubos");
+    await user.selectOptions(select, ubos.id);
+    await waitFor(() => {
+      expect(calls.some(u => u === `/api/v1/dih/source-systems/${ubos.id}/forms/`)).toBe(true);
     });
   });
 
@@ -135,7 +156,7 @@ describe("RunConnectorModal — form picker (US-S11-022)", () => {
     render(<RunConnectorModal {...defaultProps()} />);
     await waitFor(() => {
       // The form-picker label appears once /forms/ resolves.
-      expect(screen.getByText(/^Form/)).toBeTruthy();
+      expect(screen.getByText(/^Form \/ file/)).toBeTruthy();
     });
     // Two combos now: source + form. Form is the second.
     const combos = screen.getAllByRole("combobox");
@@ -159,7 +180,7 @@ describe("RunConnectorModal — form picker (US-S11-022)", () => {
         pinned: false },
     ]);
     render(<RunConnectorModal {...defaultProps()} />);
-    await waitFor(() => screen.getByText(/^Form/));
+    await waitFor(() => screen.getByText(/^Form \/ file/));
     const combos = screen.getAllByRole("combobox");
     const formSelect = combos[1];
     expect(formSelect.value).toBe("form-B");
@@ -173,7 +194,7 @@ describe("RunConnectorModal — form picker (US-S11-022)", () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     render(<RunConnectorModal {...defaultProps({ onSubmit })} />);
-    await waitFor(() => screen.getByText(/^Form/));
+    await waitFor(() => screen.getByText(/^Form \/ file/));
     const combos = screen.getAllByRole("combobox");
     const formSelect = combos[1];
     await user.selectOptions(formSelect, "form-B");
@@ -188,7 +209,7 @@ describe("RunConnectorModal — form picker (US-S11-022)", () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     render(<RunConnectorModal {...defaultProps({ onSubmit })} />);
-    await waitFor(() => screen.getByText(/^Form/));
+    await waitFor(() => screen.getByText(/^Form \/ file/));
     const input = screen.getByRole("spinbutton");
     // Controlled-input value resets from state every render, so use
     // fireEvent.change to overwrite cleanly (user.clear() + .type()
@@ -205,7 +226,7 @@ describe("RunConnectorModal — form picker (US-S11-022)", () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     render(<RunConnectorModal {...defaultProps({ onSubmit })} />);
-    await waitFor(() => screen.getByText(/^Form/));
+    await waitFor(() => screen.getByText(/^Form \/ file/));
     const input = screen.getByRole("spinbutton");
     fireEvent.change(input, { target: { value: "9999" } });
     await user.click(screen.getByRole("button", { name: /Run pull/ }));

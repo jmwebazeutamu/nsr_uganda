@@ -87,3 +87,28 @@ def test_trigger_run_path_documented(spec):
     # 4xx documented for IsDihTrigger denial + precondition failures.
     assert "400" in op["responses"]
     assert "403" in op["responses"]
+
+
+def test_nira_vital_events_webhook_documented(spec):
+    """US-114 restore — the NIRA reverse feed is push-based; its inbound
+    endpoint must be in the spec with the signature header and the
+    four recorded outcomes the view returns."""
+    appended = spec["paths_appended_2026_09_10"]
+    path = "/api/v1/dih/nira/vital-events/"
+    assert path in appended, sorted(appended.keys())
+    op = appended[path]["post"]
+    header_names = {p["name"] for p in op.get("parameters", [])}
+    assert "X-NIRA-Signature" in header_names
+    body = op["responses"]["200"]["content"]["application/json"]["schema"]
+    assert set(body["properties"]["outcome"]["enum"]) == {
+        "committed", "noop", "quarantined", "duplicate",
+    }
+    for code in ("400", "401", "503"):
+        assert code in op["responses"]
+
+
+def test_supported_kinds_are_in_the_kind_enum(spec):
+    from apps.ingestion_hub.connection_test import PULL_KINDS, SUPPORTED_KINDS
+    enum_in_spec = set(spec["components"]["schemas"]["SourceSystemKind"]["enum"])
+    assert {k.value for k in SUPPORTED_KINDS} <= enum_in_spec
+    assert PULL_KINDS <= SUPPORTED_KINDS

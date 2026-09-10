@@ -1,16 +1,18 @@
-"""Django admin for DIH source-system credentials (US-S11-003b).
+"""Django admin for DIH source-system credentials (US-S11-003b, US-114).
 
 The "Source system" admin gains:
 
-1. A kind dropdown that disables NIRA + UBOS with a "(coming soon)"
-   suffix until their credential models land — keeps the UI honest
-   about what an operator can actually wire today.
+1. A kind dropdown that disables kinds without a credential model
+   (PDM / NUSAF / WFP SCOPE partner MIS, ODK, …) with a "(coming
+   soon)" suffix — keeps the UI honest about what an operator can
+   actually wire today. Kobo, UBOS bulk and NIRA are live.
 2. Per-kind credential editors. Kobo gets a KoboCredentialInline
    that captures `server_url` + `username` + `password`; on save the
    admin form exchanges the username+password for a Knox token via
    `acquire_token()` and writes the token (encrypted) to
    KoboCredential. The plaintext password is held only in the
-   request's stack frame.
+   request's stack frame. UBOS gets a drop-directory + checksum
+   policy inline; NIRA gets a write-only webhook-secret inline.
 3. A "Test connection" admin action that calls
    `connection_test.run_test_connection(source_system, ...)` and
    surfaces the result through `messages`.
@@ -33,12 +35,21 @@ from django.utils.html import format_html, format_html_join
 from requests.exceptions import RequestException
 
 from .connection_test import (
+    PULL_KINDS,
+    SUPPORTED_KINDS,
     CredentialMissingError,
     UnsupportedConnectorError,
+    credential_row_for,
     run_test_connection,
 )
 from .connectors.kobo import acquire_token
-from .models import KoboCredential, SourceSystem, SourceSystemKind
+from .models import (
+    KoboCredential,
+    NiraCredential,
+    SourceSystem,
+    SourceSystemKind,
+    UbosCredential,
+)
 
 # Source of truth for the per-click cap lives in services so the
 # console "Run connector" button (US-S11-021) and this admin action
@@ -49,9 +60,13 @@ from .services import TRIGGER_PULL_BATCH_CAP as PULL_BATCH_CAP
 logger = logging.getLogger(__name__)
 
 
-# Source kinds that have a live connector + credential form. Every
-# OTHER kind appears in the dropdown but disabled (see __init__).
-SUPPORTED_KINDS = {SourceSystemKind.KOBO}
+# SUPPORTED_KINDS (live connector + credential form) and PULL_KINDS
+# (can be pulled on demand) are defined once in connection_test and
+# re-imported here; every OTHER kind appears in the dropdown but
+# disabled (see SourceSystemForm.__init__).
+__all__ = ["PULL_KINDS", "SUPPORTED_KINDS"]
+
+_PULL_LABEL = " / ".join(sorted(PULL_KINDS))
 
 
 # --------------------------------------------------------------------
@@ -175,7 +190,98 @@ class KoboCredentialInline(admin.StackedInline):
 
 
 # --------------------------------------------------------------------
-# Credential registry — extension seam for NIRA + UBOS.
+# UBOS bulk — drop directory + checksum policy (US-114).
+# --------------------------------------------------------------------
+
+class UbosCredentialForm(forms.ModelForm):
+    """Where the UBOS export files are dropped and whether a missing
+    `.sha256` sidecar blocks the pull. The directory is only *checked*
+    by the Test connection action, not here — the admin may be saved
+    before the SFTP mirror has created it."""
+
+    class Meta:
+        model = UbosCredential
+        fields = ("drop_path", "require_checksum")
+
+    def clean_drop_path(self):
+        path = (self.cleaned_data.get("drop_path") or "").strip()
+        if not path.startswith("/"):
+            raise forms.ValidationError(
+                "drop_path must be an absolute directory on the DIH host.",
+            )
+        return path
+
+
+class UbosCredentialInline(admin.StackedInline):
+    model = UbosCredential
+    form = UbosCredentialForm
+    extra = 1
+    max_num = 1
+    can_delete = True
+    verbose_name = "UBOS bulk drop"
+    verbose_name_plural = "UBOS bulk drop"
+    readonly_fields = ("last_test_at", "last_test_ok")
+
+
+# --------------------------------------------------------------------
+# NIRA reverse-feed — inbound webhook signing secret (US-096).
+# --------------------------------------------------------------------
+
+class NiraCredentialForm(forms.ModelForm):
+    """Captures the shared HMAC secret NIRA signs its pushes with.
+    Write-only: the stored value is never rendered back. Required on
+    first save; blank on edit keeps the existing secret."""
+
+    webhook_secret = forms.CharField(
+        required=False,
+        widget=forms.PasswordInput(
+            render_value=False, attrs={"autocomplete": "new-password"},
+        ),
+        help_text=(
+            "Shared secret NIRA uses to sign X-NIRA-Signature "
+            "(HMAC-SHA256 over the raw body). Required on first save; "
+            "leave blank on edit to keep the current secret."
+        ),
+    )
+
+    class Meta:
+        model = NiraCredential
+        fields = ()
+
+    def clean(self):
+        cleaned = super().clean()
+        if self.instance._state.adding and not cleaned.get("webhook_secret"):
+            raise forms.ValidationError(
+                "Provide the webhook signing secret on first save.",
+            )
+        return cleaned
+
+    def save(self, commit: bool = True):
+        instance: NiraCredential = super().save(commit=False)
+        secret = self.cleaned_data.get("webhook_secret")
+        if secret:
+            instance.webhook_secret_encrypted = secret.strip()
+            # Stamped by SourceSystemAdmin.save_formset (needs request).
+            instance._secret_rotated = True
+        if commit:
+            instance.save()
+        return instance
+
+
+class NiraCredentialInline(admin.StackedInline):
+    model = NiraCredential
+    form = NiraCredentialForm
+    extra = 1
+    max_num = 1
+    can_delete = True
+    verbose_name = "NIRA webhook secret"
+    verbose_name_plural = "NIRA webhook secret"
+    readonly_fields = ("configured_by_username", "configured_at",
+                       "last_test_at", "last_test_ok")
+
+
+# --------------------------------------------------------------------
+# Credential registry — one inline per supported kind (ADR-0007).
 # --------------------------------------------------------------------
 
 # Add an entry here when a new credential model + form lands. The
@@ -183,6 +289,8 @@ class KoboCredentialInline(admin.StackedInline):
 # for the current object's kind.
 _CREDENTIAL_REGISTRY: dict[str, type[admin.StackedInline]] = {
     SourceSystemKind.KOBO: KoboCredentialInline,
+    SourceSystemKind.UBOS: UbosCredentialInline,
+    SourceSystemKind.NIRA: NiraCredentialInline,
 }
 
 
@@ -192,9 +300,9 @@ _CREDENTIAL_REGISTRY: dict[str, type[admin.StackedInline]] = {
 
 class SourceSystemForm(forms.ModelForm):
     """Disables the kind dropdown choices for connectors that don't
-    have a live credential form yet (NIRA + UBOS). Operators see them
-    in the list with a '(coming soon)' suffix so they know what's
-    being built."""
+    have a live credential form yet (partner MIS, ODK, …). Operators
+    see them in the list with a '(coming soon)' suffix so they know
+    what's being built."""
 
     class Meta:
         model = SourceSystem
@@ -217,22 +325,25 @@ class SourceSystemForm(forms.ModelForm):
 # see the action-description f-string below.
 
 
-@admin.action(description="List Kobo forms (read-only)")
+@admin.action(description="List forms / files (read-only)")
 def list_kobo_forms_action(modeladmin, request, queryset):
-    """Diagnostic: enumerate the assets each selected Kobo SourceSystem
-    can see under its stored token. No DB writes other than the
-    standard AuditEvent on read."""
+    """Diagnostic: enumerate the assets each selected pull-capable
+    SourceSystem can see — Kobo forms under the stored token, UBOS
+    files in the drop directory. No DB writes other than the standard
+    AuditEvent on read."""
     from apps.security.audit import emit as emit_audit
 
     from .connection_test import credentials_for
     from .connectors.base import get_connector
 
     for source in queryset:
-        if source.kind != SourceSystemKind.KOBO:
-            messages.warning(request, f"{source.code}: not a Kobo source — skipped")
+        if source.kind not in PULL_KINDS:
+            messages.warning(
+                request, f"{source.code}: not a {_PULL_LABEL} source — skipped",
+            )
             continue
         connector = get_connector(source.code)
-        if connector is None or connector.list_forms is None:
+        if connector is None or getattr(connector, "list_forms", None) is None:
             messages.warning(request, f"{source.code}: no live connector registered")
             continue
         try:
@@ -289,7 +400,7 @@ def _process_one_landing(landing, connector_impl, *, actor: str) -> tuple[str, s
     """
     from .services import process_stage_record, stage_from_landing
 
-    if connector_impl.canonicalize is None:
+    if getattr(connector_impl, "canonicalize", None) is None:
         return ("error", "connector has no canonicalize method wired")
     try:
         canonical = connector_impl.canonicalize(landing.payload)
@@ -304,20 +415,22 @@ def _process_one_landing(landing, connector_impl, *, actor: str) -> tuple[str, s
     return ("staged", stage.state)
 
 
-@admin.action(description=f"Pull Kobo submissions + auto-process (first deployed form, ≤{PULL_BATCH_CAP})")
+@admin.action(description=f"Pull submissions + auto-process (pinned form / file, ≤{PULL_BATCH_CAP})")
 def pull_kobo_submissions_action(modeladmin, request, queryset):
-    """End-to-end pull + processing. Delegates to
-    `services.trigger_connector_pull` so the body stays in lock-step
-    with the console "Run connector" button (US-S11-021). Per-source
-    errors surface as warning/error messages; successes link to the
-    run + staged rows + DIH queue.
+    """End-to-end pull + processing for Kobo and UBOS bulk sources.
+    Delegates to `services.trigger_connector_pull` so the body stays
+    in lock-step with the console "Run connector" button (US-S11-021).
+    Per-source errors surface as warning/error messages; successes
+    link to the run + staged rows + DIH queue.
     """
     from .services import TriggerError, trigger_connector_pull
 
     actor = request.user.username or "admin"
     for source in queryset:
-        if source.kind != SourceSystemKind.KOBO:
-            messages.warning(request, f"{source.code}: not a Kobo source — skipped")
+        if source.kind not in PULL_KINDS:
+            messages.warning(
+                request, f"{source.code}: not a {_PULL_LABEL} source — skipped",
+            )
             continue
         try:
             result = trigger_connector_pull(source, actor=actor)
@@ -355,9 +468,9 @@ def pull_kobo_submissions_action(modeladmin, request, queryset):
         )
 
 
-@admin.action(description="Process pending Kobo landings (canonicalize + stage + DQA/IDV/DDUP)")
+@admin.action(description="Process pending landings (canonicalize + stage + DQA/IDV/DDUP)")
 def process_pending_landings_action(modeladmin, request, queryset):
-    """For each Kobo SourceSystem, find RawLanding rows that don't yet
+    """For each Kobo / UBOS SourceSystem, find RawLanding rows that don't yet
     have a StageRecord and drive them through the canonicalize →
     stage → process pipeline. Useful when landings exist from a prior
     pull that ran before US-S11-014 (or from a future Celery beat
@@ -371,11 +484,13 @@ def process_pending_landings_action(modeladmin, request, queryset):
 
     actor = request.user.username or "admin"
     for source in queryset:
-        if source.kind != SourceSystemKind.KOBO:
-            messages.warning(request, f"{source.code}: not a Kobo source — skipped")
+        if source.kind not in PULL_KINDS:
+            messages.warning(
+                request, f"{source.code}: not a {_PULL_LABEL} source — skipped",
+            )
             continue
         connector_impl = get_connector(source.code)
-        if connector_impl is None or connector_impl.canonicalize is None:
+        if connector_impl is None or getattr(connector_impl, "canonicalize", None) is None:
             messages.warning(
                 request,
                 f"{source.code}: no canonicalize method — wire one before processing",
@@ -525,13 +640,31 @@ def _install_source_system_admin() -> None:
                 instances.append(inline_cls(self.model, self.admin_site))
             return instances
 
+        def save_formset(self, request, form, formset, change):
+            """Stamp who configured / rotated a NIRA webhook secret —
+            the ModelForm has no request, so the lineage field is
+            filled here (mirrors KoboCredential.acquired_by_username)."""
+            instances = formset.save(commit=False)
+            for obj in formset.deleted_objects:
+                obj.delete()
+            for instance in instances:
+                if isinstance(instance, NiraCredential) and getattr(
+                    instance, "_secret_rotated", False,
+                ):
+                    instance.configured_by_username = (
+                        request.user.username or "admin"
+                    )
+                instance.save()
+            formset.save_m2m()
+
         @admin.display(description="Last test", ordering=None)
         def last_test_display(self, obj: SourceSystem) -> str:
             """Renders the most-recent test outcome from the credential
-            row. For un-tested or non-Kobo sources, shows a dash."""
-            if obj.kind != SourceSystemKind.KOBO:
+            row. For un-tested or unsupported sources, shows a dash."""
+            try:
+                cred = credential_row_for(obj)
+            except UnsupportedConnectorError:
                 return "—"
-            cred = getattr(obj, "kobo_credential", None)
             if cred is None or cred.last_test_at is None:
                 return "—"
             tone = "#198754" if cred.last_test_ok else "#b00"
