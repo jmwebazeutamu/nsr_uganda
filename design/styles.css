@@ -120,6 +120,17 @@ a:hover { text-decoration: underline; }
   font-weight: 700;
   letter-spacing: 0.01em;
   min-width: 0;
+  /* It is an <a> to the welcome screen, so the default link underline and
+     colour have to go — the masthead must look identical to before. The
+     focus ring stays: it is the only affordance a keyboard user gets. */
+  text-decoration: none;
+  cursor: pointer;
+}
+.topbar-brand:hover .brand-wordmark { text-decoration: underline; }
+.topbar-brand:focus-visible {
+  outline: 2px solid var(--neutral-0);
+  outline-offset: 3px;
+  border-radius: 4px;
 }
 /* Brand wordmark + ministry line.  The two stacked spans inside
    .topbar-brand pick up their typography from these rules; the

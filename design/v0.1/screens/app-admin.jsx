@@ -21,7 +21,7 @@
 //   "admin-pmt-dashboard"     → Dashboard (default)
 //   "admin-pmt-configuration" → Configuration
 
-const { useState: useStateAdmin } = React;
+const { useState: useStateAdmin, useEffect: useEffectAdmin } = React;
 
 const initialFromHost = (typeof window !== "undefined" && window.__defaultScreen) || "admin-pmt-dashboard";
 
@@ -92,6 +92,19 @@ const NAV_GROUPS = [
 
 const AdminApp = () => {
   const [screen, setScreen] = useStateAdmin(initialFromHost);
+  const [me, setMe] = useStateAdmin(null);
+
+  useEffectAdmin(() => {
+    let cancelled = false;
+    window.nsrApi.get("/api/v1/security/users/me/")
+      .then(data => { if (!cancelled) setMe(data); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const profileName = me?.display_name || me?.username || "My profile";
+  const profileInitials = profileName.split(/\s+/).filter(Boolean)
+    .map(part => part[0]).slice(0, 2).join("").toUpperCase() || "?";
 
   return (
     <div style={{
@@ -106,7 +119,14 @@ const AdminApp = () => {
           state app. The sidebar below picks up its branding from the
           masthead; its header now just labels the console. */}
       <header className="topbar">
-        <div className="topbar-brand">
+        {/* The masthead is the way back to the welcome screen. A real
+            anchor, not an onClick handler: it is keyboard reachable, it
+            shows its target in the status bar, and middle-click and
+            open-in-new-tab behave the way people expect a masthead to.
+            It leaves the console deliberately — /home/ is the
+            server-rendered welcome screen, not the in-console Home tab,
+            which the sidebar still owns. */}
+        <a className="topbar-brand" href="/home/" title="Back to the welcome screen">
           <span className="brand-mark">
             <img src="assets/Coat_of_arms_of_Uganda.png" alt="Coat of Arms of Uganda"/>
           </span>
@@ -114,12 +134,19 @@ const AdminApp = () => {
             <span className="brand-wordmark">National Social Registry</span>
             <span className="brand-sub">Ministry of Gender, Labour and Social Development</span>
           </div>
-        </div>
+        </a>
         <div className="topbar-spacer"/>
         <div className="topbar-actions">
           <span className="role-chip">
             <span>Admin Console</span>
           </span>
+          <button className="icon-btn" title="My profile" onClick={() => window.nsrProfile()}>
+            <Icon name="settings" size={18}/>
+          </button>
+          <button className="avatar" title={`Open profile for ${profileName}`} onClick={() => window.nsrProfile()}>{profileInitials}</button>
+          <button className="icon-btn" title="Sign out" aria-label="Sign out" onClick={() => window.nsrSignOut()}>
+            <Icon name="x" size={18}/>
+          </button>
         </div>
       </header>
 
@@ -188,7 +215,7 @@ const AdminApp = () => {
           borderTop: "1px solid var(--neutral-200)",
           fontSize: 11, color: "var(--neutral-500)",
         }}>
-          Akello P. · NSR Coordinator
+          {me?.display_name || me?.username || "Loading profile…"}
         </div>
       </aside>
 

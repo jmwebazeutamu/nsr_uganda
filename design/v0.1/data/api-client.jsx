@@ -60,6 +60,29 @@ const nsrApi = {
 
 window.nsrApi = nsrApi;
 
+// Session controls shared by the operator and admin shells. Logout remains a
+// POST protected by Django's CSRF middleware; if a stale token is rejected,
+// send the operator to the server-rendered confirmation page to mint a fresh
+// token rather than leaving them in a confusing half-signed-in state.
+window.nsrProfile = () => { window.location.assign("/profile/"); };
+window.nsrSignOut = async () => {
+  try {
+    const response = await fetch("/logout/", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: _headers(),
+    });
+    if (response.ok || response.redirected) {
+      window.location.assign(response.url || "/");
+      return;
+    }
+  } catch (_err) {
+    // The confirmation page below is the safe fallback for a network or
+    // stale-CSRF failure.
+  }
+  window.location.assign("/logout/");
+};
+
 
 // Convenience hook: fetch a resource on mount + refetch on demand.
 // Returns [data, { loading, error, refresh }].

@@ -237,7 +237,14 @@ function App() {
           bar with a 3px gold rule, sticky over every route. Search
           and ⌘K affordance removed with this redesign. */}
       <header className="topbar">
-        <div className="topbar-brand">
+        {/* The masthead is the way back to the welcome screen. A real
+            anchor, not an onClick handler: it is keyboard reachable, it
+            shows its target in the status bar, and middle-click and
+            open-in-new-tab behave the way people expect a masthead to.
+            It leaves the console deliberately — /home/ is the
+            server-rendered welcome screen, not the in-console Home tab,
+            which the sidebar still owns. */}
+        <a className="topbar-brand" href="/home/" title="Back to the welcome screen">
           <span className="brand-mark">
             <img src="assets/Coat_of_arms_of_Uganda.png" alt="Coat of Arms of Uganda"/>
           </span>
@@ -245,7 +252,7 @@ function App() {
             <span className="brand-wordmark">National Social Registry</span>
             <span className="brand-sub">Ministry of Gender, Labour and Social Development</span>
           </div>
-        </div>
+        </a>
 
         <div className="topbar-spacer"/>
 
@@ -260,8 +267,13 @@ function App() {
             </button>
           )}
           <button className="icon-btn" title="Notifications"><Icon name="bell" size={18}/><span className="dot"/></button>
-          <button className="icon-btn" title="Settings"><Icon name="settings" size={18}/></button>
-          <button className="avatar" title={`${identityName}${identityOrg ? " · " + identityOrg : ""}${me?.username ? " (" + me.username + ")" : ""}`}>{identityInitials}</button>
+          <button className="icon-btn" title="My profile" onClick={() => window.nsrProfile()}>
+            <Icon name="settings" size={18}/>
+          </button>
+          <button className="avatar" title={`Open profile for ${identityName}${identityOrg ? " · " + identityOrg : ""}${me?.username ? " (" + me.username + ")" : ""}`} onClick={() => window.nsrProfile()}>{identityInitials}</button>
+          <button className="icon-btn" title="Sign out" aria-label="Sign out" onClick={() => window.nsrSignOut()}>
+            <Icon name="x" size={18}/>
+          </button>
         </div>
       </header>
 

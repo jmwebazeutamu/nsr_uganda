@@ -1,0 +1,61 @@
+{% extends "base_public.html" %}
+{% load i18n %}
+
+{% block title %}{% trans "My profile — National Social Registry" %}{% endblock %}
+
+{% block extra_head %}
+<style>
+  .profile{max-width:40em}
+  .profile .field{margin:0 0 18px}
+  .profile label,.profile .label{display:block;font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;margin-bottom:8px}
+  .profile input{width:100%;box-sizing:border-box;padding:12px 13px}
+  .profile .readonly{padding:12px 13px;background:var(--tint);border:1px solid var(--line);border-radius:4px;color:var(--muted)}
+  .profile .meta{margin:28px 0 0;padding-top:22px;border-top:1px solid var(--line)}
+  .profile .roles{display:flex;gap:7px;flex-wrap:wrap;margin:8px 0 0;padding:0;list-style:none}
+  .profile .roles li{padding:4px 9px;border:1px solid var(--line);border-radius:999px;font-family:var(--mono);font-size:11px;color:var(--navy)}
+  .profile .notice{padding:12px 14px;background:#E8F4EA;border-left:3px solid var(--acc-data,#2E7D32);margin:0 0 20px}
+  .profile .errors{color:#9e2b20;font-size:13px;margin:6px 0 0}
+  .profile .actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:26px}
+  .profile .quiet{color:var(--navy);text-decoration:underline}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="plate plate--paper profile">
+  <p class="eyebrow rise d1">{% trans "Account" %}</p>
+  <h1 class="rise d2">{% trans "My profile" %}</h1>
+  <p class="lede rise d3">{% trans "Keep your contact details current. Access roles and data scope are managed separately." %}</p>
+
+  {% if updated %}
+    <p class="notice" role="status">{% trans "Your profile has been updated." %}</p>
+  {% endif %}
+
+  <form class="rise d4" method="post" action="{% url 'profile' %}">
+    {% csrf_token %}
+    <div class="field">
+      <span class="label">{% trans "Username" %}</span>
+      <div class="readonly">{{ user.get_username }}</div>
+    </div>
+    {% for field in form %}
+      <div class="field">
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+        {% if field.errors %}<div class="errors">{{ field.errors|join:", " }}</div>{% endif %}
+      </div>
+    {% endfor %}
+    <div class="actions">
+      <button class="btn gold" type="submit">{% trans "Save profile" %}</button>
+      <a class="quiet" href="/home/">{% trans "Return to home" %}</a>
+    </div>
+  </form>
+
+  <section class="meta rise d5" aria-labelledby="role-heading">
+    <span class="label" id="role-heading">{% trans "Assigned roles" %}</span>
+    {% if roles %}
+      <ul class="roles">{% for role in roles %}<li>{{ role }}</li>{% endfor %}</ul>
+    {% else %}
+      <p>{% trans "No roles have been assigned. Contact a System Administrator." %}</p>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
