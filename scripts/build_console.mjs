@@ -44,6 +44,14 @@
  * The only thing that moves is WHERE the JSX compile happens: build time
  * instead of the operator's browser.
  *
+ * Two harnesses, one output
+ * ------------------------
+ * There are two shells — the operator console (nsr-mis-console.html, 47
+ * scripts) and the admin console (nsr-mis-admin-console.html, 21). They
+ * overlap by only 6 files, so each unique source is compiled ONCE into a
+ * shared js/ directory and each harness gets its own manifest naming the
+ * files it loads, in its own order.
+ *
  * Usage:  node scripts/build_console.mjs
  * Output: static/console/
  */
@@ -56,20 +64,25 @@ import * as esbuild from "esbuild";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DESIGN = path.join(ROOT, "design");
-const HARNESS = path.join(DESIGN, "nsr-mis-console.html");
 const OUT_DIR = path.join(ROOT, "static", "console");
 const JS_DIR = path.join(OUT_DIR, "js");
 
+/** The shells to build. `manifest` is what the matching Django view reads. */
+const HARNESSES = [
+  { name: "operator console", html: "nsr-mis-console.html", manifest: "manifest.json" },
+  { name: "admin console", html: "nsr-mis-admin-console.html", manifest: "manifest-admin.json" },
+];
+
 /** The babel script srcs from the harness, in load order. Order is the
  *  dependency graph — there is no other one. */
-async function scriptOrder() {
-  const html = await readFile(HARNESS, "utf8");
+async function scriptOrder(harnessFile) {
+  const html = await readFile(path.join(DESIGN, harnessFile), "utf8");
   const re = /<script\s+type="text\/babel"\s+src="([^"]+)"\s*><\/script>/g;
   const files = [];
   let m;
   while ((m = re.exec(html)) !== null) files.push(m[1]);
   if (!files.length) {
-    throw new Error(`no <script type="text/babel"> tags found in ${HARNESS}`);
+    throw new Error(`no <script type="text/babel"> tags found in ${harnessFile}`);
   }
   return files;
 }
@@ -86,18 +99,24 @@ const INLINE_FLAGS = {
 const outName = (rel) => rel.replace(/\.jsx$/, "").replace(/[\/]/g, "-") + ".js";
 
 async function build() {
-  const files = await scriptOrder();
+  // Every harness's file list, and the union to compile.
+  const lists = [];
+  for (const h of HARNESSES) {
+    lists.push({ ...h, files: await scriptOrder(h.html) });
+  }
+  const unique = [...new Set(lists.flatMap((l) => l.files))];
+
   await rm(JS_DIR, { recursive: true, force: true });
   await mkdir(JS_DIR, { recursive: true });
 
-  const manifest = [];
   let bytesIn = 0;
   let bytesOut = 0;
 
-  for (const rel of files) {
+  // Compile each source ONCE — the two shells share six files.
+  for (const rel of unique) {
     const abs = path.join(DESIGN, rel);
     if (!existsSync(abs)) {
-      throw new Error(`harness references a missing file: ${rel}`);
+      throw new Error(`a harness references a missing file: ${rel}`);
     }
     let src = await readFile(abs, "utf8");
     bytesIn += Buffer.byteLength(src);
@@ -116,23 +135,21 @@ async function build() {
       legalComments: "none",
       sourcefile: rel,
     });
-    for (const w of out.warnings) {
-      console.warn(`  warn ${rel}: ${w.text}`);
-    }
+    for (const w of out.warnings) console.warn(`  warn ${rel}: ${w.text}`);
 
-    const name = outName(rel);
-    await writeFile(path.join(JS_DIR, name), out.code, "utf8");
+    await writeFile(path.join(JS_DIR, outName(rel)), out.code, "utf8");
     bytesOut += Buffer.byteLength(out.code);
-    manifest.push(name);
   }
 
-  // The template renders script tags from this, so load order survives
-  // in data rather than being retyped into HTML and silently drifting.
-  await writeFile(
-    path.join(OUT_DIR, "manifest.json"),
-    JSON.stringify({ scripts: manifest }, null, 2),
-    "utf8",
-  );
+  // One manifest per shell. The template renders script tags from it, so
+  // load order lives in data and cannot drift from the harness.
+  for (const l of lists) {
+    await writeFile(
+      path.join(OUT_DIR, l.manifest),
+      JSON.stringify({ scripts: l.files.map(outName) }, null, 2),
+      "utf8",
+    );
+  }
 
   // Styles: the harness loads tokens.css then styles.css, in that order.
   const css = [
@@ -149,9 +166,12 @@ async function build() {
   }
 
   const kb = (n) => (n / 1024).toFixed(0) + " KB";
-  console.log(`  sources     : ${files.length} files, ${kb(bytesIn)}`);
-  console.log(`  compiled    : ${manifest.length} files, ${kb(bytesOut)} (minified)`);
-  console.log(`  console.css : ${kb(Buffer.byteLength(css))}`);
+  for (const l of lists) {
+    console.log(`  ${l.name.padEnd(17)}: ${String(l.files.length).padStart(2)} scripts -> ${l.manifest}`);
+  }
+  console.log(`  unique sources   : ${unique.length} files, ${kb(bytesIn)}`);
+  console.log(`  compiled         : ${unique.length} files, ${kb(bytesOut)} (minified)`);
+  console.log(`  console.css      : ${kb(Buffer.byteLength(css))}`);
   console.log(`  -> ${path.relative(ROOT, OUT_DIR)}`);
   console.log(`  browser no longer downloads Babel (3.1 MB) or compiles JSX`);
 }

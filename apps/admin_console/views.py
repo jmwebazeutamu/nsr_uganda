@@ -12,6 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from django.http import FileResponse, Http404, HttpResponseForbidden
+from django.shortcuts import render
+from nsr_mis.views import console_scripts
 
 from apps.admin_console.permissions import user_can_admin_console
 
@@ -31,6 +33,17 @@ def admin_console(request, path: str = "nsr-mis-admin-console.html"):
             "Admin Console access requires membership in one of: "
             "nsr_admin / mglsd_statistics / dpo / nsr_dba / nsr_security.",
         )
+    # Built shell when the console has been compiled into the image; the
+    # design/ passthrough otherwise. design/ is excluded from the Docker
+    # build context, so in a container the passthrough can only 404 —
+    # which is what /admin-console/ did in production until this landed.
+    # See docs/console_production_build.md.
+    scripts = console_scripts("manifest-admin.json")
+    if scripts is not None and path in ("", "nsr-mis-admin-console.html"):
+        return render(request, "console/index.html", {
+            "console_scripts": scripts,
+            "console_title": "NSR MIS — Admin Console",
+        })
     target = (DESIGN_DIR / path).resolve()
     try:
         target.relative_to(DESIGN_DIR)
