@@ -84,3 +84,80 @@ jobs:
             echo '--- post-deploy status ---'
             docker compose -f compose.prod.yml ps
           "
+
+  # ── PRODUCTION (nsr-sris.mglsd.go.ug / 154.72.204.74) ────────────────
+  #
+  # Second deploy target. The training box above is the canary: this job
+  # `needs` it, so a deploy that breaks training never reaches
+  # production.
+  #
+  # DISABLED BY DEFAULT. It runs only when the repository variable
+  # PROD_DEPLOY_ENABLED is set to the string "true".
+  deploy-production:
+    needs: build-and-deploy
+    if: vars.PROD_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Resolve the commit being deployed
+        id: sha
+        run: echo "sha=${{ github.event.workflow_run.head_sha || github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy over SSH (pull + up + migrate)
+        env:
+          SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+          SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/prod_key
+          chmod 600 ~/.ssh/prod_key
+          SSH="ssh -i ~/.ssh/prod_key -o StrictHostKeyChecking=accept-new"
+          $SSH "$PROD_USER@$PROD_HOST" "
+            set -euo pipefail
+            cd /opt/nsrmis
+            git fetch --prune origin main
+            git checkout --force '$SHA'
+            if grep -q '^NSR_IMAGE=' .env; then
+              sed -i 's|^NSR_IMAGE=.*|NSR_IMAGE=ghcr.io/jmwebazeutamu/nsr_uganda:$SHA|' .env
+            else
+              echo 'NSR_IMAGE=ghcr.io/jmwebazeutamu/nsr_uganda:$SHA' >> .env
+            fi
+            echo '$GHCR_TOKEN' | docker login ghcr.io -u '$GHCR_USER' --password-stdin
+            docker compose -f compose.production.yml --env-file .env pull
+            docker compose -f compose.production.yml --env-file .env up -d --remove-orphans
+            docker logout ghcr.io
+            docker compose -f compose.production.yml --env-file .env exec -T web \
+              python manage.py migrate --noinput
+            docker image prune -f
+            docker compose -f compose.production.yml --env-file .env ps
+          "
+
+      - name: Health check (fail the deploy if the app does not respond)
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+        run: |
+          set -euo pipefail
+          SSH="ssh -i ~/.ssh/prod_key -o StrictHostKeyChecking=accept-new"
+          $SSH "$PROD_USER@$PROD_HOST" "
+            set -eu
+            for i in \$(seq 1 30); do
+              code=\$(curl -s -o /dev/null -w '%{http_code}' \
+                       -H 'Host: nsr-sris.mglsd.go.ug' \
+                       http://127.0.0.1/healthz || true)
+              if [ \"\$code\" = '200' ]; then
+                echo \"healthz OK after \${i} attempt(s)\"
+                exit 0
+              fi
+              echo \"attempt \${i}: healthz returned '\${code}', retrying...\"
+              sleep 5
+            done
+            echo 'HEALTH CHECK FAILED'
+            docker compose -f /opt/nsrmis/compose.production.yml --env-file /opt/nsrmis/.env logs --tail=80 web
+            exit 1
+          "
