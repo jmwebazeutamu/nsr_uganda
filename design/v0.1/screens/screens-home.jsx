@@ -112,36 +112,72 @@ const HOME_QUEUE_LIVE_MAP = {
 };
 
 
-// Map a KPI's `title` to the field on the dashboard payload it
-// should read. Wiring a new KPI to live data = add an entry here.
-// Falls back to the hardcoded mock value when the field is missing
-// from the payload (or when the API call hasn't returned yet).
-const HOME_KPI_LIVE_MAP = {
-  // nsr-unit
-  "DIH review queue": "stages_pending_promotion",
-  "Bulk batches awaiting dual-approval": null,  // no backend signal yet
-  "Partner DSAs expiring in 30d":         null,
-  "Fast-track auto-promote":              null,
-  // cdo
-  "UPD review queue":     "change_requests_pending",
-  "GRM L2 cases":         "grievances_l2_open",
-  "Programme referrals":  null,
-  "Avg approval time (UPD)": null,
-  // parish
-  "Captures today":          null,
-  "Drafts about to expire":  null,
-  "GRM L1 cases (my parish)": "grievances_open",
-  "Sync queue (CAPI)":       null,
-  // dpo
-  "Anomaly alerts (US-103)": null,
-  "Rows shipped 7d":         null,
-  "Erasure requests":        null,
-  "DPIA review tasks":       null,
-  // partner-analyst
-  "Delivered (30d)":         "data_requests_delivered_7d",
-  "Pending approval":        "data_requests_pending_approval",
-  "Bundles expiring 7d":     null,
-  "Active DSA":              null,
+/* ============================================================
+   REAL KPIs — every number on this screen comes from the API
+   ============================================================
+
+   Each entry reads one field of
+   /api/v1/rpt/dashboards/operator-kpis/, which is ABAC-scoped
+   server-side, so an operator sees counts for their own geography.
+
+   The rule, and the reason this table exists: IF A NUMBER CANNOT COME
+   FROM THE API, IT DOES NOT BELONG ON THIS SCREEN. It is not rendered
+   with a placeholder, and it is certainly not rendered with an invented
+   value.
+
+   The previous version carried a full set of hardcoded KPIs per role —
+   "DIH review queue 342", "Fast-track auto-promote 61.4%", "Bulk batches
+   awaiting dual-approval 4" — with sparklines and week-on-week trends,
+   all fabricated, on a registry holding 284 households. A live overlay
+   existed but most fields mapped to null, so the fallback quietly showed
+   the fiction. An operator had no way to tell which numbers were real.
+
+   Adding a KPI: add the field to the operator-kpis serializer first,
+   then add a row here. There is no other order that works.
+   ============================================================ */
+const HOME_KPIS_BY_ROLE = {
+  "nsr-unit": [
+    { title: "DIH review queue",      field: "stages_pending_promotion", foot: "Stage records awaiting promotion" },
+    { title: "DDUP review queue",     field: "stages_ddup_review",       foot: "Held for de-duplication review" },
+    { title: "Quality failures",      field: "stages_quality_failed",    foot: "Stage records failing DQA" },
+    { title: "Households registered", field: "households_total",         foot: "Within your scope" },
+  ],
+  "sr-manager": [
+    { title: "Change requests pending", field: "change_requests_pending", foot: "Awaiting review or approval" },
+    { title: "Households registered",   field: "households_total",        foot: "Within your scope" },
+    { title: "Households with PMT",     field: "households_with_pmt",     foot: "Scored by the Proxy Means Test" },
+    { title: "Grievances open",         field: "grievances_open",         foot: "All tiers" },
+  ],
+  "parish": [
+    { title: "Grievances open",         field: "grievances_open",         foot: "In your parish" },
+    { title: "Change requests pending", field: "change_requests_pending", foot: "Awaiting review or approval" },
+    { title: "Identity checks pending", field: "stages_idv_pending",      foot: "Awaiting NIRA verification" },
+    { title: "Households registered",   field: "households_total",        foot: "Within your scope" },
+  ],
+  "cdo": [
+    { title: "UPD review queue",      field: "change_requests_pending", foot: "Change requests awaiting approval" },
+    { title: "GRM L2 cases",          field: "grievances_l2_open",      foot: "Open at tier 2" },
+    { title: "Grievances open",       field: "grievances_open",         foot: "All tiers" },
+    { title: "Households registered", field: "households_total",        foot: "Within your scope" },
+  ],
+  "partner-analyst": [
+    // Labelled 7d because the field IS 7d. The previous card said
+    // "Delivered (30d)" while reading data_requests_delivered_7d.
+    { title: "Pending approval",  field: "data_requests_pending_approval", foot: "Your data requests awaiting approval" },
+    { title: "Delivered (7d)",    field: "data_requests_delivered_7d",     foot: "Bundles delivered in the last 7 days" },
+  ],
+  "dpo": [
+    { title: "Data requests pending", field: "data_requests_pending_approval", foot: "Awaiting approval" },
+    { title: "Delivered (7d)",        field: "data_requests_delivered_7d",     foot: "Bundles delivered in the last 7 days" },
+    { title: "Grievances open",       field: "grievances_open",                foot: "All tiers" },
+    { title: "Households registered", field: "households_total",               foot: "Within your scope" },
+  ],
+  "explorer": [
+    { title: "Households registered", field: "households_total",     foot: "Within your scope" },
+    { title: "Households with PMT",   field: "households_with_pmt",  foot: "Scored by the Proxy Means Test" },
+    { title: "Change requests pending", field: "change_requests_pending", foot: "Awaiting review or approval" },
+    { title: "Grievances open",       field: "grievances_open",      foot: "All tiers" },
+  ],
 };
 
 /* ============================================================
@@ -378,20 +414,26 @@ const HomeScreen = ({ role, onNavigate, operatorName }) => {
   // count when one is available, and stripping the misleading
   // spark/trend lines (the live count is a single point — sparks
   // come back when /api/v1/rpt/dashboards/comparative/ wires in).
-  const kpis = r.kpis.map(k => {
-    const fieldName = HOME_KPI_LIVE_MAP[k.title];
-    if (liveKpis && fieldName && liveKpis[fieldName] != null) {
+  // Built entirely from HOME_KPIS_BY_ROLE, never from ROLE_CONTENT.kpis.
+  //
+  // Three deliberate consequences:
+  //   * a role with no real field for something simply shows fewer cards,
+  //     rather than a card with an invented number;
+  //   * before the fetch returns, the value is an em dash, so a number on
+  //     screen is always a number the server sent;
+  //   * no spark, no trend. Both were fabricated series; the endpoint
+  //     returns a single point, and drawing a week of history from one
+  //     point would be inventing data again. They return when
+  //     /api/v1/rpt/dashboards/comparative/ is wired in.
+  const kpis = (HOME_KPIS_BY_ROLE[role] || HOME_KPIS_BY_ROLE["nsr-unit"])
+    .map(({ title, field, foot }) => {
+      const loaded = liveKpis && liveKpis[field] != null;
       return {
-        ...k,
-        value: String(liveKpis[fieldName]),
-        spark: undefined,
-        trend: undefined,
-        trendValue: undefined,
-        foot: `${k.foot} · live`,
+        title,
+        value: loaded ? String(liveKpis[field]) : "—",
+        foot: loaded ? foot : "Loading…",
       };
-    }
-    return k;
-  });
+    });
 
   // US-S13-002 — per-queue live item fetch. State: titles → list
   // of projected items (or null while loading). Each queue's title
@@ -431,9 +473,15 @@ const HomeScreen = ({ role, onNavigate, operatorName }) => {
     return () => { cancelled = true; };
   }, [r.queues, region]);
 
-  const queues = r.queues.map(q => {
+  // Only queues with a live endpoint are shown. An unwired queue used to
+  // fall through to its mock items — four invented households with real
+  // -looking names and ULIDs, which is considerably worse than showing
+  // nothing on a registry of actual people.
+  const queues = r.queues.filter(q => HOME_QUEUE_LIVE_MAP[q.title]).map(q => {
     const live = liveQueues[q.title];
-    if (live === undefined) return q;  // not wired or still loading
+    if (live === undefined) {
+      return { ...q, count: null, items: [] };   // still loading
+    }
     return {
       ...q,
       items: live.items,
