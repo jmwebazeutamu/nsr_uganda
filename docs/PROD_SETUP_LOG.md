@@ -269,7 +269,116 @@ procedure in this repository uses it.
 
 ## Phase 6 — data migration
 
-_Not started._
+**2026-09-17. Complete.** Cut-off `20260917T020653Z` (UTC), confirmed by
+the project owner as "now". Dev was never stopped, locked or modified.
+
+### On dev (read-only)
+
+```
+mkdir -p migration
+docker exec nsr_dev_db pg_dump -U nsr -d nsr -Fc --no-owner --no-acl > migration/nsr_dev_<cutoff>.dump
+cp nsr_dev_<cutoff>.dump work_nsr_<cutoff>.dump        # work from the copy
+tar czf migration/drs_bundles_<cutoff>.tar.gz -C . .drs-bundles
+sha256sum ... > migration/SHA256SUMS.txt
+```
+
+Dump 8.7 MB (custom format, from a 96 MB database), pg_dump stderr empty.
+`media/`, `.upd-evidence/` and `.consent-evidence/` were empty or absent
+on dev, so only the DRS bundles needed archiving. The original dump stays
+on dev as the fallback.
+
+`migration/dev_counts.txt` holds exact `COUNT(*)` per table — 125 tables,
+113,990 rows — plus file counts. Not `pg_stat` estimates: those were
+stale by a factor of 50 and produced a badly wrong figure earlier in
+this work.
+
+### Transfer
+
+```
+rsync -av work_nsr_<cutoff>.dump drs_bundles_<cutoff>.tar.gz dev_counts.txt \
+      CUTOFF.txt SHA256SUMS.txt nsr-prod:/opt/nsrmis/migration/
+ssh nsr-prod 'cd /opt/nsrmis/migration && sha256sum -c SHA256SUMS.txt'
+```
+
+All four transferred artefacts verified OK on prod.
+
+### On prod
+
+Version gate (step 9) confirmed before restoring: PostgreSQL 16.4 /
+PostGIS 3.4.3 on both sides.
+
+```
+docker compose ... stop nginx public worker beat web     # db + redis stay up
+psql -c "DROP DATABASE nsr;" ; psql -c "CREATE DATABASE nsr OWNER nsr;"
+pg_restore -h db -U nsr -d nsr --no-owner --no-acl -j 2 work_nsr_<cutoff>.dump
+```
+
+The dropped database was the empty Phase 5 one — verified 0 households,
+0 members, 0 users, 0 audit events immediately beforehand. pg_restore
+exited 0 with no warnings; all 6 extensions and 131 table-data entries
+restored.
+
+### Key rotation
+
+The restored ciphertext was written under the dev key, which production
+does not have. `manage.py rotate_encryption_keys` re-encrypted it under
+the production key:
+
+```
+# old dev secrets piped to /opt/nsrmis/migration/.oldkeys (mode 600),
+# forwarded with `docker compose run -e NAME` (pass-through form, so the
+# values never appear in `ps`), then shredded.
+/opt/nsrmis/migration/run_rotation.sh --dry-run        # 993, 0 unreadable
+/opt/nsrmis/migration/run_rotation.sh --batch-size=500 # 993, 0 unreadable
+```
+
+Result: 992 Member NINs + 1 Kobo token re-encrypted, 0 unreadable.
+Verified afterwards through the ORM under the production key:
+
+```
+members with NIN      : 992
+decrypt under PROD key: 992
+failed to decrypt     : 0
+nin_hash matches      : 992
+```
+
+`.oldkeys` was shredded from prod immediately after.
+
+### File volumes (step 12)
+
+`.drs-bundles` restored into the `drs_bundles` named volume, 4 files,
+`chown 999:999` to match the image's `app` user — a fresh volume would
+otherwise be root-owned and every write would fail with EACCES.
+
+### Count comparison (step 13)
+
+| | dev | prod |
+|---|---|---|
+| Tables | 125 | 125 |
+| Total rows | 113,990 | 113,990 |
+| Row-count differences | **none — identical on every table** | |
+| `.drs-bundles` files | 4 | 4 |
+| `media` files | 0 | 0 |
+
+### Clean-up list (step 15) — listed, NOT changed
+
+Project owner instruction: **keep all accounts.** All 11 restored and
+left active, including the 8 superusers.
+
+Dev-only values still present in the data, for a later decision:
+
+| Location | Rows | Example |
+|---|---|---|
+| `auth_user.email` | 2 | `admin@example.com`, `dev@example.com` |
+| `partners_dsasignature.signer_email` | 1 | `@quasar.ug` |
+| `partners_programmesignoff.expected/actual_email` | 2+2 | `@quasar.ug` |
+| `chatbot_manualchunk.content` | 7 | doc text mentioning localhost |
+| `ddup_mergedecision.reason`, `pmt_pmtmodelsignoff.decision_note` | 1+2 | free text |
+| `security_auditevent.actor_id` / `.reason` | 5+4 | historical audit rows — **must not be edited**, the chain is hash-linked |
+
+`ingestion_hub_kobocredential` holds one row pointing at the real
+`https://kf.kobotoolbox.org`, marked `(pre-minted)` and never tested.
+The six DIH source systems are all seeded and active.
 
 ---
 
