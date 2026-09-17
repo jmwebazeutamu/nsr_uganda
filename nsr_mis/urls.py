@@ -6,7 +6,7 @@ from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
-from .views import LogoutConfirmView, console, home, manual
+from .views import LogoutConfirmView, console, home, manual, profile
 
 
 def healthz(_request):
@@ -45,6 +45,7 @@ urlpatterns = [
         redirect_authenticated_user=True,
     ), name="login"),
     path("logout/", LogoutConfirmView.as_view(), name="logout"),
+    path("profile/", profile, name="profile"),
     path("", home, name="home"),
     # The operator home also answers at /home/. On the deployed box the
     # public site owns "/" of the hostname and Apache path-routes the

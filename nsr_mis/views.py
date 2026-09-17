@@ -8,10 +8,12 @@ user manual under /docs/user-manual/site/."""
 import logging
 from pathlib import Path
 
+from django import forms
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import redirect, render
+from django.urls import reverse
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,50 @@ def console_scripts(manifest_name: str = "manifest.json"):
 #: Backwards-compatible alias for the operator shell.
 def _console_scripts():
     return console_scripts("manifest.json")
+
+
+class ProfileForm(forms.ModelForm):
+    """The small, self-service portion of an operator's account.
+
+    Roles, geographic scope and the username are deliberately absent: those
+    are access-control records administered by an authorised administrator,
+    not profile preferences a user may edit themselves.
+    """
+
+    class Meta:
+        from django.contrib.auth import get_user_model
+
+        model = get_user_model()
+        fields = ("first_name", "last_name", "email")
+        widgets = {
+            "first_name": forms.TextInput(attrs={"autocomplete": "given-name"}),
+            "last_name": forms.TextInput(attrs={"autocomplete": "family-name"}),
+            "email": forms.EmailInput(attrs={"autocomplete": "email"}),
+        }
+
+
+@login_required
+def profile(request):
+    """Show and update the signed-in user's contact profile.
+
+    This is intentionally session-scoped: a user can only edit their own
+    display name and email address. Group membership and ABAC scope remain
+    visible as read-only context, which avoids turning the profile page into
+    a privilege-escalation surface.
+    """
+    if request.method == "POST":
+        form = ProfileForm(request.POST, instance=request.user)
+        if form.is_valid():
+            form.save()
+            return redirect(f"{reverse('profile')}?updated=1")
+    else:
+        form = ProfileForm(instance=request.user)
+
+    return render(request, "registration/profile.html", {
+        "form": form,
+        "roles": sorted(request.user.groups.values_list("name", flat=True)),
+        "updated": request.GET.get("updated") == "1",
+    })
 
 
 @login_required
