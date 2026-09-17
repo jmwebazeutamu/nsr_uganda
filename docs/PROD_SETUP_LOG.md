@@ -380,6 +380,34 @@ Dev-only values still present in the data, for a later decision:
 `https://kf.kobotoolbox.org`, marked `(pre-minted)` and never tested.
 The six DIH source systems are all seeded and active.
 
+### Clean-up of the migration staging area (step 16)
+
+The project owner confirmed the migration was good, so the transferred
+artefacts were destroyed on production.
+
+```
+ssh nsr-prod 'cd /opt/nsrmis/migration
+  shred -u -z work_nsr_<cutoff>.dump drs_bundles_<cutoff>.tar.gz
+  rm -f CUTOFF.txt SHA256SUMS.txt dev_counts.txt prod_counts.txt run_rotation.sh'
+```
+
+`shred` rather than `rm` for the dump and archive: both carry live
+personal data under the DPPA 2019, and the directory sits on an
+ordinary ext4 filesystem where `rm` only unlinks.
+
+Verified afterwards: `/opt/nsrmis/migration` is empty, still `700`
+`jmwebaze:jmwebaze`, and a sweep of `/opt`, `/home/jmwebaze` and `/tmp`
+found no stray dump, archive or key file.
+
+`prod_counts.txt` was copied back to dev first, so the count evidence
+survives off-production; it holds table names and integers only, no
+personal data. The dev-side dumps are retained until the project owner
+says otherwise.
+
+Post-deletion check: all 8 containers healthy, 1,283 members / 992 NINs
+/ 80,430 audit events still present, 4 DRS bundle files still in the
+volume.
+
 ---
 
 ## Phase 7 — SSL and go-live
