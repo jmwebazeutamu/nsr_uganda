@@ -90,8 +90,13 @@ services:
       - nginx_logs:/var/log/nginx
     # Copy the selected config into place at boot, then run. The copy is
     # what makes the directory mount work: conf.d holds a real file that
-    # is rewritten every start, so `up -d` always lands the current
-    # config and a stale inode cannot survive a deploy.
+    # is rewritten every start, so a stale inode cannot survive a restart.
+    #
+    # OPERATOR NOTE: after editing an nginx config, `up -d` is NOT enough.
+    # Compose sees no change to the service spec (only to a file inside a
+    # mounted directory) and leaves the container alone, so the boot-time
+    # copy never re-runs. Use:
+    #     docker compose -f compose.production.yml --env-file .env restart nginx
     #
     # The 6-hourly reload picks up a certificate renewed by the certbot
     # container without needing a deploy. The subshell backgrounds the

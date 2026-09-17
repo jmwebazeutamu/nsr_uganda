@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+#
+# nsr-user — manage NSR MIS accounts on the production server.
+#
+#   /opt/nsrmis/nsr-user <command> [args]
+#
+# A thin, safe wrapper around the app's own management commands, run
+# inside the running `web` container. It deliberately does NOT talk to
+# the database directly: creating an account with SQL skips the role and
+# the ABAC scope, and an operator without a scope is not broken — it is
+# BLIND. Every list returns zero rows, with no error to explain why.
+# `create_operator` sets all three together and refuses combinations that
+# cannot work.
+#
+# Passwords are never passed as arguments. Anything on a command line
+# ends up in shell history and in `ps` output, so every password here is
+# typed at an interactive prompt that does not echo.
+#
+# Python snippets are fed to `manage.py shell` on STDIN via quoted
+# heredocs rather than `-c "..."`. With `-c` the snippet passes through
+# two levels of shell quoting and any nested quote has to be
+# backslash-escaped, which Python then rejects. Values reach the snippet
+# as environment variables, never by string interpolation — so a
+# username can never be injected into the code.
+
+set -euo pipefail
+
+COMPOSE_DIR=/opt/nsrmis
+COMPOSE_FILE=compose.production.yml
+ENV_FILE=.env
+
+cd "$COMPOSE_DIR" 2>/dev/null || { echo "error: $COMPOSE_DIR not found — is this the production server?" >&2; exit 1; }
+
+dc() { docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"; }
+
+# Suppress Django's app-init RuntimeWarning, which fires on every shell
+# call here and would otherwise train operators to skim real output.
+QUIET=(-e PYTHONWARNINGS=ignore::RuntimeWarning)
+
+require_running() {
+  if ! dc ps --status running --services 2>/dev/null | grep -qx web; then
+    echo "error: the 'web' container is not running." >&2
+    echo "       start it:  cd $COMPOSE_DIR && docker compose -f $COMPOSE_FILE --env-file $ENV_FILE up -d" >&2
+    exit 1
+  fi
+}
+
+# Quieten Django shell's "N objects imported automatically" banner.
+py() { dc exec -T "${QUIET[@]}" "$@" web python manage.py shell -c "$(cat)" 2>&1 | grep -v "objects imported automatically"; }
+
+usage() {
+cat <<'USAGE'
+nsr-user — NSR MIS account management (production)
+
+  nsr-user list
+        Every account: role, ABAC scope, flags, last login.
+
+  nsr-user create <username> --role <role> [--scope-code <code>] [--email <addr>] [--staff]
+        Create an operator with a role AND a scope, then prompt for a password.
+        Omit --scope-code only for national roles. --dry-run to preview.
+
+  nsr-user passwd <username>
+        Change a password (prompted twice, never echoed, validators applied).
+
+  nsr-user disable <username> / enable <username>
+        Deactivate or reactivate. Disable is how a leaver is handled — never
+        DELETE an account that has touched personal data: the audit chain
+        (SAD §8.4) references it and deleting breaks the hash chain.
+
+  nsr-user roles          List the role catalogue and default scope levels.
+  nsr-user whoami <user>  Show one account in detail.
+
+Roles (ADR-0028), by default scope level:
+
+  national   : nsr_admin, nsr_unit_coordinator, nsr_security, nsr_dba,
+               auditor, dpo, mis_specialist, systems_architect,
+               application_developer, communications_officer, mglsd_statistics
+  district   : cdo, admin_officer, m_and_e_officer
+  sub_county : supervisor
+  parish     : parish_chief, enumerator
+  partner    : programme_manager, programme_caseworker, partner_dpo
+
+Examples:
+
+  nsr-user create j.okello  --role parish_chief --scope-code KLA-CEN
+  nsr-user create a.nakato  --role nsr_unit_coordinator --email a.nakato@mglsd.go.ug
+  nsr-user create p.mugisha --role programme_manager --scope-code PDM
+  nsr-user passwd j.okello
+  nsr-user disable j.okello
+
+A scoped role given no --scope-code becomes NATIONAL, which is almost never
+right for a district or parish officer. create_operator will say so — read it
+rather than passing --scope-level to silence it.
+USAGE
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift || true
+
+case "$cmd" in
+  list)
+    require_running
+    py <<'PY'
+from django.contrib.auth import get_user_model
+from apps.security.models import OperatorScope
+
+U = get_user_model()
+rows = []
+for u in U.objects.all().order_by("-is_superuser", "username"):
+    groups = ", ".join(g.name for g in u.groups.all()) or "-"
+    sc = OperatorScope.objects.filter(user=u, active=True).first()
+    if sc:
+        scope = sc.scope_level + ":" + (sc.scope_code or "*")
+    else:
+        scope = "NONE (blind)"
+    flags = ("S" if u.is_superuser else ".") + ("A" if u.is_staff else ".") + ("+" if u.is_active else "-")
+    last = u.last_login.strftime("%Y-%m-%d") if u.last_login else "never"
+    rows.append((u.username, groups, scope, flags, last))
+
+if not rows:
+    print("no accounts")
+else:
+    w = max(max(len(r[0]) for r in rows), 8)
+    g = max(max(len(r[1]) for r in rows), 4)
+    print("USERNAME".ljust(w) + "  " + "ROLE".ljust(g) + "  " + "SCOPE".ljust(18) + "  FLAGS  LAST LOGIN")
+    for r in rows:
+        print(r[0].ljust(w) + "  " + r[1].ljust(g) + "  " + r[2].ljust(18) + "  " + r[3] + "    " + r[4])
+    print()
+    print("FLAGS: S=superuser  A=django-admin  +=active  -=disabled")
+    print("SCOPE 'NONE' means the account signs in but sees nothing.")
+PY
+    ;;
+
+  create)
+    [ $# -ge 1 ] || { echo "usage: nsr-user create <username> --role <role> [--scope-code <code>]" >&2; exit 1; }
+    require_running
+    # --set-password makes create_operator prompt. Without it the account
+    # gets an unusable password and cannot sign in at all.
+    dc exec "${QUIET[@]}" web python manage.py create_operator "$@" --set-password
+    ;;
+
+  passwd)
+    [ $# -eq 1 ] || { echo "usage: nsr-user passwd <username>" >&2; exit 1; }
+    require_running
+    # Django's own changepassword: prompts twice, no echo, runs validators.
+    dc exec "${QUIET[@]}" web python manage.py changepassword "$1"
+    ;;
+
+  disable|enable)
+    [ $# -eq 1 ] || { echo "usage: nsr-user $cmd <username>" >&2; exit 1; }
+    require_running
+    if [ "$cmd" = "enable" ]; then WANT=1; else WANT=0; fi
+    dc exec -T "${QUIET[@]}" -e NSRU_NAME="$1" -e NSRU_ACTIVE="$WANT" web python manage.py shell -c "$(cat <<'PY'
+import os
+from django.contrib.auth import get_user_model
+
+U = get_user_model()
+name = os.environ["NSRU_NAME"]
+active = os.environ["NSRU_ACTIVE"] == "1"
+word = "enabled" if active else "disabled"
+try:
+    u = U.objects.get(username=name)
+except U.DoesNotExist:
+    raise SystemExit("no such account: " + name)
+if u.is_active == active:
+    print(name + " is already " + word + " — nothing to do")
+else:
+    u.is_active = active
+    u.save(update_fields=["is_active"])
+    print(name + " is now " + word)
+PY
+)" 2>&1 | grep -v "objects imported automatically"
+    ;;
+
+  roles)
+    require_running
+    py <<'PY'
+from apps.security import roles
+for code in sorted(roles.ROLE_CODES):
+    r = roles.BY_CODE.get(code)
+    default = getattr(r, "default_scope", "?")
+    print("  " + code.ljust(28) + " default_scope=" + str(default))
+PY
+    ;;
+
+  whoami)
+    [ $# -eq 1 ] || { echo "usage: nsr-user whoami <username>" >&2; exit 1; }
+    require_running
+    dc exec -T "${QUIET[@]}" -e NSRU_NAME="$1" web python manage.py shell -c "$(cat <<'PY'
+import os
+from django.contrib.auth import get_user_model
+from apps.security.models import OperatorScope
+
+U = get_user_model()
+name = os.environ["NSRU_NAME"]
+try:
+    u = U.objects.get(username=name)
+except U.DoesNotExist:
+    raise SystemExit("no such account: " + name)
+print("username    : " + u.username)
+print("email       : " + (u.email or "-"))
+print("active      : " + str(u.is_active))
+print("django admin: " + str(u.is_staff))
+print("superuser   : " + str(u.is_superuser))
+print("roles       : " + (", ".join(g.name for g in u.groups.all()) or "-"))
+scopes = list(OperatorScope.objects.filter(user=u))
+if scopes:
+    for sc in scopes:
+        state = "" if sc.active else "  [INACTIVE]"
+        print("scope       : " + sc.scope_level + ":" + (sc.scope_code or "*")
+              + " expires=" + str(sc.expires_at or "never") + state)
+else:
+    print("scope       : NONE — this account will see nothing")
+print("last login  : " + str(u.last_login or "never"))
+PY
+)" 2>&1 | grep -v "objects imported automatically"
+    ;;
+
+  ""|-h|--help|help) usage ;;
+  *) echo "unknown command: $cmd" >&2; echo >&2; usage >&2; exit 1 ;;
+esac
