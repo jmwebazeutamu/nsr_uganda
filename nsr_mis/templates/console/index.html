@@ -1,0 +1,61 @@
+{% load static %}<!doctype html>
+{% comment %}
+Production shell for the operator console.
+
+This replaces design/nsr-mis-console.html for deployed environments. The
+difference is entirely in HOW the same application is loaded:
+
+  harness (dev)                      this template (production)
+  ---------------------------------  ----------------------------------
+  47 x <script type="text/babel">    47 x precompiled <script>
+  Babel-standalone 3.1 MB from CDN   none — JSX compiled at build time
+  React/ReactDOM development builds  React/ReactDOM production builds
+  d3 from unpkg @7, no integrity     d3 7.9.0 served from this origin
+  Inter from fonts.googleapis.com    Inter self-hosted
+
+Script ORDER is load-bearing: the sources declare globals and rely on
+being evaluated in the harness's order. It is rendered from
+static/console/manifest.json, written by scripts/build_console.mjs, so
+the order lives in one place and cannot drift from the harness.
+
+No third-party request is made from this page. That is not only about
+speed: the console renders personal data, and every external request
+would disclose an operator's IP address to that third party — the same
+processing the public site already avoids by self-hosting its font.
+{% endcomment %}
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+  <title>NSR MIS — Operator Console</title>
+
+  <!-- Self-hosted, so no request leaves this origin. -->
+  <style>
+    @font-face {
+      font-family: 'Inter';
+      font-style: normal;
+      font-weight: 100 900;
+      font-display: swap;
+      src: url("{% static 'console/fonts/inter-latin-var.woff2' %}") format('woff2');
+    }
+  </style>
+
+  <link rel="stylesheet" href="{% static 'console/console.css' %}"/>
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- React PRODUCTION builds (the harness uses development ones). -->
+  <script src="{% static 'console/vendor/react-18.3.1.production.min.js' %}"></script>
+  <script src="{% static 'console/vendor/react-dom-18.3.1.production.min.js' %}"></script>
+  <script src="{% static 'console/vendor/d3-7.9.0.min.js' %}"></script>
+
+  <!-- Where the coverage screens fetch map data from. The harness uses a
+       path relative to design/; here it is a static URL. -->
+  <script>window.NSR_CONSOLE_MAP_URL = "{% static 'console/maps/uganda-adm2.geojson' %}";</script>
+
+  <!-- The application, precompiled, in the harness's dependency order. -->
+  {% for src in console_scripts %}<script src="{% static 'console/js/' %}{{ src }}"></script>
+  {% endfor %}
+</body>
+</html>
