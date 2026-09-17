@@ -307,7 +307,22 @@ const ROLES = Object.keys(ROLE_CONTENT);
 /* ============================================================
    Home dashboard
    ============================================================ */
-const HomeScreen = ({ role, onNavigate }) => {
+// operatorName is the signed-in user, resolved by the shell from
+// /api/v1/security/users/me/. ROLE_CONTENT[role].person is demo data and
+// is only a fallback for the standalone harness, where there is no
+// session to ask about.
+/* Times are rendered in EAT (UTC+3) per CLAUDE.md, which is also the
+   operator's local time, so the browser clock is the right source. The
+   previous greeting was the literal string "Good afternoon" — wrong for
+   most of the working day, and wrong at 07:00 when enumeration starts. */
+const _greeting = () => {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+};
+
+const HomeScreen = ({ role, onNavigate, operatorName }) => {
   const r = ROLE_CONTENT[role] || ROLE_CONTENT["nsr-unit"];
 
   // US-S12-001 — overlay live KPI counts from
@@ -434,7 +449,7 @@ const HomeScreen = ({ role, onNavigate }) => {
         eyebrow={liveKpis
           ? (region ? `HOME · LIVE · DRILLED INTO ${region}` : "HOME · LIVE")
           : "HOME"}
-        title={<span>Good afternoon, <span style={{color:'var(--primary-900)'}}>{r.person.split(' ')[0]}</span></span>}
+        title={<span>{_greeting()}, <span style={{color:'var(--primary-900)'}}>{(operatorName || r.person).split(' ')[0]}</span></span>}
         sub={<>Signed in as {r.name}. Scope: {r.org}. Today is Thursday, 14 May 2026.</>}
         right={<>
           {subRegions.length > 0 && (

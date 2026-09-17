@@ -334,7 +334,11 @@ function App() {
       {/* Main */}
       <main className="main">
         <ErrorBoundary>
-        {screen === "home"    && <HomeScreen role={role} onNavigate={navigate}/>}
+        {/* operatorName is the REAL signed-in identity from
+            /api/v1/security/users/me/. Without it HomeScreen falls back to
+            ROLE_CONTENT[role].person, which is demo data — so every
+            operator was greeted by the same hardcoded name. */}
+        {screen === "home"    && <HomeScreen role={role} onNavigate={navigate} operatorName={identityName}/>}
         {screen === "kit"     && <KitScreen/>}
         {screen === "capture" && <CaptureScreen
           device={device} onChangeDevice={setDevice}
