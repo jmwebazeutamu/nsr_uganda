@@ -515,6 +515,27 @@ all needing repository access the deploy key does not have:
 owner. The Actions key was verified to authenticate by loopback SSH on
 the server before use.
 
+### Step 4 — automatic deploys armed
+
+The workflow reached `main` the long way round. A repo-scoped deploy key
+may not push workflow files, so the job was added through the GitHub web
+editor, which auto-indents pasted text: the first attempt silently nested
+`deploy-production` inside the preceding job (valid YAML, but only one
+job registered), and the second shifted the entire file two spaces right
+(invalid YAML). `Ctrl+A`, `Shift+Tab` fixed it — the displacement was
+uniform, so un-shifting was too.
+
+**If workflow files need editing again, use a Personal Access Token with
+`workflow` scope and push normally. The web editor is not worth it.**
+
+Merged in order, which matters: `prod-setup` first, so `main` carried
+`compose.production.yml` before anything tried to deploy from it, then
+the workflow PR, then the `PROD_DEPLOY_ENABLED` repository variable.
+
+`PROD_DEPLOY_ENABLED` is a **variable, not a secret** — the `secrets`
+context is unavailable in a job-level `if:`, so storing it as a secret
+leaves the job permanently skipped with no error to explain why.
+
 ---
 
 ## Phase 8 — backups and rollback
