@@ -1,105 +1,98 @@
 name: Deploy
 
-# Auto-deploy to the nsr-sris-dev.quasar.ug box after CI passes on main.
-# Gated on CI success via workflow_run so a red main never ships; also
-# runnable on demand (workflow_dispatch) for re-deploys / rollbacks.
-on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main]
-  workflow_dispatch:
+  # Auto-deploy to the nsr-sris-dev.quasar.ug box after CI passes on main.
+  # Gated on CI success via workflow_run so a red main never ships; also
+  # runnable on demand (workflow_dispatch) for re-deploys / rollbacks.
+  on:
+    workflow_run:
+      workflows: ["CI"]
+      types: [completed]
+      branches: [main]
+    workflow_dispatch:
 
-concurrency:
-  group: deploy-prod
-  cancel-in-progress: false
+  concurrency:
+    group: deploy-prod
+    cancel-in-progress: false
 
-permissions:
-  contents: read
-  packages: write   # push the image to GHCR
+  permissions:
+    contents: read
+    packages: write   # push the image to GHCR
 
-env:
-  IMAGE: ghcr.io/jmwebazeutamu/nsr_uganda
+  env:
+    IMAGE: ghcr.io/jmwebazeutamu/nsr_uganda
 
-jobs:
-  build-and-deploy:
-    # Only when triggered manually OR by a SUCCESSFUL CI run on main.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # Build the exact commit CI just validated.
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+  jobs:
+    build-and-deploy:
+      # Only when triggered manually OR by a SUCCESSFUL CI run on main.
+      if: >-
+        github.event_name == 'workflow_dispatch' ||
+        github.event.workflow_run.conclusion == 'success'
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4
+          with:
+            # Build the exact commit CI just validated.
+            ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      - uses: docker/setup-buildx-action@v3
+        - uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+        - name: Log in to GHCR
+          uses: docker/login-action@v3
+          with:
+            registry: ghcr.io
+            username: ${{ github.actor }}
+            password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build + push image (linux/amd64)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:latest
-            ${{ env.IMAGE }}:${{ github.event.workflow_run.head_sha || github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        - name: Build + push image (linux/amd64)
+          uses: docker/build-push-action@v6
+          with:
+            context: .
+            platforms: linux/amd64
+            push: true
+            tags: |
+              ${{ env.IMAGE }}:latest
+              ${{ env.IMAGE }}:${{ github.event.workflow_run.head_sha || github.sha }}
+            cache-from: type=gha
+            cache-to: type=gha,mode=max
 
-      - name: Deploy over SSH (pull + up + migrate)
-        env:
-          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_USER: ${{ github.actor }}
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new"
-          DIR=/home/jmwebaze/nsr_uganda
-          # Refresh the compose file (the only deploy artifact on the host;
-          # the image carries the entrypoint, .env is managed on the box).
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            compose.prod.yml "$DEPLOY_USER@$DEPLOY_HOST:$DIR/compose.prod.yml"
-          $SSH "$DEPLOY_USER@$DEPLOY_HOST" "
-            set -e
-            cd $DIR
-            echo '$GHCR_TOKEN' | docker login ghcr.io -u '$GHCR_USER' --password-stdin
-            docker compose -f compose.prod.yml --env-file .env pull
-            docker compose -f compose.prod.yml --env-file .env up -d --remove-orphans
-            docker logout ghcr.io
-            docker image prune -f
-            echo '--- post-deploy status ---'
-            docker compose -f compose.prod.yml ps
-          "
-          # ── PRODUCTION (nsr-sris.mglsd.go.ug / 154.72.204.74) ────────────────
+        - name: Deploy over SSH (pull + up + migrate)
+          env:
+            SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+            DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+            DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+            GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            GHCR_USER: ${{ github.actor }}
+          run: |
+            set -euo pipefail
+            mkdir -p ~/.ssh
+            printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+            chmod 600 ~/.ssh/deploy_key
+            SSH="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new"
+            DIR=/home/jmwebaze/nsr_uganda
+            # Refresh the compose file (the only deploy artifact on the host;
+            # the image carries the entrypoint, .env is managed on the box).
+            scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+              compose.prod.yml "$DEPLOY_USER@$DEPLOY_HOST:$DIR/compose.prod.yml"
+            $SSH "$DEPLOY_USER@$DEPLOY_HOST" "
+              set -e
+              cd $DIR
+              echo '$GHCR_TOKEN' | docker login ghcr.io -u '$GHCR_USER' --password-stdin
+              docker compose -f compose.prod.yml --env-file .env pull
+              docker compose -f compose.prod.yml --env-file .env up -d --remove-orphans
+              docker logout ghcr.io
+              docker image prune -f
+              echo '--- post-deploy status ---'
+              docker compose -f compose.prod.yml ps
+            "
+
+    # ── PRODUCTION (nsr-sris.mglsd.go.ug / 154.72.204.74) ────────────────
     #
     # Second deploy target. The training box above is the canary: this job
     # `needs` it, so a deploy that breaks training never reaches
     # production.
     #
     # DISABLED BY DEFAULT. It runs only when the repository variable
-    # PROD_DEPLOY_ENABLED is set to the string "true" (Settings →
-    # Secrets and variables → Actions → Variables). Phase 7 of the
-    # production setup flips it on. Until then every push to main deploys
-    # training only, and production is deployed by hand.
-    #
-    # Unlike the training box, production runs a FULLY CONTAINERISED stack
-    # (nginx in-compose, compose.production.yml) and pins NSR_IMAGE to this
-    # commit's SHA — never :latest — so the running version is always
-    # traceable and a rollback is a one-line .env edit.
+    # PROD_DEPLOY_ENABLED is set to the string "true".
     deploy-production:
       needs: build-and-deploy
       if: vars.PROD_DEPLOY_ENABLED == 'true'
@@ -110,7 +103,7 @@ jobs:
           id: sha
           run: echo "sha=${{ github.event.workflow_run.head_sha || github.sha }}" >> "$GITHUB_OUTPUT"
 
-        - name: Deploy over SSH (pull + up + migrate + health check)
+        - name: Deploy over SSH (pull + up + migrate)
           env:
             SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
             PROD_HOST: ${{ secrets.PROD_HOST }}
@@ -127,49 +120,30 @@ jobs:
             $SSH "$PROD_USER@$PROD_HOST" "
               set -euo pipefail
               cd /opt/nsrmis
-
-              # Bring the checkout to exactly the commit CI validated. .env
-              # is gitignored, so this never touches the secrets file.
               git fetch --prune origin main
               git checkout --force '$SHA'
-
-              # Pin the image to this commit. Recorded in .env so a manual
-              # 'up -d' on the box deploys the same version CI did.
               if grep -q '^NSR_IMAGE=' .env; then
                 sed -i 's|^NSR_IMAGE=.*|NSR_IMAGE=ghcr.io/jmwebazeutamu/nsr_uganda:$SHA|' .env
               else
                 echo 'NSR_IMAGE=ghcr.io/jmwebazeutamu/nsr_uganda:$SHA' >> .env
               fi
-
               echo '$GHCR_TOKEN' | docker login ghcr.io -u '$GHCR_USER' --password-stdin
               docker compose -f compose.production.yml --env-file .env pull
-              # NOTE: no -v, ever. Named volumes hold the registry.
               docker compose -f compose.production.yml --env-file .env up -d --remove-orphans
               docker logout ghcr.io
-
-              # web-entrypoint.sh already ran migrate on boot; run it again
-              # explicitly so a migration failure surfaces as a red job
-              # rather than only in container logs. Idempotent by design.
               docker compose -f compose.production.yml --env-file .env exec -T web \
                 python manage.py migrate --noinput
-
               docker image prune -f
-              echo '--- post-deploy status ---'
               docker compose -f compose.production.yml --env-file .env ps
             "
-  
+
         - name: Health check (fail the deploy if the app does not respond)
           env:
-            SSH_KEY_PATH: ~/.ssh/prod_key
             PROD_HOST: ${{ secrets.PROD_HOST }}
             PROD_USER: ${{ secrets.PROD_USER }}
           run: |
             set -euo pipefail
             SSH="ssh -i ~/.ssh/prod_key -o StrictHostKeyChecking=accept-new"
-            # Probed through nginx on the server itself, with an explicit
-            # Host header so the catch-all 444 server block is not what
-            # answers. Works identically before and after TLS, so this step
-            # does not need changing at Phase 7.
             $SSH "$PROD_USER@$PROD_HOST" "
               set -eu
               for i in \$(seq 1 30); do
@@ -183,9 +157,7 @@ jobs:
                 echo \"attempt \${i}: healthz returned '\${code}', retrying...\"
                 sleep 5
               done
-              echo 'HEALTH CHECK FAILED — app did not return 200 within 150s'
-              docker compose -f /opt/nsrmis/compose.production.yml --env-file /opt/nsrmis/.env ps
+              echo 'HEALTH CHECK FAILED'
               docker compose -f /opt/nsrmis/compose.production.yml --env-file /opt/nsrmis/.env logs --tail=80 web
               exit 1
             "
-
