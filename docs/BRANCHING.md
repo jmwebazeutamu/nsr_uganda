@@ -9,7 +9,7 @@ written statement of the flow now that there are two deploy targets.
 |---|---|---|---|
 | **dev** | developer box / Multipass VM | `docker-compose.yml` + local `docker-compose.override.yml` | `docker compose up` by hand |
 | **testing / training** | `nsr-sris-dev.quasar.ug` (104.225.218.102) | `compose.prod.yml` | GitHub Actions, automatically on green CI on `main` |
-| **production** | `nsr-sris.mglsd.go.ug` (154.72.204.74) | `compose.production.yml` | GitHub Actions, after training succeeds, gated on `PROD_DEPLOY_ENABLED` |
+| **production** | `nsr-sris.mglsd.go.ug` (154.72.204.74) | `compose.production.yml` | `ssh nsr-prod /opt/nsrmis/deploy.sh` — checkout and build on the box |
 
 Dev is never deployed to and never deploys anything. Its compose override
 is machine-local and `.gitignore`d precisely so it cannot reach a server.
@@ -33,10 +33,30 @@ is machine-local and `.gitignore`d precisely so it cannot reach a server.
 5. **CI runs on `main`.** On success the `Deploy` workflow builds the
    image, tags it `:latest` and `:<commit-sha>`, pushes to GHCR, and
    deploys the **training** box.
-6. **Production deploys next**, but only if the training deploy passed
-   (`needs: build-and-deploy`) *and* the repository variable
-   `PROD_DEPLOY_ENABLED` is `true`. Training is the canary: a deploy that
-   breaks it never reaches production.
+6. **Production is deployed by running one command on the server:**
+
+   ```bash
+   ssh nsr-prod /opt/nsrmis/deploy.sh
+   ```
+
+   It fetches `origin/main`, builds the image **on the box**, switches the
+   stack onto it, migrates, health-checks, and prunes old images. Training
+   still deploys automatically and remains the canary — if it is red,
+   don't run this.
+
+   No registry is involved. That is deliberate: the registry round-trip
+   was the only part of the pipeline that ever failed. Three deploys
+   half-succeeded — a queued run rolled the checkout backwards, a
+   `docker compose pull` raced its own push, and one died on an
+   unreachable Docker Hub AAAA record — and each had already mutated
+   server state before the failing step. Building on the box removes all
+   of it.
+
+   Safety properties: the running containers are never stopped until a new
+   image has built successfully; a commit that is not an ancestor of
+   `origin/main` is refused; deploying an *older* commit needs an explicit
+   `--rollback`; and a failed health check restores the previous image
+   automatically.
 
 A red CI run on `main` ships nothing, to either box — the deploy workflow
 is gated on `workflow_run.conclusion == 'success'`.
@@ -52,9 +72,15 @@ one has already proved the image boots.
 ## Production is pinned, training is not
 
 Training runs `NSR_IMAGE=...:latest`. Production pins
-`NSR_IMAGE=...:<commit-sha>`, written into `/opt/nsrmis/.env` by the
-deploy job. That is what makes a production rollback a one-line edit
-rather than a rebuild — see `docs/PRODUCTION.md`.
+`NSR_IMAGE=nsr-mis:<commit-sha>`, written by `deploy.sh`, and keeps the
+last three builds on disk. Rolling back is therefore:
+
+```bash
+ssh nsr-prod '/opt/nsrmis/deploy.sh <older-sha> --rollback'
+```
+
+If that build is still on disk it is near-instant; otherwise it rebuilds
+from the checkout. Either way the health check guards it.
 
 ## Hotfixes
 
