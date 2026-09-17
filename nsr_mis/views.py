@@ -26,6 +26,32 @@ MANUAL_DIR = REPO_ROOT / "docs" / "user-manual" / "site"
 #: passthrough below can only 404 — which is exactly what /console/ did
 #: in production before this build existed.
 CONSOLE_MANIFEST = REPO_ROOT / "static" / "console" / "manifest.json"
+#: Built console output. Sub-path requests (`/console/assets/...`) are
+#: served from here once the console has been built.
+CONSOLE_BUILD_DIR = REPO_ROOT / "static" / "console"
+
+
+def console_asset(path: str):
+    """A file from the built console, or None.
+
+    The screens reference assets RELATIVELY — `assets/Coat_of_arms_of_Uganda.png`
+    in both app shells, `assets/maps/<file>` in data-explorer coverage. Under
+    the harness those resolve to /console/assets/... and are served out of
+    design/. A built image has no design/, so the request 404s and the image
+    silently vanishes — which is how the coat of arms disappeared from the
+    top-left of both consoles with no error logged anywhere.
+
+    Serving the same relative paths out of the build directory keeps one URL
+    working in both environments without editing any screen.
+    """
+    if not CONSOLE_MANIFEST.is_file():
+        return None
+    target = (CONSOLE_BUILD_DIR / path).resolve()
+    try:
+        target.relative_to(CONSOLE_BUILD_DIR.resolve())
+    except ValueError:
+        return None          # traversal attempt
+    return target if target.is_file() else None
 
 
 def console_scripts(manifest_name: str = "manifest.json"):
@@ -67,8 +93,13 @@ def console(request, path: str = "nsr-mis-console.html"):
     harness; in a built deployment those assets are served from /static/.
     """
     scripts = _console_scripts()
-    if scripts is not None and path in ("", "nsr-mis-console.html"):
-        return render(request, "console/index.html", {"console_scripts": scripts})
+    if scripts is not None:
+        if path in ("", "nsr-mis-console.html"):
+            return render(request, "console/index.html",
+                          {"console_scripts": scripts})
+        built = console_asset(path)
+        if built is not None:
+            return FileResponse(open(built, "rb"))  # noqa: SIM115
     # Defence against ".." traversal — the resolved path must still
     # live under DESIGN_DIR.
     target = (DESIGN_DIR / path).resolve()
