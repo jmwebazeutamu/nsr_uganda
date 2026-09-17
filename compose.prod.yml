@@ -1,4 +1,12 @@
-# NSR MIS — production stack (single-host Docker Compose).
+# NSR MIS — TESTING / TRAINING stack (single-host Docker Compose).
+#
+# ┌───────────────────────────────────────────────────────────────────┐
+# │ Target: nsr-sris-dev.quasar.ug (104.225.218.102) — the testing /  │
+# │ training server. PRODUCTION is a different host and a different   │
+# │ file: compose.production.yml (nsr-sris.mglsd.go.ug). The two are  │
+# │ not interchangeable — this one has no proxy of its own and        │
+# │ publishes gunicorn on localhost for a host Apache to front.       │
+# └───────────────────────────────────────────────────────────────────┘
 #
 # Deploys ALONGSIDE the other services on this shared box (ADR-0027): the
 # host's Apache + certbot already own 80/443 and front several sites, so
