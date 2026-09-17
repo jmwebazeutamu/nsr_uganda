@@ -90,6 +90,38 @@ them. One compiled file per source file, loaded in the same order.
 
 The only thing that moves is **where the JSX compile happens**.
 
+## The transform must match the harness (learned the hard way)
+
+The first version of this build compiled with **esbuild at `target:
+es2019`**, which keeps `const`. That shipped a production regression:
+**eight screens silently stopped rendering**, household detail among
+them, while continuing to work in dev.
+
+The harness compiles with `@babel/standalone` and the default presets
+`["react", "env"]`. The `env` preset **downlevels top-level `const` to
+`var`**, and `var` redeclaration is legal — it silently overwrites. The
+sources contain ten duplicate top-level declarations across files, so
+under Babel they quietly clobber each other and everything appears to
+work. Under `const` in a classic script the second declaration throws
+`Identifier 'X' has already been declared`, and the **entire file** fails
+to evaluate, taking every screen it defines with it. Nothing reports
+this: no build error, no server error, no 404. The screen simply never
+appears.
+
+Babel injects real `<script>` elements (`document.createElement("script")`
++ `appendChild`), so scope is shared either way. The only thing that
+differed was `const` versus `var`.
+
+The build therefore uses **the same Babel transform with the same
+presets** the harness does. The deployed console runs the same JavaScript
+the harness produces; the only difference is when it is compiled.
+
+The build then **verifies its own output**: it evaluates each shell's
+scripts in one shared `vm` context, exactly as a browser evaluates
+consecutive `<script>` tags, and fails the build if any throws. A console
+that cannot load cannot be built. Verified by deliberately reintroducing
+the fault — the build failed and named all nine broken files.
+
 ## Latent bug this surfaced (not fixed here)
 
 The build revealed duplicate top-level `const` declarations across files:
@@ -108,12 +140,34 @@ environment, shared by every script on the page. A redeclaration throws
 second file fails to evaluate** — silently, taking all of its components
 with it.
 
-This behaviour is identical before and after this change: the same files
-load in the same order into the same environment. The build neither
-introduces nor fixes it. It is recorded here because it is worth a story of
-its own — the affected screens (change-request, data-explorer coverage,
-data-explorer results/synthetic) should be checked for components that never
-render.
+Under the harness's `var` semantics these do not throw — they silently
+**overwrite**, so the definition that wins is whichever file loads last.
+`data-explorer-coverage`'s `KPI` therefore shadows `components.jsx`'s for
+the ~30 files that reference `KPI`, which is almost certainly not what
+anyone intended.
+
+That is a real bug, but fixing it means changing which definition those
+~30 files resolve to, so it is deliberately **not** done here — that is a
+behavioural change needing its own story and its own testing, not
+something to fold into a production hotfix.
+
+The full list:
+
+| Symbol | Declared first in | Redeclared in |
+|---|---|---|
+| `initials` | `components.jsx` | `change-request/screens-change-request.jsx` |
+| `ScopeCard` | `components/scope-edit-modal.jsx` | `change-request/app-change-request.jsx` |
+| `KPI` | `components.jsx` | `data-explorer/screens-data-explorer-coverage.jsx` |
+| `_humanize`, `_deriveColumns` | `data-explorer/...-results.jsx` | `data-explorer/...-synthetic.jsx` |
+| `Fact` | `data-explorer/...-catalogue.jsx` | `screens-household.jsx` |
+| `_projectProgramme` | `screens-partner-detail.jsx` | `screens-programmes.jsx` |
+| `EXIT_TONE` | `screens-programme-new.jsx` | `screens-beneficiaries.jsx` |
+| `KIND_TONE` | `screens-programmes.jsx` | `screens-beneficiaries.jsx` |
+| `Toggle` | `screens-programme-new.jsx` | `consent/consent-shared.jsx` |
+| `useStatePD` | (within programme screens) | `screens-programme-detail.jsx` |
+
+The admin console has **no** collisions, which is why `/admin-console/`
+kept working when the operator console broke.
 
 ## Rebuilding
 

@@ -57,10 +57,12 @@
  */
 
 import { readFile, writeFile, mkdir, copyFile, rm } from "node:fs/promises";
+import vm from "node:vm";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
+import * as Babel from "@babel/standalone";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DESIGN = path.join(ROOT, "design");
@@ -123,14 +125,41 @@ async function build() {
 
     if (INLINE_FLAGS[rel]) src = `${INLINE_FLAGS[rel]}\n${src}`;
 
-    // React and ReactDOM are UMD globals here, never imports, so the JSX
-    // factory has to name them explicitly.
-    const out = await esbuild.transform(src, {
-      loader: "jsx",
-      jsx: "transform",
-      jsxFactory: "React.createElement",
-      jsxFragment: "React.Fragment",
-      target: "es2019",
+    // Transform with @babel/standalone using the SAME presets the harness
+    // uses at runtime — ["react", "env"] — not with esbuild.
+    //
+    // This is a correctness choice, not a stylistic one. The `env` preset
+    // downlevels top-level `const` to `var`. The sources carry TEN
+    // duplicate top-level declarations across files (`Fact` in both
+    // data-explorer-catalogue and screens-household, `KPI` in both
+    // components and data-explorer-coverage, and eight more). As `var`
+    // those redeclarations are legal and silently overwrite. As `const`
+    // in a classic script they throw "Identifier has already been
+    // declared" — and the ENTIRE file fails to evaluate, taking its
+    // screens with it.
+    //
+    // Compiling with esbuild at target es2019 kept `const`, so eight
+    // screens — household detail among them — silently stopped rendering
+    // in production while still working in dev. Matching the harness's
+    // transform removes that whole class of divergence: the deployed
+    // console runs the same JavaScript the harness produces, compiled
+    // ahead of time instead of in the browser.
+    //
+    // The duplicate names are still a real latent bug — last definition
+    // wins, across files, by load order. Renaming them would change which
+    // definition ~30 other files resolve to, so that is separate work.
+    // See docs/console_production_build.md.
+    const transformed = Babel.transform(src, {
+      presets: ["react", "env"],
+      filename: rel,
+      compact: false,
+      sourceType: "script",
+    });
+
+    // esbuild remains the minifier: fast, and semantics-neutral here
+    // because Babel has already downlevelled.
+    const out = await esbuild.transform(transformed.code, {
+      target: "es5",
       minify: true,
       legalComments: "none",
       sourcefile: rel,
@@ -163,6 +192,62 @@ async function build() {
   if (existsSync(geo)) {
     await mkdir(path.join(OUT_DIR, "maps"), { recursive: true });
     await copyFile(geo, path.join(OUT_DIR, "maps", "uganda-adm2.geojson"));
+  }
+
+  // --- verify the output can actually run --------------------------------
+  // The bug this guards against was invisible: eight screens, household
+  // detail among them, silently failed to evaluate in production while
+  // working in dev, because a duplicate top-level `const` throws in a
+  // classic script and kills the whole file. Nothing in the build or the
+  // page reported it — the screen simply never rendered.
+  //
+  // So the build now runs every shell's scripts in one shared context,
+  // exactly as a browser evaluates consecutive <script> tags, and FAILS
+  // if any of them throws. A console that cannot load cannot be built.
+  for (const l of lists) {
+    const sandbox = {
+      document: {
+        createElement: () => ({ style: {}, setAttribute() {}, appendChild() {} }),
+        addEventListener() {}, querySelector: () => null,
+        getElementById: () => ({}), head: { appendChild() {} },
+        body: { appendChild() {} }, cookie: "",
+      },
+      React: new Proxy(function () {}, {
+        get: (t, k) => (k === "Component" ? class {} : () => null),
+        apply: () => null,
+      }),
+      ReactDOM: { createRoot: () => ({ render() {} }), render() {} },
+      d3: new Proxy(function () {}, { get: () => () => null, apply: () => null }),
+      fetch: () => Promise.resolve({ json: () => ({}), ok: true }),
+      console: { log() {}, warn() {}, error() {}, info() {} },
+      setTimeout, clearTimeout, setInterval, clearInterval,
+      localStorage: { getItem() {}, setItem() {}, removeItem() {} },
+      location: { href: "", pathname: "/console/" }, navigator: {},
+    };
+    sandbox.window = sandbox;
+    sandbox.globalThis = sandbox;
+    sandbox.self = sandbox;
+    const ctx = vm.createContext(sandbox);
+
+    const broken = [];
+    for (const f of l.files.map(outName)) {
+      const code = await readFile(path.join(JS_DIR, f), "utf8");
+      try {
+        vm.runInContext(code, ctx, { filename: f });
+      } catch (err) {
+        broken.push(`${f}: ${String(err.message).split("\n")[0]}`);
+      }
+    }
+    if (broken.length) {
+      console.error(`\n  ${l.name}: ${broken.length} script(s) FAIL to evaluate:`);
+      for (const b of broken) console.error(`    ${b}`);
+      throw new Error(
+        `${l.name} would not load in a browser. A duplicate top-level ` +
+        `declaration across two files is the usual cause — the second ` +
+        `file throws and every screen in it disappears silently.`,
+      );
+    }
+    console.log(`  ${l.name.padEnd(17)}: all ${l.files.length} scripts evaluate cleanly`);
   }
 
   const kb = (n) => (n / 1024).toFixed(0) + " KB";
