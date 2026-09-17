@@ -48,11 +48,22 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 
 RUN pip install .
 
-# Create the static + media mountpoints owned by the runtime user BEFORE
-# the named volumes attach, so a fresh volume inherits app ownership and
-# collectstatic (run as `app`) can write to it.
+# Create the static + media + data mountpoints owned by the runtime user
+# BEFORE the named volumes attach, so a fresh volume inherits app
+# ownership and collectstatic (run as `app`) can write to it.
+#
+# /app/data/* are the production persistence targets for the three
+# file-backed stores (DRS bundles, UPD evidence, consent evidence).
+# Docker seeds a fresh named volume from the image path INCLUDING its
+# ownership — so if these directories did not exist here, the volumes
+# would mount root-owned and every write as `app` would fail with
+# EACCES at runtime rather than at build time. Dev is unaffected:
+# docker-compose.override.yml bind-mounts the repo over /app, and the
+# dev settings default these stores to BASE_DIR/.drs-bundles etc.
 RUN chmod +x /usr/local/bin/web-entrypoint.sh \
     && mkdir -p /app/staticfiles /app/media \
+    && mkdir -p /app/data/drs-bundles /app/data/upd-evidence \
+                /app/data/consent-evidence \
     && groupadd --system app \
     && useradd --system --gid app --no-create-home --home-dir /app app \
     && chown -R app:app /app

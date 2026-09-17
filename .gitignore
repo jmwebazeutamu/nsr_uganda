@@ -69,3 +69,37 @@ design/v0.1/*-source/
 
 # MkDocs build output for the user manual
 /docs/user-manual/site/
+
+# --- Production / deployment hygiene (Phase 2, prod setup) ------------
+# Local compose overrides are per-machine and MUST NOT reach a server:
+# compose auto-loads this file, so a committed one would silently apply
+# dev port mappings and the arm64 postgis image on production.
+docker-compose.override.yml
+compose.override.yml
+
+# Env files. .env is already covered above; these are the sibling forms
+# that have appeared on dev boxes. *.example templates stay tracked.
+.ci-test.env
+.env.prod
+.env.production
+*.env
+!.env.example
+!.env.prod.example
+!.env.production.example
+
+# Data migration working area (dumps, archives, checksums). Never
+# committed — these contain live personal data under the DPPA 2019.
+migration/
+*.sql
+*.sql.gz
+*.dump
+*.tar.gz
+*.tgz
+!docs/**/*.sql
+
+# Consent evidence (file-backed default), sibling of .upd-evidence/
+.consent-evidence/
+
+# Backups
+backups/
+*.bak

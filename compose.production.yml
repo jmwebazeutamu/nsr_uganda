@@ -1,0 +1,277 @@
+# NSR MIS — PRODUCTION stack (nsr-sris.mglsd.go.ug / 154.72.204.74).
+#
+# ┌───────────────────────────────────────────────────────────────────┐
+# │ THIS IS PRODUCTION. The testing/training box uses a DIFFERENT     │
+# │ file: compose.prod.yml (nsr-sris-dev.quasar.ug). Check the        │
+# │ hostname before you run anything here.                            │
+# └───────────────────────────────────────────────────────────────────┘
+#
+# Fully containerised, unlike the training box: nginx runs IN the stack
+# and is the ONLY service bound to a public interface (80/443). The app,
+# the database and the broker are reachable only on the private compose
+# networks — nothing else is published to the host at all.
+#
+#   Internet ──80/443──> nginx ──> web    (registry, gunicorn)
+#                             └──> public (public site, urls_public)
+#                                    └──> db (postgis) + redis  [backend only]
+#
+# Usage:
+#   docker compose -f compose.production.yml --env-file .env up -d
+#   docker compose -f compose.production.yml --env-file .env ps
+#   docker compose -f compose.production.yml --env-file .env logs -f web
+#
+# ── PERSISTENCE ────────────────────────────────────────────────────────
+# Every stateful path is a NAMED VOLUME. Named volumes survive
+# `restart`, `stop`, `down`, `up -d`, image upgrades and host reboots
+# (restart: unless-stopped brings containers back after a reboot, and
+# the docker service is enabled at boot).
+#
+# The ONLY command that destroys them is `docker compose down -v` (or an
+# explicit `docker volume rm`). NEVER run `down -v` on this host. The
+# rollback procedure in docs/PRODUCTION.md never needs it.
+#
+# Volumes: pgdata redisdata media_data drs_bundles upd_evidence
+#          consent_evidence certbot_conf certbot_www nginx_logs
+
+name: nsr-sris-prod
+
+# Pinned image — NO :latest in production. CI tags every build with the
+# commit SHA and the deploy job writes that tag into .env, so the running
+# version is always traceable to a commit and a rollback is a one-line
+# edit. `:?` makes a missing value a loud startup error instead of a
+# silent deploy of whatever :latest happens to be.
+x-app-image: &app_image ${NSR_IMAGE:?NSR_IMAGE must be set to a pinned image tag, e.g. ghcr.io/jmwebazeutamu/nsr_uganda:<sha>}
+
+# Cap container logs so a chatty gunicorn cannot fill the disk and take
+# the database down with it. 10 MB x 5 files x ~7 services ≈ 350 MB max.
+x-logging: &default_logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+# Where the app writes its file-backed stores. Set HERE, not in .env, so
+# the paths can never drift out of sync with the volume mounts below.
+x-app-storage-env: &app_storage_env
+  MEDIA_ROOT: /app/media
+  DRS_BUNDLE_DIR: /app/data/drs-bundles
+  UPD_EVIDENCE_DIR: /app/data/upd-evidence
+  CONSENT_EVIDENCE_DIR: /app/data/consent-evidence
+
+services:
+  # ── edge ────────────────────────────────────────────────────────────
+  # The only internet-facing service. Terminates TLS (from Phase 7) and
+  # path-routes to the registry and public containers.
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    logging: *default_logging
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # NGINX_CONF selects HTTP-only (Phase 5) vs TLS (Phase 7). It is a
+      # deliberate one-line switch in .env — nginx will not start if a
+      # TLS config points at a certificate that does not exist yet.
+      - ./infrastructure/nginx/${NGINX_CONF:-nsr-sris.http.conf}:/etc/nginx/conf.d/default.conf:ro
+      - ./infrastructure/nginx/snippets:/etc/nginx/snippets:ro
+      - certbot_conf:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+      - nginx_logs:/var/log/nginx
+    # Reload every 6h so a certificate renewed by the certbot container
+    # is picked up without a deploy. The subshell backgrounds the loop
+    # and nginx stays PID 1 in the foreground.
+    command: >-
+      sh -c 'while :; do sleep 6h & wait $${!}; nginx -s reload; done & exec nginx -g "daemon off;"'
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null --header='Host: ${PUBLIC_HOST:-nsr-sris.mglsd.go.ug}' http://127.0.0.1/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      web: {condition: service_healthy}
+      public: {condition: service_healthy}
+    networks: [edge]
+
+  # Renewal loop. Inert until Phase 7 issues the first certificate —
+  # `certbot renew` with nothing to renew is a no-op, so it is safe to
+  # run from the very first HTTP-only bring-up.
+  certbot:
+    image: certbot/certbot:v3.1.0
+    restart: unless-stopped
+    logging: *default_logging
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+    entrypoint: >-
+      sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done'
+    networks: [edge]
+
+  # ── data ────────────────────────────────────────────────────────────
+  # postgis/postgis:16-3.4 == PostgreSQL 16.4 + PostGIS 3.4.3, the exact
+  # pair dev runs (dev uses imresamu/postgis:16-3.4, the arm64 rebuild of
+  # the same contents). Matching them is what makes the Phase 6 pg_dump
+  # restore clean. NEVER published to the host — backend network only.
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    logging: *default_logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [backend]
+
+  # appendonly so a restart does not lose the Celery queue mid-task.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    logging: *default_logging
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+    networks: [backend]
+
+  # ── application ─────────────────────────────────────────────────────
+  # The registry. Its entrypoint runs migrate + collectstatic, and it is
+  # the ONLY service that does — worker/beat/public all gate on it being
+  # healthy, so migrations run exactly once per deploy with no race.
+  # No `ports:` — nginx reaches it over the edge network by name.
+  web:
+    image: *app_image
+    restart: unless-stopped
+    logging: *default_logging
+    env_file: [.env]
+    environment: *app_storage_env
+    entrypoint: ["/usr/local/bin/web-entrypoint.sh"]
+    command:
+      - gunicorn
+      - nsr_mis.wsgi:application
+      - --bind=0.0.0.0:8000
+      - --workers=3
+      - --timeout=60
+      - --access-logfile=-
+      - --error-logfile=-
+    volumes:
+      - media_data:/app/media
+      - drs_bundles:/app/data/drs-bundles
+      - upd_evidence:/app/data/upd-evidence
+      - consent_evidence:/app/data/consent-evidence
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [edge, backend]
+
+  # The public site: same image, ROOT_URLCONF swapped so the registry
+  # routes do not exist in this process at all. nginx also strips cookies
+  # on the way in (LP-O-10).
+  public:
+    image: *app_image
+    restart: unless-stopped
+    logging: *default_logging
+    env_file: [.env]
+    environment:
+      <<: *app_storage_env
+      ROOT_URLCONF: nsr_mis.urls_public
+      # Stays False until the DPO signs the §8.3 disclosure floor
+      # (LP-O-06). Flip it in .env, not here, so the change has an owner.
+      NSR_PUBLIC_STATS_LIVE: ${NSR_PUBLIC_STATS_LIVE:-False}
+      NSR_STAFF_SIGNIN_URL: ${NSR_STAFF_SIGNIN_URL:-/login/}
+    command:
+      - gunicorn
+      - nsr_mis.wsgi:application
+      - --bind=0.0.0.0:8000
+      - --workers=2
+      - --timeout=60
+      - --access-logfile=-
+      - --error-logfile=-
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    depends_on:
+      db: {condition: service_healthy}
+      web: {condition: service_healthy}
+    networks: [edge, backend]
+
+  # ── async ───────────────────────────────────────────────────────────
+  # Same volumes as web: tasks write DRS bundles and UPD evidence.
+  worker:
+    image: *app_image
+    restart: unless-stopped
+    logging: *default_logging
+    env_file: [.env]
+    environment: *app_storage_env
+    command: ["celery", "-A", "nsr_mis", "worker", "-l", "info", "--concurrency=4"]
+    volumes:
+      - media_data:/app/media
+      - drs_bundles:/app/data/drs-bundles
+      - upd_evidence:/app/data/upd-evidence
+      - consent_evidence:/app/data/consent-evidence
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A nsr_mis inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 5
+      start_period: 60s
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      web: {condition: service_healthy}
+    networks: [backend]
+
+  # Scheduler. No healthcheck: beat has no ping endpoint, and a process
+  # liveness probe would only restate what restart: unless-stopped
+  # already handles.
+  beat:
+    image: *app_image
+    restart: unless-stopped
+    logging: *default_logging
+    env_file: [.env]
+    environment: *app_storage_env
+    command: ["celery", "-A", "nsr_mis", "beat", "-l", "info"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      web: {condition: service_healthy}
+    networks: [backend]
+
+# edge   — nginx <-> web/public. Carries public traffic only.
+# backend — app <-> db/redis. db and redis sit ONLY here and publish no
+#           ports, so neither is reachable from the host or the internet.
+networks:
+  edge:
+  backend:
+
+volumes:
+  pgdata:
+  redisdata:
+  media_data:
+  drs_bundles:
+  upd_evidence:
+  consent_evidence:
+  certbot_conf:
+  certbot_www:
+  nginx_logs:
