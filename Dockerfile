@@ -8,6 +8,33 @@
 # - Entrypoint: gunicorn on port 8000. Override via `command:` in compose for
 #   local dev (runserver).
 
+# ---------------------------------------------------------------------
+# Stage 1 — compile the operator console.
+#
+# The console sources are 47 JSX files that the design harness compiles
+# in the BROWSER with a 3.1 MB Babel-standalone, pulling React, ReactDOM
+# and d3 from unpkg. That is a design-review tool, not an operator
+# surface: see scripts/build_console.mjs for the full reasoning.
+#
+# This stage moves the JSX compile to build time. Only the compiled
+# output crosses into the runtime image — no JSX, no Babel, no node.
+# ---------------------------------------------------------------------
+FROM node:22-slim AS console-build
+
+WORKDIR /build
+COPY package.json package-lock.json ./
+# npm ci needs the lockfile to match package.json; --omit=optional keeps
+# the platform-specific esbuild download to the one binary we need.
+RUN npm ci --no-audit --no-fund
+
+COPY scripts/build_console.mjs ./scripts/
+COPY design ./design
+COPY static ./static
+RUN node scripts/build_console.mjs
+
+# ---------------------------------------------------------------------
+# Stage 2 — the application image.
+# ---------------------------------------------------------------------
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -36,6 +63,9 @@ COPY manage.py ./
 # public-site URL 404s while Django only WARNS. tests/contract/
 # test_static_is_in_the_image.py fails the build path instead.
 COPY static ./static
+# The compiled console, from stage 1. Nothing else crosses over: the JSX
+# sources, Babel and node all stay behind in the build stage.
+COPY --from=console-build /build/static/console ./static/console
 # Web-service entrypoint (migrate + collectstatic). Only the `web` service
 # uses it; worker/beat run celery directly. See compose.prod.yml.
 COPY infrastructure/docker/web-entrypoint.sh /usr/local/bin/web-entrypoint.sh

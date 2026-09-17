@@ -34,9 +34,14 @@ db.sqlite3-journal
 .DS_Store
 Thumbs.db
 
-# Heavy directories the runtime image does not need
+# Heavy directories the runtime image does not need.
+#
+# design/ is NOT excluded: the console build stage compiles its JSX. It
+# still never reaches the runtime image — only static/console/, the
+# compiled output, is COPYd from the build stage. Excluding it here is
+# what made /console/ 404 in production, because the view fell back to
+# serving files that were not in the image.
 docs
-design
 tests
 .claude
 # Exclude the heavy infra subdirs but KEEP infrastructure/docker/ — the

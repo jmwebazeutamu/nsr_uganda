@@ -103,3 +103,15 @@ migration/
 # Backups
 backups/
 *.bak
+
+# Operator console — GENERATED output only (scripts/build_console.mjs).
+# Committing 47 minified files would put a build artefact in every diff.
+#
+# static/console/vendor/ and static/console/fonts/ are NOT ignored: they
+# are third-party sources (d3, React UMD, Inter), not build products.
+# The image build has no network, so if they were not committed the
+# console would 404 on every one of them in CI.
+static/console/js/
+static/console/manifest.json
+static/console/console.css
+static/console/maps/

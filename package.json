@@ -3,10 +3,11 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "JS test harness for design/v0.1 React components served by the Django dev server. The browser harness still uses Babel-standalone — these tests are for unit coverage of pure helpers + RTL renders of components like the Open-CR modal.",
+  "description": "JS test harness for design/v0.1 React components served by the Django dev server. The browser harness still uses Babel-standalone \u2014 these tests are for unit coverage of pure helpers + RTL renders of components like the Open-CR modal.",
   "scripts": {
     "test:js": "vitest run",
-    "test:js:watch": "vitest"
+    "test:js:watch": "vitest",
+    "build:console": "node scripts/build_console.mjs"
   },
   "devDependencies": {
     "@babel/standalone": "^7.29.0",
@@ -17,6 +18,7 @@
     "jsdom": "^24.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "vitest": "^2.0.4"
+    "vitest": "^2.0.4",
+    "esbuild": "^0.25.0"
   }
 }

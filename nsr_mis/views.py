@@ -19,13 +19,48 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DESIGN_DIR = REPO_ROOT / "design"
 MANUAL_DIR = REPO_ROOT / "docs" / "user-manual" / "site"
 
+#: Built console manifest, produced by scripts/build_console.mjs. Its
+#: presence is what distinguishes a deployed image from a dev checkout:
+#: `design/` is excluded from the Docker build context (.dockerignore),
+#: so in a container the harness files simply do not exist and the
+#: passthrough below can only 404 — which is exactly what /console/ did
+#: in production before this build existed.
+CONSOLE_MANIFEST = REPO_ROOT / "static" / "console" / "manifest.json"
+
+
+def _console_scripts():
+    """Script filenames in dependency order, or None if not built.
+
+    Order is load-bearing: the sources declare globals and rely on being
+    evaluated in the harness's order, so it is read from the manifest
+    rather than restated in the template.
+    """
+    try:
+        import json
+        return json.loads(CONSOLE_MANIFEST.read_text())["scripts"]
+    except (OSError, ValueError, KeyError):
+        return None
+
 
 @login_required
-def console(_request, path: str = "nsr-mis-console.html"):
-    """Serve files out of /design/ under /console/{path}. Dev-only
-    convenience for US-S11-013 — the same files the static HTTP
-    server on :8765 serves, but same-origin with the Django runserver
-    so fetch() can carry the session cookie."""
+def console(request, path: str = "nsr-mis-console.html"):
+    """Serve the operator console.
+
+    Two modes, chosen by what is actually on disk rather than by DEBUG,
+    so a developer who has run the build gets the same page operators do:
+
+    * BUILT (production) — render the precompiled shell. No Babel, no
+      CDN, React production builds. See scripts/build_console.mjs.
+    * HARNESS (dev) — pass files straight out of design/, compiled in the
+      browser by Babel-standalone. US-S11-013's same-origin convenience,
+      so fetch() carries the session cookie.
+
+    A request for a sub-path (/console/foo.jsx) is only meaningful for the
+    harness; in a built deployment those assets are served from /static/.
+    """
+    scripts = _console_scripts()
+    if scripts is not None and path in ("", "nsr-mis-console.html"):
+        return render(request, "console/index.html", {"console_scripts": scripts})
     # Defence against ".." traversal — the resolved path must still
     # live under DESIGN_DIR.
     target = (DESIGN_DIR / path).resolve()
