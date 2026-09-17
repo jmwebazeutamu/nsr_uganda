@@ -412,7 +412,108 @@ volume.
 
 ## Phase 7 — SSL and go-live
 
-_Not started._
+**2026-09-17. SSL complete.** The GitHub Actions trigger (step 4) is
+still pending — see below.
+
+### Pre-flight (steps 1-2)
+
+```
+dig +short nsr-sris.mglsd.go.ug          -> 154.72.204.74
+tcp connect 154.72.204.74:80             -> open from outside
+```
+
+The ACME path was proved end-to-end BEFORE any certificate was
+requested, so a misconfigured webroot could not burn Let's Encrypt rate
+limit:
+
+```
+docker run --rm -v nsr-sris-prod_certbot_www:/w alpine \
+  sh -c 'echo probe > /w/.well-known/acme-challenge/probe'
+curl http://nsr-sris.mglsd.go.ug/.well-known/acme-challenge/probe   -> 200
+```
+
+### Certificate (step 3)
+
+Staging first, exactly as the plan required:
+
+```
+docker compose ... run --rm --entrypoint certbot certbot certonly \
+  --webroot -w /var/www/certbot -d nsr-sris.mglsd.go.ug --staging ...
+# success -> delete the staging cert (browsers do not trust it)
+docker compose ... run --rm --entrypoint certbot certbot delete --cert-name nsr-sris.mglsd.go.ug
+docker compose ... run --rm --entrypoint certbot certbot certonly \
+  --webroot -w /var/www/certbot -d nsr-sris.mglsd.go.ug ...
+```
+
+Issued: `issuer=C=US, O=Let's Encrypt, CN=YE1`,
+`subject=CN=nsr-sris.mglsd.go.ug`, valid 2026-09-17 to **2026-12-16**.
+
+Registration e-mail: `jmwebaze@gmail.com` (expiry notices). Worth moving
+to a ministry address before handover — `certbot update_account`.
+
+Auto-renew is the long-running `certbot` container, which loops
+`certbot renew` every 12h; nginx reloads every 6h to pick up a new cert.
+Renewal verified: `--dry-run` reported *"all simulated renewals
+succeeded"*.
+
+Then `NGINX_CONF=nsr-sris.ssl.conf` and `NSR_SECURE_SSL=True` in `.env`,
+and the stack was recreated.
+
+### Two defects found by going live
+
+**Conflicting `Referrer-Policy`.** nginx sent
+`strict-origin-when-cross-origin` while Django's SecurityMiddleware sent
+`same-origin`, so every response carried both.
+`X-Content-Type-Options` and `X-Frame-Options` were duplicated too. The
+edge now sets only what Django does not; Django's stricter value wins.
+HSTS stays deliberately duplicated — it must appear on responses the app
+never generates (502, the 444 default server), and both values are
+identical. Commit `773e897`.
+
+**Stale nginx config surviving a deploy.** A single-file bind mount pins
+that file's inode, and `git reset --hard` replaces files rather than
+editing them. After a pull the container kept serving the OLD config,
+and `nginx -t` passed because the test read the same stale file — so it
+failed silently in both directions. Found when a removed `ssl_stapling`
+directive kept warning after a pull and reload.
+
+Fixed by mounting the whole directory (inode-stable) and copying the
+`NGINX_CONF`-selected file into `conf.d` at container start, with
+`nginx -t` run on the copy before the server starts. Commit `bbaa930`.
+
+**Operator note: an nginx config change needs `up -d`, not just
+`nginx -s reload`.**
+
+`ssl_stapling` was also dropped — Let's Encrypt no longer publishes an
+OCSP responder URL, so it only produced a warning on every config test.
+Commit `9552dad`.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `https://nsr-sris.mglsd.go.ug/` | **200, HTTP/2, cert valid (`ssl_verify_result=0`)** |
+| `http://...` -> HTTPS | **301** to the https URL |
+| `/`, `/healthz`, `/login/` | 200 |
+| `/console/`, `/admin/` | 302 -> login |
+| `/api/schema/` | 403 (`NSR_PUBLIC_API_DOCS=False`) |
+| Security headers | one each; HSTS twice by design |
+| Migrated data | 1,283 members / 992 NINs still served |
+
+### Outstanding (step 4)
+
+Automatic production deploys are NOT yet enabled. Three things remain,
+all needing repository access the deploy key does not have:
+
+1. `.github/workflows/deploy.yml` — the `deploy-production` job has never
+   been pushed; the repo's SSH credential is a repo-scoped deploy key and
+   GitHub refuses workflow-file pushes from one.
+2. `prod-setup` -> `main` merge, since only `main` should deploy to prod.
+3. The `PROD_DEPLOY_ENABLED` repository variable set to `true`.
+
+`PROD_SSH_KEY`, `PROD_HOST` and `PROD_USER` were created by the project
+owner. The Actions key was verified to authenticate by loopback SSH on
+the server before use.
 
 ---
 
