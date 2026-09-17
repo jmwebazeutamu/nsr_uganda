@@ -408,6 +408,7 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
   const [signOpen, setSignOpen] = useStatePD(false);
   const [signTarget, setSignTarget] = useStatePD(null);
   const [closeOpen, setCloseOpen] = useStatePD(false);
+  const [suspendOpen, setSuspendOpen] = useStatePD(false);
   const [deleteOpen, setDeleteOpen] = useStatePD(false);
 
   const [progResp, progMeta] = useApi(
@@ -562,8 +563,18 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
           <Chip size="sm">{p.cycle}</Chip>
           <span className="t-bodysm muted">DSA expires in {p.dsaExpiresIn} days · ceiling {p.dsaCeiling}</span>
           <div style={{flex:1}}/>
-          <button className="btn btn-primary"><Icon name="edit" size={14}/> Propose amendment</button>
-          <button className="btn"><Icon name="pause" size={14}/> Suspend</button>
+          <button className="btn btn-primary" disabled
+            title="Programme amendments need a dedicated API and approval workflow; this is not implemented yet.">
+            <Icon name="edit" size={14}/> Propose amendment
+          </button>
+          <button className="btn"
+            onClick={() => setSuspendOpen(true)}
+            disabled={p.statusCode !== "active"}
+            title={p.statusCode === "active"
+              ? "Suspend this active programme (reason required)"
+              : "Only active programmes can be suspended"}>
+            <Icon name="pause" size={14}/> Suspend
+          </button>
           <button className="btn btn-ghost"><Icon name="moreH" size={14}/></button>
         </div>
       </div>
@@ -659,6 +670,18 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
           progMeta.refresh && progMeta.refresh();
         }}
         onError={(msg) => setToast(`Close failed: ${msg}`)}/>
+
+      <SuspendProgrammeConfirm
+        open={suspendOpen}
+        programme={programmeRecord}
+        onClose={() => setSuspendOpen(false)}
+        onSuspended={(updated) => {
+          setSuspendOpen(false);
+          if (updated) setProgrammeView(updated);
+          setToast(`Suspended ${updated?.code || p.code} — lifecycle event written to audit chain.`);
+          progMeta.refresh && progMeta.refresh();
+        }}
+        onError={(msg) => setToast(`Suspend failed: ${msg}`)}/>
 
       <DeleteProgrammeConfirm
         open={deleteOpen}
@@ -1073,6 +1096,56 @@ const SignProgrammeStepModal = ({ open, programme, target, onClose, onSigned, on
         <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
         <button className="btn btn-primary" onClick={fire} disabled={!canSubmit}>
           {submitting ? "Signing…" : "Sign step"}
+        </button>
+      </div>
+    </Modal>
+  );
+};
+
+
+// ── SuspendProgrammeConfirm ───────────────────────────────────────────
+// The ProgrammeViewSet owns this transition. Keeping the reason capture
+// here prevents an irreversible lifecycle action from being a one-click
+// control and matches the server's ≥20-character guard.
+const SuspendProgrammeConfirm = ({ open, programme, onClose, onSuspended, onError }) => {
+  const [reason, setReason] = useStatePD("");
+  const [submitting, setSubmitting] = useStatePD(false);
+  React.useEffect(() => { if (open) setReason(""); }, [open]);
+  if (!open || !programme) return null;
+
+  const fire = async () => {
+    setSubmitting(true);
+    try {
+      const updated = await nsrApi.post(`/api/v1/programmes/${programme.id}/suspend/`, {
+        reason: reason.trim(),
+      });
+      onSuspended(updated);
+    } catch (err) {
+      const detail = (err && err.body && (err.body.detail || JSON.stringify(err.body))) || err.message;
+      onError(detail);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal open={true} onClose={() => !submitting && onClose()}
+           title={`Suspend ${programme.code}?`} size="sm">
+      <p className="t-bodysm" style={{margin:"4px 0 12px"}}>
+        Suspends the active programme and records the reason in its lifecycle
+        audit chain. New operational activity should stop until it is restored
+        through the authorised workflow.
+      </p>
+      <Field label="Reason (minimum 20 characters)">
+        <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3}
+                  disabled={submitting}
+                  placeholder="Explain the operational, safeguarding, or compliance reason."/>
+      </Field>
+      <div style={{display:"flex", justifyContent:"flex-end", gap:8, marginTop:16}}>
+        <button className="btn" onClick={onClose} disabled={submitting}>Cancel</button>
+        <button className="btn btn-danger" onClick={fire}
+                disabled={submitting || reason.trim().length < 20}>
+          {submitting ? "Suspending…" : "Suspend programme"}
         </button>
       </div>
     </Modal>

@@ -384,9 +384,12 @@ const CitizenConsentScreen = (props = {}) => {
   const api = (typeof window !== "undefined" && window.nsrApi) ? window.nsrApi : null;
   const liveMembers = (Array.isArray(props.members) && props.members.length) ? props.members : null;
   const liveMode = !!(liveMembers && api);
+  // No HOUSEHOLD fixture fallback: without live members this renders an
+  // empty roster and says so, rather than showing invented people on a
+  // consent screen — the one place a citizen's own record is displayed.
   const house = liveMode
     ? { id: props.householdId || "—", members: liveMembers.map(projectMember) }
-    : HOUSEHOLD;
+    : { id: props.householdId || "—", members: [] };
 
   const [memberId, setMemberId] = useStateCD(house.members[0] ? house.members[0].id : "M1");
   const [records, setRecords] = useStateCD(liveMode ? {} : seedRecords);

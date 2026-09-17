@@ -211,8 +211,13 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
   // `current` is the row clicked to open detail (drives the diff +
   // PMT preview + sticky bar). `me` is the /me probe's response and
   // gets bound as `actor` on every action POST.
-  const [queue, setQueue] = useStateUpd(UPD_QUEUE);
-  const [dataSource, setDataSource] = useStateUpd("mock");
+  // Data comes from the API or it is not shown. The screen used to
+// initialise from a fabricated fixture and only replace it if the fetch
+// succeeded, so a slow or failing API left an operator reading invented
+// people — names, NINs and ULIDs — with only a small "mock" chip to say
+// so. It now starts empty and says which state it is in.
+  const [queue, setQueue] = useStateUpd([]);
+  const [dataSource, setDataSource] = useStateUpd("loading");
   const [busy, setBusy] = useStateUpd(false);
   const [current, setCurrent] = useStateUpd(null);
   const [me, setMe] = useStateUpd(null);
@@ -272,7 +277,11 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
       setQueue(list);
       setDataSource(list.length === 0 ? "live-empty" : "live");
     })
-    .catch(() => { setDataSource("offline"); });
+    .catch(() => {
+      // Empty, not the UPD_QUEUE fixture. The eyebrow says OFFLINE.
+      setQueue([]);
+      setDataSource("offline");
+    });
 
   // Reset current selection + opened row when switching tabs so a
   // pending row doesn't linger in the detail rail while the queue
@@ -413,7 +422,7 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
     ? "UPDATES · US-090 · OPENED FROM GRM"
     : dataSource === "live"      ? "UPDATES · US-S22-001 · LIVE"
     : dataSource === "live-empty" ? "UPDATES · US-S22-001 · live (0 in scope)"
-    : dataSource === "offline"   ? "UPDATES · US-S22-001 · OFFLINE PREVIEW"
+    : dataSource === "offline"   ? "UPDATES · US-S22-001 · COULD NOT LOAD"
     : "UPDATES · US-S22-001";
 
   // Diff data: live mode projects current._raw.changes JSON into the

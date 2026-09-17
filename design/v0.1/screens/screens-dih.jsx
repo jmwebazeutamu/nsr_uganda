@@ -154,7 +154,12 @@ const DIHScreen = () => {
   // Live row state; starts as the mock so the design preview renders
   // immediately. The effect below replaces it with live API rows when
   // available.
-  const [rows, setRows] = useStateDIH(MOCK_DIH_ROWS);
+  // Data comes from the API or it is not shown. The screen used to
+// initialise from a fabricated fixture and only replace it if the fetch
+// succeeded, so a slow or failing API left an operator reading invented
+// people — names, NINs and ULIDs — with only a small "mock" chip to say
+// so. It now starts empty and says which state it is in.
+  const [rows, setRows] = useStateDIH([]);
   // Live count of post-promotion MatchPairs pending — reused from
   // useNavCounts which already polls /api/v1/ddup/match-pairs/.
   // Surfaces a tiny caption clarifying that the two queues count
@@ -162,8 +167,8 @@ const DIHScreen = () => {
   const [navCounts] = (typeof useNavCounts === "function") ? useNavCounts() : [{}];
   const dedupPendingCount = (navCounts && typeof navCounts.dedup === "number") ? navCounts.dedup : 0;
   const [archiveRows, setArchiveRows] = useStateDIH([]);
-  const [dataSource, setDataSource] = useStateDIH("mock"); // 'mock' | 'live' | 'live-empty'
-  const [selectedRow, setSelectedRow] = useStateDIH(MOCK_DIH_ROWS[1].id);
+  const [dataSource, setDataSource] = useStateDIH("loading"); // 'loading' | 'live' | 'live-empty' | 'offline'
+  const [selectedRow, setSelectedRow] = useStateDIH(null);
   const [auditOpen, setAuditOpen] = useStateDIH(false);
   const [modal, setModal] = useStateDIH(null); // 'promote' | 'merge' | 'hold' | 'reject' | 'archive'
   const [toast, setToast] = useStateDIH("");
@@ -280,9 +285,12 @@ const DIHScreen = () => {
         if (cancelled) return;
         const apiRows = (data.results || data).map(_stageToRow);
         if (apiRows.length === 0) {
-          // No pending rows — keep the mock visible so the screen
-          // doesn't look empty during the demo. A banner cues the
-          // operator that the queue is real but currently zero.
+          // An empty queue is a real, and good, answer. It used to keep
+          // the fabricated rows on screen "so the screen doesn't look
+          // empty during the demo" — which meant a cleared queue looked
+          // like a backlog of invented households.
+          setRows([]);
+          setSelectedRow(null);
           setDataSource("live-empty");
           return;
         }
@@ -291,7 +299,12 @@ const DIHScreen = () => {
         setDataSource("live");
       })
       .catch(() => {
-        // Stays on MOCK_DIH_ROWS; dataSource already 'mock'.
+        if (cancelled) return;
+        // Show the outage. Previously this silently left the fabricated
+        // rows on screen, so a failing API looked like a working queue.
+        setRows([]);
+        setSelectedRow(null);
+        setDataSource("offline");
       });
     // Archive tab: quarantined records.
     fetch("/api/v1/dih/stage-records/?state=quarantined&page_size=500", {
@@ -502,10 +515,11 @@ const DIHScreen = () => {
         eyebrow="DIH REVIEW QUEUE · US-109"
         title={<>
           NSR Unit DIH review queue{" "}
-          <Chip>{rows.length} {dataSource === "live" ? "live" : "pending"}</Chip>
-          {dataSource === "mock" && <Chip tone="quality" size="sm">mock</Chip>}
+          <Chip>{rows.length} pending</Chip>
+          {dataSource === "loading" && <Chip tone="data" size="sm">loading…</Chip>}
           {dataSource === "live" && <Chip tone="eligibility" size="sm">live</Chip>}
-          {dataSource === "live-empty" && <Chip tone="data" size="sm">live (queue empty — mock shown)</Chip>}
+          {dataSource === "live-empty" && <Chip tone="data" size="sm">live · queue empty</Chip>}
+          {dataSource === "offline" && <Chip tone="danger" size="sm">could not load</Chip>}
         </>}
         sub={<>
           Promote, promote-as-merge, hold, or reject. Walk-in SLA = 24 hours from capture.
