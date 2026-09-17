@@ -541,3 +541,70 @@ leaves the job permanently skipped with no error to explain why.
 ## Phase 8 — backups and rollback
 
 _Not started._
+
+---
+
+## Post-go-live — IPv6 disabled on production
+
+**2026-09-17.** Approved by the project owner.
+
+### Why
+
+A production deploy failed with:
+
+```
+Image nginx:1.27-alpine  Error failed to resolve reference
+  "docker.io/library/nginx:1.27-alpine": dial tcp
+  [2600:1f18:2148:bc00:...]:443: connect: network is unreachable
+```
+
+The host has **no IPv6 address and no IPv6 default route**, but Docker
+resolves AAAA records and dials them anyway. `docker compose pull`
+fetches *every* image in the compose file, so one unreachable Docker Hub
+image aborted the whole step under `set -e` — after the job had already
+moved the checkout and rewritten `NSR_IMAGE`, leaving `.env` naming an
+image the box did not have.
+
+The GHCR application image was never the problem; it pulled fine.
+
+### Prerequisite: nginx had to stop listening on IPv6 first
+
+`infrastructure/nginx/*.conf` carried three `listen [::]` directives.
+With IPv6 disabled at the kernel, nginx refuses to start —
+`Address family not supported by protocol` — and would have taken the
+site down on its next restart. **The listeners were removed and deployed
+first** (commit `0c750a7`), nginx restarted and verified serving, and
+only then was IPv6 disabled.
+
+Checked inside the container rather than on the host: `ss` on the host
+shows docker-proxy's `[::]` sockets regardless of nginx's configuration,
+so it cannot answer this question.
+
+### The change
+
+```
+sudo tee /etc/sysctl.d/99-nsr-disable-ipv6.conf   # all/default/lo disable_ipv6 = 1
+sudo sysctl --system
+```
+
+Reverse by deleting that file and rebooting — and restore the nginx IPv6
+listeners at the same time.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `disable_ipv6` | 1, no global IPv6 addresses |
+| nginx restart with IPv6 off | starts clean, healthy, no address-family error |
+| Site | `/` `/healthz` `/login/` 200, `/console/` 302, `/admin-console/` 403 (permission gate), cert valid, HTTP/2 |
+| `docker pull nginx:1.27-alpine` | **succeeds** — the exact failure that killed the deploy |
+| `docker compose pull` | Docker Hub images pull; only the local-only `nsr-mis:` tag fails, as expected |
+
+### Still to do
+
+The deploy job should pull **only** the application image rather than
+`docker compose pull`. The other images are pinned and already present,
+and pulling them puts Docker Hub in the deploy path for no reason. The
+corrected job also verifies before mutating server state, and refuses a
+commit that is not an ancestor of `origin/main`. It needs a credential
+with `workflow` scope to land.
