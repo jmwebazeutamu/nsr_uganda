@@ -245,7 +245,7 @@ const WgRow = ({ q, answer }) => {
 /* ----------------------------------------------------------------
    MEMBER DETAIL — top-level
    ---------------------------------------------------------------- */
-const MemberDetailScreen = ({ memberId, onBack, onOpenHousehold }) => {
+const MemberDetailScreen = ({ memberId, onBack, onOpenHousehold, onNavigate }) => {
   const [tab, setTab] = useStateMD("over");
 
   // Live fetch — main payload first, then the parent household so
@@ -351,8 +351,34 @@ const MemberDetailScreen = ({ memberId, onBack, onOpenHousehold }) => {
             </div>
           )}
           <div style={{flex:1}}/>
-          <button className="btn btn-primary"><Icon name="edit" size={14}/> Open change request</button>
-          <button className="btn"><Icon name="message" size={14}/> Open grievance</button>
+          <button className="btn btn-primary"
+            onClick={() => onNavigate?.("change-request", {
+              householdId: m.hh,
+              initialScope: "member",
+              // Supplying this one live member makes the CR selector open
+              // on the record the operator is viewing, with its real ULID.
+              roster: [{
+                id: m.mid, line: m.line, name: m.name, rel: m.rel,
+                sex: m.sex, age: m.age, dob: m.dob,
+                nin: m.nin.value === "—" ? "" : m.nin.value,
+                ninStatus: m.nin.status,
+              }],
+            })}
+            disabled={!m.hh || !m.mid}>
+            <Icon name="edit" size={14}/> Open change request
+          </button>
+          <button className="btn"
+            onClick={() => onNavigate?.("grm", {
+              initialGrievance: {
+                household_id: m.hh,
+                member_id: m.mid,
+                reporter_name: m.name,
+                reporter_relationship: m.rel || "",
+              },
+            })}
+            disabled={!m.hh || !m.mid}>
+            <Icon name="message" size={14}/> Open grievance
+          </button>
           <button className="btn btn-ghost"><Icon name="moreH" size={14}/></button>
         </div>
       </div>

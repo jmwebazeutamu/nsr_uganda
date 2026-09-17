@@ -194,14 +194,19 @@ const QUICK_FILTERS_GRM = [
   { id: "mine",      label: "Assigned to me",            icon: "user",       tone: "programme", predicate: r => r.assigned_to !== "" && r.status !== "closed" },
 ];
 
-const GRMScreen = ({ onNavigate }) => {
+const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
   // Live state. allRows is the canonical roster (live or mock); rows
   // is the visible subset after quick-filter. dataSource drives the
   // eyebrow indicator so an operator can see whether they're looking
   // at real data or the offline-preview fallback.
-  const [allRows, setAllRows] = useStateGrm(GRM_MOCK_ROWS);
-  const [dataSource, setDataSource] = useStateGrm("mock");
-  const [selectedRow, setSelectedRow] = useStateGrm(GRM_MOCK_ROWS[1].id);
+  // Data comes from the API or it is not shown. The screen used to
+// initialise from a fabricated fixture and only replace it if the fetch
+// succeeded, so a slow or failing API left an operator reading invented
+// people — names, NINs and ULIDs — with only a small "mock" chip to say
+// so. It now starts empty and says which state it is in.
+  const [allRows, setAllRows] = useStateGrm([]);
+  const [dataSource, setDataSource] = useStateGrm("loading");
+  const [selectedRow, setSelectedRow] = useStateGrm(null);
   const [selection, setSelection] = useStateGrm(new Set());
   const [quickFilter, setQuickFilter] = useStateGrm(null);
   // 'assign' | 'escalate' | 'resolve' | 'close' | 'open_grievance' | 'add_task'
@@ -225,6 +230,16 @@ const GRMScreen = ({ onNavigate }) => {
   const [taskForm, setTaskForm] = useStateGrm({
     title: "", description: "", assigned_to: "",
   });
+
+  // Record-detail screens can hand off directly to the real GRM create
+  // form with their household/member identifiers already bound. The GRM
+  // endpoint remains the single writer, so SLA and audit stamping stay
+  // server-side.
+  useEffectGrm(() => {
+    if (!initialGrievance) return;
+    setOpenForm((form) => ({ ...form, ...initialGrievance }));
+    setModal("open_grievance");
+  }, [initialGrievance]);
 
   // Refresh the roster from the API. Used on mount + after every
   // successful action. On unreachable API (file:// preview) it
@@ -455,9 +470,9 @@ const GRMScreen = ({ onNavigate }) => {
   // selection). After all calls settle, refresh the roster, toast,
   // and clear the selection.
   const fire = (kind, opts = {}) => {
-    if (dataSource === "offline" || dataSource === "mock") {
-      // No live API available — keep the demo behaviour so the
-      // design preview still works under file://.
+    if (dataSource === "offline" || dataSource === "loading") {
+      // No live API to write to. The action is acknowledged but NOT
+      // persisted, and the toast says so rather than implying success.
       const map = {
         assign:   `${selection.size || 1} grievance(s) assigned. (preview — not persisted)`,
         escalate: `${selection.size || 1} grievance(s) escalated. (preview — not persisted)`,
@@ -522,8 +537,8 @@ const GRMScreen = ({ onNavigate }) => {
           : dataSource === "live-empty"
             ? "GRM WORKBENCH · US-S8-006 · live (0 in scope)"
             : dataSource === "offline"
-              ? "GRM WORKBENCH · US-S8-006 · offline preview"
-              : "GRM WORKBENCH · US-S8-006"}
+              ? "GRM WORKBENCH · US-S8-006 · COULD NOT LOAD"
+              : "GRM WORKBENCH · US-S8-006 · loading…"}
         title={<>Grievance management <Chip>{allRows.filter(r => r.status !== "closed" && r.status !== "resolved").length} active</Chip></>}
         sub={dataSource === "live"
           ? "Live ABAC-scoped data. SLA = 24h L1 / 48h L2 / 72h L3 / 7d L4 (per SAD §11.1)."

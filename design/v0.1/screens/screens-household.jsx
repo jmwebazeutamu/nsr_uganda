@@ -234,7 +234,7 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
   const [tab, setTab] = useStateHH("over");
   const [liveHh, setLiveHh] = useStateHH(null);
   const [loadError, setLoadError] = useStateHH(null);
-  const [dataSource, setDataSource] = useStateHH(householdId ? "loading" : "mock");
+  const [dataSource, setDataSource] = useStateHH(householdId ? "loading" : "none");
 
   // US-S22-002 — Open Grievance wiring state. (Open Update is no
   // longer modal — it navigates to the full-page change-request
@@ -284,7 +284,10 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
     return () => { cancelled = true; };
   }, [householdId]);
 
-  const h = useMemoHH(() => liveHh || (householdId ? null : DEMO_HH), [liveHh, householdId]);
+  // No DEMO_HH fallback. Opened without a household id this screen now
+  // says so, instead of rendering a fabricated household that looks
+  // exactly like a real record.
+  const h = useMemoHH(() => liveHh || null, [liveHh]);
 
   // Open the full-page Open-CR submitter (US-S22-004). Replaces the
   // legacy ChangeRequestModal — see design/v0.1/screens/change-request/.
@@ -370,6 +373,17 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
       .finally(() => setBusy(false));
   };
 
+  if (dataSource === "none") {
+    return (
+      <div className="page">
+        <div className="card mt-3" style={{padding:48, textAlign:"center", color:"var(--neutral-500)"}}>
+          <Icon name="users" size={32} color="var(--neutral-300)"/>
+          <div className="t-bodysm mt-2">No household selected.</div>
+          <div className="t-cap mt-1">Open a household from the Social Registry.</div>
+        </div>
+      </div>
+    );
+  }
   if (dataSource === "loading") {
     return (
       <div className="page">
@@ -405,7 +419,7 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
     <div className="page">
       <PageHeader
         eyebrow={`HOUSEHOLD DETAIL · ${h.rid}`}
-        title={h.head + (dataSource === "live" ? "   (live)" : dataSource === "mock" ? "   (mock)" : "")}
+        title={h.head + (dataSource === "live" ? "   (live)" : "")}
         sub={`${h.village} · ${h.code} · ${h.parish}, ${h.district} · ${h.subreg}`}
         right={onNavigate ? (
           <button className="btn" onClick={() => onNavigate("registry")}>
@@ -508,7 +522,7 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
         {tab === "hous"  && <TabHousing h={h}/>}
         {tab === "food"  && <TabFood h={h}/>}
         {tab === "hist"  && <TabHistory h={h} live={dataSource === "live"} onNavigate={onNavigate}/>}
-        {tab === "grm"   && <TabGrievances h={h} live={dataSource === "live"}/>}
+        {tab === "grm"   && <TabGrievances h={h} live={dataSource === "live"} onFileGrievance={openGrievance}/>}
         {tab === "prog"  && <TabProgrammes h={h} live={dataSource === "live"}/>}
         {tab === "cons"  && <TabConsent h={h} live={dataSource === "live"}/>}
         {tab === "dqa"   && <TabDqa h={h} live={dataSource === "live"} onNavigate={onNavigate}/>}
@@ -1109,7 +1123,7 @@ const TabHistory = ({ h, live, onNavigate }) => {
 // /api/v1/grm/grievances/?household_id={h.rid}; falls back to a
 // "no grievances" empty state. household_id was added to the
 // GrievanceViewSet's filterset_fields as part of this same ticket.
-const TabGrievances = ({ h, live }) => {
+const TabGrievances = ({ h, live, onFileGrievance }) => {
   const [rows, setRows] = useStateHH(null);
   const [err, setErr] = useStateHH(null);
   useEffectHH(() => {
@@ -1129,7 +1143,10 @@ const TabGrievances = ({ h, live }) => {
         sub={live
           ? "GRM cases filed against or referencing this household."
           : "GRM cases filed against or referencing this household. Mock preview — log into /admin/ first."}
-        action={<button className="btn btn-sm"><Icon name="plus" size={13}/> File grievance</button>}/>
+        action={<button className="btn btn-sm" onClick={onFileGrievance} disabled={!live}
+          title={live ? "File a grievance against this household" : "Live data required — log in via /admin/"}>
+          <Icon name="plus" size={13}/> File grievance
+        </button>}/>
       {err && <div className="muted t-bodysm" style={{padding:"16px 20px"}}>Couldn't load: {err}</div>}
       {live && !rows && !err && <div className="muted t-bodysm" style={{padding:"16px 20px"}}>Loading…</div>}
       {live && rows?.length === 0 && (
