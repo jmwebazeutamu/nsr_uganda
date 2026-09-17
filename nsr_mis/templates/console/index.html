@@ -1,6 +1,10 @@
 {% load static %}<!doctype html>
 {% comment %}
-Production shell for the operator console.
+Production shell for BOTH consoles — the operator console (/console/)
+and the admin console (/admin-console/). They share this template and
+differ only in which scripts they load, which comes from
+`console_scripts`; the admin shell's own harness lists 21 of the 62
+sources, in its own order.
 
 This replaces design/nsr-mis-console.html for deployed environments. The
 difference is entirely in HOW the same application is loaded:
@@ -14,9 +18,10 @@ difference is entirely in HOW the same application is loaded:
   Inter from fonts.googleapis.com    Inter self-hosted
 
 Script ORDER is load-bearing: the sources declare globals and rely on
-being evaluated in the harness's order. It is rendered from
-static/console/manifest.json, written by scripts/build_console.mjs, so
-the order lives in one place and cannot drift from the harness.
+being evaluated in the harness's order. It is rendered from the manifest
+written by scripts/build_console.mjs (manifest.json for the operator
+shell, manifest-admin.json for the admin one), so the order lives in one
+place and cannot drift from the harness.
 
 No third-party request is made from this page. That is not only about
 speed: the console renders personal data, and every external request
@@ -27,7 +32,7 @@ processing the public site already avoids by self-hosting its font.
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
-  <title>NSR MIS — Operator Console</title>
+  <title>{{ console_title|default:"NSR MIS — Operator Console" }}</title>
 
   <!-- Self-hosted, so no request leaves this origin. -->
   <style>

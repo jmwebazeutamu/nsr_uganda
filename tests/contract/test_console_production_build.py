@@ -27,6 +27,8 @@ HARNESS = REPO / "design" / "nsr-mis-console.html"
 BUILD_SCRIPT = REPO / "scripts" / "build_console.mjs"
 TEMPLATE = REPO / "nsr_mis" / "templates" / "console" / "index.html"
 MANIFEST = REPO / "static" / "console" / "manifest.json"
+ADMIN_HARNESS = REPO / "design" / "nsr-mis-admin-console.html"
+ADMIN_MANIFEST = REPO / "static" / "console" / "manifest-admin.json"
 
 pytestmark = pytest.mark.django_db
 
@@ -185,3 +187,61 @@ def test_sub_paths_still_reach_the_harness_in_a_dev_checkout(client_in):
         "sub-path passthrough broke; the design harness is no longer "
         "reachable in a dev checkout."
     )
+
+
+# --- the admin console shares the build ---------------------------------
+
+@pytest.mark.skipif(not ADMIN_MANIFEST.is_file(),
+                    reason="console not built in this checkout")
+def test_admin_manifest_matches_its_own_harness():
+    """The admin console is a SECOND shell over the same sources. It has
+    its own harness listing 21 of the 62 files in its own order, so it
+    needs its own manifest — loading the operator list would pull in
+    screens the admin shell does not have and miss the ones it does."""
+    harness = ADMIN_HARNESS.read_text()
+    srcs = re.findall(r'<script\s+type="text/babel"\s+src="([^"]+)"', harness)
+    expected = [s.replace(".jsx", "").replace("/", "-") + ".js" for s in srcs]
+    actual = json.loads(ADMIN_MANIFEST.read_text())["scripts"]
+    assert actual == expected, (
+        "the built admin console is out of step with its harness. Re-run "
+        "`node scripts/build_console.mjs`."
+    )
+
+
+@pytest.mark.skipif(not ADMIN_MANIFEST.is_file(),
+                    reason="console not built in this checkout")
+def test_the_two_shells_load_different_scripts():
+    operator = json.loads(MANIFEST.read_text())["scripts"]
+    admin = json.loads(ADMIN_MANIFEST.read_text())["scripts"]
+    assert operator != admin
+    assert "v0.1-screens-app-admin.js" in admin, (
+        "the admin shell must load its own app-admin entry point"
+    )
+    assert "app.js" in operator
+
+
+def test_admin_console_refuses_an_unprivileged_operator(client_in):
+    """403, not a redirect, so a misrouted operator notices loudly."""
+    resp = client_in.get("/admin-console/")
+    assert resp.status_code == 403
+
+
+@pytest.mark.skipif(not ADMIN_MANIFEST.is_file(),
+                    reason="console not built in this checkout")
+def test_built_admin_console_renders_for_a_privileged_user(operator):
+    from django.contrib.auth.models import Group
+    for name in ("nsr_admin",):
+        operator.groups.add(Group.objects.get_or_create(name=name)[0])
+    c = Client()
+    c.force_login(operator)
+    resp = c.get("/admin-console/")
+    assert resp.status_code == 200, (
+        "the built admin console did not render — this is the 404 the "
+        "change exists to fix."
+    )
+    body = resp.content.decode()
+    assert "Admin Console" in body
+    assert "unpkg.com" not in body
+    assert "babel" not in body.lower()
+    for name in json.loads(ADMIN_MANIFEST.read_text())["scripts"]:
+        assert name in body, f"{name} is built but never loaded by the admin page"

@@ -28,18 +28,26 @@ MANUAL_DIR = REPO_ROOT / "docs" / "user-manual" / "site"
 CONSOLE_MANIFEST = REPO_ROOT / "static" / "console" / "manifest.json"
 
 
-def _console_scripts():
+def console_scripts(manifest_name: str = "manifest.json"):
     """Script filenames in dependency order, or None if not built.
 
     Order is load-bearing: the sources declare globals and rely on being
     evaluated in the harness's order, so it is read from the manifest
-    rather than restated in the template.
+    rather than restated in the template. Shared with
+    apps.admin_console.views, which passes "manifest-admin.json" — both
+    shells are built by the same run of scripts/build_console.mjs.
     """
     try:
         import json
-        return json.loads(CONSOLE_MANIFEST.read_text())["scripts"]
+        path = CONSOLE_MANIFEST.parent / manifest_name
+        return json.loads(path.read_text())["scripts"]
     except (OSError, ValueError, KeyError):
         return None
+
+
+#: Backwards-compatible alias for the operator shell.
+def _console_scripts():
+    return console_scripts("manifest.json")
 
 
 @login_required

@@ -53,7 +53,17 @@ emits `static/console/`. A `console-build` stage in the Dockerfile runs it;
 only the compiled output crosses into the runtime image, so the final image
 contains no JSX, no Babel and no node.
 
-`nsr_mis/templates/console/index.html` is the production shell. It loads the
+There are **two** shells, not one: the operator console
+(`nsr-mis-console.html`, 47 scripts) and the admin console
+(`nsr-mis-admin-console.html`, 21). They overlap by only six files, so
+each unique source is compiled once into a shared `js/` directory and
+each shell gets its own manifest — `manifest.json` and
+`manifest-admin.json` — naming the files it loads, in its own order.
+Loading the operator list in the admin shell would pull in screens it
+does not have and miss the ones it does.
+
+`nsr_mis/templates/console/index.html` is the production shell, used by
+both; they differ only in the script list and the page title. It loads the
 compiled scripts, React/ReactDOM **production** builds, a pinned local d3
 `7.9.0`, and a self-hosted Inter. **It makes no third-party request at all.**
 
