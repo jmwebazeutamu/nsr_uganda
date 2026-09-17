@@ -34,15 +34,33 @@ const _localMapAsset = (path) =>
     ? `assets/maps/${path}`
     : `../../../assets/maps/${path}`;
 
-// District boundaries are vendored locally so the console does not
-// flicker from a fallback map into a runtime network fetch.
-const _GB = "https://media.githubusercontent.com/media/wmgeolab/geoBoundaries/main/releaseData/gbOpen/UGA";
+// ALL boundaries are vendored locally. Previously only the district file
+// was, and the other three levels were fetched from
+// media.githubusercontent.com by the OPERATOR'S BROWSER — a third-party
+// request from a page rendering personal data, disclosing every
+// operator's IP, and a hard dependency on that host being reachable.
+// The deployed console removed exactly this processing for React, d3 and
+// the webfont; the maps were the last of it.
+//
+// CAVEAT — these files do not all match the registry's geography, and
+// vendoring does not change that:
+//
+//   level       units in registry   shapes in file
+//   region                      5                4
+//   sub_region                 19                4   <-- ADM1 is regions
+//   district                  147              151   <-- the good one
+//   sub_county              2,225              137   <-- ADM3 far too coarse
+//
+// Only the district map is meaningful today. Correct sub-region and
+// sub-county boundaries have to be sourced (UBOS, or a finer gbOpen
+// release) before those levels can be trusted — see the "matched N of M"
+// badge, which is what makes the mismatch visible rather than silent.
 const _UGA_BOUNDARIES = {
-  region:     `${_GB}/ADM1/geoBoundaries-UGA-ADM1_simplified.geojson`,
-  subregion:  `${_GB}/ADM1/geoBoundaries-UGA-ADM1_simplified.geojson`,
-  sub_region: `${_GB}/ADM1/geoBoundaries-UGA-ADM1_simplified.geojson`,
+  region:     _localMapAsset("geoBoundaries-UGA-ADM1_simplified.geojson"),
+  subregion:  _localMapAsset("geoBoundaries-UGA-ADM1_simplified.geojson"),
+  sub_region: _localMapAsset("geoBoundaries-UGA-ADM1_simplified.geojson"),
   district:   _localMapAsset("uganda-adm2.geojson"),
-  sub_county: `${_GB}/ADM3/geoBoundaries-UGA-ADM3_simplified.geojson`,
+  sub_county: _localMapAsset("geoBoundaries-UGA-ADM3_simplified.geojson"),
 };
 const _hasCustomBoundaries = () =>
   typeof window !== "undefined" && !!window.DE_UGA_BOUNDARIES_URL;
