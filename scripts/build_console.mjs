@@ -56,7 +56,7 @@
  * Output: static/console/
  */
 
-import { readFile, writeFile, mkdir, copyFile, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdir, cp, rm } from "node:fs/promises";
 import vm from "node:vm";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -187,11 +187,22 @@ async function build() {
   ].join("\n");
   await writeFile(path.join(OUT_DIR, "console.css"), css, "utf8");
 
-  // Map data the coverage screens fetch at runtime.
-  const geo = path.join(DESIGN, "assets", "maps", "uganda-adm2.geojson");
-  if (existsSync(geo)) {
-    await mkdir(path.join(OUT_DIR, "maps"), { recursive: true });
-    await copyFile(geo, path.join(OUT_DIR, "maps", "uganda-adm2.geojson"));
+  // Everything under design/assets/, kept at the SAME relative path.
+  //
+  // The screens reference these relatively — `assets/Coat_of_arms_of_Uganda.png`
+  // in both app shells, `assets/maps/<file>` in the data-explorer coverage
+  // screen. Relative to /console/ that is /console/assets/..., which the
+  // harness serves out of design/. A built image has no design/, so those
+  // requests 404 and the asset silently disappears — which is exactly how
+  // the Uganda coat of arms went missing from the top-left of both
+  // consoles, with no error anywhere.
+  //
+  // Copying the tree here, and having the console views fall back to
+  // static/console/ for sub-paths, makes the same relative URL work in
+  // both environments without touching a single source file.
+  const assetsSrc = path.join(DESIGN, "assets");
+  if (existsSync(assetsSrc)) {
+    await cp(assetsSrc, path.join(OUT_DIR, "assets"), { recursive: true });
   }
 
   // --- verify the output can actually run --------------------------------

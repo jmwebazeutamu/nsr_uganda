@@ -13,7 +13,7 @@ from pathlib import Path
 
 from django.http import FileResponse, Http404, HttpResponseForbidden
 from django.shortcuts import render
-from nsr_mis.views import console_scripts
+from nsr_mis.views import console_asset, console_scripts
 
 from apps.admin_console.permissions import user_can_admin_console
 
@@ -39,11 +39,17 @@ def admin_console(request, path: str = "nsr-mis-admin-console.html"):
     # which is what /admin-console/ did in production until this landed.
     # See docs/console_production_build.md.
     scripts = console_scripts("manifest-admin.json")
-    if scripts is not None and path in ("", "nsr-mis-admin-console.html"):
-        return render(request, "console/index.html", {
-            "console_scripts": scripts,
-            "console_title": "NSR MIS — Admin Console",
-        })
+    if scripts is not None:
+        if path in ("", "nsr-mis-admin-console.html"):
+            return render(request, "console/index.html", {
+                "console_scripts": scripts,
+                "console_title": "NSR MIS — Admin Console",
+            })
+        # Same relative-asset fallback as the operator console: the admin
+        # shell also references assets/Coat_of_arms_of_Uganda.png.
+        built = console_asset(path)
+        if built is not None:
+            return FileResponse(open(built, "rb"))  # noqa: SIM115
     target = (DESIGN_DIR / path).resolve()
     try:
         target.relative_to(DESIGN_DIR)

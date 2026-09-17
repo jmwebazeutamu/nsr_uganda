@@ -245,3 +245,52 @@ def test_built_admin_console_renders_for_a_privileged_user(operator):
     assert "babel" not in body.lower()
     for name in json.loads(ADMIN_MANIFEST.read_text())["scripts"]:
         assert name in body, f"{name} is built but never loaded by the admin page"
+
+
+# --- relative assets must survive the build -----------------------------
+
+ASSET = "assets/Coat_of_arms_of_Uganda.png"
+
+
+@pytest.mark.skipif(not MANIFEST.is_file(),
+                    reason="console not built in this checkout")
+def test_design_assets_are_shipped_with_the_build():
+    """Both app shells reference the coat of arms RELATIVELY, so the file
+    has to exist under the build directory at the same relative path."""
+    built = REPO / "static" / "console" / ASSET
+    assert built.is_file(), (
+        f"{ASSET} is missing from the build. Both consoles reference it "
+        f"relatively, so it 404s and the emblem silently disappears from "
+        f"the top-left of every screen."
+    )
+
+
+@pytest.mark.skipif(not MANIFEST.is_file(),
+                    reason="console not built in this checkout")
+def test_console_serves_its_relative_assets(client_in):
+    """/console/assets/... must resolve once the console is built."""
+    resp = client_in.get(f"/console/{ASSET}")
+    assert resp.status_code == 200, (
+        "the console cannot serve its own relative assets; the coat of arms "
+        "will be a broken image."
+    )
+
+
+@pytest.mark.skipif(not MANIFEST.is_file(),
+                    reason="console not built in this checkout")
+def test_admin_console_serves_its_relative_assets(operator):
+    from django.contrib.auth.models import Group
+    operator.groups.add(Group.objects.get_or_create(name="nsr_admin")[0])
+    c = Client()
+    c.force_login(operator)
+    resp = c.get(f"/admin-console/{ASSET}")
+    assert resp.status_code == 200
+
+
+@pytest.mark.skipif(not MANIFEST.is_file(),
+                    reason="console not built in this checkout")
+def test_console_asset_path_cannot_escape_the_build_directory(client_in):
+    """The fallback resolves a caller-supplied path — it must not be a
+    traversal primitive."""
+    resp = client_in.get("/console/../../../etc/passwd")
+    assert resp.status_code in (404, 400, 301, 302), resp.status_code
