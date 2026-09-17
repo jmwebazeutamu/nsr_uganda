@@ -12,7 +12,7 @@
 //   - one event detail with chain verification status
 //   - global chain health (verified to head)
 
-const { useState: useStateAUD, useMemo: useMemoAUD } = React;
+const { useState: useStateAUD, useMemo: useMemoAUD, useEffect: useEffectAUD } = React;
 
 const audDownloadCsv = (filename, rows) => {
   const csv = rows.map(row => row.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -28,18 +28,68 @@ const audDownloadCsv = (filename, rows) => {
 const AUD_ACTIONS = ["create","read","update","soft_delete","hard_delete","merge","unmerge","promote","reject"];
 const AUD_ENTITY_TYPES = ["household","member","pmt_model_version","pmt_result","dqa_rule","ddup_match_pair","change_request","choice_list","partner","programme","data_request"];
 
-const AUD_EVENTS = [
-  { id:"01HXP4M8N1K6FB7K6FZRWS2201", occurred:"22 May 2026 · 14:08:21", actor:"akello.p", actorKind:"user", action:"update", entityType:"household", entityId:"01KRPPW6WRGRJZY0N4XN8R1YC2", reason:"Approved UPD-2026-05-22-00188", ip:"196.43.221.18", changes:{"roof_material":{"old":"thatch","new":"metal"}}, chainOk: true },
-  { id:"01HXP4M8N1K6FB7K6FZRWS2200", occurred:"22 May 2026 · 14:02:18", actor:"system-ref", actorKind:"system", action:"update", entityType:"programme", entityId:"OPM-PDM", reason:"enrolment.activated batch wh-2026-05-22-088", ip:"10.0.0.42", changes:{"enrolled":{"old":1486807,"new":1487219}}, chainOk: true },
-  { id:"01HXP4M8N1K6FB7K6FZRWS2199", occurred:"22 May 2026 · 02:00:04", actor:"celery-beat", actorKind:"system", action:"create", entityType:"pmt_band_threshold", entityId:"01HXP4M8N1K6FB7K6FZRWS00", reason:"daily recompute · v1 · 4 bands · n=12,108,331", ip:"10.0.0.51", changes:null, chainOk: true },
-  { id:"01HXP4M8N1K6FB7K6FZRWS2198", occurred:"21 May 2026 · 16:44:02", actor:"otieno.j", actorKind:"user", action:"promote", entityType:"pmt_model_version", entityId:"01HXM12Z4F7N6P0V8K9TB2QXJK", reason:"Signed step 3/3 — activation of v2", ip:"196.43.221.32", changes:null, chainOk: true },
-  { id:"01HXP4M8N1K6FB7K6FZRWS2197", occurred:"21 May 2026 · 14:18:51", actor:"nakanwagi.d", actorKind:"user", action:"create", entityType:"pmt_model_version", entityId:"01HXM12Z4F7N6P0V8K9TB2QXJK", reason:"Submitted v2 for approval", ip:"196.43.221.40", changes:null, chainOk: true },
-  { id:"01HXP4M8N1K6FB7K6FZRWS2196", occurred:"21 May 2026 · 11:08:14", actor:"adong.f", actorKind:"user", action:"merge", entityType:"member", entityId:"01HXR9P2K7N6FB7K6FZRWS01", reason:"Manual merge — same NIN match", ip:"41.78.12.4", changes:{"surviving":"M-01KRPPW6WR-002","losing":"M-01KRPPW6WR-099"}, chainOk: true },
-  { id:"01HXP4M8N1K6FB7K6FZRWS2195", occurred:"21 May 2026 · 09:58:01", actor:"akello.p", actorKind:"user", action:"read", entityType:"member", entityId:"M-01KRPPW6WR-002", reason:"PII reveal · NIN value", ip:"196.43.221.18", changes:null, chainOk: true, piiReveal: true },
-  { id:"01HXP4M8N1K6FB7K6FZRWS2194", occurred:"20 May 2026 · 22:14:50", actor:"system-nira", actorKind:"system", action:"update", entityType:"member", entityId:"M-01HXP02CN4-002", reason:"NIN verified · match score 0.98", ip:"10.0.0.62", changes:{"nin_verification_status":{"old":"pending","new":"verified"}}, chainOk: true },
-  { id:"01HXP4M8N1K6FB7K6FZRWS2193", occurred:"20 May 2026 · 14:48:21", actor:"bahati.e", actorKind:"user", action:"create", entityType:"data_request", entityId:"DR-2026-05-20-00041", reason:"Submitted DRS request — DSA-OPM-PDM-2026", ip:"41.78.12.18", changes:null, chainOk: true },
-  { id:"01HXP4M8N1K6FB7K6FZRWS2192", occurred:"20 May 2026 · 11:08:22", actor:"otieno.j", actorKind:"user", action:"reject", entityType:"change_request", entityId:"UPD-2026-05-20-00211", reason:"Insufficient evidence — photo blurry", ip:"196.43.221.32", changes:null, chainOk: true },
-];
+/* ============================================================
+   LIVE DATA — /api/v1/security/audit-events/
+   ============================================================
+
+   This screen used to render AUD_EVENTS: ten fabricated audit events,
+   above KPIs claiming 412,890,221 events in the chain and a flat
+   "Chain integrity ✓ verified". The real chain holds 81,794 events and
+   does NOT verify.
+
+   Of everywhere mock data reached a screen, this was the worst place
+   for it. The integrity claim of the whole registry rests on the
+   hash-linked audit chain (SAD §8.4), and the people most likely to
+   open this screen — an auditor, the DPO — are exactly the people who
+   must not be shown a reassuring fiction.
+
+   Nothing here is asserted that the server has not returned.
+   ============================================================ */
+
+// EAT (UTC+3) per CLAUDE.md: persist UTC, render East Africa Time.
+const _audWhen = (iso) => {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString("en-GB", {
+    timeZone: "Africa/Kampala",
+    day: "2-digit", month: "short", year: "numeric",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).replace(",", " ·");
+};
+
+// A read of a personal-data field is the event an auditor looks for, so
+// it is flagged. Derived from what the server sent, not guessed.
+const _audIsPiiReveal = (e) =>
+  (e.action || "").includes("read")
+  && ["member", "household", "submission"].includes(e.entity_type)
+  && !/list|page/.test(String(e.entity_id || ""));
+
+const _audRow = (e) => ({
+  id: e.id,
+  occurred: _audWhen(e.occurred_at),
+  occurredRaw: e.occurred_at,
+  actor: e.actor_id || "—",
+  actorKind: e.actor_kind || "system",
+  action: e.action,
+  entityType: e.entity_type,
+  entityId: e.entity_id,
+  reason: e.reason || "",
+  ip: e.ip_address || "—",
+  changes: e.field_changes || null,
+  prevHash: e.prev_hash,
+  selfHash: e.self_hash,
+  piiReveal: _audIsPiiReveal(e),
+  // chainOk is deliberately absent. Whether a row's link is intact is
+  // only knowable from the server-side verification below; asserting it
+  // per row from the client would be inventing the very assurance this
+  // screen exists to report.
+});
+
+// How many recent events the table loads. The list endpoint does not
+// filter server-side, so the search and dropdowns below narrow THIS
+// window — which the UI says, rather than implying it searched all 81k.
+const AUD_WINDOW = 200;
 
 const AUD_ACTION_TONE = {
   create: "data", read: "system", update: "update", soft_delete: "quality",
@@ -47,6 +97,9 @@ const AUD_ACTION_TONE = {
 };
 
 const AdminAuditScreen = () => {
+  const [rows, setRows] = useStateAUD(null);      // null = loading
+  const [total, setTotal] = useStateAUD(null);
+  const [loadError, setLoadError] = useStateAUD(null);
   const [q, setQ] = useStateAUD("");
   const [actorFilter, setActorFilter] = useStateAUD("");
   const [actionFilter, setActionFilter] = useStateAUD("");
@@ -55,7 +108,30 @@ const AdminAuditScreen = () => {
   const [verifying, setVerifying] = useStateAUD(false);
   const [verifyResult, setVerifyResult] = useStateAUD(null);
 
-  const events = useMemoAUD(() => AUD_EVENTS.filter(e => {
+  useEffectAUD(() => {
+    let cancelled = false;
+    fetch(`/api/v1/security/audit-events/?ordering=-occurred_at&page_size=${AUD_WINDOW}`, {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(d => {
+        if (cancelled) return;
+        const results = Array.isArray(d) ? d : (d.results || []);
+        setRows(results.map(_audRow));
+        setTotal(typeof d.count === "number" ? d.count : results.length);
+      })
+      .catch(err => {
+        if (cancelled) return;
+        // Show the failure. The previous version fell back to fixtures,
+        // so an outage looked like a healthy, quiet audit log.
+        setRows([]);
+        setLoadError(err.message || String(err));
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const events = useMemoAUD(() => (rows || []).filter(e => {
     if (q && !(e.actor.includes(q.toLowerCase()) || e.entityId.toLowerCase().includes(q.toLowerCase()) || (e.reason || "").toLowerCase().includes(q.toLowerCase()))) return false;
     if (actorFilter && e.actorKind !== actorFilter) return false;
     if (actionFilter && e.action !== actionFilter) return false;
@@ -63,20 +139,30 @@ const AdminAuditScreen = () => {
     return true;
   }), [q, actorFilter, actionFilter, entityFilter]);
 
-  const totalEvents = "412,890,221";
-  const last24h = "1,408,221";
-  const piiReveals7d = 38;
-  const chainHead = AUD_EVENTS[0];
+  // Every figure below is computed from what the server returned.
+  // Previously: 412,890,221 events, 1,408,221 in 24h, 38 PII reveals —
+  // all invented, against a real chain of ~81,800 events.
+  const totalEvents = total == null ? "—" : total.toLocaleString();
+  const windowPii = (rows || []).filter(e => e.piiReveal).length;
+  const chainHead = (rows && rows[0]) || null;
 
   const verifyChain = async () => {
     setVerifying(true);
     setVerifyResult(null);
     try {
-      const api = window.nsrApi;
-      const result = api
-        ? await api.post("/api/v1/security/audit-events/verify-chain/", {})
-        : { ok: true, mode: "preview", rows_scanned: AUD_EVENTS.length, breaks: [] };
-      setVerifyResult(result);
+      // No preview fallback. Reporting "ok" without asking the server
+      // is precisely the failure this screen must never have.
+      const rsp = await fetch("/api/v1/security/audit-events/verify-chain/", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/) || [])[1] || "",
+        },
+        body: "{}",
+      });
+      if (!rsp.ok) throw new Error(`HTTP ${rsp.status}`);
+      setVerifyResult(await rsp.json());
     } catch (err) {
       setVerifyResult({ ok: false, mode: "error", detail: err?.body?.detail || err?.message || String(err) });
     } finally {
@@ -86,13 +172,13 @@ const AdminAuditScreen = () => {
 
   const exportWindow = () => {
     audDownloadCsv("audit-window.csv", [
-      ["id", "occurred", "actor", "actor_kind", "action", "entity_type", "entity_id", "reason", "ip", "chain_ok"],
-      ...events.map(e => [e.id, e.occurred, e.actor, e.actorKind, e.action, e.entityType, e.entityId, e.reason, e.ip, e.chainOk ? "yes" : "no"]),
+      ["id", "occurred", "actor", "actor_kind", "action", "entity_type", "entity_id", "reason", "ip", "self_hash"],
+      ...events.map(e => [e.id, e.occurred, e.actor, e.actorKind, e.action, e.entityType, e.entityId, e.reason, e.ip, e.selfHash]),
     ]);
   };
 
   if (selected) {
-    const e = AUD_EVENTS.find(x => x.id === selected);
+    const e = (rows || []).find(x => x.id === selected);
     return <AuditEventDetail event={e} onBack={() => setSelected(null)}/>;
   }
 
@@ -110,6 +196,27 @@ const AdminAuditScreen = () => {
         </>}
       />
 
+      {/* State is always explicit. An empty table with no explanation is
+          how an outage looked like a quiet audit log in the old version. */}
+      {loadError && (
+        <div className="tint-danger mb-3" style={{ padding: 10, borderRadius: 4 }}>
+          <strong className="t-bodysm">Could not load audit events</strong>
+          <div className="t-cap mt-1">
+            {loadError} · nothing is shown rather than stale or sample data.
+          </div>
+        </div>
+      )}
+      {rows === null && !loadError && (
+        <div className="tint-data mb-3" style={{ padding: 10, borderRadius: 4 }}>
+          <span className="t-bodysm">Loading audit events…</span>
+        </div>
+      )}
+      {rows !== null && rows.length === 0 && !loadError && (
+        <div className="tint-data mb-3" style={{ padding: 10, borderRadius: 4 }}>
+          <span className="t-bodysm">No audit events recorded.</span>
+        </div>
+      )}
+
       {verifyResult && (
         <div className={verifyResult.ok ? "tint-data mb-3" : "tint-danger mb-3"} style={{ padding: 10, borderRadius: 4 }}>
           <strong className="t-bodysm">
@@ -124,10 +231,18 @@ const AdminAuditScreen = () => {
       )}
 
       <div className="grid grid-4">
-        <KPI title="Events in chain" value={totalEvents} foot="Since 04 Jan 2026 · 10-year retention"/>
-        <KPI title="Last 24 hours" value={last24h} foot="Average 16.3k/hour" spark={[1.2,1.3,1.3,1.4,1.4,1.4,1.4,1.4]}/>
-        <KPI title="PII reveals (7d)" value={piiReveals7d} foot="NIN / DoB / photo unmask" trend="up" trendValue="+8 from 7d prior"/>
-        <KPI title="Chain integrity" value="✓ verified" foot={`Verified to head ${chainHead.id.slice(0,16)}…`}/>
+        <KPI title="Events in chain" value={totalEvents} foot="10-year retention (SAD §8.4)"/>
+        <KPI title="Loaded window" value={rows ? String(rows.length) : "—"}
+             foot={`${AUD_WINDOW} most recent · filters narrow this window`}/>
+        <KPI title="PII reveals (window)" value={rows ? String(windowPii) : "—"}
+             foot="Reads of member / household / submission records"/>
+        {/* Never claims verified. The chain is only known good when the
+            server says so, and on this data it currently does not. */}
+        <KPI title="Chain integrity"
+             value={verifyResult ? (verifyResult.ok ? "✓ verified" : "✗ breaks found") : "not verified"}
+             foot={verifyResult
+               ? `${verifyResult.rows_scanned ?? "—"} scanned · ${verifyResult.breaks?.length ?? 0} break(s)`
+               : "Run \u201cVerify chain\u201d to check"}/>
       </div>
 
       <div className="card mt-5" style={{ padding: '14px 16px' }}>
@@ -150,7 +265,7 @@ const AdminAuditScreen = () => {
             {AUD_ENTITY_TYPES.map(e => <option key={e}>{e}</option>)}
           </select>
           <div style={{ flex: 1 }}/>
-          <span className="t-cap">{events.length} of {AUD_EVENTS.length}</span>
+          <span className="t-cap">{events.length} of {rows ? rows.length : 0} loaded · {total == null ? "…" : total.toLocaleString()} in chain</span>
         </div>
       </div>
 
