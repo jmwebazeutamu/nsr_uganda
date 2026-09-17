@@ -294,3 +294,40 @@ def test_console_asset_path_cannot_escape_the_build_directory(client_in):
     traversal primitive."""
     resp = client_in.get("/console/../../../etc/passwd")
     assert resp.status_code in (404, 400, 301, 302), resp.status_code
+
+
+@pytest.mark.skipif(not MANIFEST.is_file(),
+                    reason="console not built in this checkout")
+def test_coverage_map_makes_no_third_party_request():
+    """All boundary files must be served from this origin.
+
+    The coverage screen once fetched three of its four boundary files from
+    media.githubusercontent.com in the operator's browser — a third-party
+    request from a page rendering personal data. The console removed the
+    same processing for React, d3 and the webfont; the maps must not
+    reintroduce it.
+    """
+    src = (REPO / "design" / "v0.1" / "screens" / "data-explorer"
+           / "screens-data-explorer-coverage.jsx").read_text()
+    body = re.sub(r"/\*.*?\*/", "", src, flags=re.S)       # strip block comments
+    body = re.sub(r"^\s*//.*$", "", body, flags=re.M)       # strip line comments
+    for host in ("githubusercontent.com", "github.com", "unpkg.com"):
+        assert host not in body, (
+            f"the coverage screen fetches boundaries from {host}; vendor the "
+            f"file under design/assets/maps/ instead."
+        )
+
+
+@pytest.mark.skipif(not MANIFEST.is_file(),
+                    reason="console not built in this checkout")
+def test_every_boundary_file_the_coverage_screen_names_is_shipped():
+    src = (REPO / "design" / "v0.1" / "screens" / "data-explorer"
+           / "screens-data-explorer-coverage.jsx").read_text()
+    named = set(re.findall(r'_localMapAsset\("([^"]+)"\)', src))
+    assert named, "no local map assets referenced — has the screen changed?"
+    maps = REPO / "static" / "console" / "assets" / "maps"
+    missing = [n for n in sorted(named) if not (maps / n).is_file()]
+    assert not missing, (
+        f"the coverage screen names boundary files that the build does not "
+        f"ship: {missing}. The map will silently fall back."
+    )
