@@ -182,135 +182,69 @@ const HOME_KPIS_BY_ROLE = {
 
 /* ============================================================
    ROLE config
+
+   Identity and navigation only. The KPI arrays and the queue `items`
+   that used to live here were demo content — fabricated counts,
+   sparklines, and invented households with real-looking names and
+   ULIDs — and they were rendered on a production registry.
+
+   KPIs now come from HOME_KPIS_BY_ROLE above, which reads the
+   operator-kpis endpoint. Queue contents come from
+   HOME_QUEUE_LIVE_MAP. `person` and `org` remain solely as a fallback
+   for the standalone design harness, where there is no session to ask
+   who the operator is; the deployed console passes the real identity in.
    ============================================================ */
 const ROLE_CONTENT = {
   "nsr-unit": {
     name: "NSR Unit Coordinator",
     person: "Johnson Mwebaze",
     org: "MGLSD · NSR Unit",
-    kpis: [
-      { title: "DIH review queue", value: "342", trend: "up", trendValue: "+38 today", foot: "vs. 7-day avg 287", spark: [180,210,250,235,280,310,342] },
-      { title: "Fast-track auto-promote", value: "61.4", suffix: "%", trend: "up", trendValue: "+2.1pp wk", foot: "Target ≥ 60% (AC-DIH-AUTO)", spark: [54,55,58,57,60,59,61.4] },
-      { title: "Bulk batches awaiting dual-approval", value: "4", trend: "flat", trendValue: "no change", foot: "1 batch > 10,000 (US-108)", spark: [4,3,4,5,4,4,4] },
-      { title: "Partner DSAs expiring in 30d", value: "3", trend: "down", trendValue: "−1 since Monday", foot: "Renewal owner notified", spark: [6,5,5,5,4,4,3] },
-    ],
     queues: [
-      { title: "Pending DIH promotions", icon: "inbox", count: 342, items: [
-        { id: "01HXY7K3B2N9PVQE4M6FZRWS18", who: "Lokol Naume · Nakiloro, Moroto", note: "Walk-in · No DDUP match · 0 warnings", chip: "Pending", age: "12m" },
-        { id: "01HXZ9MR4N8P2QFB7K6FZRWS33", who: "Akello Grace · Pageya, Gulu", note: "Walk-in · DDUP 0.83 · 2 warnings", chip: "Pending", age: "47m" },
-        { id: "01HXZBVK6QN8M2PFB7K6FZRWS41", who: "Onyango David · Logiri, Arua", note: "Bulk OPM-PDM · 0 warnings", chip: "Pending", age: "2h" },
-        { id: "01HXZGN3W8MN6P2FB7K6FZRWS52", who: "Nakato Sarah · Kuluba, Yumbe", note: "Walk-in · NIRA mismatch · 1 blocking", chip: "Pending", age: "3h" },
-      ]},
+      { title: "Pending DIH promotions", icon: "inbox" },
       // Bulk DRS dual-approval queue — routes to the DRS screen,
       // NOT the DIH default. CR-YYYY-MM-DD IDs are change-request
       // identifiers for partner bulk requests (US-108).
-      { title: "Bulk batches awaiting dual-approval", icon: "duplicate", count: 4, _target: "drs", items: [
-        { id: "CR-2026-05-13-00112", who: "UBOS-NUSAF-2026-BULK", note: "11,402 records · awaits second approver", chip: "Pending Approval", age: "yesterday" },
-        { id: "CR-2026-05-12-00031", who: "OPM-PDM-2026-Q2-BULK",  note: "8,213 records · awaits second approver",  chip: "Pending Approval", age: "2d" },
-      ]},
-    ],
-  },
+      { title: "Bulk batches awaiting dual-approval", icon: "duplicate", _target: "drs" }
+    ] },
   "sr-manager": {
     name: "Social Registry Manager",
     person: "Namutebi Esther",
     org: "MGLSD · NSR Unit",
-    kpis: [
-      { title: "Items awaiting my sign-off", value: "9", trend: "up", trendValue: "+3 today", foot: "Across reference data, DQA, PMT, DRS", spark: [4,5,6,7,8,8,9] },
-      { title: "Choice lists pending sign-off", value: "3", trend: "flat", trendValue: "—", foot: "No-self-approve enforced (REF-DATA)", spark: [2,3,3,4,3,3,3] },
-      { title: "DQA rules pending approval", value: "2", trend: "flat", trendValue: "—", foot: "Dual-approval workflow (DAT-DQA)", spark: [3,2,2,3,2,2,2] },
-      { title: "PMT model versions pending", value: "1", trend: "flat", trendValue: "—", foot: "Three-step sign-off (PMT)", spark: [1,1,1,1,1,1,1] },
-    ],
     queues: [
-      { title: "Approvals — awaiting my signature", icon: "shield", count: 9, _target: "admin", items: [
-        { id: "CL-2026-05-22-00007", who: "Choice list · roof_material v3", note: "Draft by Adong F. · 4 codes added", chip: "Pending Approval", age: "2h" },
-        { id: "RULE-2026-05-22-00031", who: "DQA rule · AC-HH-SIZE-RANGE", note: "Draft by Mukasa R. · scope=member", chip: "Pending Approval", age: "5h" },
-        { id: "PMT-v2-2026Q2", who: "PMT model v2 · UNHS 2023/24 reweight", note: "Step 2/3 · awaits Registry Manager sign-off", chip: "Pending Approval", age: "yesterday" },
-      ]},
-      { title: "Bulk DRS batches awaiting dual-approval", icon: "duplicate", count: 4, _target: "drs", items: [
-        { id: "CR-2026-05-13-00112", who: "UBOS-NUSAF-2026-BULK", note: "11,402 records · author cannot self-approve", chip: "Pending Approval", age: "yesterday" },
-        { id: "CR-2026-05-12-00031", who: "OPM-PDM-2026-Q2-BULK",  note: "8,213 records · awaits second approver", chip: "Pending Approval", age: "2d" },
-      ]},
-    ],
-  },
+      { title: "Approvals — awaiting my signature", icon: "shield", _target: "admin" },
+      { title: "Bulk DRS batches awaiting dual-approval", icon: "duplicate", _target: "drs" }
+    ] },
   "parish": {
     name: "Parish Chief",
     person: "Lokwang Peter",
     org: "Nakiloro Parish · Tapac · Moroto",
-    kpis: [
-      { title: "Captures today", value: "14", trend: "up", trendValue: "+3 vs. yesterday", foot: "8 in queue, 6 promoted", spark: [4,7,9,11,12,13,14] },
-      { title: "Drafts about to expire", value: "2", trend: "flat", trendValue: "—", foot: "Both due in < 3 days", spark: [3,3,2,2,3,2,2] },
-      { title: "GRM L1 cases (my parish)", value: "5", trend: "down", trendValue: "−1 this week", foot: "Avg L1 close 2.4 days", spark: [7,6,6,6,5,5,5] },
-      { title: "Sync queue (CAPI)", value: "0", trend: "flat", trendValue: "all synced", foot: "Last sync 09:12 EAT", spark: [4,2,1,3,1,0,0] },
-    ],
     queues: [
-      { title: "Today's captures", icon: "users", count: 14, items: [
-        { id: "01HXY7K3B2N9PVQE4M6FZRWS18", who: "Lokol Naume · HH size 6 · 14:35 EAT", note: "Submitted · 3 warnings, 0 blocking", chip: "Provisional", age: "8m" },
-        { id: "01HXY7H1B0N7PVQE4M6FZRWS09", who: "Lochoro Mary · HH size 4 · 13:22 EAT", note: "Submitted · 0 warnings", chip: "Provisional", age: "1h" },
-        { id: "01HXY6X9B0M6PVQE4M6FZRWS00", who: "Lopuwa John · HH size 7 · 11:58 EAT", note: "Promoted · Registry confirmed", chip: "Registered", age: "2h" },
-      ]},
-      { title: "Drafts about to expire", icon: "clock", count: 2, items: [
-        { id: "DRAFT-2026-05-11-00012", who: "Nakong Anna · partial (4/7 sections)", note: "Expires in 2 days (Draft TTL = 14d)", chip: "Draft", age: "12d" },
-      ]},
-    ],
-  },
+      { title: "Today's captures", icon: "users" },
+      { title: "Drafts about to expire", icon: "clock" }
+    ] },
   "cdo": {
     name: "Community Development Officer",
     person: "Adong Florence",
     org: "Tapac Sub-county · Moroto",
-    kpis: [
-      { title: "UPD review queue", value: "23", trend: "up", trendValue: "+5 today", foot: "9 PMT-relevant", spark: [12,14,15,18,20,22,23] },
-      { title: "GRM L2 cases", value: "8", trend: "flat", trendValue: "—", foot: "2 awaiting citizen response", spark: [8,9,8,8,9,8,8] },
-      { title: "Programme referrals", value: "16", trend: "up", trendValue: "+4 wk", foot: "OPM-PDM batch incoming", spark: [10,12,11,13,14,15,16] },
-      { title: "Avg approval time (UPD)", value: "1.8", suffix: "d", trend: "down", trendValue: "−0.4d wk", foot: "SLA = 3 working days", spark: [2.6,2.4,2.2,2.0,1.9,1.8,1.8] },
-    ],
     queues: [
-      { title: "Pending UPD reviews", icon: "edit", count: 23, items: [
-        { id: "UPD-2026-05-14-00237", who: "01HXY7K3… · pmt_relevant", note: "Roster: add member · evidence: photo, witness", chip: "Pending Approval", age: "3h" },
-        { id: "UPD-2026-05-14-00231", who: "01HXZ9MR… · cosmetic", note: "Phone number update · evidence: USSD echo", chip: "Pending Approval", age: "6h" },
-        { id: "UPD-2026-05-13-00188", who: "01HXZGN3… · pmt_relevant", note: "Housing: roof material change · evidence: photo", chip: "Pending Approval", age: "yesterday" },
-      ]},
-      { title: "GRM L2 cases", icon: "message", count: 8, items: [
-        { id: "GRV-2026-05-14-00091", who: "Akello Grace · Pageya, Gulu", note: "Missed enrolment in OPM-PDM 2026 Q2", chip: "In progress", age: "2d" },
-        { id: "GRV-2026-05-13-00088", who: "Nakato Sarah · Kuluba, Yumbe", note: "NIRA mismatch on head of household", chip: "Awaiting citizen response", age: "3d" },
-      ]},
-    ],
-  },
+      { title: "Pending UPD reviews", icon: "edit" },
+      { title: "GRM L2 cases", icon: "message" }
+    ] },
   "partner-analyst": {
     name: "Partner Analyst",
     person: "Nakimuli Sarah",
     org: "PDM Programme Office · MGLSD",
-    kpis: [
-      { title: "Delivered (30d)", value: "12", trend: "up", trendValue: "+3 wk", foot: "Avg 2,140 rows/req", spark: [6,7,8,9,10,11,12] },
-      { title: "Pending approval", value: "1", trend: "flat", trendValue: "—", foot: "Submitted 14 May 14:15", spark: [0,1,1,2,1,1,1] },
-      { title: "Bundles expiring 7d", value: "2", trend: "flat", trendValue: "—", foot: "30d TTL since delivery", spark: [3,3,2,2,2,2,2] },
-      { title: "Active DSA", value: "DSA-PDM-2026-01", suffix: "", foot: "Valid 01 Jan 2026 → 31 Dec 2026" },
-    ],
     queues: [
-      { title: "Pending approval", icon: "clock", count: 1, items: [
-        { id: "01DRS2026051400003", who: "DSA-PDM-2026-01 · sub-region BUGANDA-SOUTH", note: "household.id + sub_region_code · programme PDM", chip: "Pending Approval", age: "6h" },
-      ]},
-      { title: "Delivered (downloadable)", icon: "download", count: 2, items: [
-        { id: "01DRS2026051400001", who: "DSA-PDM-2026-01 · 1,284 rows", note: "Manifest a3f8e91c… · expires 12 Jun 11:42", chip: "Delivered", age: "yesterday" },
-      ]},
-    ],
-  },
+      { title: "Pending approval", icon: "clock" },
+      { title: "Delivered (downloadable)", icon: "download" }
+    ] },
   "dpo": {
     name: "Data Protection Officer",
     person: "Mukasa Robert",
     org: "MGLSD · DPO Office",
-    kpis: [
-      { title: "Anomaly alerts (US-103)", value: "3", trend: "up", trendValue: "+2 today", foot: "1 critical: 30d > DSA budget +18%", spark: [1,1,2,2,1,2,3] },
-      { title: "Rows shipped 7d", value: "2.4", suffix: "M", trend: "up", trendValue: "+11% wk", foot: "Across 14 active requesters", spark: [1.8,1.9,2.1,2.0,2.2,2.3,2.4] },
-      { title: "Erasure requests", value: "6", trend: "flat", trendValue: "—", foot: "2 awaiting controller review", spark: [4,5,5,6,5,6,6] },
-      { title: "DPIA review tasks", value: "2", trend: "down", trendValue: "−1", foot: "Both due in next 7 days", spark: [4,3,3,3,3,2,2] },
-    ],
     queues: [
-      { title: "Active anomalies", icon: "alert", count: 3, items: [
-        { id: "ANOM-2026-05-14-008", who: "MoH-Vital-Stats · CSV via DRS", note: "30-day volume 124% of DSA budget (US-103 AC-DPO-VOL)", chip: "Blocking", age: "47m" },
-        { id: "ANOM-2026-05-14-005", who: "UBOS-NUSAF-2026-BULK · query reused 6x", note: "Identical query hash across 6 requesters", chip: "Warning", age: "3h" },
-      ]},
-    ],
-  },
+      { title: "Active anomalies", icon: "alert" }
+    ] },
   // Data Explorer Analyst — the EXPLORER realm role (ADR-0023,
   // US-DATA-EXP-001). Discovery + aggregate-preview surface; no
   // record-level access except via the DRS handoff. KPIs mirror the
@@ -319,24 +253,10 @@ const ROLE_CONTENT = {
     name: "Data Explorer Analyst",
     person: "Atim Brenda",
     org: "MGLSD · NSR Unit · Analytics",
-    kpis: [
-      { title: "Aggregate queries today", value: "37", trend: "up", trendValue: "+9 vs. yesterday", foot: "Internal cap 100/user/day", spark: [12,18,21,25,29,33,37] },
-      { title: "Cells suppressed (k-floor)", value: "14", trend: "flat", trendValue: "—", foot: "k=10 personal · k=5 internal", spark: [9,11,10,12,13,12,14] },
-      { title: "Record-level handoffs to DRS", value: "2", trend: "up", trendValue: "+1 wk", foot: "Below-floor scopes → DSA draft", spark: [0,1,1,1,2,1,2] },
-      { title: "Active datasets", value: "8", trend: "flat", trendValue: "—", foot: "matview-backed · dual-approved vars", spark: [6,6,7,7,8,8,8] },
-    ],
     queues: [
-      { title: "Recent aggregate runs", icon: "database", count: 3, _target: "data-explorer", items: [
-        { id: "Household × PMT by sub-county", who: "dwelling_type × sub_county", note: "412 cells · 6 suppressed · k=5", chip: "Executed", age: "18m" },
-        { id: "Member education by sub-county", who: "highest_grade × sub_county", note: "Karamoja · 0 suppressed", chip: "Executed", age: "1h" },
-        { id: "Household shocks by sub-region", who: "shock_type × sub_region", note: "blocked below floor → handoff drafted", chip: "Handoff", age: "2h" },
-      ]},
-      { title: "Drafts handed to DRS", icon: "download", count: 2, _target: "drs", items: [
-        { id: "01DRS2026052900014", who: "Karamoja elderly-headed HH study", note: "parish scope · awaits DSA scope check", chip: "Draft", age: "2h" },
-      ]},
-    ],
-  },
-};
+      { title: "Recent aggregate runs", icon: "database", _target: "data-explorer" },
+      { title: "Drafts handed to DRS", icon: "download", _target: "drs" }
+    ] } };
 
 const ROLES = Object.keys(ROLE_CONTENT);
 
