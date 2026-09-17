@@ -540,7 +540,35 @@ leaves the job permanently skipped with no error to explain why.
 
 ## Phase 8 — backups and rollback
 
-_Not started._
+**Rollback: done.** `scripts/deploy_prod.sh` keeps the last three built
+images and supports `deploy.sh <sha> --rollback`, guarded by the same
+health check; a failed deploy restores the previous image automatically.
+Documented in `docs/PRODUCTION.md` §4.
+
+**Backups: DEFERRED TO THE BACKLOG** at the project owner's instruction,
+2026-09-17. Not started, and production therefore has no automated
+backup and no tested restore.
+
+This is a known and accepted gap, recorded here so it is not mistaken for
+an oversight. It is the largest outstanding operational risk on the
+system: 113,990 rows including 992 encrypted NINs, recoverable only from
+a fresh dev dump — which would lose anything entered on production.
+
+What the backlog item needs:
+
+- nightly database dump + file-volume archive;
+- 14-day retention;
+- copies stored off the server — **pull-based** preferred (an external
+  host fetching), so that compromise of production cannot reach the
+  archive;
+- a restore tested into a throwaway container, not just written down;
+- a stated RPO/RTO agreed with the NSR Unit;
+- DPPA 2019 handling for the archives: dumps carry live personal data,
+  so they need encryption at rest, access limited to named custodians,
+  and `shred` rather than `rm` on disposal.
+
+The manual dump and restore commands are in `docs/PRODUCTION.md` §6 as
+the interim procedure — run one before anything risky.
 
 ---
 
