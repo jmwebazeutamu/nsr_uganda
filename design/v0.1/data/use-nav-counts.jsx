@@ -21,8 +21,10 @@
 // the screen does its filter client-side, so we mirror that here
 // (no status filter on the endpoint yet — see apps/grievance/api.py).
 //
-// If a request fails the counter falls back to the screen's mock
-// fixture value so the design harness preview still renders.
+// If a request fails the badge is HIDDEN. It is never replaced with a
+// fixture value: a fabricated "342" next to DIH review is worse than no
+// badge at all, because an operator cannot tell it is fabricated and
+// will plan work around it.
 
 const {
   useState: _navUseState,
@@ -30,16 +32,17 @@ const {
   useCallback: _navUseCallback,
 } = React;
 
-// Mock fallbacks — match the previously hardcoded values in app.jsx
-// so an offline preview looks identical to before this change.
-const NAV_COUNT_MOCK = {
-  capture: 14,
-  dih: 342,
-  upd: 23,
-  dedup: 47,
-  grm: 7,
-  drs: 9,
-  "partner-drs": 5,
+// Every badge starts unknown (null = render nothing) and only becomes a
+// number when an endpoint returns one. `capture` has no endpoint yet, so
+// it stays null and its badge simply does not appear.
+const NAV_COUNT_INITIAL = {
+  capture: null,
+  dih: null,
+  upd: null,
+  dedup: null,
+  grm: null,
+  drs: null,
+  "partner-drs": null,
 };
 
 // Read DRF's paginated count, fall back to results.length, then 0.
@@ -121,7 +124,7 @@ const _FETCHERS = [
 const REFRESH_MS = 60_000;
 
 const useNavCounts = () => {
-  const [counts, setCounts] = _navUseState(NAV_COUNT_MOCK);
+  const [counts, setCounts] = _navUseState(NAV_COUNT_INITIAL);
 
   const refresh = _navUseCallback(() => {
     _FETCHERS.forEach(({ id, fetch }) => {
@@ -132,10 +135,10 @@ const useNavCounts = () => {
           }
         })
         .catch(() => {
-          // Swallow — leave the previous (or mock) value in place.
-          // Console noise is suppressed deliberately; the screen
-          // itself will surface a more visible offline indicator
-          // when the operator navigates into it.
+          // Drop the badge rather than show a stale or invented number.
+          // The screen the operator navigates into surfaces the outage
+          // properly; a wrong count in the sidebar just misleads quietly.
+          setCounts((prev) => ({ ...prev, [id]: null }));
         });
     });
   }, []);
@@ -150,4 +153,4 @@ const useNavCounts = () => {
 };
 
 window.useNavCounts = useNavCounts;
-window.NAV_COUNT_MOCK = NAV_COUNT_MOCK;
+window.NAV_COUNT_INITIAL = NAV_COUNT_INITIAL;

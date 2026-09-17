@@ -33,17 +33,17 @@ const NAV = [
   { id: "data-explorer", label: "Data Explorer", icon: "database",
     featureFlag: "data_explorer_enabled", requireRole: "EXPLORER" },
   { section: "WORKFLOWS" },
-  { id: "dih",     label: "DIH review",    icon: "inbox",     count: 342 },
-  { id: "upd",     label: "Updates",       icon: "edit",      count: 23 },
-  { id: "dedup",   label: "Duplicates",    icon: "duplicate", count: 47 },
-  { id: "grm",     label: "Grievances",    icon: "message",   count: 7 },
+  { id: "dih",     label: "DIH review",    icon: "inbox" },
+  { id: "upd",     label: "Updates",       icon: "edit" },
+  { id: "dedup",   label: "Duplicates",    icon: "duplicate" },
+  { id: "grm",     label: "Grievances",    icon: "message" },
   { section: "DATA" },
   { id: "registry",         label: "Social Registry", icon: "users", screen: true },
   { id: "registry-members", label: "Members",         icon: "user",  screen: true, indent: 1 },
   { id: "programmes",       label: "Programmes",      icon: "book",  screen: true },
   { id: "beneficiaries",    label: "Beneficiaries",   icon: "book",  screen: true },
-  { id: "drs",     label: "Data Requests", icon: "download",  count: 9 },
-  { id: "partner-drs", label: "My requests", icon: "download", count: 5 },
+  { id: "drs",     label: "Data Requests", icon: "download" },
+  { id: "partner-drs", label: "My requests", icon: "download" },
   // Partner self-service surfaces — visible only when role is
   // partner-analyst (see role-filter below). Read-only views of the
   // partner's own DSA + programmes register.
@@ -287,8 +287,10 @@ function App() {
           // Live counter takes priority over the hardcoded fallback.
           // We only render the badge if the original NAV entry had one
           // (i.e. it's a workflow link, not a plain navigation link).
-          const liveCount = navCounts ? navCounts[n.id] : undefined;
-          const displayCount = liveCount !== undefined ? liveCount : n.count;
+          // Live only. A badge appears when an endpoint has returned a
+          // number for it and disappears otherwise — there is no
+          // hardcoded fallback to fall back TO any more.
+          const displayCount = navCounts ? navCounts[n.id] : null;
           if (n.externalHref) {
             return (
               <a key={n.id}
@@ -310,7 +312,7 @@ function App() {
                     onClick={() => navigate(n.id)}>
               <Icon name={n.icon} size={18}/>
               <span className="nav-label">{n.label}</span>
-              {n.count !== undefined && <span className="nav-count">{displayCount}</span>}
+              {typeof displayCount === "number" && <span className="nav-count">{displayCount}</span>}
             </button>
           );
         })}

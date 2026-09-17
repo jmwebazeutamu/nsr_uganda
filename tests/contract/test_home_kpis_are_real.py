@@ -91,3 +91,41 @@ def test_unwired_queues_are_dropped_not_faked():
         "queues without a live endpoint are being rendered again; they fall "
         "back to invented households with real-looking names and ULIDs."
     )
+
+
+# --- sidebar badges -----------------------------------------------------
+
+APP = REPO / "design" / "app.jsx"
+NAV_HOOK = REPO / "design" / "v0.1" / "data" / "use-nav-counts.jsx"
+
+
+def test_nav_badges_have_no_hardcoded_counts():
+    """The sidebar badges showed 342 / 23 / 47 / 7 on every screen.
+
+    Worse than the home cards, because they are visible everywhere and
+    look like a live work queue.
+    """
+    src = APP.read_text()
+    nav = src[src.index("const NAV = ["):src.index("]", src.index("my-programmes")) + 1]
+    assert "count:" not in nav, (
+        "the NAV list has hardcoded badge counts again; they render whenever "
+        "the live fetch has not returned."
+    )
+
+
+def test_nav_count_hook_has_no_mock_fallback():
+    src = NAV_HOOK.read_text()
+    assert "NAV_COUNT_MOCK" not in src, (
+        "the nav-count hook falls back to fixture values again. A fabricated "
+        "'342' next to DIH review is worse than no badge: an operator cannot "
+        "tell it is invented and will plan work around it."
+    )
+    assert "NAV_COUNT_INITIAL" in src
+
+
+def test_nav_badge_renders_only_for_a_real_number():
+    src = APP.read_text()
+    assert 'typeof displayCount === "number"' in src, (
+        "the badge no longer checks that it has a real number, so a null or "
+        "undefined count could render."
+    )
