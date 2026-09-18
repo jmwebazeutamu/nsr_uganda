@@ -21,64 +21,8 @@ const {
 /* ============================================================
    Sample data — mirrors PMTModelVersion shape; replace with API
    ============================================================ */
-const PCFG_VERSIONS = [
-  {
-    id: "01HXM12Z4F7N6P0V8K9TB2QXJK",
-    version: 2,
-    status: "draft",
-    description: "v2 calibration — UDHS 2024 spike-in. Adds livestock & cooking-fuel variables.",
-    author: "Dr. Nakanwagi · MGLSD Statistics",
-    approvedBy: null, approvedAt: null,
-    effectiveFrom: null,
-    variablesCount: 27,
-    intercept: 2.9842,
-    validationRSquared: 0.668,
-    bandStrategy: "percentile",
-    bandCutoffs: { extreme_poverty: 10, poverty: 20, vulnerable: 30, not_poor: 100 },
-    calibrationDataset: "UNHS 2023/24 + UDHS 2024 spike-in",
-    calibrationYearEnd: 2024,
-    createdAt: "12 May 2026",
-    updatedAt: "21 May 2026 · 11:08 EAT",
-  },
-  {
-    id: "01HX91KPNRMQ0F2B7K6FZRWS01",
-    version: 1,
-    status: "active",
-    description: "Uganda PMT v1 — UNHS 2019/20 + UDHS 2022 calibration. 25-variable model; ADR-0025 DSL.",
-    author: "MGLSD Statistics Unit · Dr. Nakanwagi",
-    approvedBy: "Director General · UBOS",
-    approvedAt: "02 Jan 2026",
-    effectiveFrom: "04 Jan 2026",
-    variablesCount: 25,
-    intercept: 3.0185,
-    validationRSquared: 0.642,
-    bandStrategy: "percentile",
-    bandCutoffs: { extreme_poverty: 10, poverty: 20, vulnerable: 30, not_poor: 100 },
-    calibrationDataset: "UNHS 2023/24",
-    calibrationYearEnd: 2024,
-    createdAt: "02 Dec 2025",
-    updatedAt: "04 Jan 2026 · 09:14 EAT",
-  },
-  {
-    id: "01H8M9QR4N1P0V8B7K6FZRWS00",
-    version: 0,
-    status: "retired",
-    description: "Legacy PMT (UNHS 2016/17). Retired on v1 activation.",
-    author: "MGLSD legacy",
-    approvedBy: "Director General · UBOS",
-    approvedAt: "10 Aug 2023",
-    effectiveFrom: "01 Sep 2023",
-    variablesCount: 22,
-    intercept: 2.9100,
-    validationRSquared: 0.582,
-    bandStrategy: "threshold",
-    bandCutoffs: { extreme_poverty: 0, poverty: 30, vulnerable: 50, not_poor: 100 },
-    calibrationDataset: "UNHS 2016/17",
-    calibrationYearEnd: 2017,
-    createdAt: "20 Jul 2023",
-    updatedAt: "04 Jan 2026 · 09:14 EAT",
-  },
-];
+// PCFG_VERSIONS removed — this screen reads /api/v1/admin/pmt/versions/.
+
 
 // Full 25-variable list of the active v1 model (and stub for v2 draft)
 const PCFG_VARIABLES_V1 = [
@@ -216,11 +160,17 @@ const PCfgSection = ({ title, sub, action, children }) => (
    ============================================================ */
 const PmtConfigurationScreen = ({ onBack }) => {
   // Which version is selected in the right pane.
-  const [selectedId, setSelectedId] = useStatePCfg(PCFG_VERSIONS[0].id);
+  const [selectedId, setSelectedId] = useStatePCfg(null);
   const [tab, setTab] = useStatePCfg("variables");
   const [varSearch, setVarSearch] = useStatePCfg("");
   const [varGroupFilter, setVarGroupFilter] = useStatePCfg("All");
-  const [versions, setVersions] = useStatePCfg(PCFG_VERSIONS);
+  // Starts empty. It used to start as PCFG_VERSIONS, a fabricated v2
+  // calibration that does not exist in this registry — and a PMT model
+  // version is an approval-gated artefact, so an invented one invites
+  // sign-off on something that was never submitted. fetchVersions below
+  // already loads the real ones; it just had a fixture underneath it.
+  const [versions, setVersions] = useStatePCfg([]);
+
   const [loading, setLoading] = useStatePCfg(true);
   const [error, setError] = useStatePCfg("");
   const [saving, setSaving] = useStatePCfg("");
@@ -263,9 +213,36 @@ const PmtConfigurationScreen = ({ onBack }) => {
   }, []);
 
   const selected = useMemoPCfg(
-    () => versions.find(v => v.id === selectedId) || versions[0] || PCFG_VERSIONS[0],
+    () => versions.find(v => v.id === selectedId) || versions[0] || null,
     [selectedId, versions]
   );
+  // With no versions there is nothing to configure. Previously `selected`
+  // could never be null because it fell back to a fabricated version, so
+  // the screen always had something to render — including when the API
+  // was unreachable.
+  if (!selected) {
+    return (
+      <div className="page">
+        <div className="card mt-3" style={{padding:48, textAlign:"center", color:"var(--neutral-500)"}}>
+          <Icon name={error ? "alert" : "clock"} size={32} color="var(--neutral-300)"/>
+          <div className="t-bodysm mt-2">
+            {error
+              ? error
+              : loading
+                ? "Loading PMT model versions\u2026"
+                : "No PMT model versions exist yet."}
+          </div>
+          {error && (
+            <div className="t-cap mt-1">
+              Nothing is shown rather than a sample model — a PMT version is
+              approval-gated and must never be invented.
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   const variables = (selected.variables && selected.variables.length)
     ? selected.variables
     : selected.version === 1 ? PCFG_VARIABLES_V1
@@ -1299,4 +1276,4 @@ const PmtConfigurationScreen = ({ onBack }) => {
   );
 };
 
-Object.assign(window, { PmtConfigurationScreen, PCFG_VERSIONS });
+Object.assign(window, { PmtConfigurationScreen });

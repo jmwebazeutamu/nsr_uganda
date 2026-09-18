@@ -53,85 +53,44 @@ const PERMISSION_SCREENS = [
   "console.registry", "console.upd", "console.programmes", "console.audit", "console.partners",
   "console.drs", "admin.pmt", "admin.refdata", "admin.security", "admin.audit", "admin.*", "console.*",
 ];
-const OPERATOR_SCOPE_OPTIONS = {
-  region: [
-    { code: "R-NORTHERN", name: "Northern Region" },
-    { code: "R-EASTERN", name: "Eastern Region" },
-    { code: "R-CENTRAL", name: "Central Region" },
-    { code: "R-WESTERN", name: "Western Region" },
-  ],
-  sub_region: [
-    { code: "SR-KARAMOJA", name: "Karamoja" },
-    { code: "SR-ACHOLI", name: "Acholi" },
-    { code: "SR-LANGO", name: "Lango" },
-    { code: "SR-WEST-NILE", name: "West Nile" },
-    { code: "SR-BUGANDA-SOUTH", name: "Buganda South" },
-    { code: "SR-BUGANDA-NORTH", name: "Buganda North" },
-    { code: "SR-TESO", name: "Teso" },
-    { code: "SR-BUKEDI", name: "Bukedi" },
-    { code: "SR-ANKOLE", name: "Ankole" },
-    { code: "SR-KIGEZI", name: "Kigezi" },
-    { code: "SR-BUNYORO", name: "Bunyoro" },
-    { code: "SR-RWENZORI", name: "Rwenzori" },
-  ],
-  district: [
-    { code: "DST-MOROTO", name: "Moroto" },
-    { code: "DST-NAPAK", name: "Napak" },
-    { code: "DST-NAKAPIRIPIRIT", name: "Nakapiripirit" },
-    { code: "DST-KOTIDO", name: "Kotido" },
-    { code: "DST-KAABONG", name: "Kaabong" },
-    { code: "DST-ABIM", name: "Abim" },
-    { code: "DST-AMUDAT", name: "Amudat" },
-    { code: "DST-KARENGA", name: "Karenga" },
-    { code: "DST-NABILATUK", name: "Nabilatuk" },
-    { code: "DST-GULU", name: "Gulu" },
-    { code: "DST-ARUA", name: "Arua" },
-    { code: "DST-LYANTONDE", name: "Lyantonde" },
-    { code: "DST-LIRA", name: "Lira" },
-    { code: "DST-KAMPALA", name: "Kampala" },
-    { code: "DST-MUKONO", name: "Mukono" },
-    { code: "DST-MBARARA", name: "Mbarara" },
-    { code: "DST-KABALE", name: "Kabale" },
-    { code: "DST-HOIMA", name: "Hoima" },
-    { code: "DST-KASESE", name: "Kasese" },
-    { code: "DST-SOROTI", name: "Soroti" },
-    { code: "DST-TORORO", name: "Tororo" },
-  ],
-  sub_county: [
-    { code: "SC-TAPAC", name: "Tapac" },
-    { code: "SC-RUPA", name: "Rupa" },
-    { code: "SC-LOKOPO", name: "Lokopo" },
-    { code: "SC-KATIKEKILE", name: "Katikekile" },
-    { code: "SC-LYANTONDE-TC", name: "Lyantonde Town Council" },
-  ],
-  parish: [
-    { code: "PAR-NAKILORO", name: "Nakiloro" },
-    { code: "PAR-KIBALINGA", name: "Kibalinga" },
-    { code: "PAR-PAGEYA", name: "Pageya" },
-    { code: "PAR-LOKOPO", name: "Lokopo" },
-    { code: "PAR-ADEKOKWOK", name: "Adekokwok" },
-  ],
-  village: [
-    { code: "VLG-NAKILORO-A", name: "Nakiloro A" },
-    { code: "VLG-LOPUWAPUWA-A", name: "Lopuwapuwa A" },
-    { code: "VLG-KAKINGOL", name: "Kakingol" },
-    { code: "VLG-OKELLO", name: "Okello Village" },
-    { code: "VLG-AYWEE", name: "Aywee" },
-  ],
-  partner: [
-    { code: "OPM", name: "Office of the Prime Minister" },
-    { code: "WFP", name: "World Food Programme" },
-    { code: "NUSAF", name: "NUSAF" },
-    { code: "PDM", name: "Parish Development Model" },
-  ],
+// Scope options are the registry's own geography, fetched live. The
+// fixture they replace listed four regions and invented sub-regions —
+// granting an operator a scope code that does not exist in the registry
+// produces an account that can see nothing, with no error to explain why.
+const _SCOPE_LEVELS = ["region", "sub_region", "district", "sub_county", "parish"];
+
+// Module-level cache so the helpers below — which are plain functions
+// called from several places — can read the fetched options without each
+// becoming a hook. The hook fills it and re-renders the screen.
+const _scopeCache = {};
+
+const useScopeOptions = () => {
+  const [opts, setOpts] = React.useState(_scopeCache);
+  React.useEffect(() => {
+    let cancelled = false;
+    Promise.all(_SCOPE_LEVELS.map(level =>
+      fetch(`/api/v1/reference-data/geographic-units/?level=${level}&page_size=500`, {
+        credentials: "same-origin", headers: { Accept: "application/json" },
+      })
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))))
+        .then(d => [level, (d.results || d || []).map(u => ({ code: u.code, name: u.name }))])
+        .catch(() => [level, []])
+    )).then(pairs => {
+      Object.assign(_scopeCache, Object.fromEntries(pairs));
+      if (!cancelled) setOpts({ ..._scopeCache });
+    });
+    return () => { cancelled = true; };
+  }, []);
+  return opts;
 };
+
 
 const secInitials = (name) => String(name || "?").split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
 const secClone = (value) => JSON.parse(JSON.stringify(value));
 const secSlug = (value) => String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 const secRoleLabel = (roles, id) => roles.find(r => r.id === id)?.label || id;
 const secScopeLabel = (scope) => scope.level === "national" ? "national" : `${scope.level}:${scope.code || "*"}`;
-const secScopeOptions = (level) => OPERATOR_SCOPE_OPTIONS[level] || [];
+const secScopeOptions = (level) => _scopeCache[level] || [];
 const secScopeName = (scope) => secScopeOptions(scope.level).find(opt => opt.code === scope.code)?.name || "";
 const secDefaultScopeCode = (level) => level === "national" ? "" : (secScopeOptions(level)[0]?.code || "");
 const secFilteredScopeOptions = (scope) => {
@@ -229,6 +188,9 @@ const SEC_SCOPE_SEARCH_LIST_STYLE = {
 };
 
 const AdminSecurityRolesScreen = () => {
+  // Fills _scopeCache from the registry's geography and re-renders
+  // when it lands, so the scope pickers offer codes that exist.
+  useScopeOptions();
   const [tab, setTab] = useStateSEC("users");
   const [q, setQ] = useStateSEC("");
   const [roleFilter, setRoleFilter] = useStateSEC("");
