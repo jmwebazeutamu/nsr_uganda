@@ -97,8 +97,30 @@ than show a queue of invented withdrawal tickets.
 
 Worth recording so the next audit does not re-raise them:
 
-- `screens-pmt-dashboard.jsx` — `PMT_GEO` / `PMT_RECENT_EVENTS` are destructured
-  from the live `dash` response (`const PMT_GEO = dash.geo`), not fixtures.
+- ~~`screens-pmt-dashboard.jsx` — `PMT_GEO` / `PMT_RECENT_EVENTS` are destructured
+  from the live `dash` response (`const PMT_GEO = dash.geo`), not fixtures.~~
+  **Wrong — corrected 18 Sep 2026.** The destructuring is real, but it reads
+  `usePmtDashboard()`, whose *initial state* was the nine module fixtures
+  (`PMT_ACTIVE`, `PMT_BANDS`, `PMT_COVERAGE`, `PMT_VARIABLES_TOP`, `PMT_GEO`,
+  `PMT_DRIFT`, `PMT_TRIGGERS`, `PMT_JOB`, `PMT_RECENT_EVENTS`). Before the
+  fetch landed, and after any failure, the screen showed a complete invented
+  picture of the engine that decides eligibility. Two of the fixtures also
+  survived as `||` fallbacks inside the success path, so even a live response
+  could render a fabricated coverage total or recompute job.
+
+  This is the audit's **second** method failure, and a different one from the
+  inline-JSX blind spot. Checking whether a name resolves to a fixture at its
+  point of use is not enough: a hook can shadow a fixture name with live state
+  and still be seeded from the fixture. **The question to ask is what the
+  screen renders in the first frame and after a failed fetch, not where a name
+  is bound.**
+
+  The same fixture leaked across files: `screens-pmt-configuration.jsx` read
+  `PMT_ACTIVE.thresholdsLatest` off `window` for its "Daily empirical
+  threshold" column, so every version displayed the same four invented score
+  cutoffs — the scores at which a household stops being eligible. Fixed by
+  adding `thresholds_latest` to the version-detail serializer and reading it
+  from the selected version.
 - `screens-drs.jsx` — `_PREVIEW_ULIDS` are placeholder ids in a field-preview
   widget, not records.
 - `screens-drs-fieldselector.jsx` — `FS_FIELDS` is a field catalogue
@@ -129,16 +151,55 @@ A contract test per screen, in the shape of
 
 | Item | State |
 |---|---|
-| 1. Security audit screen | **done** — reads the real chain; reports its 816 breaks instead of claiming "✓ verified" |
+| 1. Security audit screen | **done** — reads the real chain and reports what the verifier returns, instead of claiming "✓ verified" unconditionally. (The 816 breaks it first reported were a verifier defect, not chain damage — see `apps/security/integrity.py`; the chain verifies clean.) |
 | 2. Five fallback screens | **done** — DIH, UPD, GRM, household, consent-citizen start empty |
 | 3. Geography, roles, PMT config | **done** — all read live endpoints |
 | 4. Consent DPO queue | **done** — reports the module as disabled rather than inventing tickets |
 | 5. Retired `_LEGACY_*` arrays | **done** — 8 fixtures, 377 lines, 151 identities deleted |
+| 6. DIH / UPD / change-request detail views | **done** — no specimen record in any of the three |
+| 7. Admin console (21 scripts) | **done** — DDUP model versions, the DDUP pair detail and the PMT dashboard; 18 of the 21 were already live |
+| 8. PMT configuration band cutoffs | **done** — empirical thresholds now come from the selected version, not the dashboard fixture |
 
 Referenced fabricated fixtures: **20 → 10**. Dead fixtures: **8 → 0**. The
 ten that remain are the known-clean set (`ROLE_CONTENT` identity fallback,
 `NAV`, `PMT_GEO`, `FS_FIELDS`, `_PREVIEW_ULIDS`, `UPD`) plus
 change-request's `ROSTER` and `HH`.
+
+## A third pattern: `prop || specimen` in a screen nothing passes a prop to
+
+Found while doing the admin console (item 7), and the most complete miss of
+the three.
+
+`screens-admin-details.jsx` holds five record views — geographic unit, UPD
+routing rule, user account, DDUP match pair, choice-list option. Each opened
+with `const u = unit || { …specimen… }`, which reads as an ordinary default:
+the caller passes a record, the specimen is a design-time convenience.
+
+No caller passes a record. The only route into all five was an admin sidebar
+group labelled **"Examples (record views)"**, which rendered them with
+`onBack` and nothing else. So the fallback was not a fallback — it was the
+entire screen, in production, for every visit. The `onSave` and `onMerge`
+handlers were equally absent, so the Save and Merge buttons did nothing,
+which is the only reason this was harmless.
+
+What they showed:
+
+| Screen | Specimen |
+|---|---|
+| User | `adong.f@mglsd.go.ug`, MFA state, two sub-county scopes, three IP-stamped audit entries |
+| Geographic unit | Moroto district, 42,101 households, five sub-counties, UBOS/OCHA p-codes |
+| DDUP match pair | two members at 0.94 similarity, with a Merge button |
+| Routing rule / choice option | invented workflow and reference-data configuration |
+
+Fixed by making all five require their record and moving the guard into a
+wrapper component — a guard inside the body would put the record view's
+`useState` calls behind a condition, which React rejects when the prop
+arrives later. The "Examples" nav group is gone; the routes remain, for the
+list rows to use once those lists are wired to open a record.
+
+**What to check for next time:** not just "does this name resolve to a
+fixture" but "what does this screen render when its data is missing, and how
+often is it missing". A default that is always taken is not a default.
 
 ## What this audit missed, and the next piece of work
 

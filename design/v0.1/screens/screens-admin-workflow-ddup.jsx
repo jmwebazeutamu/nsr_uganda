@@ -28,19 +28,7 @@ const { useState: useStateDDUP, useMemo: useMemoDDUP } = React;
 // in the live API responses overrides these.
 // ────────────────────────────────────────────────────────────────
 
-const _DDUP_VERSIONS_MOCK = [
-  {
-    id: "01HX91KPNRMQ0F2B7K6FZRWS50",
-    version: 2, status: "active",
-    description: "v2 — relaxed name-similarity threshold to 0.84 after WG-SS roll-out; auto-reverse rate dropped from 2.1% to 0.8%.",
-    author: "Bahati E. · DDUP team",
-    approvedBy: "Director General · UBOS", approvedAt: "08 Mar 2026", effectiveFrom: "12 Mar 2026",
-    updatedAt: "12 Mar 2026",
-    config: { autoMergeThreshold: 0.90, tier1: true, tier2: false, tier3: true, tier3Fields: ["full_name","dob","sex","village_code"] },
-    autoMergeCount: 18421, manualMergeCount: 4218, autoReverseRate: 0.008,
-  },
-];
-
+// _DDUP_VERSIONS_MOCK removed — this screen reads the admin API.
 const _DDUP_QUEUE_STATS_MOCK = {
   pending: 0, mergedThisWeek: 0, rejectedThisWeek: 0, onHold: 0, crossHousehold: 0,
   autoMergedToday: 0, manualMergedToday: 0,
@@ -155,7 +143,12 @@ const AdminDdupScreen = () => {
     const live = Array.isArray(versionsResp?.results)
       ? versionsResp.results.map(_projectVersion).filter(Boolean)
       : null;
-    return (live && live.length > 0) ? live : _DDUP_VERSIONS_MOCK;
+    // No fixture fallback. _DDUP_VERSIONS_MOCK described an ACTIVE v2
+    // model with a 0.90 auto-merge threshold, 18,421 automatic merges and
+    // an approval by "Director General · UBOS" — a model configuration
+    // and an approval that do not exist. An operator reading it would
+    // believe automatic merging was live at a threshold nobody set.
+    return live || [];
   }, [versionsResp]);
 
   const DDUP_QUEUE_STATS = useMemoDDUP(() => {
@@ -180,8 +173,8 @@ const AdminDdupScreen = () => {
   const selected = DDUP_VERSIONS.find(v => v.id === selectedId)
     || DDUP_VERSIONS.find(v => v.id === defaultId)
     || DDUP_VERSIONS[0];
-  // Guard: if the live list is empty AND the mock is empty we cannot
-  // render anything. Shouldn't happen in practice (mock always has 1).
+  // With no fixture underneath, an empty live list is now the normal
+  // "nothing configured yet" case rather than an impossible one.
   if (!selected) {
     return <div className="page"><div className="t-cap muted" style={{ padding: 24 }}>No DDUP model versions available.</div></div>;
   }

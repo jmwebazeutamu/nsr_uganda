@@ -78,16 +78,13 @@ const NAV_GROUPS = [
       { id: "chatbot-assistant", label: "Chatbot", icon: "message" },
     ],
   },
-  {
-    label: "Examples (record views)",
-    items: [
-      { id: "admin-detail-geo-unit",      label: "Geographic unit",   icon: "globe" },
-      { id: "admin-detail-routing-edit",  label: "UPD routing · edit", icon: "edit" },
-      { id: "admin-detail-user",          label: "User",              icon: "user" },
-      { id: "admin-detail-ddup-pair",     label: "DDUP match pair",   icon: "users" },
-      { id: "admin-detail-choice-option", label: "Choice option · edit", icon: "edit" },
-    ],
-  },
+  // An "Examples (record views)" group used to sit here, linking to the
+  // five record screens below. Nothing passes them a record, so each one
+  // rendered a specimen — an invented district, an MGLSD user account
+  // with an MFA state and an audit trail, a DDUP pair awaiting merge.
+  // The specimens are gone and the screens now require their record, so
+  // the group would be five dead ends. The routes stay: they are what a
+  // list row will navigate to once the lists are wired to open them.
 ];
 
 const AdminApp = () => {

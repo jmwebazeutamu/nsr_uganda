@@ -1,5 +1,5 @@
 /* global React, Icon, Chip, PageHeader,
-   PMT_ACTIVE, PMT_VARIABLES_TOP, BandChip */
+   BandChip */
 // NSR MIS — PMT Configuration (Admin · PMT)
 // =========================================================
 // Manage PMT model versions: registry of all versions, variable
@@ -108,6 +108,9 @@ const pcfgNormalizeVersion = (raw) => {
     validationRSquared: raw.validation_r_squared ?? raw.validationRSquared,
     bandStrategy: raw.band_strategy || raw.bandStrategy || "threshold",
     bandCutoffs: raw.band_cutoffs || raw.bandCutoffs || {},
+    // Empirical daily thresholds for THIS version. Empty until a
+    // recompute run has produced them.
+    thresholdsLatest: raw.thresholds_latest || raw.thresholdsLatest || {},
     calibrationDataset: raw.calibration_dataset || raw.calibrationDataset || "",
     calibrationYearEnd: raw.calibration_year_end || raw.calibrationYearEnd || "",
     createdAt: pcfgVersionLabelDate(raw.created_at || raw.createdAt),
@@ -915,8 +918,8 @@ const PmtConfigurationScreen = ({ onBack }) => {
                         <td><BandChip band={band}/></td>
                         <td className="t-num">{cutoff}{selected.bandStrategy === 'percentile' ? '%' : ''}</td>
                         <td className="t-mono t-bodysm">
-                          {selected.status === 'active' && PMT_ACTIVE.thresholdsLatest[band]
-                            ? `≤ ${PMT_ACTIVE.thresholdsLatest[band].toFixed(3)}`
+                          {selected.thresholdsLatest?.[band] != null
+                            ? `≤ ${selected.thresholdsLatest[band].toFixed(3)}`
                             : <span className="muted">—</span>}
                         </td>
                         <td className="t-cap">

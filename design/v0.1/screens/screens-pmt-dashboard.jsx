@@ -18,135 +18,6 @@
 
 const { useState: useStatePMT, useMemo: useMemoPMT, useEffect: useEffectPMT } = React;
 
-/* ============================================================
-   Sample data — mock fallback for design-preview / unauthenticated
-   sessions. The live data is fetched from /api/v1/admin/pmt/dashboard/
-   on mount; the projection helpers (pmt*Projected) below convert the
-   API payload into the same shape the JSX renderer consumes.
-   ============================================================ */
-const PMT_ACTIVE = {
-  version: 1,
-  status: "active",
-  description: "Uganda PMT v1 — UNHS 2019/20 + UDHS 2022 calibration. 25-variable model; ADR-0025 DSL.",
-  author: "MGLSD Statistics Unit · Dr. Nakanwagi",
-  approvedBy: "Director General · UBOS",
-  approvedAt: "02 Jan 2026",
-  effectiveFrom: "04 Jan 2026",
-  bandStrategy: "percentile",
-  intercept: 3.0185,
-  validationRSquared: 0.642,
-  calibrationDataset: "UNHS 2023/24",
-  calibrationYearEnd: 2024,
-  calibrationStale: false, // ADR-0023: stale if year-end > 3 years ago
-  yearsToStale: 1,
-  variablesCount: 25,
-  bandCutoffsPercentile: { extreme_poverty: 10, poverty: 20, vulnerable: 30, not_poor: 100 },
-  thresholdsLatest: { extreme_poverty: 2.812, poverty: 3.245, vulnerable: 3.582, not_poor: 7.219 },
-  thresholdsComputedAt: "22 May 2026 · 02:00 EAT",
-  thresholdsSampleSize: 12108331,
-};
-
-const PMT_VARIABLES_TOP = [
-  { name: "rooms_per_capita",          weight: +0.292, transform: "identity",      group: "Dwelling",      influence: 0.193 },
-  { name: "floor_tiles_terrazzo",      weight: +0.326, transform: "present_as_one", group: "Dwelling",     influence: 0.181 },
-  { name: "owns_car_or_van",           weight: +0.294, transform: "present_as_one", group: "Assets",        influence: 0.156 },
-  { name: "owns_television",           weight: +0.228, transform: "present_as_one", group: "Assets",        influence: 0.142 },
-  { name: "owns_motorcycle",           weight: +0.213, transform: "present_as_one", group: "Assets",        influence: 0.131 },
-  { name: "any_cellphone",             weight: +0.185, transform: "present_as_one", group: "Assets",        influence: 0.118 },
-  { name: "head_edu_tertiary",         weight: +0.312, transform: "present_as_one", group: "Education",     influence: 0.117 },
-  { name: "head_edu_secondary",        weight: +0.154, transform: "present_as_one", group: "Education",     influence: 0.104 },
-  { name: "open_defecation",           weight: -0.128, transform: "present_as_one", group: "Sanitation",    influence: 0.092 },
-  { name: "share_children_under_15",   weight: -0.117, transform: "identity",      group: "Composition",   influence: 0.089 },
-  { name: "owns_refrigerator",         weight: +0.157, transform: "present_as_one", group: "Assets",        influence: 0.083 },
-];
-
-// Band distribution — full registry, snapshot 22 May 2026 02:00 EAT
-const PMT_BANDS = [
-  { band: "extreme_poverty", label: "Extreme poverty",  pct: 10.1, count: 1222942, color: "var(--accent-danger)",    tone: "danger"      },
-  { band: "poverty",         label: "Poverty",          pct: 10.0, count: 1210890, color: "var(--accent-quality)",   tone: "quality"     },
-  { band: "vulnerable",      label: "Vulnerable",       pct: 10.1, count: 1222942, color: "var(--accent-update)",    tone: "update"      },
-  { band: "not_poor",        label: "Not poor",         pct: 69.8, count: 8451557, color: "var(--accent-data)",      tone: "data"        },
-];
-
-// Sub-region poverty-rate (% in poverty + extreme_poverty)
-const PMT_GEO = [
-  { subreg: "Karamoja",        rate: 53.2, hh: 412091, scored: 99.8, pomp: 219400 },
-  { subreg: "West Nile",       rate: 38.4, hh: 901232, scored: 99.1, pomp: 345970 },
-  { subreg: "Acholi",          rate: 35.8, hh: 698412, scored: 98.4, pomp: 250030 },
-  { subreg: "Lango",           rate: 29.1, hh: 712014, scored: 97.6, pomp: 207195 },
-  { subreg: "Teso",            rate: 28.4, hh: 658912, scored: 99.0, pomp: 187131 },
-  { subreg: "Bukedi",          rate: 26.9, hh: 622109, scored: 96.8, pomp: 167347 },
-  { subreg: "Busoga",          rate: 22.4, hh: 1109221, scored: 95.4, pomp: 248466 },
-  { subreg: "Bunyoro",         rate: 21.0, hh: 712031, scored: 96.9, pomp: 149526 },
-  { subreg: "Sebei",           rate: 19.8, hh: 192040, scored: 99.4, pomp: 38024 },
-  { subreg: "Tooro",           rate: 17.6, hh: 821092, scored: 95.1, pomp: 144512 },
-  { subreg: "Kigezi",          rate: 16.2, hh: 612091, scored: 97.0, pomp: 99159 },
-  { subreg: "Ankole",          rate: 13.4, hh: 988120, scored: 96.2, pomp: 132408 },
-  { subreg: "Buganda North",   rate: 11.6, hh: 1322015, scored: 94.3, pomp: 153354 },
-  { subreg: "Buganda South",   rate:  9.1, hh: 1448820, scored: 93.0, pomp: 131843 },
-];
-
-// Threshold drift — last 6 weeks of empirical band thresholds (percentile model)
-const PMT_DRIFT = [
-  { wk: "Wk 16", ep: 2.798, p: 3.232, v: 3.569 },
-  { wk: "Wk 17", ep: 2.802, p: 3.235, v: 3.572 },
-  { wk: "Wk 18", ep: 2.804, p: 3.238, v: 3.575 },
-  { wk: "Wk 19", ep: 2.808, p: 3.241, v: 3.578 },
-  { wk: "Wk 20", ep: 2.810, p: 3.243, v: 3.580 },
-  { wk: "Wk 21", ep: 2.812, p: 3.245, v: 3.582 },
-];
-
-// Trigger-source breakdown — where the scores came from (last 90d)
-const PMT_TRIGGERS = [
-  { code: "initial_registration", label: "Initial registration", count: 87102, share: 38.2, tone: "data" },
-  { code: "upd_pmt_relevant",     label: "UPD · pmt_relevant",   count: 64811, share: 28.4, tone: "update" },
-  { code: "model_activation",     label: "Model activation",     count: 38241, share: 16.8, tone: "programme" },
-  { code: "manual_recompute",     label: "Manual recompute",     count: 21908, share:  9.6, tone: "quality" },
-  { code: "ddup_merge",           label: "DDUP merge",           count: 11421, share:  5.0, tone: "identity" },
-  { code: "scheduled_batch",      label: "Scheduled batch",      count:  4521, share:  2.0, tone: "neutral" },
-];
-
-const PMT_JOB = {
-  taskName: "apps.pmt.tasks.recompute_band_thresholds_task",
-  schedule: "Daily · 02:00 EAT",
-  lastRun: "22 May 2026 · 02:00 EAT",
-  durationMs: 84320,
-  status: "success",
-  bandsWritten: 4,
-  modelVersionsProcessed: 1,
-  nextRun: "23 May 2026 · 02:00 EAT",
-  successRate7d: 100,
-  recentRuns: [
-    { date: "22 May 2026", status: "success", ms: 84320, sample: 12108331 },
-    { date: "21 May 2026", status: "success", ms: 81204, sample: 12107218 },
-    { date: "20 May 2026", status: "success", ms: 79892, sample: 12104991 },
-    { date: "19 May 2026", status: "success", ms: 81012, sample: 12103442 },
-    { date: "18 May 2026", status: "success", ms: 82431, sample: 12101108 },
-    { date: "17 May 2026", status: "warn",    ms: 142981, sample: 12098932, note: "Slow — index rebuild on PMTResult.computed_at" },
-    { date: "16 May 2026", status: "success", ms: 80201, sample: 12096081 },
-  ],
-};
-
-const PMT_COVERAGE = {
-  totalHouseholds: 12108331,
-  scored: 12108331,
-  scoredPct: 100.0,
-  scoredInLast30d: 11212091,
-  scoredInLast30dPct: 92.6,
-  scoredInLast90d: 11800042,
-  scoredInLast90dPct: 97.5,
-  scoredStale: 308289, // older than 12 months
-  scoredStalePct: 2.5,
-};
-
-const PMT_RECENT_EVENTS = [
-  { when: "22 May · 14:02", actor: "System REF",  action: "score.recomputed", entity: "01KRPPW6WRGRJZY0N4XN8R1YC2", detail: "UPD-2026-05-22-00188 · roof material · band poverty→vulnerable", tone: "update" },
-  { when: "22 May · 13:55", actor: "System REF",  action: "score.recomputed", entity: "01HXP02CN4QFB7K6FZRWS00111", detail: "UPD-2026-05-22-00184 · land hectares · band unchanged",        tone: "update" },
-  { when: "22 May · 09:18", actor: "Akello P.",   action: "score.manual",     entity: "01HY09KRS1P9MN6FB7K6FZRWS84", detail: "UPD review · manual recompute · band vulnerable→poverty",     tone: "user"   },
-  { when: "22 May · 02:00", actor: "celery-beat", action: "thresholds.recompute", entity: "PMT-v1",                  detail: "4 bands written · n=12,108,331 · 84.3s",                       tone: "system" },
-  { when: "21 May · 16:44", actor: "System REF",  action: "score.recomputed", entity: "01HXZ9MR4N8P2QFB7K6FZRWS33", detail: "DDUP merge · band poverty→poverty",                            tone: "update" },
-  { when: "20 May · 11:08", actor: "System REF",  action: "score.recomputed", entity: "(batch · 412 households)",    detail: "Scheduled batch · West Nile · band shifts: 38 ep→p, 71 p→v",   tone: "system" },
-];
 
 /* ============================================================
    Live-data wiring
@@ -320,16 +191,22 @@ const _pmtProjectEvents = (rows) => (rows || []).map(e => ({
 // silently falls back to the mock constants so the design preview
 // keeps rendering.
 const usePmtDashboard = () => {
+  // Starts empty. It used to start from the module fixtures below, so
+  // before the fetch returned — or if it failed — the dashboard showed a
+  // complete PMT picture: an active model version, band thresholds,
+  // coverage percentages and a recompute job, none of it real. PMT
+  // scores decide who is eligible for assistance, so a specimen here is
+  // read as the basis of that decision.
   const [state, setState] = useStatePMT({
-    active: PMT_ACTIVE,
-    bands: PMT_BANDS,
-    coverage: PMT_COVERAGE,
-    variablesTop: PMT_VARIABLES_TOP,
-    geo: PMT_GEO,
-    drift: PMT_DRIFT,
-    triggers: PMT_TRIGGERS,
-    job: PMT_JOB,
-    recentEvents: PMT_RECENT_EVENTS,
+    active: null,
+    bands: [],
+    coverage: null,
+    variablesTop: [],
+    geo: [],
+    drift: [],
+    triggers: [],
+    job: null,
+    recentEvents: [],
     source: "loading",
     error: "",
   });
@@ -341,23 +218,17 @@ const usePmtDashboard = () => {
     })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(data => {
-        const projectedActive = _pmtProjectActive(data.active);
-        // Empty active → no active model on the registry. Keep the
-        // mock visible rather than show a blank card; the source
-        // flag tells the UI we're in fallback.
-        if (!projectedActive) {
-          setState(s => ({ ...s, source: "fallback" }));
-          return;
-        }
+        // No active model on the registry is a real, reportable
+        // state, not a reason to show a specimen one.
         setState({
-          active: projectedActive,
+          active: _pmtProjectActive(data.active),
           bands: _pmtProjectBands(data.bands),
-          coverage: _pmtProjectCoverage(data.coverage) || PMT_COVERAGE,
+          coverage: _pmtProjectCoverage(data.coverage),
           variablesTop: _pmtProjectVariablesTop(data.variables_top),
           geo: _pmtProjectGeo(data.geo),
           drift: _pmtProjectDrift(data.drift),
           triggers: _pmtProjectTriggers(data.triggers),
-          job: _pmtProjectJob(data.job) || PMT_JOB,
+          job: _pmtProjectJob(data.job),
           recentEvents: _pmtProjectEvents(data.recent_events),
           source: "live",
           error: "",
@@ -417,9 +288,10 @@ const BandChip = ({ band }) => {
    ============================================================ */
 const PmtDashboardScreen = ({ onOpenConfig }) => {
   const [periodFilter, setPeriodFilter] = useStatePMT('30d');
-  // Live wiring — falls back to the hardcoded constants when the API
-  // is unreachable so the design preview keeps rendering. Shadowing
-  // the names lets the JSX below stay readable.
+  // Live wiring. Shadowing the names lets the JSX below stay
+  // readable; there is no fixture underneath them any more, so an
+  // unreachable API renders the empty state rather than a specimen
+  // model.
   const dash = usePmtDashboard();
   const PMT_ACTIVE = dash.active;
   const PMT_BANDS = dash.bands;
@@ -475,12 +347,49 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
     document.body.removeChild(a);
   }, []);
 
+  // Everything below dereferences the active model, the coverage
+  // totals and the recompute job. Until the fetch lands — or if there
+  // is no active model, or the API is unreachable — there is nothing
+  // to show, and a specimen dashboard here would be read as the state
+  // of the engine that decides eligibility.
+  if (!PMT_ACTIVE || !PMT_COVERAGE || !PMT_JOB) {
+    return (
+      <div className="page">
+        <PageHeader
+          eyebrow={dash.source === "loading"
+            ? "ADMIN · PMT · operational dashboard · loading…"
+            : "ADMIN · PMT · operational dashboard"}
+          title="Proxy Means Test"
+          sub="Operational health of the Uganda PMT engine."
+          right={<button className="btn btn-primary" onClick={onOpenConfig}>
+            <Icon name="sliders" size={14}/> Open configuration
+          </button>}
+        />
+        <div className="card" style={{ padding: 24 }}>
+          <div className="t-bodysm">
+            {dash.source === "loading"
+              ? "Loading the PMT dashboard…"
+              : dash.error
+                ? <>The PMT dashboard could not be loaded{' '}
+                    <span className="t-mono">({dash.error})</span>.</>
+                : "No active PMT model version. Publish one from the configuration screen to populate this dashboard."}
+          </div>
+          {dash.source !== "loading" && (
+            <button className="btn mt-3" onClick={dash.reload}>
+              <Icon name="refresh" size={14}/> Retry
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page">
       <PageHeader
         eyebrow={
           dash.source === "live"     ? "ADMIN · PMT · operational dashboard · LIVE"
-          : dash.source === "fallback" ? "ADMIN · PMT · operational dashboard · MOCK PREVIEW"
+          : dash.source === "fallback" ? "ADMIN · PMT · operational dashboard · STALE"
           : "ADMIN · PMT · operational dashboard · loading…"
         }
         title="Proxy Means Test"
@@ -972,5 +881,4 @@ const ThresholdDrift = ({ data }) => {
 
 Object.assign(window, {
   PmtDashboardScreen,
-  PMT_ACTIVE, PMT_BANDS, PMT_VARIABLES_TOP, PMT_GEO, PMT_DRIFT, PMT_JOB, PMT_COVERAGE,
 });
