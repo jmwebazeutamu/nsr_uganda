@@ -1,8 +1,7 @@
 /* global React,
    Icon, Chip, PageHeader, Modal,
-   HH, ROSTER,
    CHANGE_TYPES, routingFor, fieldDef, initials,
-   SEED_DOCS, HISTORY, useFieldCatalog, useCurrentValues, catColor,
+   useFieldCatalog, useCurrentValues, catColor,
    HHContextStrip, RosterPicker, NumberedSection, FieldComposer,
    TweaksPanel, useTweaks, TweakSection, TweakRadio */
 // NSR MIS — full-page Change Request submitter (US-S22-004 replacement
@@ -187,8 +186,7 @@ const ReviewSection = ({ scope, member, rows, changeType, pmtRelevant, note, doc
 
           <div className="muted">Household</div>
           <div>
-            <span className="t-mono">{(householdId || HH.id).slice(0, 18)}…</span>
-            <div className="t-cap mt-1">{HH.head} · {HH.village}, {HH.parish}</div>
+            <span className="t-mono">{householdId ? householdId.slice(0, 18) + "…" : "— no household —"}</span>
           </div>
 
           <div className="muted">Change type</div>
@@ -277,13 +275,41 @@ const ReviewSection = ({ scope, member, rows, changeType, pmtRelevant, note, doc
 /* ================================================================
    Right-rail — Change history
    ================================================================ */
-const HistoryRail = ({ open, setOpen, scope, member }) => {
-  // Filter relevant rows
+const HistoryRail = ({ open, setOpen, scope, member, householdId }) => {
+  // Prior change requests for THIS household, from the API. The HISTORY
+  // fixture this replaces listed five fabricated decisions — including
+  // approvals and a rejection, each attributed to a named reviewer. A
+  // reviewer reading that rail would have formed a view of what had
+  // already been decided about a household, from decisions nobody made.
+  const [rows, setRows] = useApp([]);
+  useAppE(() => {
+    if (!open || !householdId) return undefined;
+    let cancelled = false;
+    fetch(`/api/v1/upd/change-requests/?entity_id=${encodeURIComponent(householdId)}&page_size=50`,
+      { credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))))
+      .then(d => {
+        if (cancelled) return;
+        setRows((d.results || d || []).map(cr => ({
+          id: cr.id,
+          type: cr.change_type || "—",
+          subject: cr.entity_type === "member" ? "Member" : "Household-level",
+          status: cr.status || "—",
+          decided: cr.decided_at || cr.updated_at || "",
+          by: cr.decided_by || cr.reviewer || "—",
+          note: cr.decision_note || "",
+        })));
+      })
+      .catch(() => { if (!cancelled) setRows([]); });
+    return () => { cancelled = true; };
+  }, [open, householdId]);
+
   const filtered = useAppM(() => {
-    if (scope === "household") return HISTORY.filter(h => h.subject === "Household-level" || true); // show all
-    if (member) return HISTORY.filter(h => h.subject.toLowerCase().includes(member.name.toLowerCase()) || h.subject === "Household-level");
-    return HISTORY;
-  }, [scope, member]);
+    if (member) {
+      return rows.filter(h => h.subject === "Member" || h.subject === "Household-level");
+    }
+    return rows;
+  }, [rows, member]);
 
   if (!open) {
     return (
@@ -331,7 +357,7 @@ const HistoryRail = ({ open, setOpen, scope, member }) => {
       <div style={{padding:"10px 14px", background:"var(--neutral-50)", borderBottom:"1px solid var(--neutral-200)"}}>
         <div className="t-cap">
           {scope === "household"
-            ? <>All change requests against household <span className="t-mono">{HH.id.slice(0,12)}…</span></>
+            ? <>All change requests against household <span className="t-mono">{householdId ? householdId.slice(0,12) + "…" : "—"}</span></>
             : member
               ? <>Linked to <strong style={{color:"var(--neutral-900)"}}>{member.name}</strong> + parent household</>
               : <>Select a member to scope further</>}
@@ -430,12 +456,18 @@ const submitBundle = async (payload) => {
 const ChangeRequestScreen = ({
   initialScope = "household",
   // Host household identity. When omitted (standalone preview) the
-  // screen displays the mock HH constant and POSTs against its id.
+  // screen renders no household context and cannot submit.
   householdId,
+  // Household summary for the context strip, supplied by the consuming
+  // screen. Optional: without it the strip shows the id and dashes,
+  // which is the honest rendering of "we were not told".
+  // Shape: {head, village, parish, district, subreg, status, lastUpdate,
+  //         pmt, band, programmes}
+  household = null,
   // Live roster projected by the consuming screen (household detail).
   // Items: {id, line, name, rel, sex, age, dob, nin, ninStatus}.
-  // When present, replaces the bundle's mock ROSTER so member-scope
-  // CRs submit with the real Member ULID. Falls back to ROSTER for
+  // When present, member-scope CRs submit with the real Member ULID.
+  // When absent there is no roster at all, rather than a fixture — for
   // standalone preview where no household context exists.
   roster = null,
   // /api/v1/security/users/me/ payload, when available. Used for the
@@ -452,9 +484,10 @@ const ChangeRequestScreen = ({
 }) => {
   const [t, setTweak] = useTweaks({ scope: initialScope });
   const scope = t.scope;
-  // Effective roster — live when supplied, otherwise the bundle mock.
-  const effectiveRoster = (Array.isArray(roster) && roster.length > 0)
-    ? roster : ROSTER;
+  // Live roster or none. The ROSTER fixture it replaced would let an
+  // operator pick a member who does not exist and file a change request
+  // about them.
+  const effectiveRoster = Array.isArray(roster) ? roster : [];
   const isLiveRoster = Array.isArray(roster) && roster.length > 0;
 
   const [member, setMember] = useApp(null);
@@ -462,7 +495,10 @@ const ChangeRequestScreen = ({
   const [changeType, setChangeType] = useApp("correction");
   const [pmtOverride, setPmtOverride] = useApp(false);
   const [note, setNote] = useApp("");
-  const [docs, setDocs] = useApp(SEED_DOCS);
+  // Evidence starts empty. SEED_DOCS pre-populated the list with
+  // fabricated uploads — an LC1 letter and a photo, attributed to a named
+  // uploader — so a reviewer could believe evidence had been supplied.
+  const [docs, setDocs] = useApp([]);
   const [historyOpen, setHistoryOpen] = useApp(true);
   const [busy, setBusy] = useApp(false);
   const [error, setError] = useApp("");
@@ -483,7 +519,7 @@ const ChangeRequestScreen = ({
   // Member-scope current-values only fire when we have a real
   // Member ULID (live-roster path); mock rows are skipped server-side.
   const currentValues = useCurrentValues({
-    householdId: householdId || HH.id,
+    householdId: householdId,
     entity: scope === "household" ? "household" : "member",
     memberId: (scope === "member" && isLiveRoster && member?.id) ? member.id : "",
     rows,
@@ -517,12 +553,19 @@ const ChangeRequestScreen = ({
   const noteValid = note.trim().length >= 12;
 
   const problems = [];
+  if (!householdId) problems.push("No household — open this from a household record.");
   if (memberRequired && !member) problems.push("Pick a member from the roster.");
   if (rows.length === 0) problems.push("Add at least one field change.");
   else if (!rows.every(r => String(r.value).trim().length > 0)) problems.push("Every field change needs a new value.");
   if (!noteValid) problems.push(`Reason needs at least 12 characters (currently ${note.trim().length}).`);
 
-  const canSubmit = problems.length === 0 && !busy;
+  // A change request MUST name the household it is against. Without
+  // this guard the payload below fell back to the HH fixture's id —
+  // and that id exists in production, so submitting from a screen
+  // opened without a household would have filed a change request
+  // against a real household the operator was not looking at, and
+  // audited it as theirs.
+  const canSubmit = problems.length === 0 && !busy && !!householdId;
 
   const [toast, setToast] = useApp("");
   // Live submit — POST to /api/v1/upd/change-requests/bundle/ and let
@@ -534,7 +577,7 @@ const ChangeRequestScreen = ({
     setBusy(true);
     setError("");
     const payload = {
-      household_id: householdId || HH.id,
+      household_id: householdId,
       entity: scope === "household" ? "household" : "member",
       // Member ULID for member-scope CRs. Server requires exactly 26
       // chars; the live-roster path supplies a real Member.id, the
@@ -582,7 +625,7 @@ const ChangeRequestScreen = ({
             title="Open a change request"
             sub={<>
               Creates a <strong>DRAFT</strong> ChangeRequest scoped to household{" "}
-              <span className="t-mono">{(householdId || HH.id).slice(0, 18)}…</span>, and advances it to{" "}
+              <span className="t-mono">{householdId ? householdId.slice(0, 18) + "…" : "— no household —"}</span>, and advances it to{" "}
               <strong>PENDING_APPROVAL</strong> on submit.
             </>}
             right={<>
@@ -612,7 +655,7 @@ const ChangeRequestScreen = ({
             </div>
           )}
 
-          <HHContextStrip/>
+          <HHContextStrip householdId={householdId} household={household}/>
 
           {/* Section 1 — Scope */}
           <NumberedSection n="1" title="Update scope"
@@ -724,7 +767,7 @@ const ChangeRequestScreen = ({
         </div>
 
         {/* Right rail — history */}
-        <HistoryRail open={historyOpen} setOpen={setHistoryOpen} scope={scope} member={member}/>
+        <HistoryRail householdId={householdId} open={historyOpen} setOpen={setHistoryOpen} scope={scope} member={member}/>
       </div>
 
       {/* Tweaks */}
@@ -824,7 +867,7 @@ const SelectedMemberStrip = ({ member }) => (
     <div>
       <div className="t-cap">MEMBER ID</div>
       <div className="t-mono" style={{fontSize:12}}>
-        {member.id || `M-${HH.id.slice(-10)}-${String(member.line).padStart(3, "0")}`}
+        {member.id || "—"}
       </div>
       <div className="t-cap mt-1">
         <Icon name="info" size={10}/> Change will be linked to this record

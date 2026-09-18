@@ -10,106 +10,10 @@
 const { useState: useCR, useMemo: useCRm, useEffect: useCRe, useRef: useCRr } = React;
 
 /* ================================================================
-   Household context — Nsubuga Ruth, Kibalinga (matches registry sample)
+   Household context is supplied by the caller; this file holds no records.
    ================================================================ */
-const HH = {
-  id: "01KRPPW6WRGRJZY0N4XN8R1YC2",
-  head: "Nsubuga Ruth",
-  hh_size: 7,
-  subreg: "Buganda South",
-  district: "Lyantonde",
-  parish: "Kibalinga",
-  village: "Okello Village",
-  ea: "EA-7411-002",
-  gps: "0.266500, 33.396584",
-  phone: "+256 772 558 219",
-  alt_phone: "—",
-  email: "—",
-  language: "Luganda",
-  urban_rural: "Rural",
-  // Housing & assets
-  roof: "Iron sheets",
-  wall: "Mud + sticks",
-  floor: "Earth",
-  water: "Borehole < 1 km",
-  toilet: "Pit latrine",
-  fuel: "Firewood",
-  light: "Solar lamp",
-  tenure: "Customary",
-  land: "1.2",
-  cattle: "2",
-  goats: "3",
-  radio: "Yes",
-  tv: "No",
-  phone_owned: "Yes",
-  // Food & shocks
-  meals: "2",
-  fcs: "31",
-  shock: "Drought",
-  coping: "Reduced meals",
-  // Status
-  status: "Registered",
-  pmt: 0.39,
-  band: "Poorest 40%",
-  programmes: ["OPM-PDM"],
-  regDate: "08 Mar 2026",
-  lastUpdate: "22 Apr 2026",
-};
-
-const ROSTER = [
-  { line: 1, name: "Nsubuga Ruth",     rel: "Head",     sex: "F", age: 42, dob: "12 Jan 1983", nin: "CM83011242ABCD", ninStatus: "verified",
-    marital: "Married — monogamous", ethnicity: "Muganda", language: "Luganda",
-    wg_seeing: "No difficulty", wg_hearing: "No difficulty", wg_walking: "No difficulty",
-    wg_cognition: "No difficulty", wg_selfcare: "No difficulty", wg_communication: "No difficulty",
-    chronic: "None", insurance: "None", pregnant: "No",
-    literacy: "Reads + writes", ever_school: "Yes", grade: "S4", attending: "No",
-    activity: "Self-employed", occupation: "Petty trader (ISCO 5221)",
-    sector: "Trade", hours: "30", employer_type: "Self-employed", earnings_band: "UGX 150k–300k" },
-  { line: 2, name: "Tumusiime Samuel", rel: "Spouse",   sex: "M", age: 46, dob: "12 Apr 1979", nin: "CM80020412EFGH", ninStatus: "verified",
-    marital: "Married — monogamous", ethnicity: "Muganda", language: "Luganda",
-    wg_seeing: "No difficulty", wg_hearing: "No difficulty", wg_walking: "Some difficulty",
-    wg_cognition: "No difficulty", wg_selfcare: "No difficulty", wg_communication: "No difficulty",
-    chronic: "Hypertension", insurance: "None", pregnant: "—",
-    literacy: "Reads + writes", ever_school: "Yes", grade: "P7", attending: "No",
-    activity: "Casual wage", occupation: "Construction labour (ISCO 7110)",
-    sector: "Construction", hours: "24", employer_type: "Private informal", earnings_band: "UGX 150k–300k" },
-  { line: 3, name: "Nsubuga David",    rel: "Son",      sex: "M", age: 18, dob: "08 May 2007", nin: "CM07050818IJKL", ninStatus: "verified",
-    marital: "Single", ethnicity: "Muganda", language: "Luganda",
-    wg_seeing: "No difficulty", wg_hearing: "No difficulty", wg_walking: "No difficulty",
-    wg_cognition: "No difficulty", wg_selfcare: "No difficulty", wg_communication: "No difficulty",
-    chronic: "None", insurance: "None", pregnant: "—",
-    literacy: "Reads + writes", ever_school: "Yes", grade: "S6", attending: "Yes",
-    activity: "Student", occupation: "—", sector: "—", hours: "—", employer_type: "—", earnings_band: "—" },
-  { line: 4, name: "Nsubuga Mary",     rel: "Daughter", sex: "F", age: 15, dob: "22 Sep 2010", nin: "—",              ninStatus: "not-issued",
-    marital: "Single", ethnicity: "Muganda", language: "Luganda",
-    wg_seeing: "No difficulty", wg_hearing: "No difficulty", wg_walking: "No difficulty",
-    wg_cognition: "No difficulty", wg_selfcare: "No difficulty", wg_communication: "No difficulty",
-    chronic: "None", insurance: "None", pregnant: "No",
-    literacy: "Reads + writes", ever_school: "Yes", grade: "S2", attending: "Yes",
-    activity: "Student", occupation: "—", sector: "—", hours: "—", employer_type: "—", earnings_band: "—" },
-  { line: 5, name: "Nsubuga Joseph",   rel: "Son",      sex: "M", age: 12, dob: "03 Feb 2014", nin: "—",              ninStatus: "not-issued",
-    marital: "Single", ethnicity: "Muganda", language: "Luganda",
-    wg_seeing: "No difficulty", wg_hearing: "No difficulty", wg_walking: "No difficulty",
-    wg_cognition: "No difficulty", wg_selfcare: "No difficulty", wg_communication: "No difficulty",
-    chronic: "None", insurance: "None", pregnant: "—",
-    literacy: "Reads only", ever_school: "Yes", grade: "P5", attending: "Yes",
-    activity: "Student", occupation: "—", sector: "—", hours: "—", employer_type: "—", earnings_band: "—" },
-  { line: 6, name: "Nsubuga Grace",    rel: "Daughter", sex: "F", age: 8,  dob: "11 Nov 2017", nin: "—",              ninStatus: "not-issued",
-    marital: "Single", ethnicity: "Muganda", language: "Luganda",
-    wg_seeing: "No difficulty", wg_hearing: "No difficulty", wg_walking: "No difficulty",
-    wg_cognition: "Some difficulty", wg_selfcare: "No difficulty", wg_communication: "No difficulty",
-    chronic: "None", insurance: "None", pregnant: "—",
-    literacy: "Cannot read", ever_school: "Yes", grade: "P2", attending: "Yes",
-    activity: "Student", occupation: "—", sector: "—", hours: "—", employer_type: "—", earnings_band: "—" },
-  { line: 7, name: "Nakato Annet",     rel: "Mother",   sex: "F", age: 67, dob: "06 Jun 1958", nin: "CM58061224MNOP", ninStatus: "verified",
-    marital: "Widowed", ethnicity: "Muganda", language: "Luganda",
-    wg_seeing: "Some difficulty", wg_hearing: "Some difficulty", wg_walking: "A lot of difficulty",
-    wg_cognition: "No difficulty", wg_selfcare: "Some difficulty", wg_communication: "No difficulty",
-    chronic: "Diabetes", insurance: "None", pregnant: "No",
-    literacy: "Cannot read", ever_school: "No", grade: "—", attending: "No",
-    activity: "Not working", occupation: "—", sector: "—", hours: "—", employer_type: "—", earnings_band: "—" },
-];
-
+// HH fixture removed — this screen renders only what it is given.
+// ROSTER fixture removed — this screen renders only what it is given.
 /* ================================================================
    Live field-catalog hook — fetches /api/v1/upd/field-catalog/ on
    mount and exposes the categories + a flat (cat:field → meta)
@@ -274,18 +178,8 @@ const ROUTING_MATRIX = {
 };
 const routingFor = (t, pmt) => (ROUTING_MATRIX[t] || ROUTING_MATRIX.correction)[pmt ? "pmt" : "cosmetic"];
 
-const SEED_DOCS = [
-  { name: "LC1 confirmation letter — Kibalinga.pdf", kind: "LC1 letter",  size: "186 KB", uploadedBy: "Kato Joseph · 2 min ago" },
-];
-
-const HISTORY = [
-  { id: "UPD-2026-04-22-00188", type: "Roster: edit member age",  subject: "Tumusiime Samuel · line 2", status: "Approved",    decided: "22 Apr 2026", by: "Adong Florence" },
-  { id: "UPD-2026-03-09-00041", type: "Employment: occupation",    subject: "Tumusiime Samuel · line 2", status: "Approved",    decided: "09 Mar 2026", by: "Adong Florence" },
-  { id: "UPD-2026-02-14-00112", type: "Housing: water source",     subject: "Household-level",           status: "Approved",    decided: "14 Feb 2026", by: "Adong Florence" },
-  { id: "UPD-2026-01-15-00012", type: "Address correction",        subject: "Household-level",           status: "Rejected",    decided: "15 Jan 2026", by: "Adong Florence", note: "Insufficient evidence" },
-  { id: "UPD-2026-03-08-00001", type: "Initial registration",      subject: "Household-level",           status: "Committed",   decided: "08 Mar 2026", by: "System DIH" },
-];
-
+// SEED_DOCS fixture removed — see docs/console_mock_data_audit.md.
+// HISTORY fixture removed — see docs/console_mock_data_audit.md.
 /* ================================================================
    Helpers
    ================================================================ */
@@ -322,7 +216,15 @@ const NumberedSection = ({ n, title, sub, right, locked, children }) => (
 /* ================================================================
    Top — Household summary strip
    ================================================================ */
-const HHContextStrip = () => (
+// Household context for the change-request flow. It used to render the
+// HH fixture — a complete household with a head's name, village, PMT
+// score, band and programme list, none of it real. Worse, the id it
+// carried EXISTS in production, so the submit path's `householdId ||
+// HH.id` fallback could have filed a change request against a real
+// household the operator was never looking at.
+//
+// It now renders only what the caller passes. Nothing is inferred.
+const HHContextStrip = ({ householdId, household }) => (
   <div className="card" style={{
     padding:"16px 20px",
     display:"grid", gridTemplateColumns:"auto 1.4fr 1fr 1fr 1fr auto", gap:24,
@@ -332,33 +234,46 @@ const HHContextStrip = () => (
       width:44, height:44, borderRadius:"50%",
       background:"var(--primary-100)", color:"var(--primary-900)",
       display:"grid", placeItems:"center", fontSize:14, fontWeight:600,
-    }}>{initials(HH.head)}</div>
+    }}>{household?.head ? initials(household.head) : "—"}</div>
     <div>
-      <div className="t-cap">HOUSEHOLD</div>
-      <div style={{fontWeight:600, fontSize:15, color:"var(--neutral-900)"}}>{HH.head}</div>
-      <div className="t-cap t-mono" style={{marginTop:2}}>{HH.id.slice(0, 22)}…</div>
-    </div>
-    <div>
-      <div className="t-cap">LOCATION</div>
-      <div className="t-bodysm" style={{fontWeight:500}}>{HH.village} · {HH.parish}</div>
-      <div className="t-cap mt-1">{HH.district} · {HH.subreg}</div>
-    </div>
-    <div>
-      <div className="t-cap">STATUS</div>
-      <div className="row gap-2 mt-1"><Chip tone="data">{HH.status}</Chip></div>
-      <div className="t-cap mt-1">Last updated {HH.lastUpdate}</div>
-    </div>
-    <div>
-      <div className="t-cap">PMT</div>
-      <div className="row gap-2 mt-1">
-        <span className="t-mono" style={{fontSize:15, fontWeight:600}}>{HH.pmt.toFixed(3)}</span>
-        <Chip size="sm" tone="eligibility">{HH.band}</Chip>
+      <div style={{fontWeight:600, fontSize:15, color:"var(--neutral-900)"}}>
+        {household?.head || "—"}
       </div>
-      <div className="t-cap mt-1">{HH.programmes.length ? HH.programmes.join(" · ") : "No active programmes"}</div>
+      <div className="t-cap t-mono" style={{marginTop:2}}>
+        {householdId ? householdId.slice(0, 22) + "…" : "no household"}
+      </div>
     </div>
-    <button className="btn btn-ghost" title="Open household record">
-      <Icon name="eye" size={14}/> Open record
-    </button>
+    <div>
+      <div className="t-bodysm" style={{fontWeight:500}}>
+        {household?.village || household?.parish
+          ? `${household.village || "—"} · ${household.parish || "—"}`
+          : "—"}
+      </div>
+      <div className="t-cap mt-1">
+        {household?.district || household?.subreg
+          ? `${household.district || "—"} · ${household.subreg || "—"}`
+          : "—"}
+      </div>
+    </div>
+    <div>
+      <div className="row gap-2 mt-1">
+        <Chip tone="data">{household?.status || "—"}</Chip>
+      </div>
+      <div className="t-cap mt-1">
+        {household?.lastUpdate ? `Last updated ${household.lastUpdate}` : ""}
+      </div>
+    </div>
+    <div>
+      <div className="row gap-2" style={{alignItems:"baseline"}}>
+        <span className="t-mono" style={{fontSize:15, fontWeight:600}}>
+          {typeof household?.pmt === "number" ? household.pmt.toFixed(3) : "—"}
+        </span>
+        {household?.band && <Chip size="sm" tone="eligibility">{household.band}</Chip>}
+      </div>
+      <div className="t-cap mt-1">
+        {household?.programmes?.length ? household.programmes.join(" · ") : "—"}
+      </div>
+    </div>
   </div>
 );
 
@@ -366,7 +281,9 @@ const HHContextStrip = () => (
    Roster picker (member-scope only)
    ================================================================ */
 const RosterPicker = ({ selected, onSelect, roster }) => {
-  const rows = Array.isArray(roster) && roster.length > 0 ? roster : ROSTER;
+  // No ROSTER fallback — an invented roster would let an operator pick a
+  // member who does not exist and file a change request about them.
+  const rows = Array.isArray(roster) ? roster : [];
   return (
   <div style={{padding:0}}>
     <div className="card-toolbar" style={{borderBottom:0, paddingTop:0, paddingBottom:0}}>
