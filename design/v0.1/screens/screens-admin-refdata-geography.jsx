@@ -18,63 +18,8 @@ const GEO_LEVEL_LABEL = {
 const GEO_STATUS_TONE = { active: "data", superseded: "quality", retired: "neutral" };
 
 // Sample slice — anchored on Karamoja sub-region
-const GEO_TREE = {
-  region: [
-    { code: "R-NORTHERN",  name: "Northern Region", children: 6, status: "active", effectiveFrom: "01 Jan 2020", households: 2120432 },
-    { code: "R-EASTERN",   name: "Eastern Region",  children: 6, status: "active", effectiveFrom: "01 Jan 2020", households: 2918302 },
-    { code: "R-CENTRAL",   name: "Central Region",  children: 4, status: "active", effectiveFrom: "01 Jan 2020", households: 3092411 },
-    { code: "R-WESTERN",   name: "Western Region",  children: 5, status: "active", effectiveFrom: "01 Jan 2020", households: 3977186 },
-  ],
-  sub_region: {
-    "R-NORTHERN": [
-      { code: "SR-KARAMOJA",  name: "Karamoja",  children: 9,  status: "active",     effectiveFrom: "01 Jan 2020", households: 412091 },
-      { code: "SR-ACHOLI",    name: "Acholi",    children: 8,  status: "active",     effectiveFrom: "01 Jan 2020", households: 698412 },
-      { code: "SR-LANGO",     name: "Lango",     children: 9,  status: "active",     effectiveFrom: "01 Jan 2020", households: 712014 },
-      { code: "SR-WEST-NILE", name: "West Nile", children: 11, status: "active",     effectiveFrom: "01 Jan 2020", households: 901232 },
-    ],
-  },
-  district: {
-    "SR-KARAMOJA": [
-      { code: "DST-MOROTO",      name: "Moroto",      children: 8,  status: "active",     effectiveFrom: "01 Jan 2020", households: 42101 },
-      { code: "DST-NAPAK",       name: "Napak",       children: 7,  status: "active",     effectiveFrom: "01 Jan 2020", households: 51920 },
-      { code: "DST-NAKAPIRIPIRIT", name: "Nakapiripirit", children: 6, status: "active", effectiveFrom: "01 Jan 2020", households: 38104 },
-      { code: "DST-KOTIDO",      name: "Kotido",      children: 7,  status: "active",     effectiveFrom: "01 Jan 2020", households: 56012 },
-      { code: "DST-KAABONG",     name: "Kaabong",     children: 9,  status: "active",     effectiveFrom: "01 Jan 2020", households: 58220 },
-      { code: "DST-ABIM",        name: "Abim",        children: 5,  status: "active",     effectiveFrom: "01 Jan 2020", households: 32198 },
-      { code: "DST-AMUDAT",      name: "Amudat",      children: 4,  status: "active",     effectiveFrom: "01 Jan 2020", households: 28104 },
-      { code: "DST-KARENGA",     name: "Karenga",     children: 5,  status: "active",     effectiveFrom: "12 May 2022", households: 21008, note: "Split from Kaabong" },
-      { code: "DST-NABILATUK",   name: "Nabilatuk",   children: 4,  status: "active",     effectiveFrom: "12 May 2022", households: 19420, note: "Split from Nakapiripirit" },
-    ],
-  },
-  sub_county: {
-    "DST-MOROTO": [
-      { code: "SC-TAPAC",         name: "Tapac",        children: 5,  status: "active", effectiveFrom: "01 Jan 2020", households: 8120 },
-      { code: "SC-RUPA",          name: "Rupa",         children: 4,  status: "active", effectiveFrom: "01 Jan 2020", households: 6021 },
-      { code: "SC-KATIKEKILE",    name: "Katikekile",   children: 5,  status: "active", effectiveFrom: "01 Jan 2020", households: 5418 },
-      { code: "SC-MOROTO-NORTH",  name: "Moroto North", children: 4,  status: "superseded", effectiveFrom: "01 Jan 2020", effectiveTo: "12 May 2022", households: 0, note: "Renamed to Tepeth" },
-      { code: "SC-TEPETH",        name: "Tepeth",       children: 4,  status: "active", effectiveFrom: "12 May 2022", households: 4710 },
-    ],
-  },
-  parish: {
-    "SC-TAPAC": [
-      { code: "PAR-NAKILORO",    name: "Nakiloro",    children: 4, status: "active", effectiveFrom: "01 Jan 2020", households: 1812 },
-      { code: "PAR-LOTIRIR",     name: "Lotirir",     children: 3, status: "active", effectiveFrom: "01 Jan 2020", households: 1241 },
-      { code: "PAR-LOPUWAPUWA",  name: "Lopuwapuwa",  children: 5, status: "active", effectiveFrom: "01 Jan 2020", households: 2008 },
-      { code: "PAR-MUSAS",       name: "Musas",       children: 3, status: "active", effectiveFrom: "01 Jan 2020", households: 1419 },
-      { code: "PAR-TAPAC",       name: "Tapac (parish)", children: 4, status: "active", effectiveFrom: "01 Jan 2020", households: 1620 },
-    ],
-  },
-  village: {
-    "PAR-NAKILORO": [
-      { code: "VLG-NAKILORO-A",  name: "Nakiloro A",  children: 0, status: "active", effectiveFrom: "01 Jan 2020", households: 412 },
-      { code: "VLG-NAKILORO-B",  name: "Nakiloro B",  children: 0, status: "active", effectiveFrom: "01 Jan 2020", households: 388 },
-      { code: "VLG-LOPUWAPUWA-A", name: "Lopuwapuwa A", children: 0, status: "active", effectiveFrom: "01 Jan 2020", households: 312 },
-      { code: "VLG-KAKINGOL",    name: "Kakingol",    children: 0, status: "active", effectiveFrom: "01 Jan 2020", households: 287 },
-      { code: "VLG-LOSILANG",    name: "Losilang",    children: 0, status: "active", effectiveFrom: "01 Jan 2020", households: 220 },
-      { code: "VLG-OLD-NAKILORO", name: "Old Nakiloro", children: 0, status: "retired", effectiveFrom: "01 Jan 2020", effectiveTo: "12 May 2022", households: 0, note: "Renamed Nakiloro A" },
-    ],
-  },
-};
+// GEO_TREE removed — this screen reads /api/v1/admin/refdata/geography/.
+
 
 // Project a /api/v1/admin/refdata/geography/ row onto the mock shape
 // the JSX below renders against. children comes from
@@ -104,17 +49,16 @@ const AdminGeographyScreen = () => {
   }${showRetired ? "&include_inactive=true" : ""}`;
   const [resp] = (typeof useApi === "function") ? useApi(_url) : [null];
 
-  // Resolve the rows for the current level + parent
-  let rows;
-  if (resp && Array.isArray(resp.results) && resp.results.length) {
-    rows = resp.results.map(_projectGeoRow);
-  } else if (currentLevel === "region") rows = GEO_TREE.region;
-  else if (currentLevel === "sub_region") rows = GEO_TREE.sub_region[currentParentCode] || [];
-  else if (currentLevel === "district") rows = GEO_TREE.district[currentParentCode] || [];
-  else if (currentLevel === "sub_county") rows = GEO_TREE.sub_county[currentParentCode] || [];
-  else if (currentLevel === "parish") rows = GEO_TREE.parish[currentParentCode] || [];
-  else if (currentLevel === "village") rows = GEO_TREE.village[currentParentCode] || [];
-  else rows = [];
+  // Rows come from the API or the table is empty. The GEO_TREE fixture
+  // that used to back this screen described a different country: four
+  // regions against the registry's five, invented sub-regions, and
+  // household counts in the millions. Worse, the old condition required
+  // `resp.results.length`, so a level that legitimately has no children
+  // fell through to the fixture and showed units that do not exist.
+  const geoLoading = resp == null;
+  const rows = (resp && Array.isArray(resp.results))
+    ? resp.results.map(_projectGeoRow)
+    : [];
 
   let filtered = rows;
   if (q) filtered = filtered.filter(r => r.code.toLowerCase().includes(q.toLowerCase()) || r.name.toLowerCase().includes(q.toLowerCase()));
@@ -182,7 +126,13 @@ const AdminGeographyScreen = () => {
       <div className="card mt-4" style={{ padding: '12px 16px' }}>
         <div className="row gap-3" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
           <Chip tone="data">{GEO_LEVEL_LABEL[currentLevel]}</Chip>
-          <span className="t-cap">{filtered.length} of {rows.length}</span>
+          <span className="t-cap">
+            {geoLoading
+              ? "loading\u2026"
+              : rows.length === 0
+                ? "no units at this level"
+                : `${filtered.length} of ${rows.length}`}
+          </span>
           <div className="search" style={{ maxWidth: 320, height: 32 }}>
             <Icon name="search" size={13} color="var(--neutral-500)"/>
             <input value={q} onChange={e => setQ(e.target.value)} placeholder={`Search ${GEO_LEVEL_LABEL[currentLevel].toLowerCase()} code or name…`}/>

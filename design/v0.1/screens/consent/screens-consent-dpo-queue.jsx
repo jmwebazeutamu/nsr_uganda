@@ -11,17 +11,8 @@ const { useState: useStateDQ, useMemo: useMemoDQ } = React;
 const SLA_DAYS = 30;
 
 /* ---------- Queue rows ---------- */
-const TICKETS = [
-  { id: "WD-2026-04420", hh: "HH-7411-0231", member: "Nakato Sarah",  purpose: "REFERRAL",            channel: "USSD", daysOpen: 27, state: "In DPO review", assignee: "You",          referrals: 0, smsSubs: 1, extracts: 0, origin: "Citizen" },
-  { id: "WD-2026-04450", hh: "HH-8821-0144", member: "Auma Florence", purpose: "RESEARCH",            channel: "Web",  daysOpen: 28, state: "Open",          assignee: "—",            referrals: 0, smsSubs: 0, extracts: 2, origin: "Citizen" },
-  { id: "WD-2026-04417", hh: "HH-7411-0192", member: "Lokol Moses",   purpose: "PAYMENTS",            channel: "Web",  daysOpen: 4,  state: "Open",          assignee: "—",            referrals: 1, smsSubs: 1, extracts: 0, origin: "Citizen" },
-  { id: "WD-2026-04422", hh: "HH-7411-0250", member: "Mugisha James", purpose: "ELIGIBILITY",          channel: "Web", daysOpen: 8,  state: "In DPO review", assignee: "You",          referrals: 0, smsSubs: 0, extracts: 0, origin: "Citizen" },
-  { id: "WD-2026-04431", hh: "HH-3920-1101", member: "Okello Peter",  purpose: "REFERRAL",            channel: "OPM-PDM", daysOpen: 2, state: "Open",        assignee: "—",            referrals: 0, smsSubs: 0, extracts: 0, origin: "Bulk DIH" },
-  { id: "WD-2026-04432", hh: "HH-3920-1102", member: "Adong Mary",    purpose: "REFERRAL",            channel: "OPM-PDM", daysOpen: 2, state: "Open",        assignee: "—",            referrals: 0, smsSubs: 0, extracts: 0, origin: "Bulk DIH" },
-  { id: "WD-2026-04433", hh: "HH-3920-1108", member: "Ojok Samuel",   purpose: "REFERRAL",            channel: "OPM-PDM", daysOpen: 2, state: "Open",        assignee: "—",            referrals: 0, smsSubs: 0, extracts: 0, origin: "Bulk DIH" },
-  { id: "WD-2026-04409", hh: "HH-5510-0307", member: "Akello Grace",  purpose: "COMMUNICATIONS_SMS",  channel: "Web",  daysOpen: 11, state: "Clarification requested", assignee: "You",  referrals: 0, smsSubs: 1, extracts: 0, origin: "Citizen" },
-  { id: "WD-2026-04398", hh: "HH-6620-0091", member: "Tumusiime John",purpose: "PAYMENTS",            channel: "Parish desk", daysOpen: 19, state: "Confirmed", assignee: "Nabbanja S.", referrals: 0, smsSubs: 0, extracts: 0, origin: "Citizen" },
-];
+// TICKETS removed — this screen reads /api/v1/consent/withdrawal-tickets/.
+
 
 const QUICK_FILTERS = [
   { id: "sla", label: "SLA breach risk (under 5 days)", icon: "clock",  tone: "danger" },
@@ -144,8 +135,60 @@ const DecisionPanel = ({ ticket, onDecide }) => {
    MAIN — DPO withdrawal queue
    ============================================================ */
 const DpoWithdrawalQueueScreen = () => {
-  const [rows, setRows] = useStateDQ(TICKETS);
-  const [selectedId, setSelectedId] = useStateDQ(TICKETS[0].id);
+  // Withdrawal tickets come from /api/v1/consent/withdrawal-tickets/,
+  // which returns 503 while CONSENT_MODULE_ENABLED is False (ADR-0024,
+  // pending DPO sign-off). So this screen has no live source today —
+  // and the honest answer to that is to say the module is off, not to
+  // show nine invented citizens asking to withdraw consent. Of all the
+  // places to fabricate a record, a withdrawal request is among the
+  // worst: acting on one would mean processing a real person's data on
+  // the strength of a request they never made.
+  const [rows, setRows] = useStateDQ([]);
+  const [selectedId, setSelectedId] = useStateDQ(null);
+  const [queueState, setQueueState] = useStateDQ("loading"); // loading | live | disabled | offline
+
+  React.useEffect(() => {
+    let cancelled = false;
+    fetch("/api/v1/consent/withdrawal-tickets/?page_size=200", {
+      credentials: "same-origin", headers: { Accept: "application/json" },
+    })
+      .then(r => {
+        if (r.status === 503) return { _disabled: true };
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
+      .then(d => {
+        if (cancelled) return;
+        if (d && d._disabled) { setQueueState("disabled"); return; }
+        const list = d.results || d || [];
+        setRows(list);
+        setSelectedId(list[0] ? list[0].id : null);
+        setQueueState("live");
+      })
+      .catch(() => { if (!cancelled) setQueueState("offline"); });
+    if (queueState !== "live") {
+    return (
+      <div className="page">
+        <div className="card mt-3" style={{padding:48, textAlign:"center", color:"var(--neutral-500)"}}>
+          <Icon name={queueState === "offline" ? "alert" : "shield"} size={32} color="var(--neutral-300)"/>
+          <div className="t-bodysm mt-2">
+            {queueState === "loading"   && "Loading withdrawal queue\u2026"}
+            {queueState === "disabled"  && "Consent management is not enabled."}
+            {queueState === "offline"   && "Could not load the withdrawal queue."}
+          </div>
+          {queueState === "disabled" && (
+            <div className="t-cap mt-1">
+              CONSENT_MODULE_ENABLED is off pending DPO sign-off (ADR-0024).
+              No withdrawal requests exist to action.
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return () => { cancelled = true; };
+  }, []);
   const [quick, setQuick] = useStateDQ(null);
   const [sel, setSel] = useStateDQ(new Set());
   const [auditOpen, setAuditOpen] = useStateDQ(false);
