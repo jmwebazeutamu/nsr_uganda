@@ -56,30 +56,8 @@ class HouseholdErrorBoundary extends React.Component {
 
 // Mock fallback — kept lean so the design preview still tells the
 // visual story. The live projection produces the same shape.
-const DEMO_HH = {
-  rid: "01HXY7K3B2N9PVQE4M6FZRWS18",
-  head: "Sarah Nakato",
-  status: "Registered",
-  hh: 3,
-  subreg: "Buganda South", district: "Lyantonde", parish: "Kibalinga",
-  village: "Okello Village", code: "—",
-  gps: { lat: 0.266500, lng: 33.396584, acc: 10 },
-  pmt: { score: 0.39, band: "Poorest 40%", model: "v2.4", computedAt: "—" },
-  phone: "+256 772 558 219",
-  capturedAt: "—",
-  capturedBy: "—",
-  source: "DIH",
-  programmes: [],
-  members: [
-    { line:1, name:"Sarah Nakato", rel:"Head", sex:"F", age:38, nin:"…ABCD",
-      dob:"—", literacy:"—", everSchool:"Yes", highestGrade:"—",
-      currentlyAttending:"—", neverReason:"—",
-      health:null, education:null, employment:null },
-  ],
-  questionnaire: null,
-};
-
-
+// DEMO_HH removed — it was fabricated records that nothing rendered.
+// See docs/console_mock_data_audit.md.
 // Project the API HouseholdSerializer payload into the view-model
 // the redesign's render tree consumes.
 //

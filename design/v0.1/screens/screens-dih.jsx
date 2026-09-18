@@ -106,17 +106,8 @@ const _stageToRow = (stage) => {
 };
 
 
-const MOCK_DIH_ROWS = [
-  { id: "01HXY7K3B2N9PVQE4M6FZRWS18", head: "Lokol Naume",      hh: 6, region: "Karamoja",    parish: "Nakiloro · Moroto", source: "Walk-in", channel: "CAPI", ddup: null, dqa: { b: 0, w: 3, i: 1 }, idv: "Matched", ageH: "47m", sla: "ok",     status: "Pending" },
-  { id: "01HXZ9MR4N8P2QFB7K6FZRWS33", head: "Akello Grace",     hh: 5, region: "Acholi",      parish: "Pageya · Gulu",     source: "Walk-in", channel: "CAPI", ddup: 0.83, dqa: { b: 0, w: 2, i: 0 }, idv: "Matched", ageH: "1h 12m", sla: "warn", status: "Pending" },
-  { id: "01HXZBVK6QN8M2PFB7K6FZRWS41", head: "Onyango David",   hh: 7, region: "West Nile",   parish: "Logiri · Arua",     source: "Bulk",    channel: "OPM-PDM", ddup: null, dqa: { b: 0, w: 0, i: 2 }, idv: "Matched", ageH: "2h 04m", sla: "ok",  status: "Pending" },
-  { id: "01HXZGN3W8MN6P2FB7K6FZRWS52", head: "Nakato Sarah",    hh: 4, region: "West Nile",   parish: "Kuluba · Yumbe",    source: "Walk-in", channel: "CAPI", ddup: 0.91, dqa: { b: 1, w: 0, i: 0 }, idv: "Mismatch","ageH": "3h 18m", sla: "ok", status: "Pending" },
-  { id: "01HY02FNQ9P8MN6FB7K6FZRWS67", head: "Mugisha James",   hh: 6, region: "Karamoja",    parish: "Lorengedwat · Napak", source: "Walk-in", channel: "CAPI", ddup: 0.95, dqa: { b: 0, w: 1, i: 0 }, idv: "Matched", ageH: "5h 41m", sla: "ok",     status: "Pending" },
-  { id: "01HY04MQR0N8P2FB7K6FZRWS73", head: "Auma Beatrice",    hh: 8, region: "Karamoja",    parish: "Apeitolim · Napak", source: "Walk-in", channel: "CAPI", ddup: null, dqa: { b: 0, w: 0, i: 0 }, idv: "Matched", ageH: "9h 22m", sla: "ok",     status: "Pending" },
-  { id: "01HY09KRS1P9MN6FB7K6FZRWS84", head: "Lopuwa John",     hh: 7, region: "Karamoja",    parish: "Kakingol · Moroto", source: "Walk-in", channel: "CAPI", ddup: 0.86, dqa: { b: 0, w: 2, i: 1 }, idv: "Matched", ageH: "18h 15m", sla: "crit", status: "Pending" },
-  { id: "01HY0AMNT8P2N6FB7K6FZRWS92", head: "Acheng Rose",      hh: 3, region: "Acholi",      parish: "Aywee · Gulu",      source: "Walk-in", channel: "CAPI", ddup: null, dqa: { b: 0, w: 0, i: 0 }, idv: "Matched", ageH: "21h 03m", sla: "crit", status: "Pending" },
-];
-
+// MOCK_DIH_ROWS removed — it was fabricated records that nothing rendered.
+// See docs/console_mock_data_audit.md.
 // Quick-filter definitions. Each carries a `predicate(row)` so the
 // count + the row filtering use the same logic. Counts get computed
 // live in DIHScreen against the rows actually in the queue (the

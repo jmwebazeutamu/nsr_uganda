@@ -108,16 +108,8 @@ const GRM_STATUSES = {
 // unreachable (file:// preview) or returns no rows (fresh DB).
 // hours_to_breach is precomputed here; live rows compute it from
 // sla_deadline via _grmApiToView.
-const GRM_MOCK_ROWS = [
-  { id: "01GRM2026051400001", category: "data_correction", tier: "l1_parish_chief", status: "open",        household_id: "01HXY7K3B2N9PVQE4M6FZRWS18", member_id: "01HXY7K3B2N9PVQE4M6FZRWS19", reporter_name: "Sarah Nakato",  reporter_phone: "+256 786 234 567", relationship: "Daughter",      assigned_to: "",                  opened_at: "14 May 09:12", hours_to_breach:  18, narrative: "Surname spelled OKELO instead of OKELLO on receipt slip." },
-  { id: "01GRM2026051400002", category: "exclusion_error", tier: "l2_cdo",          status: "in_progress", household_id: "01HXZ9MR4N8P2QFB7K6FZRWS33", member_id: "",                              reporter_name: "Akello Grace", reporter_phone: "+256 772 991 234", relationship: "Self · head",   assigned_to: "Adong Florence",    opened_at: "13 May 17:40", hours_to_breach:  -3, narrative: "Household enumerated but not appearing in CDO register; PMT band missing." },
-  { id: "01GRM2026051400003", category: "programme_issue", tier: "l3_district",     status: "escalated",   household_id: "01HXZBVK6QN8M2PFB7K6FZRWS41", member_id: "01HXZBVK6QN8M2PFB7K6FZRWS42", reporter_name: "Onyango David",reporter_phone: "+256 752 110 080", relationship: "Self · head",   assigned_to: "Twikirize J. · DM&E",opened_at: "12 May 11:05", hours_to_breach: -27, narrative: "Eligible for PDM SACCO; partner says NSR ID not on roster." },
-  { id: "01GRM2026051400004", category: "operator_conduct",tier: "l2_cdo",          status: "open",        household_id: "",                                  member_id: "",                              reporter_name: "Anonymous",     reporter_phone: "",                  relationship: "—",              assigned_to: "",                  opened_at: "14 May 06:55", hours_to_breach:  41, narrative: "Enumerator requested money to register family. Tablet ID PCH-4421." },
-  { id: "01GRM2026051400005", category: "data_correction", tier: "l1_parish_chief", status: "open",        household_id: "01HY09KRS1P9MN6FB7K6FZRWS84", member_id: "01HY09KRS1P9MN6FB7K6FZRWS85", reporter_name: "Lokwang Peter", reporter_phone: "+256 782 005 511", relationship: "Self · head",   assigned_to: "Akiteng L.",        opened_at: "13 May 16:30", hours_to_breach:  -1, narrative: "DOB recorded as 1985 but birth-cert shows 1987." },
-  { id: "01GRM2026051400006", category: "inclusion_error", tier: "l4_nsr_unit",     status: "escalated",   household_id: "01HY02FNQ9P8MN6FB7K6FZRWS67", member_id: "",                              reporter_name: "Programme MIS · PDM", reporter_phone: "",          relationship: "—",              assigned_to: "Coordinator",       opened_at: "08 May 13:20", hours_to_breach:  19, narrative: "Household marked deceased by NIRA reverse-feed but still showing in PDM roster." },
-  { id: "01GRM2026051400007", category: "data_correction", tier: "l1_parish_chief", status: "resolved",    household_id: "01HY04MQR0N8P2FB7K6FZRWS73", member_id: "01HY04MQR0N8P2FB7K6FZRWS74", reporter_name: "Auma Beatrice", reporter_phone: "+256 778 213 994", relationship: "Self · head",   assigned_to: "Akiteng L.",        opened_at: "12 May 08:00", hours_to_breach:   0, narrative: "Telephone updated; UPD 01HXYUPD20260512EFAB committed by CDO." },
-];
-
+// GRM_MOCK_ROWS removed — it was fabricated records that nothing rendered.
+// See docs/console_mock_data_audit.md.
 // Hours-to-breach -> SLA chip. Mirrors the format_html badge from
 // apps/grievance/admin.py — green/amber/red is the corridor signal.
 const slaChip = (h, status) => {
