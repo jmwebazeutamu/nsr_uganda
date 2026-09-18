@@ -95,8 +95,23 @@ class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
                     "occurred_at": b.occurred_at,
                     "expected_prev_hash": b.expected_prev_hash.hex() if b.expected_prev_hash else None,
                     "actual_prev_hash": b.actual_prev_hash.hex() if b.actual_prev_hash else None,
+                    # "content" = the row was edited; "dangling" = its
+                    # predecessor was deleted.
+                    "kind": b.kind,
                 }
                 for b in report.breaks
+            ],
+            # Forks are reported but do NOT set ok=False. They weaken the
+            # total-order claim, not tamper-evidence — see ADR-0029 and
+            # docs/audit/2026-08-10_audit_chain_concurrency.md. Production
+            # carries 23, all predating the fix.
+            "forks": [
+                {
+                    "prev_hash": f.prev_hash.hex() if f.prev_hash else None,
+                    "children": f.children,
+                    "first_seen": f.first_seen,
+                }
+                for f in report.forks
             ],
         })
 
