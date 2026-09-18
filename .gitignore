@@ -113,5 +113,7 @@ backups/
 # console would 404 on every one of them in CI.
 static/console/js/
 static/console/manifest.json
+static/console/manifest-admin.json
+static/console/assets/
 static/console/console.css
 static/console/maps/

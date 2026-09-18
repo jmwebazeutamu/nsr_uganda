@@ -17,23 +17,11 @@ const { useState: useStateAD } = React;
 /* ===========================================================
    GEOGRAPHIC UNIT — view + edit
    =========================================================== */
-const AdminGeoUnitDetailScreen = ({ unit, onBack, onSave }) => {
-  const u = unit || {
-    code: "DST-MOROTO", name: "Moroto", level: "district",
-    parent: { code: "SR-KARAMOJA", name: "Karamoja", level: "sub_region" },
-    status: "active", effectiveFrom: "01 Jan 2020", effectiveTo: null,
-    pCodeUbos: "UG7501", pCodeOcha: "UG-401",
-    centroidLat: 2.5333, centroidLng: 34.6667,
-    households: 42101,
-    children: [
-      { code: "SC-TAPAC", name: "Tapac", status: "active" },
-      { code: "SC-RUPA", name: "Rupa", status: "active" },
-      { code: "SC-KATIKEKILE", name: "Katikekile", status: "active" },
-      { code: "SC-MOROTO-NORTH", name: "Moroto North", status: "superseded" },
-      { code: "SC-TEPETH", name: "Tepeth", status: "active" },
-    ],
-    notes: "Capital town of Karamoja sub-region. Boundary review pending for 2026 split with Napak.",
-  };
+const AdminGeoUnitDetailScreenRecord = ({ unit, onBack, onSave }) => {
+  // Requires the record. It used to substitute a specimen one, and
+  // nothing ever passes the prop, so this screen only ever showed
+  // the specimen — editable, with a Save button.
+  const u = unit;
 
   const [edit, setEdit] = useStateAD(false);
   const [draft, setDraft] = useStateAD({ name: u.name, notes: u.notes, status: u.status, effectiveTo: u.effectiveTo });
@@ -162,15 +150,26 @@ const AdminGeoUnitDetailScreen = ({ unit, onBack, onSave }) => {
   );
 };
 
+// The guard sits in a wrapper so the record view's hooks are never
+// called conditionally.
+const AdminGeoUnitDetailScreen = (props) => (
+  !props.unit ? (
+    <div className="page">
+      <div className="t-cap muted" style={{ padding: 24 }}>No geographic unit selected.</div>
+    </div>
+  ) : (
+    <AdminGeoUnitDetailScreenRecord {...props}/>
+  )
+);
+
 /* ===========================================================
    UPD ROUTING — edit (versioned write)
    =========================================================== */
-const AdminUpdRoutingRuleEditScreen = ({ rule, onBack, onSave }) => {
-  const r = rule || {
-    changeType: "addition", pmtRelevant: false,
-    requiredRole: "cdo", slaHours: 48,
-    isActive: true, updatedAt: "12 Mar 2026", note: "Backlog rebalance — was 72h",
-  };
+const AdminUpdRoutingRuleEditScreenRecord = ({ rule, onBack, onSave }) => {
+  // Requires the record. It used to substitute a specimen one, and
+  // nothing ever passes the prop, so this screen only ever showed
+  // the specimen — editable, with a Save button.
+  const r = rule;
 
   const [draft, setDraft] = useStateAD({
     requiredRole: r.requiredRole, slaHours: r.slaHours, note: r.note,
@@ -250,26 +249,26 @@ const AdminUpdRoutingRuleEditScreen = ({ rule, onBack, onSave }) => {
   );
 };
 
+// The guard sits in a wrapper so the record view's hooks are never
+// called conditionally.
+const AdminUpdRoutingRuleEditScreen = (props) => (
+  !props.rule ? (
+    <div className="page">
+      <div className="t-cap muted" style={{ padding: 24 }}>No routing rule selected.</div>
+    </div>
+  ) : (
+    <AdminUpdRoutingRuleEditScreenRecord {...props}/>
+  )
+);
+
 /* ===========================================================
    USER DETAIL — view + edit (roles + scopes)
    =========================================================== */
-const AdminUserDetailScreen = ({ user, onBack, onSave }) => {
-  const u = user || {
-    id: "u-adong-f", name: "Adong F.", username: "adong.f",
-    email: "adong.f@mglsd.go.ug", phone: "+256 772 412 089",
-    status: "active", lastLogin: "22 May · 11:32",
-    mfa: true, mfaMethod: "TOTP",
-    groups: ["cdo"],
-    scopes: [{ level: "sub_county", code: "SC-TAPAC" }, { level: "sub_county", code: "SC-RUPA" }],
-    onboardedAt: "12 Mar 2024",
-    lastPasswordReset: "08 Mar 2026",
-    sessionCount24h: 3,
-    recentActions: [
-      { time: "22 May · 11:33", action: "view", entity: "household", id: "01KRPPW6WR…", ip: "41.78.12.4" },
-      { time: "21 May · 16:48", action: "update", entity: "change_request", id: "UPD-2026-05-21-00188", ip: "41.78.12.4" },
-      { time: "21 May · 11:08", action: "merge", entity: "member", id: "M-01KRPPW6WR-002", ip: "41.78.12.4" },
-    ],
-  };
+const AdminUserDetailScreenRecord = ({ user, onBack, onSave }) => {
+  // Requires the record. It used to substitute a specimen one, and
+  // nothing ever passes the prop, so this screen only ever showed
+  // the specimen — editable, with a Save button.
+  const u = user;
   const [edit, setEdit] = useStateAD(false);
   const [draft, setDraft] = useStateAD({ groups: u.groups, scopes: u.scopes, status: u.status });
 
@@ -439,28 +438,28 @@ const AdminUserDetailScreen = ({ user, onBack, onSave }) => {
   );
 };
 
+// The guard sits in a wrapper so the record view's hooks are never
+// called conditionally.
+const AdminUserDetailScreen = (props) => (
+  !props.user ? (
+    <div className="page">
+      <div className="t-cap muted" style={{ padding: 24 }}>No user account selected.</div>
+    </div>
+  ) : (
+    <AdminUserDetailScreenRecord {...props}/>
+  )
+);
+
 /* ===========================================================
    DDUP MATCH PAIR — side-by-side merge resolution
    =========================================================== */
-const AdminDdupPairDetailScreen = ({ pair, onBack, onMerge, onReject, onHold }) => {
-  const p = pair || {
-    id: "01HXR9P2K7N6FB7K6FZRWS01",
-    type: "member",
-    tier: 3, score: 0.94, status: "pending", ageHours: 2,
-    reason: "name + village + DoB",
-    fields: [
-      { field: "full_name",     a: "Lokol Naume",   b: "Lokol Naome",   similarity: 0.92, match: true },
-      { field: "date_of_birth", a: "1995-03-14",    b: "1995-03-14",    similarity: 1.00, match: true },
-      { field: "sex",           a: "F",             b: "F",             similarity: 1.00, match: true },
-      { field: "village_code",  a: "VLG-LOPUWAPUWA-A", b: "VLG-LOPUWAPUWA-A", similarity: 1.00, match: true },
-      { field: "nin_value",     a: "—",             b: "CM95031411XYZW", similarity: 0.00, match: false },
-      { field: "phone",         a: "+256 772 412…", b: "—",             similarity: 0.00, match: false },
-      { field: "household_id",  a: "01HXY7K3B2…",   b: "01HXP02CN5…",   similarity: 0.00, match: false },
-    ],
-    contextA: { id: "M-01HXY7K3B2-001", household: "Lokol household · Moroto", confirmed: "Confirmed", line: 1, role: "Head" },
-    contextB: { id: "M-01HXP02CN5-099", household: "Onyango household · Arua", confirmed: "Provisional", line: 4, role: "Daughter" },
-  };
-
+const AdminDdupPairDetailScreenRecord = ({ pair, onBack, onMerge, onReject, onHold }) => {
+  // A merge collapses two member records into one. This screen used to
+  // fall back to a fabricated pair — two near-identical members with a
+  // 0.94 similarity, NINs, phones and household ids — and invite the
+  // operator to pick a survivor and merge. No specimen belongs on a
+  // screen whose primary action is destructive.
+  const p = pair;
   const [survivor, setSurvivor] = useStateAD("A");
   const [reason, setReason] = useStateAD("");
 
@@ -583,18 +582,35 @@ const AdminDdupPairDetailScreen = ({ pair, onBack, onMerge, onReject, onHold }) 
   );
 };
 
+// The guard sits in a wrapper so the record view's hooks are never
+// called conditionally.
+const AdminDdupPairDetailScreen = (props) => (
+  !props.pair ? (
+    <div className="page">
+      <div className="card mt-3" style={{padding:48, textAlign:"center", color:"var(--neutral-500)"}}>
+        <Icon name="duplicate" size={32} color="var(--neutral-300)"/>
+        <div className="t-bodysm mt-2">No match pair selected.</div>
+        <div className="t-cap mt-1">Open a pair from the DDUP queue.</div>
+        {onBack && (
+          <div className="mt-3">
+            <button className="btn" onClick={onBack}>Back to DDUP</button>
+          </div>
+        )}
+      </div>
+    </div>
+  ) : (
+    <AdminDdupPairDetailScreenRecord {...props}/>
+  )
+);
+
 /* ===========================================================
    CHOICE LIST OPTION — edit a single ChoiceOption in a draft
    =========================================================== */
-const AdminChoiceListOptionEditScreen = ({ option, onBack, onSave }) => {
-  const o = option || {
-    listName: "education_level", listLabel: "Education level",
-    listVersion: 5, // draft
-    code: "T6", label: "Doctorate / PhD",
-    language: "en", sort: 20, status: "active",
-    description: "ISCED 2024 level 8 — research doctorate.",
-    parentCode: null,
-  };
+const AdminChoiceListOptionEditScreenRecord = ({ option, onBack, onSave }) => {
+  // Requires the record. It used to substitute a specimen one, and
+  // nothing ever passes the prop, so this screen only ever showed
+  // the specimen — editable, with a Save button.
+  const o = option;
   const [draft, setDraft] = useStateAD({ code: o.code, label: o.label, language: o.language, sort: o.sort, status: o.status, description: o.description });
 
   return (
@@ -653,6 +669,18 @@ const AdminChoiceListOptionEditScreen = ({ option, onBack, onSave }) => {
     </div>
   );
 };
+
+// The guard sits in a wrapper so the record view's hooks are never
+// called conditionally.
+const AdminChoiceListOptionEditScreen = (props) => (
+  !props.option ? (
+    <div className="page">
+      <div className="t-cap muted" style={{ padding: 24 }}>No choice-list option selected.</div>
+    </div>
+  ) : (
+    <AdminChoiceListOptionEditScreenRecord {...props}/>
+  )
+);
 
 Object.assign(window, {
   AdminGeoUnitDetailScreen,

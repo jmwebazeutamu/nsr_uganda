@@ -35,6 +35,29 @@ from apps.security.models import AuditEvent
 # Helpers
 # ───────────────────────────────────────────────────────────────
 
+def _latest_thresholds(mv: PMTModelVersion) -> tuple[dict[str, float], str, int]:
+    """Most recent empirical score threshold per band for one model
+    version, with the time it was computed and the largest sample it
+    was computed over. Both the dashboard's active-model card and the
+    Configuration screen's band-cutoff table read these; neither may
+    substitute a figure from anywhere else, since an empirical band
+    threshold is the score at which a household stops being eligible.
+    """
+    thresholds: dict[str, float] = {}
+    computed_at = ""
+    sample_size = 0
+    for row in (
+        PMTBandThreshold.objects
+        .filter(model_version=mv)
+        .order_by("band_name", "-computed_at")
+    ):
+        if row.band_name not in thresholds:
+            thresholds[row.band_name] = float(row.score_threshold)
+            computed_at = row.computed_at.isoformat()
+            sample_size = max(sample_size, row.sample_size)
+    return thresholds, computed_at, sample_size
+
+
 def _active_model_payload() -> dict:
     """Top card on the dashboard — active model + latest threshold
     per band + staleness flags per ADR-0023."""
@@ -48,18 +71,7 @@ def _active_model_payload() -> dict:
         return {}
     year = timezone.now().year
     cal_end = mv.calibration_year_end or 0
-    thresholds_latest: dict[str, float] = {}
-    thresholds_at = ""
-    sample_size = 0
-    for row in (
-        PMTBandThreshold.objects
-        .filter(model_version=mv)
-        .order_by("band_name", "-computed_at")
-    ):
-        if row.band_name not in thresholds_latest:
-            thresholds_latest[row.band_name] = float(row.score_threshold)
-            thresholds_at = row.computed_at.isoformat()
-            sample_size = max(sample_size, row.sample_size)
+    thresholds_latest, thresholds_at, sample_size = _latest_thresholds(mv)
     return {
         "id": str(mv.id),
         "version": mv.version,
@@ -757,6 +769,10 @@ def _version_detail(mv: PMTModelVersion) -> dict:
         "calibration_dataset": mv.calibration_dataset,
         "variables": mv.variables or [],
         "signoffs": signoffs,
+        # Empty for every version that has never been used to score:
+        # thresholds are a by-product of a recompute run, not a
+        # property the author declares.
+        "thresholds_latest": _latest_thresholds(mv)[0],
     }
 
 
