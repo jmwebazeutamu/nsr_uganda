@@ -636,3 +636,39 @@ and pulling them puts Docker Hub in the deploy path for no reason. The
 corrected job also verifies before mutating server state, and refuses a
 commit that is not an ancestor of `origin/main`. It needs a credential
 with `workflow` scope to land.
+
+## 2026-09-18 20:30Z — production unreachable (open incident)
+
+Reported: https://nsr-sris.mglsd.go.ug/ returns nothing.
+
+Probed from the dev VM (no commands could be run on prod — it does not
+answer):
+
+| Probe | Result |
+|---|---|
+| DNS `nsr-sris.mglsd.go.ug` | resolves to 154.72.204.74, correct |
+| ICMP to 154.72.204.74 | 4/4 lost, 100% |
+| TCP 22 / 80 / 443 | no connection, 3 attempts each |
+| HTTPS `/` and `/healthz` | timeout at 30s, no TCP handshake |
+| Path to the host | reaches provider edge 41.173.8.5 (hop 16), dies after |
+| 41.173.8.5 itself | answers, 0% loss, 230ms |
+| Dev VM outbound | fine — github.com 200, nsr-sris-dev.quasar.ug 200 |
+
+The route into the hosting provider is healthy and its edge router
+answers; the server behind it answers nothing on any port, including
+ICMP. That is a host that is down, disconnected, or dropping everything
+at the network layer — not a web-tier fault, which would still complete
+a TCP handshake.
+
+Last confirmed healthy: 2026-09-18T02:09Z, deploy cc0177c -> 8a160b7.
+Health check passed on the first attempt, all eight containers up, 38G
+free. The bundles were then fetched successfully over HTTPS from
+outside at ~02:15Z. So the box was serving after the deploy, and went
+away some time in the ~18 hours since.
+
+The deploy is not implicated: it changes containers only — checkout,
+build, `up -d`, migrate — and never touches host networking, firewall
+rules or power state.
+
+Needs out-of-band access (provider console / IPMI) to diagnose further.
+Nothing further can be established from here.
