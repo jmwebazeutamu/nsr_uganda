@@ -14,16 +14,8 @@ const { useState: useStateCD, useMemo: useMemoCD } = React;
 /* ============================================================
    Sample household — the head and three members
    ============================================================ */
-const HOUSEHOLD = {
-  id: "HH-7411-0192",
-  members: [
-    { id: "M1", name: "Nakiru Christine", rel: "Self (head)", self: true, sex: "F", age: 41, initials: "NC" },
-    { id: "M2", name: "Lokol Moses",      rel: "Spouse",      sex: "M", age: 45, initials: "LM" },
-    { id: "M3", name: "Akiru Grace",      rel: "Daughter",    sex: "F", age: 17, initials: "AG" },
-    { id: "M4", name: "Lomong Peter",     rel: "Son",         sex: "M", age: 12, initials: "LP" },
-  ],
-};
-
+// HOUSEHOLD removed — it was fabricated records that nothing rendered.
+// See docs/console_mock_data_audit.md.
 // Per-member consent state. Keyed by member id → purpose code → record.
 const seedRecords = () => ({
   M1: {

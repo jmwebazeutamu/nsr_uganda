@@ -122,3 +122,51 @@ Worth recording so the next audit does not re-raise them:
 
 A contract test per screen, in the shape of
 `tests/contract/test_home_kpis_are_real.py`, keeps each one fixed.
+
+---
+
+## Progress (18 September 2026)
+
+| Item | State |
+|---|---|
+| 1. Security audit screen | **done** — reads the real chain; reports its 816 breaks instead of claiming "✓ verified" |
+| 2. Five fallback screens | **done** — DIH, UPD, GRM, household, consent-citizen start empty |
+| 3. Geography, roles, PMT config | **done** — all read live endpoints |
+| 4. Consent DPO queue | **done** — reports the module as disabled rather than inventing tickets |
+| 5. Retired `_LEGACY_*` arrays | **done** — 8 fixtures, 377 lines, 151 identities deleted |
+
+Referenced fabricated fixtures: **20 → 10**. Dead fixtures: **8 → 0**. The
+ten that remain are the known-clean set (`ROLE_CONTENT` identity fallback,
+`NAV`, `PMT_GEO`, `FS_FIELDS`, `_PREVIEW_ULIDS`, `UPD`) plus
+change-request's `ROSTER` and `HH`.
+
+## What this audit missed, and the next piece of work
+
+Deleting the dead arrays exposed a gap in the method above. It looked for
+**top-level constants** holding three or more fabricated identities. It
+therefore did not see fabricated records written **inline in JSX**, which
+is where a detail or compare view naturally puts them.
+
+**47 fabricated identities remain in the shipped bundle**, in that shape:
+
+| Screen | Identities | Where |
+|---|---|---|
+| `screens-dih.jsx` | 12 | the three-column compare view, inline |
+| `screens-home.jsx` | 10 | `ROLE_CONTENT.person` (harness fallback, intended) + the KitScreen design gallery |
+| `change-request/screens-change-request.jsx` | 8 | `ROSTER` / `HH` — the last referenced fixture |
+| `screens-upd.jsx` | 7 | the `UPD` detail record, 23 uses |
+| `screens-capture.jsx` | 4 | inline |
+| others | 6 | inline |
+
+Not all of these are equal. `ROLE_CONTENT.person` is a documented fallback
+for the standalone harness, and KitScreen is a design gallery whose job is
+to show sample content. The ones that matter are the **detail and compare
+views** — DIH compare, UPD detail, change-request — because they render a
+single record in full, which is exactly the shape an operator reads as
+"this is the household in front of me".
+
+Those three need the same treatment as items 1–4: fetch the record, show
+loading and error states, and render nothing rather than a specimen. That
+is the next piece of work, and it is larger than it looks, because the
+fabricated values are woven through the JSX rather than sitting in one
+array.

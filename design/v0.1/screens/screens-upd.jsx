@@ -124,33 +124,8 @@ const _updFormatDiffValue = (value, meta) => {
 // In production this comes from GET /api/v1/upd/change-requests/?status=
 // pending_approval, sorted by SLA-soonest-first. Mix of change_types +
 // PMT-relevance + SLA states so the demo exercises every visual state.
-const UPD_QUEUE = [
-  { id: "UPD-2026-05-14-00237", head: "Lokol Naume", parish: "Nakiloro · Tapac",
-    type: "Roster: add member", pmt: true, slaDays: 2, slaCap: 3,
-    submitter: "Lokwang Peter", canSelfApprove: true },
-  { id: "UPD-2026-05-14-00241", head: "Akello Sarah", parish: "Lopuwapuwa · Tapac",
-    type: "Address: village move", pmt: false, slaDays: 1, slaCap: 3,
-    submitter: "Adong Florence", canSelfApprove: false },
-  { id: "UPD-2026-05-13-00208", head: "Omara John", parish: "Kakingol · Tapac",
-    type: "Roster: vital event (death)", pmt: true, slaDays: 3, slaCap: 3,
-    submitter: "Lokwang Peter", canSelfApprove: true },
-  { id: "UPD-2026-05-13-00203", head: "Apio Grace", parish: "Nakiloro · Tapac",
-    type: "Phone update", pmt: false, slaDays: 4, slaCap: 3,
-    submitter: "Otto Vincent", canSelfApprove: true },
-  { id: "UPD-2026-05-12-00191", head: "Loum Margaret", parish: "Lopuwapuwa · Tapac",
-    type: "Education: school enrolment", pmt: true, slaDays: 2, slaCap: 3,
-    submitter: "Lokwang Peter", canSelfApprove: true },
-  { id: "UPD-2026-05-12-00188", head: "Ekiru Peter", parish: "Kakingol · Tapac",
-    type: "Roster: add member", pmt: true, slaDays: 5, slaCap: 3,
-    submitter: "Adong Florence", canSelfApprove: false },
-  { id: "UPD-2026-05-12-00182", head: "Achan Beatrice", parish: "Nakiloro · Tapac",
-    type: "Identification update (NIN)", pmt: false, slaDays: 1, slaCap: 3,
-    submitter: "Otto Vincent", canSelfApprove: true },
-  { id: "UPD-2026-05-11-00170", head: "Lopeyok Mary", parish: "Lopuwapuwa · Tapac",
-    type: "Housing: roof material", pmt: true, slaDays: 3, slaCap: 3,
-    submitter: "Otto Vincent", canSelfApprove: true },
-];
-
+// UPD_QUEUE removed — it was fabricated records that nothing rendered.
+// See docs/console_mock_data_audit.md.
 // Simulates POST /api/v1/upd/change-requests/bulk-<action>/. The backend
 // shape (S10-004): { acted: [ids], skipped: [{id, reason}], not_found: [ids] }
 // Rows where the current actor is the submitter get skipped under

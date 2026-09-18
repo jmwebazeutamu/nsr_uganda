@@ -128,69 +128,8 @@ const _projectMember = (m) => ({
 // rather than undefined. The live screen no longer reads this.
 const MEMBERS = [];
 
-const _LEGACY_MEMBERS_UNUSED = [
-  // Nsubuga household (Buganda South · Lyantonde · Kibalinga)
-  { mid:"M-01KRPPW6WR-001", line:1, name:"Nsubuga Ruth",       rel:"Head",      sex:"F", age:42, ageBand:"40–49", nin:"verified", ninShort:"CM84050213ABCD", disability:"none", hh:"01KRPPW6WRGRJZY0N4XN8R1YC2", subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Okello Village", pmtBand:"Poorest 40%", programmes:["OPM-PDM"],     status:"Confirmed", lastUpdate:"22 Apr 2026" },
-  { mid:"M-01KRPPW6WR-002", line:2, name:"Tumusiime Samuel",   rel:"Spouse",    sex:"M", age:46, ageBand:"40–49", nin:"verified", ninShort:"CM80020412EFGH", disability:"none", hh:"01KRPPW6WRGRJZY0N4XN8R1YC2", subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Okello Village", pmtBand:"Poorest 40%", programmes:["OPM-PDM"],     status:"Confirmed", lastUpdate:"22 Apr 2026" },
-  { mid:"M-01KRPPW6WR-003", line:3, name:"Okello James",       rel:"Son",       sex:"M", age:14, ageBand:"10–14", nin:"pending",  ninShort:"—",              disability:"none", hh:"01KRPPW6WRGRJZY0N4XN8R1YC2", subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Okello Village", pmtBand:"Poorest 40%", programmes:["OPM-PDM"],     status:"Confirmed", lastUpdate:"20 Apr 2026" },
-  { mid:"M-01KRPPW6WR-006", line:6, name:"Achen Rebecca",      rel:"Daughter",  sex:"F", age:6,  ageBand:"5–9",   nin:"none",     ninShort:"—",              disability:"none", hh:"01KRPPW6WRGRJZY0N4XN8R1YC2", subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Okello Village", pmtBand:"Poorest 40%", programmes:["OPM-PDM"],     status:"Confirmed", lastUpdate:"22 Apr 2026" },
-
-  // Lokol household (Karamoja · Moroto)
-  { mid:"M-01HXY7K3B2-001", line:1, name:"Lokol Naume",        rel:"Head",      sex:"F", age:31, ageBand:"30–39", nin:"verified", ninShort:"CM94070118JKLM", disability:"none",         hh:"01HXY7K3B2N9PVQE4M6FZRWS18", subreg:"Karamoja", district:"Moroto", parish:"Nakiloro", village:"Lopuwapuwa A", pmtBand:"Poorest 20%", programmes:[], status:"Provisional", lastUpdate:"14 May 2026" },
-  { mid:"M-01HXY7K3B2-002", line:2, name:"Lokol Peter",        rel:"Son",       sex:"M", age:9,  ageBand:"5–9",   nin:"none",     ninShort:"—",              disability:"mobility",     hh:"01HXY7K3B2N9PVQE4M6FZRWS18", subreg:"Karamoja", district:"Moroto", parish:"Nakiloro", village:"Lopuwapuwa A", pmtBand:"Poorest 20%", programmes:[], status:"Provisional", lastUpdate:"14 May 2026" },
-  { mid:"M-01HXY7K3B2-003", line:3, name:"Lokol Esther",       rel:"Daughter",  sex:"F", age:4,  ageBand:"<5",    nin:"none",     ninShort:"—",              disability:"none",         hh:"01HXY7K3B2N9PVQE4M6FZRWS18", subreg:"Karamoja", district:"Moroto", parish:"Nakiloro", village:"Lopuwapuwa A", pmtBand:"Poorest 20%", programmes:[], status:"Provisional", lastUpdate:"14 May 2026" },
-
-  // Akello household (Acholi · Gulu)
-  { mid:"M-01HXZ9MR4N-001", line:1, name:"Akello Grace",       rel:"Head",      sex:"F", age:35, ageBand:"30–39", nin:"verified", ninShort:"CM90031128NOPQ", disability:"none",   hh:"01HXZ9MR4N8P2QFB7K6FZRWS33", subreg:"Acholi", district:"Gulu", parish:"Pageya", village:"Aywee", pmtBand:"Poorest 40%", programmes:[], status:"Pending", lastUpdate:"14 May 2026" },
-  { mid:"M-01HXZ9MR4N-002", line:2, name:"Akello Jenipher",    rel:"Daughter",  sex:"F", age:16, ageBand:"15–19", nin:"pending",  ninShort:"—",              disability:"none",   hh:"01HXZ9MR4N8P2QFB7K6FZRWS33", subreg:"Acholi", district:"Gulu", parish:"Pageya", village:"Aywee", pmtBand:"Poorest 40%", programmes:[], status:"Pending", lastUpdate:"14 May 2026" },
-  { mid:"M-01HXZ9MR4N-003", line:3, name:"Akello Faith",       rel:"Daughter",  sex:"F", age:11, ageBand:"10–14", nin:"none",     ninShort:"—",              disability:"none",   hh:"01HXZ9MR4N8P2QFB7K6FZRWS33", subreg:"Acholi", district:"Gulu", parish:"Pageya", village:"Aywee", pmtBand:"Poorest 40%", programmes:[], status:"Pending", lastUpdate:"14 May 2026" },
-
-  // Mukasa Patrick (West Nile · Arua)
-  { mid:"M-01HXP02CN4-001", line:1, name:"Mukasa Patrick",     rel:"Head",      sex:"M", age:51, ageBand:"50–59", nin:"verified", ninShort:"CM75081401RSTU", disability:"none",        hh:"01HXP02CN4QFB7K6FZRWS00111", subreg:"West Nile", district:"Arua", parish:"Anyiribu", village:"Anyiribu A", pmtBand:"Poorest 40%", programmes:["NUSAF","OPM-PDM"], status:"Confirmed", lastUpdate:"03 May 2026" },
-  { mid:"M-01HXP02CN4-002", line:2, name:"Mukasa Joyce",       rel:"Spouse",    sex:"F", age:48, ageBand:"40–49", nin:"verified", ninShort:"CM78110312VWXY", disability:"hearing",     hh:"01HXP02CN4QFB7K6FZRWS00111", subreg:"West Nile", district:"Arua", parish:"Anyiribu", village:"Anyiribu A", pmtBand:"Poorest 40%", programmes:["NUSAF","OPM-PDM"], status:"Confirmed", lastUpdate:"03 May 2026" },
-  { mid:"M-01HXP02CN4-003", line:3, name:"Mukasa Daniel",      rel:"Son",       sex:"M", age:20, ageBand:"20–29", nin:"verified", ninShort:"CM06041122ZABC", disability:"none",        hh:"01HXP02CN4QFB7K6FZRWS00111", subreg:"West Nile", district:"Arua", parish:"Anyiribu", village:"Anyiribu A", pmtBand:"Poorest 40%", programmes:["OPM-PDM"], status:"Confirmed", lastUpdate:"03 May 2026" },
-
-  // Onyango David
-  { mid:"M-01HXP02CN5-001", line:1, name:"Onyango David",      rel:"Head",      sex:"M", age:39, ageBand:"30–39", nin:"verified", ninShort:"CM87021018DEFG", disability:"none",  hh:"01HXP02CN4QFB7K6FZRWS00118", subreg:"West Nile", district:"Arua", parish:"Logiri",   village:"Logiri Central", pmtBand:"Poorest 40%", programmes:[], status:"Pending", lastUpdate:"14 May 2026" },
-  { mid:"M-01HXP02CN5-004", line:4, name:"Onyango Tabitha",    rel:"Daughter",  sex:"F", age:2,  ageBand:"<5",    nin:"none",     ninShort:"—",              disability:"none",  hh:"01HXP02CN4QFB7K6FZRWS00118", subreg:"West Nile", district:"Arua", parish:"Logiri",   village:"Logiri Central", pmtBand:"Poorest 40%", programmes:[], status:"Pending", lastUpdate:"14 May 2026" },
-
-  // Mugisha James (Karamoja · Napak)
-  { mid:"M-01HY02FNQ9-001", line:1, name:"Mugisha James",      rel:"Head",      sex:"M", age:44, ageBand:"40–49", nin:"verified", ninShort:"CM82051603HIJK", disability:"none",       hh:"01HY02FNQ9P8MN6FB7K6FZRWS67", subreg:"Karamoja", district:"Napak", parish:"Lokopo", village:"Lorengedwat", pmtBand:"Poorest 20%", programmes:[], status:"Pending", lastUpdate:"14 May 2026" },
-  { mid:"M-01HY02FNQ9-002", line:2, name:"Mugisha Susan",      rel:"Spouse",    sex:"F", age:41, ageBand:"40–49", nin:"verified", ninShort:"CM85091921LMNO", disability:"seeing",     hh:"01HY02FNQ9P8MN6FB7K6FZRWS67", subreg:"Karamoja", district:"Napak", parish:"Lokopo", village:"Lorengedwat", pmtBand:"Poorest 20%", programmes:[], status:"Pending", lastUpdate:"14 May 2026" },
-
-  // Auma Beatrice
-  { mid:"M-01HY04MQR0-001", line:1, name:"Auma Beatrice",      rel:"Head",      sex:"F", age:38, ageBand:"30–39", nin:"verified", ninShort:"CM87090517PQRS", disability:"none",   hh:"01HY04MQR0N8P2FB7K6FZRWS73", subreg:"Karamoja", district:"Napak", parish:"Lokopo", village:"Apeitolim", pmtBand:"Poorest 40%", programmes:[], status:"Pending", lastUpdate:"14 May 2026" },
-  { mid:"M-01HY04MQR0-005", line:5, name:"Auma Sarah",         rel:"Daughter",  sex:"F", age:13, ageBand:"10–14", nin:"none",     ninShort:"—",              disability:"cognition", hh:"01HY04MQR0N8P2FB7K6FZRWS73", subreg:"Karamoja", district:"Napak", parish:"Lokopo", village:"Apeitolim", pmtBand:"Poorest 40%", programmes:[], status:"Pending", lastUpdate:"14 May 2026" },
-
-  // Lopuwa John
-  { mid:"M-01HY09KRS1-001", line:1, name:"Lopuwa John",        rel:"Head",      sex:"M", age:36, ageBand:"30–39", nin:"verified", ninShort:"CM89030412TUVW", disability:"none",   hh:"01HY09KRS1P9MN6FB7K6FZRWS84", subreg:"Karamoja", district:"Moroto", parish:"Tapac", village:"Kakingol", pmtBand:"Poorest 40%", programmes:["OPM-PDM"], status:"Confirmed", lastUpdate:"11 May 2026" },
-
-  // Acheng Rose (Acholi · Gulu)
-  { mid:"M-01HY0AMNT8-001", line:1, name:"Acheng Rose",        rel:"Head",      sex:"F", age:64, ageBand:"60+",   nin:"verified", ninShort:"CM61081019XYZA", disability:"mobility", hh:"01HY0AMNT8P2N6FB7K6FZRWS92", subreg:"Acholi", district:"Gulu", parish:"Bobi", village:"Aywee", pmtBand:"Middle 40%", programmes:["NUSAF","SCG"], status:"Confirmed", lastUpdate:"30 Apr 2026" },
-  { mid:"M-01HY0AMNT8-002", line:2, name:"Acheng Margaret",    rel:"Daughter",  sex:"F", age:32, ageBand:"30–39", nin:"verified", ninShort:"CM93040621BCDE", disability:"none",     hh:"01HY0AMNT8P2N6FB7K6FZRWS92", subreg:"Acholi", district:"Gulu", parish:"Bobi", village:"Aywee", pmtBand:"Middle 40%", programmes:["NUSAF"],       status:"Confirmed", lastUpdate:"30 Apr 2026" },
-
-  // Byaruhanga Charles
-  { mid:"M-01HX91KPN1-001", line:1, name:"Byaruhanga Charles", rel:"Head",      sex:"M", age:55, ageBand:"50–59", nin:"verified", ninShort:"CM70010505FGHI", disability:"none",         hh:"01HX91KPNRMQ0F2B7K6FZRWS10", subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Okello Village", pmtBand:"Poorest 40%", programmes:["OPM-PDM"], status:"Confirmed", lastUpdate:"17 Mar 2026" },
-  { mid:"M-01HX91KPN1-004", line:4, name:"Byaruhanga Doreen",  rel:"Daughter",  sex:"F", age:17, ageBand:"15–19", nin:"verified", ninShort:"CM08121113JKLM", disability:"none",         hh:"01HX91KPNRMQ0F2B7K6FZRWS10", subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Okello Village", pmtBand:"Poorest 40%", programmes:["OPM-PDM"], status:"Confirmed", lastUpdate:"17 Mar 2026" },
-
-  // Namutebi Sarah
-  { mid:"M-01HX91KPN4-001", line:1, name:"Namutebi Sarah",     rel:"Head",      sex:"F", age:29, ageBand:"20–29", nin:"verified", ninShort:"CM96080318NOPQ", disability:"none",        hh:"01HX91KPNRMQ0F2B7K6FZRWS44", subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Okello Village", pmtBand:"Poorest 20%", programmes:["OPM-PDM","WFP"], status:"Confirmed", lastUpdate:"21 Apr 2026" },
-  { mid:"M-01HX91KPN4-002", line:2, name:"Namutebi Junior",    rel:"Son",       sex:"M", age:7,  ageBand:"5–9",   nin:"none",     ninShort:"—",              disability:"none",        hh:"01HX91KPNRMQ0F2B7K6FZRWS44", subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Okello Village", pmtBand:"Poorest 20%", programmes:["OPM-PDM","WFP"], status:"Confirmed", lastUpdate:"21 Apr 2026" },
-
-  // Apio Joyce (Lango · Lira)
-  { mid:"M-01HX91KPN6-001", line:1, name:"Apio Joyce",         rel:"Head",      sex:"F", age:43, ageBand:"40–49", nin:"verified", ninShort:"CM82061818RSTU", disability:"none",       hh:"01HX91KPNRMQ0F2B7K6FZRWS66", subreg:"Lango", district:"Lira", parish:"Adekokwok", village:"Adekokwok B", pmtBand:"Poorest 40%", programmes:["NUSAF"], status:"Confirmed", lastUpdate:"08 May 2026" },
-  { mid:"M-01HX91KPN6-002", line:2, name:"Apio Brian",         rel:"Son",       sex:"M", age:19, ageBand:"15–19", nin:"verified", ninShort:"CM07020412VWXY", disability:"none",       hh:"01HX91KPNRMQ0F2B7K6FZRWS66", subreg:"Lango", district:"Lira", parish:"Adekokwok", village:"Adekokwok B", pmtBand:"Poorest 40%", programmes:["NUSAF"], status:"Confirmed", lastUpdate:"08 May 2026" },
-  { mid:"M-01HX91KPN6-005", line:5, name:"Apio Ruth",          rel:"Daughter",  sex:"F", age:3,  ageBand:"<5",    nin:"none",     ninShort:"—",              disability:"none",       hh:"01HX91KPNRMQ0F2B7K6FZRWS66", subreg:"Lango", district:"Lira", parish:"Adekokwok", village:"Adekokwok B", pmtBand:"Poorest 40%", programmes:["NUSAF"], status:"Confirmed", lastUpdate:"08 May 2026" },
-
-  // Kintu Ronald
-  { mid:"M-01HX91KPN7-001", line:1, name:"Kintu Ronald",       rel:"Head",      sex:"M", age:48, ageBand:"40–49", nin:"verified", ninShort:"CM77051929ZABC", disability:"none",      hh:"01HX91KPNRMQ0F2B7K6FZRWS77", subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Lwemiyaga", pmtBand:"Poorest 40%", programmes:["OPM-PDM"], status:"Confirmed", lastUpdate:"14 Apr 2026" },
-  { mid:"M-01HX91KPN7-006", line:6, name:"Kintu Aisha",        rel:"Daughter",  sex:"F", age:1,  ageBand:"<5",    nin:"none",     ninShort:"—",              disability:"none",      hh:"01HX91KPNRMQ0F2B7K6FZRWS77", subreg:"Buganda South", district:"Lyantonde", parish:"Kibalinga", village:"Lwemiyaga", pmtBand:"Poorest 40%", programmes:["OPM-PDM"], status:"Confirmed", lastUpdate:"14 Apr 2026" },
-
-  // Tumuhairwe Peter
-  { mid:"M-01HX91KPN5-001", line:1, name:"Tumuhairwe Peter",   rel:"Head",      sex:"M", age:65, ageBand:"60+",   nin:"verified", ninShort:"CM60101204DEFG", disability:"mobility",  hh:"01HX91KPNRMQ0F2B7K6FZRWS55", subreg:"Buganda South", district:"Lyantonde", parish:"Kasaana", village:"Kasaana A", pmtBand:"Middle 40%", programmes:["SCG"], status:"Confirmed", lastUpdate:"02 Feb 2026" },
-  { mid:"M-01HX91KPN5-003", line:3, name:"Tumuhairwe Edith",   rel:"Daughter",  sex:"F", age:25, ageBand:"20–29", nin:"verified", ninShort:"CM00021105HIJK", disability:"none",      hh:"01HX91KPNRMQ0F2B7K6FZRWS55", subreg:"Buganda South", district:"Lyantonde", parish:"Kasaana", village:"Kasaana A", pmtBand:"Middle 40%", programmes:[],       status:"Confirmed", lastUpdate:"02 Feb 2026" },
-];
-
+// _LEGACY_MEMBERS_UNUSED removed — it was fabricated records that nothing rendered.
+// See docs/console_mock_data_audit.md.
 // Age-band keys MUST match apps.data_management.api._AGE_BANDS so
 // the dropdown round-trips cleanly through `?age_band=`.
 const MEM_AGE_BANDS = ["<5", "5-9", "10-14", "15-19", "20-29", "30-39", "40-49", "50-59", "60+"];
