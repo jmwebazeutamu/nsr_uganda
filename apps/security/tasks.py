@@ -43,10 +43,14 @@ def _slack_payload(report: ChainReport) -> dict:
     second source of truth.
     """
     first = report.breaks[0] if report.breaks else None
+    # Breaks now mean edited or deleted rows only. Forks are counted
+    # separately so a known, documented fork cannot look like tampering.
+    kinds = ", ".join(sorted({b.kind for b in report.breaks})) or "none"
     head = (
         f":rotating_light: *chain_integrity_break* — "
-        f"{len(report.breaks)} break(s) detected in audit chain "
-        f"({report.rows_scanned} rows scanned)"
+        f"{len(report.breaks)} break(s) ({kinds}) detected in audit chain "
+        f"({report.rows_scanned} rows scanned, "
+        f"{len(report.forks)} fork(s) present)"
     )
     body = ""
     if first:
