@@ -959,32 +959,24 @@ const DIHScreen = () => {
                   </>
                 );
               }
-              // Mock fallback — original design-preview content.
+              // No live record: render nothing about the household.
+              //
+              // This branch used to draw a complete, plausible household —
+              // head NIN, phone, parish, GPS to 8m, PMT band, and a
+              // five-member roster with names and NINs. A DIH reviewer
+              // decides whether to PROMOTE a record into the registry on
+              // the strength of exactly this panel, so a specimen here is
+              // not a placeholder, it is a decision made about a household
+              // that does not exist.
               return (
-                <>
-                  <RecordSummary
-                    fields={[
-                      ["Provisional ID", current.id, "mono"],
-                      ["Head NIN", "CM89241023ABCD", "mono"],
-                      ["Phone", "+256 781 552119"],
-                      ["Parish", "Pageya · Bobi · Gulu"],
-                      ["GPS", "2.79103, 32.29841 · 8m", "mono"],
-                      ["Members", "5 (head + spouse + 3 dependants)"],
-                      ["PMT band", <Chip tone="eligibility">Poorest 40%</Chip>],
-                      ["Roof material", "Iron sheets"],
-                      ["Source", "Walk-in CAPI · Lokwang Peter (PCH-7411)"],
-                    ]}
-                  />
-                  <SectionAccordion title="Roster (5 members)" tint="identity" defaultOpen>
-                    <RosterTable members={[
-                      { name: "Akello Grace",     rel: "Head",    sex: "F", age: 34, nin: "CM89241023ABCD" },
-                      { name: "Okello Charles",   rel: "Spouse",  sex: "M", age: 38, nin: "CM89110218EFGH" },
-                      { name: "Akello Joy",       rel: "Daughter",sex: "F", age: 12, nin: "—" },
-                      { name: "Okello Brian",     rel: "Son",     sex: "M", age: 9,  nin: "—" },
-                      { name: "Akello Mercy",     rel: "Daughter",sex: "F", age: 4,  nin: "—" },
-                    ]}/>
-                  </SectionAccordion>
-                </>
+                <div className="card" style={{padding:36, textAlign:"center", color:"var(--neutral-500)"}}>
+                  <Icon name="inbox" size={28} color="var(--neutral-300)"/>
+                  <div className="t-bodysm mt-2">No staged record loaded.</div>
+                  <div className="t-cap mt-1">
+                    Select a record from the queue. Nothing is shown rather
+                    than a sample household.
+                  </div>
+                </div>
               );
             })()}
             {/* Health / Education / Housing accordions stay mock-only
@@ -1064,41 +1056,19 @@ const DIHScreen = () => {
               </div>
             );
           }
+          // No live duplicate candidate: show nothing.
+          //
+          // This card used to render a fabricated match — a named head, a
+          // NIN, a registration date and a 0.83 similarity score — beside
+          // the record under review. A reviewer comparing them would have
+          // been deciding whether two households are the same person on
+          // the strength of one that does not exist.
           return (
-            <div className="card" style={{borderTop:'3px solid var(--accent-danger)'}}>
-              <div className="card-header" style={{padding:'14px 20px'}}>
-                <div>
-                  <div className="t-cap" style={{color:'var(--accent-danger)'}}><Icon name="duplicate" size={11}/> DDUP CANDIDATE · COMPOSITE 0.83</div>
-                  <h3 className="t-h3" style={{margin:'2px 0 0'}}>Akello Grace <span className="t-cap" style={{marginLeft:8}}>weak queue</span></h3>
-                  <div className="t-cap">01HXP2KR3N8M2QF · Registered 8 Nov 2025 · same parish</div>
-                </div>
-                <Chip tone="danger">0.83</Chip>
-              </div>
-              <div style={{padding:16}}>
-                <CompareTable
-                  left={[
-                    ["Provisional ID", "01HXZ9MR…RWS33", null, "mono"],
-                    ["Head name", "Akello Grace", 1.00, null],
-                    ["NIN", "CM89241023ABCD", 1.00, "mono"],
-                    ["Phone", "+256 781 552119", 0.45, "mono"],
-                    ["DoB", "12 Mar 1991", 1.00, null],
-                    ["Parish", "Pageya · Bobi · Gulu", 1.00, null],
-                    ["GPS distance", "—", null, null],
-                    ["HH size", "5", 0.80, null],
-                    ["PMT band", "Poorest 40%", 1.00, null],
-                  ]}
-                  right={[
-                    ["Registry ID", "01HXP2KR3N8M2QF", null, "mono"],
-                    ["Head name", "Akello Grace", null, null],
-                    ["NIN", "CM89241023ABCD", null, "mono"],
-                    ["Phone", "+256 700 110492", null, "mono"],
-                    ["DoB", "12 Mar 1991", null, null],
-                    ["Parish", "Pageya · Bobi · Gulu", null, null],
-                    ["GPS distance", "2.4 km", null, null],
-                    ["HH size", "4 → 5 (added in 2025)", null, null],
-                    ["PMT band", "Poorest 40%", null, null],
-                  ]}
-                />
+            <div className="card" style={{padding:36, textAlign:"center", color:"var(--neutral-500)"}}>
+              <Icon name="duplicate" size={28} color="var(--neutral-300)"/>
+              <div className="t-bodysm mt-2">No duplicate candidate loaded.</div>
+              <div className="t-cap mt-1">
+                DDUP results appear here once the record has been matched.
               </div>
             </div>
           );
@@ -1216,17 +1186,13 @@ const DIHScreen = () => {
                     </div>
                   );
                 }
+                // No candidate: say so. The sidebar summary used to show a
+                // fabricated 0.83 match against a named household, which is
+                // the number a reviewer weighs when deciding merge vs promote.
                 return (
                   <div>
                     <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>DDUP CANDIDATES</div>
-                    <div className="row gap-2" style={{padding:'8px 10px', background:'var(--accent-danger-bg)', borderRadius:4, border:'1px solid rgba(169,50,38,0.15)', marginBottom:6}}>
-                      <Chip size="sm" tone="danger">0.83</Chip>
-                      <div className="flex-1">
-                        <div className="t-bodysm" style={{fontWeight:500}}>01HXP2KR3N8M2QF · Akello Grace</div>
-                        <div className="t-cap">phone differs · HH size +1</div>
-                      </div>
-                    </div>
-                    <div className="t-bodysm muted">Below 0.90 — consider <strong>Promote-as-merge</strong> only after manual review.</div>
+                    <div className="t-bodysm muted">No candidates for this record.</div>
                   </div>
                 );
               })()}

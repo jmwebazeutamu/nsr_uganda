@@ -144,34 +144,7 @@ const mockBulkResponse = (rows, action) => {
   return { acted, skipped, not_found: [] };
 };
 
-const UPD = {
-  id: "UPD-2026-05-14-00237",
-  household: "01HXY7K3B2N9PVQE4M6FZRWS18",
-  head: "Lokol Naume",
-  parish: "Nakiloro · Tapac · Moroto",
-  change_type: "Roster: add member",
-  pmt_impact: "pmt_relevant",
-  sla: { days_open: 2, sla: 3, breach: false },
-  submitter: "Lokwang Peter · Parish Chief · PCH-7411",
-  reviewer: "Adong Florence · CDO Tapac",
-  evidence: ["Photo (baby)", "Witness statement", "Health-centre note"],
-  reason: "Birth of dependant in household (Apr 2026)",
-  diff: [
-    { field: "Household size",   before: "6",  after: "7", section: "Roster",    important: true },
-    { field: "Member 07 · Name", before: "—",  after: "Lokol Sarah", section: "Roster" },
-    { field: "Member 07 · Sex",  before: "—",  after: "F", section: "Roster" },
-    { field: "Member 07 · DoB",  before: "—",  after: "8 Apr 2026", section: "Roster" },
-    { field: "Member 07 · Relation", before: "—", after: "Daughter", section: "Roster" },
-    { field: "Children under 5", before: "1",  after: "2", section: "Health & Disability", important: true },
-    { field: "Birth-registered", before: "1",  after: "2", section: "Health & Disability" },
-    { field: "Phone",            before: "+256 786 234567", after: "+256 786 234567", section: "Identification", unchanged: true },
-    { field: "GPS lat,lng",      before: "2.49423, 34.65103", after: "2.49423, 34.65103", section: "Identification", unchanged: true },
-    { field: "Roof material",    before: "Iron sheets", after: "Iron sheets", section: "Housing", unchanged: true },
-    { field: "PMT score",        before: "0.412", after: "0.387", section: "PMT (recomputed)", important: true, mono: true },
-    { field: "PMT band",         before: "Poorest 40%", after: "Poorest 20%", section: "PMT (recomputed)", important: true },
-  ],
-};
-
+// UPD fixture removed — the detail view reads the live change request.
 const UPDScreen = ({ changeRequestId, onNavigate }) => {
   const [showAll, setShowAll] = useStateUpd(false);
   const [auditOpen, setAuditOpen] = useStateUpd(false);
@@ -389,7 +362,7 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
   // the operator sees they landed on the right CR. Backend wiring is
   // unchanged — Grievance.linked_change_request_id (S2-008) is what
   // the real fetch will resolve.
-  const effectiveId = changeRequestId || (isLive ? current.id : UPD.id);
+  const effectiveId = changeRequestId || (isLive ? current.id : "—");
   const fromGrm = Boolean(changeRequestId);
 
   // Eyebrow indicator — mirrors the GRM workbench convention.
@@ -403,7 +376,7 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
   // Diff data: live mode projects current._raw.changes JSON into the
   // same shape the table renders. The serializer's diff has no
   // semantic section metadata, so live rows collapse into a single
-  // "Change fields" section. Mock keeps the rich pre-grouped UPD.diff.
+  // "Change fields" section. Without a live record the diff is empty.
   const diffSource = isLive
     && Array.isArray(current._raw.display_changes)
     && current._raw.display_changes.length > 0
@@ -427,7 +400,7 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
           important: !!meta?.pmt,
         };
       })
-    : UPD.diff;
+    : [];   // no fabricated diff: an empty table, and the banner below says why
   const visible = showAll ? diffSource : diffSource.filter(d => !d.unchanged);
   const grouped = visible.reduce((acc, r) => {
     (acc[r.section] = acc[r.section] || []).push(r); return acc;
@@ -537,19 +510,48 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
         entity_label: current._raw.entity_type === "household" ? "Household" : "Member",
       }
     : {
-        change_type: UPD.change_type,
-        pmt_relevant: true,
-        evidence: UPD.evidence,
-        slaDays: UPD.sla.days_open,
-        slaCap: UPD.sla.sla,
-        submitter: UPD.submitter.split(" · ")[0],
-        reviewer: UPD.reviewer.split(" · ")[0],
-        reason: UPD.reason,
-        status: "pending_approval",
-        household: UPD.household,
-        household_id: UPD.household,
-        entity_label: "Household",
+        // Nothing is known until a change request is loaded. This used to
+        // read the UPD fixture — a complete, plausible change request for
+        // a household that does not exist, including a named submitter,
+        // a reviewer and an SLA clock. A reviewer could have read the
+        // whole record and formed a judgement on it.
+        change_type: "—",
+        pmt_relevant: false,
+        evidence: [],
+        slaDays: null,
+        slaCap: null,
+        submitter: "—",
+        reviewer: "—",
+        reason: "",
+        status: "",
+        household: "—",
+        household_id: null,
+        entity_label: "—",
       };
+  // Audit events for the open change request. Empty until one is loaded,
+  // and empty on failure — never a specimen trail.
+  const [auditEvents, setAuditEvents] = useStateUpd([]);
+  useEffectUpd(() => {
+    if (!auditOpen || !effectiveId || effectiveId === "—") { return undefined; }
+    let cancelled = false;
+    fetch(`/api/v1/security/audit-events/?entity_id=${encodeURIComponent(effectiveId)}&page_size=200`,
+      { credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(String(r.status))))
+      .then(d => {
+        if (cancelled) return;
+        setAuditEvents((d.results || d || []).map(e => ({
+          who: e.actor_id || "—",
+          action: e.action,
+          detail: e.reason || "",
+          time: e.occurred_at,
+          audit: e.id,
+          tone: e.actor_kind === "system" ? "system" : "user",
+        })));
+      })
+      .catch(() => { if (!cancelled) setAuditEvents([]); });
+    return () => { cancelled = true; };
+  }, [auditOpen, effectiveId]);
+
   const isSelfRequest = isLive && me?.username && me.username === current._raw.requester;
   const isOnHold = isLive && current._raw.status === "on_hold";
 
@@ -561,7 +563,7 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
         sub={<>
           {fromGrm && <Chip tone="data" size="sm" style={{marginRight:8}}>linked from grievance</Chip>}
           {headerVM.entity_label} <span className="t-mono">{(headerVM.household || "").slice(0,18)}{headerVM.household && headerVM.household.length > 18 ? "…" : ""}</span>
-          {isLive ? <> · <Chip tone="neutral" size="sm">{headerVM.status}</Chip></> : <> · {UPD.head} · {UPD.parish}</>}
+          {isLive && <> · <Chip tone="neutral" size="sm">{headerVM.status}</Chip></>}
         </>}
         right={<>
           <button className="btn" onClick={() => setAuditOpen(true)}><Icon name="history"/> Audit chain</button>
@@ -804,6 +806,18 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
               <div className="t-cap" style={{padding:'10px 16px', borderLeft:'1px solid var(--neutral-200)'}}>AFTER</div>
             </div>
 
+            {Object.keys(grouped).length === 0 && (
+              <div style={{padding:28, textAlign:"center", color:"var(--neutral-500)"}}>
+                <div className="t-bodysm">
+                  {dataSource === "loading" ? "Loading change requests\u2026"
+                    : dataSource === "offline" ? "Could not load change requests."
+                    : "No change request selected."}
+                </div>
+                <div className="t-cap mt-1">
+                  Nothing is shown rather than a sample change request.
+                </div>
+              </div>
+            )}
             {Object.entries(grouped).map(([section, rows]) => (
               <React.Fragment key={section}>
                 <div style={{padding:'8px 16px', background:'var(--neutral-100)', fontSize:11, fontWeight:600, letterSpacing:'0.06em', textTransform:'uppercase', color:'var(--neutral-700)', borderBottom:'1px solid var(--neutral-200)'}}>
@@ -944,7 +958,8 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
                   <>Submitter is <strong>{headerVM.submitter}</strong>; reviewer is <strong>{headerVM.reviewer}</strong>. Approval is permitted (AC-UPD-NO-SELF-APPROVE).</>
                 )
               ) : (
-                <>Submitter is <strong>Lokwang Peter</strong>; current reviewer is <strong>Adong Florence</strong>. Approval is permitted (AC-UPD-NO-SELF-APPROVE).</>
+                <>No change request loaded — the self-approval check
+                (AC-UPD-NO-SELF-APPROVE) runs against the live submitter.</>
               )}
             </div>
           </div>
@@ -991,13 +1006,12 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
       </div>
       )}
 
+      {/* Real audit events for this change request, same source as the
+          household audit tab. It previously listed four invented events
+          with fabricated audit reference numbers — a fabricated audit
+          trail being the one thing an audit drawer must never show. */}
       <AuditDrawer open={auditOpen} onClose={() => setAuditOpen(false)} title={`Audit · ${effectiveId}`}
-        events={[
-          { who: "Lokwang Peter", action: "submitted change request", detail: `${UPD.change_type} · evidence: photo, witness, health-centre note`, time: "2d ago", audit: "A-2026-05-12-00091", tone: "user" },
-          { who: "System DQA", action: "evaluated", detail: "0 warnings on update payload · ruleset v3.4", time: "2d ago", audit: "A-2026-05-12-00092", tone: "system" },
-          { who: "System PMT", action: "previewed recompute", detail: "Δ −0.025 · band shift Poorest 40% → Poorest 20%", time: "2d ago", audit: "A-2026-05-12-00093", tone: "system" },
-          { who: "Adong Florence", action: "opened for review", detail: "CDO Tapac · viewed diff and PMT preview", time: "8m ago", audit: "A-2026-05-14-00501", tone: "user" },
-        ]}/>
+        events={auditEvents}/>
 
       <ReasonModal open={modal === 'approve'} title="Approve change request" intent="success"
         reasonOptions={["Evidence sufficient · field-confirmed","PMT impact accepted","Routine cosmetic change","Other (specify in note)"]}

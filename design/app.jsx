@@ -351,7 +351,9 @@ function App() {
         {screen === "upd"     && <UPDScreen changeRequestId={screenPayload?.changeRequestId} onNavigate={navigate}/>}
         {screen === "drs"     && <DRSScreen onNavigate={navigate}/>}
         {screen === "data-explorer" && <DataExplorerConsoleScreen/>}
-        {screen === "grm"     && <GRMScreen onNavigate={navigate}/>}
+        {screen === "grm"     && <GRMScreen
+            onNavigate={navigate}
+            initialGrievance={screenPayload?.initialGrievance}/>}
         {screen === "partner-drs" && <PartnerDRSScreen/>}
         {screen === "my-dsa" && <MyDsaScreen/>}
         {screen === "my-programmes" && <MyProgrammesScreen/>}
@@ -367,13 +369,15 @@ function App() {
             householdId={screenPayload?.householdId}
             initialScope={screenPayload?.initialScope || "household"}
             roster={screenPayload?.roster || null}
+            household={screenPayload?.household || null}
             me={me}
             onBack={() => navigate("household", { householdId: screenPayload?.householdId })}
             onSuccess={() => navigate("household", { householdId: screenPayload?.householdId })}/>}
         {screen === "registry-member-detail" && <MemberDetailScreen
             memberId={screenPayload?.memberId}
             onBack={() => navigate("registry", { initialView: "members" })}
-            onOpenHousehold={(rid) => navigate("household", { householdId: rid })}/>}
+            onOpenHousehold={(rid) => navigate("household", { householdId: rid })}
+            onNavigate={navigate}/>}
         {screen === "partners" && <PartnersScreen
             onRegister={() => navigate("partner-new")}
             onOpen={(partnerId) => navigate("partner-detail", { partnerId })}
