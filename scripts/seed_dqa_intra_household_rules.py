@@ -18,6 +18,15 @@ Rules:
 
 Usage:
   .venv/bin/python scripts/seed_dqa_intra_household_rules.py
+  .venv/bin/python scripts/seed_dqa_intra_household_rules.py --revise
+
+`--revise` is for an environment that already has these rules ACTIVE and
+whose definitions here have since changed. It authors the new definition
+as the next version, DRAFT, parented to the current one, and submits it
+for approval. It approves nothing and never edits an ACTIVE row in
+place: an active rule is an approved artefact, so the audit chain has to
+show a supersession rather than a mutation, and the approver has to be
+someone other than its author (apps/dqa/services.approve).
 """
 
 from __future__ import annotations
@@ -58,24 +67,59 @@ ALL_STAGES = [
 # ─────────────────────────────────────────────────────────────────────
 # AC-HOH-EXISTS — exactly one head of household.
 
+# ─────────────────────────────────────────────────────────────────────
+# How a canonical payload designates the head of household.
+#
+# Every connector normalises the head to `is_head: True` and blanks that
+# member's own relationship code, because a head's relationship to
+# themselves is not a question the questionnaire asks — see
+# `apps/ingestion_hub/connectors/kobo.py` ("" if is_head else …), and
+# the same line in nusaf.py and pdm.py. The registry agrees:
+# `Household.clean()` accepts "" or "01" on the head member, because the
+# designation is the `head_member` FK, not the code.
+#
+# The three head rules below originally matched on
+# `relationship_to_head == "01"` alone — a shape no connector has ever
+# produced. The effect was total: on the dev registry, 367 staged heads
+# carried `is_head: True` and a blank code, none carried "01", and
+# AC-HOH-EXISTS therefore blocked every record in the queue with
+# "Exactly 1 member must be flagged as Head; found 0" while the roster
+# beside it displayed a head. The rules' own test fixtures used the
+# coded shape, so they passed against a payload the system never builds.
+#
+# Accept either signal: the canonical flag, or the code from a source
+# that supplies one. `_head_predicate()` returns a fresh copy so the
+# three specs never share a mutable dict.
+def _head_predicate() -> dict:
+    return {
+        "op": "or",
+        "args": [
+            {"op": "eq", "args": ["$.is_head", True]},
+            {"op": "eq", "args": [
+                "$.relationship_to_head", "$parameters.head_code",
+            ]},
+        ],
+    }
+
+
 AC_HOH_EXISTS = {
     "rule_id": "AC-HOH-EXISTS",
     "description": (
-        "Exactly one household member must be flagged as head "
-        "(relationship_to_head == \"01\"). Blocks if count is zero or "
-        "more than one — both surface as routine data-capture errors "
-        "that the enumerator can fix at the parish office."
+        "Exactly one household member must be designated head — either "
+        "the canonical `is_head` flag every connector sets, or "
+        "relationship_to_head == \"01\" from a source that codes it. "
+        "Blocks if the count is zero or more than one — both surface as "
+        "routine data-capture errors the enumerator can fix at the "
+        "parish office."
     ),
     "severity": Severity.BLOCK,
     "parameters": {"expected_count": 1, "head_code": "01"},
     "applies_to": {
-        "fields": ["members.*.relationship_to_head"],
+        "fields": ["members.*.is_head", "members.*.relationship_to_head"],
     },
     "expression": {
         "op": "count_where",
-        "predicate": {"op": "eq", "args": [
-            "$.relationship_to_head", "$parameters.head_code",
-        ]},
+        "predicate": _head_predicate(),
         "_fail_when": {"op": "neq", "args": [
             "$", "$parameters.expected_count",
         ]},
@@ -87,6 +131,19 @@ AC_HOH_EXISTS = {
     "message_template_i18n_key": "dqa.ac_hoh_exists.message",
     "test_fixtures": [
         {
+            # The shape every connector actually emits: flagged head,
+            # blank code. This is the fixture whose absence let the
+            # rule ship broken.
+            "input": {"members": [
+                {"id": "01M1", "line_number": 1, "is_head": True,
+                 "relationship_to_head": ""},
+                {"id": "01M2", "line_number": 2, "is_head": False,
+                 "relationship_to_head": "02"},
+            ]},
+            "expected_outcome": "pass",
+        },
+        {
+            # A source that codes the head instead of flagging it.
             "input": {"members": [
                 {"id": "01M1", "line_number": 1, "relationship_to_head": "01"},
                 {"id": "01M2", "line_number": 2, "relationship_to_head": "02"},
@@ -95,8 +152,21 @@ AC_HOH_EXISTS = {
         },
         {
             "input": {"members": [
-                {"id": "01M1", "line_number": 1, "relationship_to_head": "02"},
-                {"id": "01M2", "line_number": 2, "relationship_to_head": "03"},
+                {"id": "01M1", "line_number": 1, "is_head": False,
+                 "relationship_to_head": "02"},
+                {"id": "01M2", "line_number": 2, "is_head": False,
+                 "relationship_to_head": "03"},
+            ]},
+            "expected_outcome": "fail",
+        },
+        {
+            # Two heads is as wrong as none, and is what a merge or a
+            # re-capture tends to produce.
+            "input": {"members": [
+                {"id": "01M1", "line_number": 1, "is_head": True,
+                 "relationship_to_head": ""},
+                {"id": "01M2", "line_number": 2, "is_head": True,
+                 "relationship_to_head": ""},
             ]},
             "expected_outcome": "fail",
         },
@@ -112,12 +182,13 @@ AC_HOH_AGE = {
     "description": (
         "The head of household must be at least 12 years old. A "
         "younger 'head' is almost always a data-entry mistake — fix "
-        "the relationship_to_head code or correct the age."
+        "the head designation or correct the age."
     ),
     "severity": Severity.BLOCK,
     "parameters": {"min_head_age": 12, "head_code": "01"},
     "applies_to": {
         "fields": [
+            "members.*.is_head",
             "members.*.relationship_to_head",
             "members.*.age_years",
         ],
@@ -125,9 +196,7 @@ AC_HOH_AGE = {
     "expression": {
         "op": "count_where",
         "predicate": {"op": "and", "args": [
-            {"op": "eq", "args": [
-                "$.relationship_to_head", "$parameters.head_code",
-            ]},
+            _head_predicate(),
             {"op": "lt", "args": [
                 "$.age_years", "$parameters.min_head_age",
             ]},
@@ -153,6 +222,14 @@ AC_HOH_AGE = {
             ]},
             "expected_outcome": "fail",
         },
+        {
+            # Connector shape: flagged head, blank code, under age.
+            "input": {"members": [
+                {"id": "01M1", "line_number": 1, "is_head": True,
+                 "relationship_to_head": "", "age_years": 9},
+            ]},
+            "expected_outcome": "fail",
+        },
     ],
 }
 
@@ -173,6 +250,7 @@ AC_HOH_AGE_CHILD_LED = {
     },
     "applies_to": {
         "fields": [
+            "members.*.is_head",
             "members.*.relationship_to_head",
             "members.*.age_years",
         ],
@@ -180,9 +258,7 @@ AC_HOH_AGE_CHILD_LED = {
     "expression": {
         "op": "count_where",
         "predicate": {"op": "and", "args": [
-            {"op": "eq", "args": [
-                "$.relationship_to_head", "$parameters.head_code",
-            ]},
+            _head_predicate(),
             {"op": "gte", "args": ["$.age_years", "$parameters.min_age"]},
             {"op": "lte", "args": [
                 "$.age_years", "$parameters.max_age_inclusive",
@@ -196,6 +272,14 @@ AC_HOH_AGE_CHILD_LED = {
     ),
     "message_template_i18n_key": "dqa.ac_hoh_age_child_led.message",
     "test_fixtures": [
+        {
+            # Connector shape: flagged head, blank code, 15 years old.
+            "input": {"members": [
+                {"id": "01M1", "line_number": 1, "is_head": True,
+                 "relationship_to_head": "", "age_years": 15},
+            ]},
+            "expected_outcome": "fail",
+        },
         {
             "input": {"members": [
                 {"id": "01M1", "line_number": 1,
@@ -621,7 +705,102 @@ def seed() -> int:
     return created
 
 
+#: Fields a revision may change. Identity (rule_id), lifecycle
+#: (status/approved_by) and provenance (author, parent) are not
+#: revisable — a change to those is a different operation.
+REVISABLE_FIELDS = (
+    "description", "severity", "parameters", "applies_to", "expression",
+    "test_fixtures", "error_message_template", "message_template_i18n_key",
+)
+
+
+def _differs(rule: DqaRule, spec: dict) -> list[str]:
+    """Field names where the stored rule and the seeded spec disagree."""
+    changed = []
+    for field in REVISABLE_FIELDS:
+        if field not in spec:
+            continue
+        if getattr(rule, field) != spec[field]:
+            changed.append(field)
+    return changed
+
+
+def revise(actor: str = SEED_AUTHOR) -> int:
+    """Author a new DRAFT version of every rule whose definition changed.
+
+    Returns the number of versions authored. Prints one line per rule so
+    the operator can see what is now waiting for approval.
+    """
+    from apps.dqa.services import submit_for_approval
+
+    authored = 0
+    for spec in ALL_RULES:
+        latest = (
+            DqaRule.objects.filter(rule_id=spec["rule_id"])
+            .order_by("-version").first()
+        )
+        if latest is None:
+            print(f"  {spec['rule_id']} not seeded yet — run without --revise")
+            continue
+        changed = _differs(latest, spec)
+        if not changed:
+            print(f"  {spec['rule_id']} v{latest.version} matches — nothing to do")
+            continue
+        if latest.status == RuleStatus.PENDING_APPROVAL:
+            # Somebody is already reviewing this one. Authoring another
+            # version underneath a pending review would mean approving a
+            # diff nobody read.
+            print(
+                f"  {spec['rule_id']} v{latest.version} is PENDING_APPROVAL "
+                f"— leaving it alone (changed: {', '.join(changed)})"
+            )
+            continue
+        if latest.status == RuleStatus.DRAFT:
+            # Never approved, so there is nothing to supersede.
+            for field in changed:
+                setattr(latest, field, spec[field])
+            latest.save(update_fields=[*changed, "updated_at"])
+            submit_for_approval(latest, actor=actor)
+            print(
+                f"  {spec['rule_id']} v{latest.version} DRAFT updated + "
+                f"submitted ({', '.join(changed)})"
+            )
+            authored += 1
+            continue
+
+        new_version = DqaRule.objects.create(
+            rule_id=latest.rule_id,
+            version=latest.version + 1,
+            parent_rule=latest,
+            category=latest.category,
+            scope=latest.scope,
+            expression_type=latest.expression_type,
+            stages=latest.stages,
+            applicability_filter=latest.applicability_filter,
+            status=RuleStatus.DRAFT,
+            author=actor,
+            **{field: spec[field] for field in REVISABLE_FIELDS if field in spec},
+        )
+        submit_for_approval(new_version, actor=actor)
+        print(
+            f"  {spec['rule_id']} v{new_version.version} DRAFT authored from "
+            f"v{latest.version} {latest.status} + submitted "
+            f"({', '.join(changed)})"
+        )
+        authored += 1
+    return authored
+
+
 if __name__ == "__main__":
+    if "--revise" in sys.argv:
+        count = revise()
+        print(
+            f"\nauthored {count} revision(s), all PENDING_APPROVAL.\n"
+            "Nothing is live yet: approve them in the Rule Editor "
+            "(Admin > Workflow > DQA rules). The approver must not be "
+            f"{SEED_AUTHOR!r}."
+        )
+        sys.exit(0)
     n = seed()
     total = DqaRule.objects.filter(category=RuleCategory.INTRA_HOUSEHOLD).count()
     print(f"\nseeded {n} new rule(s); total INTRA_HOUSEHOLD rules: {total}")
