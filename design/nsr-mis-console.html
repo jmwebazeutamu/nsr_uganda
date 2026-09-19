@@ -27,6 +27,9 @@
 
   <!-- Reusable composite components (load after shared, before screens) -->
   <script type="text/babel" src="v0.1/components/error-boundary.jsx"></script>
+  <!-- Wide view: maximise + pop-out for list screens (ADR-0030). Must
+       load before any screen that calls useWideView. -->
+  <script type="text/babel" src="v0.1/components/wide-view.jsx"></script>
   <script type="text/babel" src="v0.1/components/scope-edit-modal.jsx"></script>
 
   <!-- Data layer — API client + useChoiceList hook (US-S23-012). MUST load

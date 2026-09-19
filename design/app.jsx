@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, DataExplorerConsoleScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, ProgrammesScreen, ProgrammeDetailScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, MemberDetailScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, CatalogueScreen, DatasetDetailScreen, VariableDetailScreen, AggregateBuilderScreen, HandoffConfirmScreen, ChangeRequestScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts, ErrorBoundary */
+/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, DataExplorerConsoleScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, ProgrammesScreen, ProgrammeDetailScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, MemberDetailScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, CatalogueScreen, DatasetDetailScreen, VariableDetailScreen, AggregateBuilderScreen, HandoffConfirmScreen, ChangeRequestScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts, ErrorBoundary, useWideView, _wideRequestedScreen, WideViewButtons */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -10,6 +10,18 @@ const _appCsrfToken = () => {
   if (typeof document === "undefined") return "";
   const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
   return m ? m[1] : "";
+};
+
+// A wide window (ADR-0030) is this same application opened at
+// `?wide=<screen>` — a real second window on the same session, not a
+// copy of the table. It renders one screen with no sidebar and no
+// masthead, because the point of it is vertical space.
+//
+// Screens opt in by handling `wide` themselves; anything not listed
+// here says so rather than rendering a normal-width screen in a window
+// the operator opened expressly to get a wider one.
+const WIDE_SCREENS = {
+  dih: { label: "DIH review queue", render: () => <DIHScreen/> },
 };
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
@@ -183,6 +195,11 @@ function App() {
   // every page so the admin can't forget; the read-only-writes
   // middleware also enforces the safety net server-side.
   const impersonator = me?.impersonator || null;
+
+  // Which screen, if any, this document was opened as a wide window for.
+  const wideWindowScreen = typeof window !== "undefined"
+    ? _wideRequestedScreen(window.location.search)
+    : null;
   const stopImpersonating = () => {
     fetch("/api/v1/security/impersonate/stop/", {
       method: "POST",
@@ -197,6 +214,45 @@ function App() {
       .then(() => { window.location.reload(); })
       .catch(() => alert("Stop impersonating failed — try logging out + back in."));
   };
+
+  // ── Wide window ───────────────────────────────────────────────────
+  if (wideWindowScreen) {
+    const entry = WIDE_SCREENS[wideWindowScreen];
+    return (
+      <div className="wide-window">
+        <div className="wide-window-bar">
+          <Icon name="maximize" size={14} color="var(--neutral-500)"/>
+          <span className="t-bodysm" style={{fontWeight:600}}>
+            {entry ? entry.label : "Wide view"}
+          </span>
+          <span className="t-cap">wide window · {identityName}</span>
+          {impersonator && (
+            <span className="t-cap" style={{color:"var(--accent-quality)", fontWeight:600}}>
+              <Icon name="shield" size={11}/> impersonating {me?.username} — writes disabled
+            </span>
+          )}
+          <div style={{flex:1}}/>
+          <button className="btn btn-sm" onClick={() => window.close()}
+                  title="Close this window and go back to the console">
+            <Icon name="x" size={13}/> Close window
+          </button>
+        </div>
+        <ErrorBoundary>
+          {entry
+            ? entry.render()
+            : (
+              <div className="card" style={{padding:32}}>
+                <h3 className="t-h3" style={{marginTop:0}}>No wide view for this screen</h3>
+                <p className="muted t-bodysm" style={{marginBottom:0}}>
+                  <span className="t-mono">{wideWindowScreen}</span> does not support the
+                  wide view yet. Close this window and use the console tab.
+                </p>
+              </div>
+            )}
+        </ErrorBoundary>
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">

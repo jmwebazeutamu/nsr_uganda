@@ -62,6 +62,9 @@ const Icon = ({ name, size = 16, color = "currentColor", style }) => {
     database: <><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></>,
     git: <><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M6 8.5v3a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3v-3M12 15v.5"/></>,
     sliders: <><path d="M4 6h10M4 12h6M4 18h14"/><circle cx="17" cy="6" r="2"/><circle cx="13" cy="12" r="2"/><circle cx="20" cy="18" r="2" fill="none"/></>,
+    // Wide view (ADR-0030): fill the window, and open in a second one.
+    maximize: <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>,
+    externalLink: <><path d="M14 4h6v6"/><path d="m20 4-8 8"/><path d="M18 14v6H4V6h6"/></>,
   };
   const p = paths[name];
   if (!p) return <span style={{display:'inline-block', width: size, height: size}}/>;

@@ -63,3 +63,11 @@ globalThis.Modal = ({ open, onClose, title, children, footer, width }) => {
   }, [open, onClose]);
   return Modal({ open, onClose, title, children, footer, width });
 };
+
+// jsdom implements no layout, so it has no scrollIntoView. Screens that
+// bring a selected record into view (the DIH queue's detail rail) would
+// otherwise throw during commit, failing a test for a reason that has
+// nothing to do with what it asserts.
+if (!globalThis.Element.prototype.scrollIntoView) {
+  globalThis.Element.prototype.scrollIntoView = function scrollIntoView() {};
+}
