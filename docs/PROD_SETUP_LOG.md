@@ -672,3 +672,51 @@ rules or power state.
 
 Needs out-of-band access (provider console / IPMI) to diagnose further.
 Nothing further can be established from here.
+
+## 2026-09-19 17:50Z — production restored (incident closed)
+
+The box is back. Verified from the dev VM, then on the host itself.
+All read-only checks; nothing on prod was changed.
+
+Remote probes:
+
+| Probe | Result |
+|---|---|
+| DNS `nsr-sris.mglsd.go.ug` | 154.72.204.74, unchanged |
+| TCP 22 / 80 / 443 | all open (all three refused on 18 Sep) |
+| `https://.../healthz` | 200, body `ok`, 0.77s |
+| `https://.../` | 200, 1.24s |
+| `http://` -> `https://` | 301, correct |
+| TLS certificate | `CN=nsr-sris.mglsd.go.ug`, valid to 16 Dec 2026 |
+| ICMP | still 0/4 — this host does not answer ping at all, so ping is not a liveness signal for it and its use as evidence on 18 Sep was weak |
+
+On the host:
+
+```
+ssh nsr-prod 'hostname; uptime; cd /opt/nsrmis && git log -1; docker compose ... ps; df -h /'
+ssh nsr-prod 'date -u; uptime -s; sudo journalctl --list-boots'
+ssh nsr-prod 'docker compose ... exec -T db psql -tAc "select counts"'
+ssh nsr-prod 'sudo journalctl -b -1 --since "2026-09-18 17:00"'
+```
+
+| Check | Result |
+|---|---|
+| `git log -1` | `8a160b7` — unchanged, as expected |
+| Containers | all eight up 8 hours, seven healthy, `beat` running (no healthcheck) |
+| Disk | 38G free, unchanged |
+| Rows | 284 households, 1,283 members, 87,941 audit events |
+
+**What actually happened.** The host rebooted cleanly at 09:45:04Z on 19 Sep.
+The journal from the *previous* boot runs continuously through the whole
+outage window and ends with an orderly `systemd-reboot` at 09:44:50Z — so the
+machine was powered on and logging the entire time it was unreachable. This
+was not a dead box: it was alive and isolated at the network layer. The 18 Sep
+entry's conclusion ("down, disconnected, or dropping everything at the network
+layer") was right on the third option and wrong to imply power state.
+
+Containers came back by themselves on boot, so the restart policy did its job
+and no manual intervention was needed.
+
+Root cause of the isolation is provider-side and not established from here.
+Both open backlog items are untouched: no automated backup (deferred), and
+`web` still runs 3 gunicorn workers (question never answered).
