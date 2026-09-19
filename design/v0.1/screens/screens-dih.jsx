@@ -110,6 +110,44 @@ const _stageToRow = (stage) => {
 // See docs/console_mock_data_audit.md.
 
 
+// A DQA finding reaches the console in one of two shapes. The
+// record-scope evaluator (apps/dqa/engine.render_reason) writes
+// {rule_id, reason}; the intra-household evaluator
+// (apps/dqa/household_evaluator._build_result) writes {rule_code,
+// message}. Both are folded into the same dqa_summary buckets by
+// ingestion_hub.services, so every reader has to handle both.
+//
+// The Decision panel read `rule_id` alone, which did two things wrong:
+// it showed an operator "Raised: AC-HOH-EXISTS" — a rule code, not a
+// sentence — and it silently dropped every intra-household finding,
+// because those carry `rule_code` instead. A record could report "1
+// blocking" and then list nothing.
+//
+// Both evaluators have already rendered the rule's
+// error_message_template against the record, interpolating its
+// parameters, so the readable sentence is sitting in the payload. It
+// is also the string the rule's i18n key translates, which a code
+// never is.
+const _dqaCode = (f) => (f && (f.rule_id || f.rule_code)) || "";
+const _dqaMessage = (f) => String((f && (f.reason || f.message)) || "").trim();
+// Falls back to the code rather than inventing prose from it: a rule
+// with no message template is an authoring gap, and guessing at what
+// AC-HOH-EXISTS means would be the console making up rules.
+const _dqaLabel = (f) => _dqaMessage(f) || _dqaCode(f) || "Rule failed";
+const _dqaVersion = (f) => (f && f.rule_version) ? ` v${f.rule_version}` : "";
+const _dqaOffenders = (f) => (f && f.offending_member_ids) || [];
+
+// One line per finding, for the queue row's hover.
+const _dqaTooltip = (summary) => {
+  if (!summary) return "";
+  const lines = [];
+  (summary.blocking_failures || []).forEach(f => lines.push(`BLOCKING · ${_dqaLabel(f)}`));
+  (summary.warnings || []).forEach(f => lines.push(`WARNING · ${_dqaLabel(f)}`));
+  (summary.info || []).forEach(f => lines.push(`INFO · ${_dqaLabel(f)}`));
+  return lines.join("\n");
+};
+
+
 // Project an AuditEvent from /api/v1/security/audit-events/ into the
 // shape AuditDrawer renders. Nothing is synthesised: an event with no
 // reason shows its entity type alone, and the hash prefix is the real
@@ -898,7 +936,9 @@ const DIHScreen = () => {
                     <div className="t-cap">{r.channel}</div>
                   </td>
                   <td>
-                    <div className="row gap-2">
+                    {/* Hover says what B 1 actually means, so triage does not
+                        require opening every record to find out. */}
+                    <div className="row gap-2" title={_dqaTooltip(r._dqaSummary)}>
                       {r.dqa.b > 0 && <Chip size="sm" tone="danger">B {r.dqa.b}</Chip>}
                       {r.dqa.w > 0 && <Chip size="sm" tone="quality">W {r.dqa.w}</Chip>}
                       {r.dqa.i > 0 && <Chip size="sm" tone="system">I {r.dqa.i}</Chip>}
@@ -1168,8 +1208,11 @@ const DIHScreen = () => {
                   const blocking = summary.blocking_failures || [];
                   const warnings = summary.warnings || [];
                   const info = summary.info || [];
-                  const ruleLines = [...blocking, ...warnings].slice(0, 3)
-                    .map(r => r.rule_id).filter(Boolean).join(", ");
+                  const findings = [
+                    ...blocking.map(f => ({ f, blocking: true })),
+                    ...warnings.map(f => ({ f, blocking: false })),
+                  ];
+                  const shown = findings.slice(0, 3);
                   return (
                     <div>
                       <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>DQA OUTCOMES</div>
@@ -1178,11 +1221,46 @@ const DIHScreen = () => {
                         <Chip tone="quality">{warnings.length} warnings</Chip>
                         <Chip tone="system">{info.length} info</Chip>
                       </div>
-                      <div className="t-bodysm muted">
-                        {(blocking.length + warnings.length) === 0
-                          ? "Clean — all rules passed."
-                          : `Raised: ${ruleLines || "(see audit chain)"}.`}
-                      </div>
+                      {findings.length === 0 ? (
+                        <div className="t-bodysm muted">Clean — all rules passed.</div>
+                      ) : (
+                        <div style={{display:'grid', gap:10}}>
+                          {shown.map(({ f, blocking: isBlocking }, i) => {
+                            const message = _dqaMessage(f);
+                            const code = _dqaCode(f);
+                            const offenders = _dqaOffenders(f);
+                            return (
+                              <div key={`${code}-${i}`}>
+                                <div className="row gap-2" style={{alignItems:'baseline'}}>
+                                  <Chip size="sm" tone={isBlocking ? "danger" : "quality"}>
+                                    {isBlocking ? "blocking" : "warning"}
+                                  </Chip>
+                                  <span className="t-bodysm" style={{color:'var(--neutral-900)'}}>
+                                    {_dqaLabel(f)}
+                                  </span>
+                                </div>
+                                {/* The code stays visible: it is what the Rule
+                                    Editor, the violations report and the audit
+                                    chain all key on. It is provenance for the
+                                    sentence above, not the message itself. */}
+                                {(message || offenders.length > 0) && (
+                                  <div className="t-cap muted" style={{marginTop:2}}>
+                                    {message && <span className="t-mono">{code}{_dqaVersion(f)}</span>}
+                                    {message && offenders.length > 0 && " · "}
+                                    {offenders.length > 0 && `member ${offenders.join(", ")}`}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                          {findings.length > shown.length && (
+                            <div className="t-cap muted">
+                              +{findings.length - shown.length} more — the full list is on the
+                              household's DQA tab after promotion, and in the audit chain now.
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 }
