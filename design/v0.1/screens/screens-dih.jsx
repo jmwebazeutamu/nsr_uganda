@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, KPI, PageHeader, AuditDrawer, ActionBar, ReasonModal, Modal, Toast, useNavCounts */
+/* global React, Icon, Chip, KPI, PageHeader, AuditDrawer, ActionBar, ReasonModal, Modal, Toast, useNavCounts, useWideView, WideViewButtons, WideShell, WideDetailHost */
 // NSR MIS — 11.3 NSR Unit DIH review queue
 // US-S11-013: live-data wiring. The screen tries to fetch from
 // /api/v1/dih/stage-records/?state=pending_promotion on mount; if
@@ -165,7 +165,14 @@ const DIHScreen = () => {
   // pending_promotion, quality_failed, ddup_review, idv_pending);
   // "archive" shows quarantined rows — operators land them there when
   // a quality_failed record can't be fixed.
-  const [tab, setTab] = useStateDIH("queue");
+  // Wide view (ADR-0030). `useWideView` is a global from
+  // v0.1/components/wide-view.jsx, which both console manifests load
+  // before any screen — so this call is unconditional and the hook
+  // order is the same in every mode.
+  const wide = useWideView("dih");
+  // Filters a pop-out was opened with. Empty in the normal window.
+  const _inherited = wide.inheritedFilters || {};
+  const [tab, setTab] = useStateDIH(_inherited.tab === "archive" ? "archive" : "queue");
   // Live row state; starts as the mock so the design preview renders
   // immediately. The effect below replaces it with live API rows when
   // available.
@@ -188,7 +195,7 @@ const DIHScreen = () => {
   const [modal, setModal] = useStateDIH(null); // 'promote' | 'merge' | 'hold' | 'reject' | 'archive'
   const [toast, setToast] = useStateDIH("");
   const [selection, setSelection] = useStateDIH(new Set());
-  const [quickFilter, setQuickFilter] = useStateDIH(null);
+  const [quickFilter, setQuickFilter] = useStateDIH(_inherited.quick || null);
   // Inline correction state — editMode toggles the staged column into
   // editable inputs; editDraft holds the dotted-path → new-value
   // patch the operator is composing; the Save button opens the modal
@@ -202,11 +209,11 @@ const DIHScreen = () => {
   // actual rows fetched — no more hardcoded "Karamoja / West Nile /
   // Acholi / Teso" set that lied about a real registry's sub-regions.
   // "" = no narrowing for that dimension.
-  const [filterSource, setFilterSource] = useStateDIH("");
-  const [filterRegion, setFilterRegion] = useStateDIH("");
-  const [filterChannel, setFilterChannel] = useStateDIH("");
-  const [filterDqa, setFilterDqa] = useStateDIH("");
-  const [filterIdv, setFilterIdv] = useStateDIH("");
+  const [filterSource, setFilterSource] = useStateDIH(_inherited.source || "");
+  const [filterRegion, setFilterRegion] = useStateDIH(_inherited.region || "");
+  const [filterChannel, setFilterChannel] = useStateDIH(_inherited.channel || "");
+  const [filterDqa, setFilterDqa] = useStateDIH(_inherited.dqa || "");
+  const [filterIdv, setFilterIdv] = useStateDIH(_inherited.idv || "");
   const [density, setDensity] = useStateDIH(() => localStorage.getItem("nsr.dih.table.density") || "comfortable");
   // US-S11-041 — Bulk Promote / Bulk Clear IDV modal state. Each
   // modal lists the actionable subset of the current selection.
@@ -310,7 +317,7 @@ const DIHScreen = () => {
           return;
         }
         setRows(apiRows);
-        setSelectedRow(apiRows[0].id);
+        setSelectedRow(wide.isWide ? null : apiRows[0].id);
         setDataSource("live");
       })
       .catch(() => {
@@ -401,8 +408,28 @@ const DIHScreen = () => {
   // Only fires when the user actively changes selection (the initial
   // render also runs this but `behavior:smooth` makes that visible
   // anyway, which doubles as a cue).
+  // Passed to the pop-out button and encoded into its URL. One-way, at
+  // open time: after that the two windows are independent.
+  const wideFilters = {
+    tab: tab === "archive" ? "archive" : null,
+    quick: quickFilter,
+    source: filterSource,
+    region: filterRegion,
+    channel: filterChannel,
+    dqa: filterDqa,
+    idv: filterIdv,
+  };
+
+  // Same reason, for the other direction: maximising with a row
+  // already selected would open the drawer immediately. Going wide is a
+  // request for the list, so it starts from the list.
+  useEffectDIH(() => {
+    if (wide.isWide) setSelectedRow(null);
+  }, [wide.isWide]);
+
   const detailRef = useRefDIH(null);
   useEffectDIH(() => {
+    if (wide.isWide) return;          // the drawer comes to the operator
     if (current && detailRef.current) {
       detailRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
@@ -538,6 +565,7 @@ const DIHScreen = () => {
   };
 
   return (
+    <WideShell wide={wide}>
     <div className="page" style={{paddingBottom:0, position:'relative'}}>
       <PageHeader
         eyebrow="DIH REVIEW QUEUE · US-109"
@@ -566,6 +594,7 @@ const DIHScreen = () => {
           )}
         </>}
         right={<>
+          <WideViewButtons wide={wide} filters={wideFilters} label="staged records"/>
           <button className="btn" onClick={() => setAuditOpen(true)}><Icon name="history"/> Audit chain</button>
           <button className="btn" onClick={exportVisibleRows}><Icon name="download"/> Export CSV</button>
         </>}
@@ -806,7 +835,13 @@ const DIHScreen = () => {
             <Icon name="sliders" size={14}/> Density
           </button>
         </div>
-        <div style={{maxHeight: density === "compact" ? 220 : 280, overflowY:'auto'}}>
+        <div style={wide.isWide
+          // What sits above the table in wide mode: the page header, the
+          // quick-filter card and this toolbar. 240px is measured, not
+          // guessed — a larger reserve is rows the operator asked for and
+          // did not get.
+          ? { maxHeight: "calc(100vh - 240px)", minHeight: 320, overflowY: "auto" }
+          : { maxHeight: density === "compact" ? 220 : 280, overflowY: "auto" }}>
           <table className="tbl" style={density === "compact" ? { fontSize: 12 } : undefined}>
             <thead>
               <tr>
@@ -894,6 +929,14 @@ const DIHScreen = () => {
         </div>
       </div>
 
+      <WideDetailHost
+        wide={wide}
+        open={!!current}
+        onClose={() => setSelectedRow(null)}
+        title={current ? current.head : ""}
+        subtitle={current
+          ? `${current.id.slice(0, 18)}… · ${current.parish || "—"} · ${rows.indexOf(current) + 1} of ${rows.length}`
+          : ""}>
       {/* Three-column compare — only rendered when a row is selected */}
       {!current && (
         <div className="card" style={{padding:48, textAlign:'center', color:'var(--neutral-500)'}}>
@@ -1245,7 +1288,9 @@ const DIHScreen = () => {
 
       {/* Sticky action bar */}
       {current && (
-        <div style={{margin:'16px -24px 0', position:'sticky', bottom:0, zIndex:20}}>
+        <div style={wide.isWide
+          ? { margin: '16px 0 0', position: 'sticky', bottom: 0, zIndex: 20 }
+          : { margin: '16px -24px 0', position: 'sticky', bottom: 0, zIndex: 20 }}>
           <ActionBar left={<>Reviewing <span className="t-mono" style={{color:'var(--neutral-900)'}}>{current.id.slice(0,18)}…</span> · {current.head} · {rows.indexOf(current) + 1} of {rows.length}</>}>
             {!["promoted", "rejected", "quarantined"].includes(current.state) && (
               <button className="btn"
@@ -1303,6 +1348,7 @@ const DIHScreen = () => {
           </ActionBar>
         </div>
       )}
+      </WideDetailHost>
       </>}
 
       <AuditDrawer
@@ -1494,6 +1540,7 @@ const DIHScreen = () => {
       )}
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>
+    </WideShell>
   );
 };
 

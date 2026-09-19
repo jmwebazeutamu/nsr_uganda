@@ -830,3 +830,41 @@ button:focus-visible { outline: 0; box-shadow: var(--focus-ring); }
 .bar-danger { border-left: 3px solid var(--accent-danger); }
 .bar-quality { border-left: 3px solid var(--accent-quality); }
 .bar-identity { border-left: 3px solid var(--accent-identity); }
+
+/* ── Wide view (ADR-0030) ────────────────────────────────────────────
+   Two ways for a list screen to take the whole window: an in-page
+   overlay, and a popped-out second window. The overlay sits over the
+   masthead and sidebar rather than hiding them by editing the shell,
+   so no other screen has to know this exists.                        */
+.wide-shell {
+  position: fixed; inset: 0;
+  z-index: 60;
+  background: var(--neutral-50);
+  overflow: auto;
+  padding: var(--space-4) var(--space-5);
+}
+/* The popped-out window has no sidebar to sit beside. */
+.wide-window {
+  min-height: 100vh;
+  background: var(--neutral-50);
+  padding: var(--space-4) var(--space-5);
+}
+.wide-window-bar {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  border-radius: 4px;
+  background: var(--neutral-0);
+  border: 1px solid var(--neutral-200);
+}
+
+/* The record drawer. `.drawer` is absolute and 380px — right for an
+   audit log, far too narrow for a three-column compare, and absolute
+   positioning would trap it inside the overlay's scroll box. */
+.drawer-backdrop.drawer-fixed { position: fixed; z-index: 61; }
+.drawer.drawer-wide {
+  position: fixed;
+  width: min(1180px, 94vw);
+  z-index: 62;
+}
+.drawer.drawer-wide .drawer-body { padding: var(--space-4); }

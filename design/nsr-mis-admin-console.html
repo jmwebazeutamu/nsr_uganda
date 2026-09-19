@@ -21,6 +21,9 @@
   <!-- Shared design-system primitives -->
   <script type="text/babel" src="components.jsx"></script>
   <script type="text/babel" src="v0.1/components/error-boundary.jsx"></script>
+  <!-- Wide view: maximise + pop-out for list screens (ADR-0030). Must
+       load before any screen that calls useWideView. -->
+  <script type="text/babel" src="v0.1/components/wide-view.jsx"></script>
 
   <!-- Data layer — same nsrApi + useApi the operator console uses,
        just pointed at /api/v1/admin/... endpoints. -->
