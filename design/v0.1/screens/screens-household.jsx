@@ -1058,7 +1058,7 @@ const TabHistory = ({ h, live, onNavigate }) => {
           No change requests recorded against this household.
         </div>
       )}
-      {(live ? crs && crs.length > 0 : true) && (
+      {crs && crs.length > 0 && (
         <table className="tbl">
           <thead><tr>
             <th>UPD ID</th><th>Change type</th><th>Submitted by</th>
@@ -1066,16 +1066,7 @@ const TabHistory = ({ h, live, onNavigate }) => {
             <th>PMT impact</th><th>Status</th>
           </tr></thead>
           <tbody>
-            {(live ? crs : [
-              { id: "UPD-2026-04-22-00188", change_type: "Roster: edit member age",
-                requester: "Mukasa R.", approver: "Adong F.",
-                created_at: "2026-04-20T00:00:00", decided_at: "2026-04-22T00:00:00",
-                pmt_relevant: false, status: "approved" },
-              { id: "UPD-2026-04-04-00112", change_type: "Housing: roof material",
-                requester: "Mukasa R.", approver: "Adong F.",
-                created_at: "2026-04-01T00:00:00", decided_at: "2026-04-04T00:00:00",
-                pmt_relevant: true, status: "approved" },
-            ]).map(cr => (
+            {crs.map(cr => (
               <tr key={cr.id} style={{cursor:"pointer"}}
                 onClick={() => onNavigate?.("upd", { changeRequestId: cr.id })}>
                 <td className="col-id">{cr.id}</td>
@@ -1118,9 +1109,7 @@ const TabGrievances = ({ h, live, onFileGrievance }) => {
   return (
     <div>
       <TabHeader title="Grievances"
-        sub={live
-          ? "GRM cases filed against or referencing this household."
-          : "GRM cases filed against or referencing this household. Mock preview — log into /admin/ first."}
+        sub="GRM cases filed against or referencing this household."
         action={<button className="btn btn-sm" onClick={onFileGrievance} disabled={!live}
           title={live ? "File a grievance against this household" : "Live data required — log in via /admin/"}>
           <Icon name="plus" size={13}/> File grievance
@@ -1132,7 +1121,7 @@ const TabGrievances = ({ h, live, onFileGrievance }) => {
           No grievances recorded against this household.
         </div>
       )}
-      {(live ? rows && rows.length > 0 : true) && (
+      {rows && rows.length > 0 && (
         <table className="tbl">
           <thead><tr>
             <th>GRM ID</th><th>Category</th><th>Description</th>
@@ -1140,14 +1129,7 @@ const TabGrievances = ({ h, live, onFileGrievance }) => {
             <th>SLA</th><th>Status</th>
           </tr></thead>
           <tbody>
-            {(live ? rows : [
-              { id: "GRM-2026-04-02-00088", category: "Roster: missing member",
-                sub_category: "—",
-                description: "Daughter Mary was not enrolled in the roster.",
-                reporter_name: "Sarah Nakato", tier: "l1_parish_chief",
-                opened_at: "2026-04-02T09:00:00",
-                sla_deadline: "2026-04-07T09:00:00", status: "closed" },
-            ]).map(g => (
+            {rows.map(g => (
               <tr key={g.id}>
                 <td className="col-id">{g.id}</td>
                 <td>{g.category}</td>
@@ -1205,9 +1187,7 @@ const TabProgrammes = ({ h, live }) => {
   return (
     <div>
       <TabHeader title="Programmes"
-        sub={live
-          ? "Active enrolments and outstanding referrals under partner programmes (PDM, NUSAF, etc.)."
-          : "Active enrolments and exits from partner programmes. Mock preview — log into /admin/ first."}
+        sub="Active enrolments and outstanding referrals under partner programmes (PDM, NUSAF, etc.)."
         action={<button className="btn btn-sm"><Icon name="plus" size={13}/> Add referral</button>}/>
       {err && <div className="muted t-bodysm" style={{padding:"16px 20px"}}>Couldn't load: {err}</div>}
       {live && (!enrolments || !referrals) && !err && (
@@ -1218,14 +1198,14 @@ const TabProgrammes = ({ h, live }) => {
           No programme enrolments or referrals on file for this household.
         </div>
       )}
-      {(live ? total > 0 : true) && (
+      {total > 0 && (
         <table className="tbl">
           <thead><tr>
             <th>Programme</th><th>Type</th><th>Status</th><th>Effective</th>
             <th>Referral / Enrolment ID</th>
           </tr></thead>
           <tbody>
-            {live ? <>
+            <>
               {(enrolments || []).map(e => (
                 <tr key={`e-${e.id}`}>
                   <td>
@@ -1256,18 +1236,7 @@ const TabProgrammes = ({ h, live }) => {
                   <td className="col-id">{r.id}</td>
                 </tr>
               ))}
-            </> : (
-              <tr>
-                <td>
-                  <div style={{fontWeight:600}}>OPM-PDM-2026</div>
-                  <div className="t-bodysm muted">Parish Development Model</div>
-                </td>
-                <td><Chip size="sm" tone="data">Enrolment</Chip></td>
-                <td><Chip size="sm" tone="data">active</Chip></td>
-                <td className="t-cap">2026-04-01</td>
-                <td className="col-id">ENR-2026-04-01-00018</td>
-              </tr>
-            )}
+            </>
           </tbody>
         </table>
       )}
@@ -1290,7 +1259,7 @@ const TabConsent = ({ h, live }) => {
   // purposes that statement covers — registration, processing for eligibility,
   // and sharing under a DSA — so the detail card reflects reality instead of
   // showing every purpose as "Not captured". Inferred rows are clearly marked.
-  const interviewConsented = live ? !!(consent || h.current_consent_state) : true;
+  const interviewConsented = !!(consent || h.current_consent_state);
   const inferredConsent = interviewConsented ? {
     codes: ["REGISTRATION", "ELIGIBILITY", "REFERRAL"],
     date: h.capturedAt,
@@ -1323,20 +1292,11 @@ const TabConsent = ({ h, live }) => {
       {showManage && hasPortal && (
         <Modal open={showManage} onClose={() => setShowManage(false)}
           title="Consent management" width={920}>
-          {/* Live mode: pass THIS household's members so the screen reads each
-              member's real consent matrix and withdraws against the live API.
-              Demo mode (no live data): render the sample preview, flagged. */}
-          {!live && (
-            <div className="tint-update" style={{
-              padding: "8px 12px", borderRadius: 6, marginBottom: 12,
-              fontSize: 12, color: "var(--neutral-700)"}}>
-              <Icon name="info" size={12} style={{verticalAlign:"middle", marginRight:6}}/>
-              Preview — sample data. Open a real (live) household to manage its
-              actual consent.
-            </div>
-          )}
+          {/* Pass THIS household's members so the screen reads each member's
+              real consent matrix and withdraws against the live API. There is
+              no sample mode: the tab only renders for a household that loaded. */}
           {React.createElement(window.CitizenConsentScreen,
-            live ? { members: h.members, householdId: h.rid, live: true } : {})}
+            { members: h.members, householdId: h.rid, live: true })}
         </Modal>
       )}
       {/* US-CONSENT-08 detail — full per-purpose consent breakdown
@@ -1368,13 +1328,15 @@ const TabConsent = ({ h, live }) => {
           </p>
         </div>
         <KVCard title="Evidence" rows={[
-          ["Consent given", live && consent
+          ["Consent given", consent
             ? <Chip size="sm" tone="data"><Icon name="check" size={11}/> {h.questionnaireLabels?.interview?.consent || consent}</Chip>
-            : (live ? <span className="muted">not recorded</span> : <Chip size="sm" tone="data">Yes</Chip>)],
-          ["Respondent", respondent || (live ? <span className="muted">—</span> : "Sample respondent")],
+            : <span className="muted">not recorded</span>],
+          ["Respondent", respondent || <span className="muted">—</span>],
           ["Captured at", h.capturedAt],
           ["Operator witness", h.capturedBy],
-          ["Method", live ? "Kobo digital capture" : "Verbal + thumbprint"],
+          ["Method", h.questionnaireLabels?.interview?.method
+                      || h.questionnaire?.interview?.method
+                      || <span className="muted">—</span>],
           ["Erasure requests", <span className="muted">None</span>],
         ]}/>
       </div>
@@ -1425,26 +1387,7 @@ const TabDqa = ({ h, live, onNavigate }) => {
   const stageLabel = { dih_ingest: "DIH ingest", dih_promote: "DIH promote", registry_post_promote: "Post-promote" };
   const outcomeTone = { pass: "data", review: "quality", block: "danger" };
 
-  // Mock fallback for design preview — non-live mode.
-  const mockEvals = [
-    { id: "01EVALA", stage: "registry_post_promote", outcome: "pass",
-      evaluator_service_version: "1.0", actor: "system",
-      evaluated_at: "2026-05-26T08:14:00Z",
-      results: [
-        { rule_code: "AC-HOH-EXISTS", rule_version: 1, status: "pass", severity: "block",
-          message: "", offending_member_ids: [] },
-        { rule_code: "AC-DUPLICATE-MEMBER", rule_version: 1, status: "pass", severity: "block",
-          message: "", offending_member_ids: [] },
-      ] },
-    { id: "01EVALB", stage: "dih_promote", outcome: "review",
-      evaluator_service_version: "1.0", actor: "akello.p",
-      evaluated_at: "2026-05-24T11:02:00Z",
-      results: [
-        { rule_code: "AC-MEMBER-COUNT-MATCH", rule_version: 1, status: "fail", severity: "flag",
-          message: "Reported 5, roster has 4", offending_member_ids: [] },
-      ] },
-  ];
-  const rows = live ? (evals || []) : mockEvals;
+  const rows = evals || [];
 
   // AC-DUPLICATE-MEMBER → Dedup hook. Picks any duplicate-member
   // failure across the evaluation history and surfaces a banner at
@@ -1562,16 +1505,7 @@ const TabAudit = ({ h, live }) => {
     return () => { cancelled = true; };
   }, [live, h.rid]);
 
-  // Mock fallback (design preview)
-  const mockRows = [
-    { actor_id:"akello.p",  actor_kind:"user",   action:"viewed household detail",
-      entity_type:"household", entity_id:h.rid, reason:"Read · Overview tab",
-      occurred_at:"2026-05-16T09:14:00", self_hash:"a1b2c3d4e5f6" },
-    { actor_id:"system",    actor_kind:"system", action:"promote",
-      entity_type:"stage_record", entity_id:"01HXP2K...", reason:"DIH pipeline",
-      occurred_at:"2026-03-08T08:50:00", self_hash:"9b21f3a045b8" },
-  ];
-  const rows = live ? (events || []) : mockRows;
+  const rows = events || [];
 
   return (
     <div>

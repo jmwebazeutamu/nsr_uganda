@@ -105,6 +105,12 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
   const consent = consentBlock.REGISTRATION === "GRANTED" ? "yes"
     : (consentBlock.REGISTRATION === "REFUSED" ? "no" : "");
   const [urbanRural, setUR] = useStateCap("2"); // "1"=Urban, "2"=Rural per rural_urban list
+  // GPS is what the operator reads off the device. It used to be three
+  // uncontrolled inputs showing 2.49423 / 34.65103 / 6.00, while the
+  // submit handler sent those same three literals for every walk-in
+  // regardless of what was typed — so every household captured here
+  // landed in the registry on one fabricated point in Karamoja.
+  const [gps, setGps] = useStateCap({ lat: "", lng: "", accuracy: "" });
   const [submitOpen, setSubmitOpen] = useStateCap(false);
   const [showReceipt, setShowReceipt] = useStateCap(false);
   // Receipt carries the real provisional_registry_id returned by
@@ -331,6 +337,7 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
               geo={geo} setGeo={setGeo}
               urbanRural={urbanRural} setUR={setUR}
               consentBlock={consentBlock} setConsentBlock={setConsentBlock}
+              gps={gps} setGps={setGps}
             />
           )}
           {active === "rost" && (
@@ -364,20 +371,21 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
 
         {/* Right rail — helper */}
         <div className="col gap-4" style={{alignSelf:'start', position:'sticky', top:140}}>
-          {/* DQA live preview */}
+          {/* DQA runs server-side on submission (apps.ingestion_hub
+              _run_staging_gates), so there is nothing to preview here. The
+              card used to show a fixed "3 warnings · 0 blocking" and three
+              invented rule outcomes beside the operator's real entry. */}
           <div className="card">
             <div className="card-header" style={{padding:'12px 16px'}}>
-              <h3 className="t-h3" style={{margin:0}}>Live DQA preview</h3>
-              <span className="t-cap">refreshed 0:03</span>
+              <h3 className="t-h3" style={{margin:0}}>Data quality checks</h3>
             </div>
             <div style={{padding:16}}>
-              <div className="row gap-3" style={{marginBottom:10}}>
-                <div className="row gap-2"><div style={{width:8,height:8,borderRadius:'50%',background:'var(--accent-quality)'}}/><strong>3</strong> <span className="muted">warnings</span></div>
-                <div className="row gap-2"><div style={{width:8,height:8,borderRadius:'50%',background:'var(--accent-danger)'}}/><strong>0</strong> <span className="muted">blocking</span></div>
+              <div className="t-bodysm muted">
+                The wizard checks each section as you go — errors appear on the
+                tab and block <strong>Next</strong>. The full DQA ruleset runs
+                on the server when you submit; its outcome appears on the
+                record in the DIH review queue.
               </div>
-              <DQARow tone="quality" rule="AC-DQA-PHONE-LENGTH" detail="Phone ends in 7-digit subscriber section; AT&T-style; accept on review."/>
-              <DQARow tone="quality" rule="AC-DQA-GPS-DRIFT" detail="GPS varied 4m across two readings; within tolerance."/>
-              <DQARow tone="quality" rule="AC-DQA-AGE-HEAD" detail="Head of household age 27 — flag for review (median 35–45)."/>
             </div>
           </div>
 
@@ -481,7 +489,11 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
                 urban_rural: urbanRural,
                 consent: consent,
                 consent_block: consentBlock,
-                gps_lat: "2.49423", gps_lng: "34.65103", gps_accuracy_m: "6.00",
+                ...(gps.lat && gps.lng ? {
+                  gps_lat: gps.lat,
+                  gps_lng: gps.lng,
+                  gps_accuracy_m: gps.accuracy || null,
+                } : {}),
                 members: members,
                 health: healthData,
                 education: educationData,
@@ -513,14 +525,13 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
         <div className="col gap-3">
           <p style={{margin:0}}>This household will be assigned a <strong>provisional Registry ID</strong> and queued for NSR Unit promotion (AC-DIH-PROMOTE).</p>
           <div className="tint-quality" style={{padding:12, borderRadius:6, borderLeft:'3px solid var(--accent-quality)'}}>
-            <div className="row gap-2" style={{marginBottom:6}}><Icon name="alert" size={14} color="var(--accent-quality)"/><strong className="t-bodysm">3 warnings will be carried forward</strong></div>
-            <ul className="t-bodysm" style={{margin:0, paddingLeft:20, color:'var(--neutral-700)'}}>
-              <li>AC-DQA-PHONE-LENGTH · subscriber section</li>
-              <li>AC-DQA-GPS-DRIFT · 4m variance between readings</li>
-              <li>AC-DQA-AGE-HEAD · head age below 28</li>
-            </ul>
+            <div className="row gap-2" style={{marginBottom:6}}><Icon name="alert" size={14} color="var(--accent-quality)"/><strong className="t-bodysm">DQA runs on submission</strong></div>
+            <div className="t-bodysm" style={{color:'var(--neutral-700)'}}>
+              Any warnings or blocking failures are raised server-side and shown
+              against this record in the DIH review queue.
+            </div>
           </div>
-          <div className="t-cap">Audit entry will be written. SMS will be sent to +256 786 234567.</div>
+          <div className="t-cap">Audit entry will be written. An SMS will be sent to the respondent\u2019s registered number.</div>
           {submitError && (
             <div className="tint-danger" style={{padding:10, borderRadius:6, borderLeft:'3px solid var(--accent-danger)'}}>
               <strong className="t-bodysm">Submission failed:</strong> <span className="t-bodysm">{submitError}</span>
@@ -560,7 +571,7 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
 /* ============================================================
    Section 1 — Identification (extracted for the conditional shell)
    ============================================================ */
-const IdentificationSection = ({ geo, setGeo, urbanRural, setUR, consentBlock, setConsentBlock }) => {
+const IdentificationSection = ({ geo, setGeo, urbanRural, setUR, consentBlock, setConsentBlock, gps, setGps }) => {
   const [urOpts] = (typeof useChoiceList === "function")
     ? useChoiceList("rural_urban")
     : [[]];
@@ -604,21 +615,30 @@ const IdentificationSection = ({ geo, setGeo, urbanRural, setUR, consentBlock, s
 
         <h4 className="t-h3" style={{ margin: '8px 0 16px' }}>GPS reading</h4>
         <div className="field-row-3">
-          <Field label="Latitude" required>
-            <input className="field-input t-mono" defaultValue="2.49423"/>
+          <Field label="Latitude">
+            <input className="field-input t-mono" value={gps.lat} placeholder="e.g. 0.31628"
+                   onChange={e => setGps({ ...gps, lat: e.target.value })}/>
           </Field>
-          <Field label="Longitude" required>
-            <input className="field-input t-mono" defaultValue="34.65103"/>
+          <Field label="Longitude">
+            <input className="field-input t-mono" value={gps.lng} placeholder="e.g. 32.58219"
+                   onChange={e => setGps({ ...gps, lng: e.target.value })}/>
           </Field>
-          <Field label="Accuracy" required hint="Must be ≤ 10m (AC-GPS-ACCURACY)" error="6 m — within limit">
-            <div className="input-affix" style={{ borderColor: 'var(--accent-data)' }}>
-              <input defaultValue="6" className="t-mono"/>
+          <Field label="Accuracy" hint="Must be ≤ 10m (AC-GPS-ACCURACY)"
+                 error={gps.accuracy !== "" && Number(gps.accuracy) > 10
+                   ? `${gps.accuracy} m — above the 10 m limit`
+                   : undefined}>
+            <div className="input-affix">
+              <input className="t-mono" value={gps.accuracy} placeholder="m"
+                     onChange={e => setGps({ ...gps, accuracy: e.target.value })}/>
               <span className="affix">m</span>
             </div>
           </Field>
         </div>
         <div className="t-cap mt-2" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Icon name="mapPin" size={12} color="var(--accent-data)"/> Position captured 14:31 EAT · accuracy 6 m · device tablet-PCH-7411
+          <Icon name="mapPin" size={12} color="var(--neutral-500)"/>
+          {gps.lat && gps.lng
+            ? `Will be submitted as ${gps.lat}, ${gps.lng}${gps.accuracy ? ` · accuracy ${gps.accuracy} m` : " · no accuracy given"}`
+            : "No position entered — the record will be submitted without GPS and flagged by AC-GPS-ACCURACY."}
         </div>
 
         <div className="divider mt-5"/>
@@ -626,13 +646,13 @@ const IdentificationSection = ({ geo, setGeo, urbanRural, setUR, consentBlock, s
         <h4 className="t-h3" style={{ margin: '8px 0 16px' }}>Respondent</h4>
         <div className="field-row-3">
           <Field label="Respondent name" required>
-            <input className="field-input" defaultValue="Lokol Naume"/>
+            <input className="field-input" placeholder="As given by the respondent"/>
           </Field>
           <Field label="Phone (E.164)" required hint="Format: +256 XXX XXXXXX">
-            <input className="field-input" defaultValue="+256 786 234567"/>
+            <input className="field-input" placeholder="+256 XXX XXXXXX"/>
           </Field>
           <Field label="Head of household" hint="Auto-filled from Roster Person 01">
-            <input className="field-input" defaultValue="Lokol Naume" readOnly style={{ background: 'var(--neutral-50)', color: 'var(--neutral-700)' }}/>
+            <input className="field-input" readOnly placeholder="—" style={{ background: 'var(--neutral-50)', color: 'var(--neutral-700)' }}/>
           </Field>
         </div>
 
@@ -755,7 +775,7 @@ const ReceiptOverlay = ({ onClose, provisionalId }) => {
             <span className="t-cap">Generated 14:35 EAT</span>
           </div>
           <h2 className="t-h2" style={{margin:'4px 0 8px'}}>Provisional Registry ID issued</h2>
-          <p className="t-body" style={{color:'var(--neutral-700)', marginTop:0}}>Hand the printed slip to the respondent. An SMS has been queued to <span className="t-mono">+256 786 234567</span>.</p>
+          <p className="t-body" style={{color:'var(--neutral-700)', marginTop:0}}>Hand the printed slip to the respondent. An SMS has been queued to the number recorded for this household.</p>
 
           <div className="card" style={{padding:14, marginTop:12}}>
             <div className="t-cap" style={{marginBottom:6}}>SMS PREVIEW · 160 char</div>

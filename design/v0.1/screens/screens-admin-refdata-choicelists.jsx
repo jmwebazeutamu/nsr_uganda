@@ -34,65 +34,23 @@ const CL_LIST_STATUS_LABEL = {
   rejected: "Rejected",
 };
 
-const CL_LISTS = [
-  // (list_name, latestVersion, optionsCount, activeVersionStatus, ...)
-  { listName: "relationship",         label: "Relationship to head",   activeVersion: 3, draftVersion: null, optionsCount: 7,  cascading: false, lastUpdated: "12 Apr 2026", uses: ["intake.member.relationship_to_head", "drs.member.relationship_to_head"], pii: false },
-  { listName: "marital_status",       label: "Marital status",         activeVersion: 2, draftVersion: null, optionsCount: 6,  cascading: false, lastUpdated: "18 Feb 2026", uses: ["intake.member.marital_status"], pii: false },
-  { listName: "sex",                  label: "Sex",                    activeVersion: 1, draftVersion: null, optionsCount: 2,  cascading: false, lastUpdated: "01 Jan 2024", uses: ["intake.member.sex"], pii: false },
-  { listName: "disability_type",      label: "Disability type (WG-SS)",activeVersion: 2, draftVersion: null, optionsCount: 6,  cascading: false, lastUpdated: "08 Mar 2026", uses: ["intake.member.wg_*", "drs.member.disability_*"], pii: true },
-  { listName: "education_level",      label: "Education level",        activeVersion: 4, draftVersion: 5,    optionsCount: 22, cascading: false, lastUpdated: "21 May 2026", uses: ["intake.member.highest_grade_completed"], pii: false, draftAuthor: "Nakanwagi · MGLSD" },
-  { listName: "occupation_isco08",    label: "Occupation (ISCO-08, top 80)", activeVersion: 1, draftVersion: 2, optionsCount: 80, cascading: false, lastUpdated: "30 Apr 2026", uses: ["intake.member.occupation_code"], pii: false, draftAuthor: "Bahati E. · OPM" },
-  { listName: "industry_isic_rev4",   label: "Industry (ISIC rev. 4)", activeVersion: 1, draftVersion: null, optionsCount: 99, cascading: false, lastUpdated: "30 Apr 2026", uses: ["intake.member.industry_code"], pii: false },
-  { listName: "income_source",        label: "Income source",          activeVersion: 2, draftVersion: null, optionsCount: 14, cascading: false, lastUpdated: "12 Mar 2026", uses: ["intake.household.income_sources[]"], pii: false },
-  { listName: "shock_type",           label: "Shock type",             activeVersion: 1, draftVersion: null, optionsCount: 12, cascading: false, lastUpdated: "30 Jan 2026", uses: ["intake.household.shocks[]"], pii: false },
-  { listName: "wall_material",        label: "Wall material",          activeVersion: 1, draftVersion: null, optionsCount: 10, cascading: false, lastUpdated: "30 Jan 2026", uses: ["intake.household.dwelling.wall_material"], pii: false },
-  { listName: "roof_material",        label: "Roof material",          activeVersion: 1, draftVersion: null, optionsCount: 8,  cascading: false, lastUpdated: "30 Jan 2026", uses: ["intake.household.dwelling.roof_material"], pii: false },
-  { listName: "floor_material",       label: "Floor material",         activeVersion: 1, draftVersion: null, optionsCount: 9,  cascading: false, lastUpdated: "30 Jan 2026", uses: ["intake.household.dwelling.floor_material"], pii: false },
-  { listName: "water_source",         label: "Drinking water source",  activeVersion: 1, draftVersion: null, optionsCount: 11, cascading: false, lastUpdated: "30 Jan 2026", uses: ["intake.household.utilities.drinking_water_source"], pii: false },
-  { listName: "toilet_facility",      label: "Toilet facility",        activeVersion: 1, draftVersion: null, optionsCount: 8,  cascading: false, lastUpdated: "30 Jan 2026", uses: ["intake.household.utilities.toilet_facility"], pii: false },
-  { listName: "cooking_fuel",         label: "Cooking fuel",           activeVersion: 1, draftVersion: null, optionsCount: 8,  cascading: false, lastUpdated: "30 Jan 2026", uses: ["intake.household.utilities.cooking_fuel"], pii: false },
-  { listName: "language",             label: "Language (UBOS 41-list)",activeVersion: 2, draftVersion: null, optionsCount: 41, cascading: false, lastUpdated: "10 Feb 2026", uses: ["intake.member.preferred_language"], pii: false },
-  { listName: "pmt_trigger_source",   label: "PMT recompute trigger",  activeVersion: 1, draftVersion: null, optionsCount: 6,  cascading: false, lastUpdated: "08 May 2026", uses: ["pmt.result.triggered_by"], pii: false },
-  { listName: "ethnicity",            label: "Ethnicity",              activeVersion: 1, draftVersion: null, optionsCount: 56, cascading: false, lastUpdated: "30 Jan 2026", uses: ["intake.member.ethnicity"], pii: true },
-];
-
-// Active version of `education_level` — 22 options, partial sample shown
-const CL_OPTIONS_EDU = [
-  { code: "00", label: "No formal schooling",          status: "active", sort: 0,  language: "en" },
-  { code: "01", label: "Pre-primary",                  status: "active", sort: 1,  language: "en" },
-  { code: "P1", label: "P1 (Primary 1)",               status: "active", sort: 2,  language: "en" },
-  { code: "P2", label: "P2",                           status: "active", sort: 3,  language: "en" },
-  { code: "P3", label: "P3",                           status: "active", sort: 4,  language: "en" },
-  { code: "P4", label: "P4",                           status: "active", sort: 5,  language: "en" },
-  { code: "P5", label: "P5",                           status: "active", sort: 6,  language: "en" },
-  { code: "P6", label: "P6",                           status: "active", sort: 7,  language: "en" },
-  { code: "P7", label: "P7 (Primary 7 — PLE)",         status: "active", sort: 8,  language: "en" },
-  { code: "S1", label: "S1 (Senior 1)",                status: "active", sort: 9,  language: "en" },
-  { code: "S2", label: "S2",                           status: "active", sort: 10, language: "en" },
-  { code: "S3", label: "S3",                           status: "active", sort: 11, language: "en" },
-  { code: "S4", label: "S4 (UCE)",                     status: "active", sort: 12, language: "en" },
-  { code: "S5", label: "S5",                           status: "active", sort: 13, language: "en" },
-  { code: "S6", label: "S6 (UACE)",                    status: "active", sort: 14, language: "en" },
-  { code: "T1", label: "Tertiary — certificate",       status: "active", sort: 15, language: "en" },
-  { code: "T2", label: "Tertiary — diploma",           status: "active", sort: 16, language: "en" },
-  { code: "T3", label: "Bachelor's degree",            status: "active", sort: 17, language: "en" },
-  { code: "T4", label: "Postgraduate diploma",         status: "active", sort: 18, language: "en" },
-  { code: "T5", label: "Master's degree",              status: "active", sort: 19, language: "en" },
-  { code: "T6", label: "Doctorate / PhD",              status: "active", sort: 20, language: "en" },
-  { code: "99", label: "Not stated / refused",         status: "active", sort: 21, language: "en" },
-  { code: "X1", label: "Pre-primary (old code)",       status: "deprecated", sort: 99, language: "en" },
-];
-
-const CL_VERSIONS_EDU = [
-  { version: 5, status: "draft",            optionsCount: 22, author: "Nakanwagi · MGLSD", approvedBy: null, approvedAt: null, effectiveFrom: null, updatedAt: "21 May 2026 · 11:08", note: "Adds T6 (PhD), splits T-tier into 6 levels." },
-  { version: 4, status: "active",           optionsCount: 22, author: "Nakanwagi · MGLSD", approvedBy: "Director General · UBOS", approvedAt: "12 Mar 2026", effectiveFrom: "15 Mar 2026", updatedAt: "12 Mar 2026", note: "Aligns with UNESCO ISCED 2024." },
-  { version: 3, status: "retired",          optionsCount: 18, author: "MGLSD Stats", approvedBy: "Director General · UBOS", approvedAt: "12 Jan 2024", effectiveFrom: "01 Feb 2024", updatedAt: "15 Mar 2026", note: "Retired on v4 activation." },
-];
+// CL_LISTS, CL_OPTIONS_EDU and CL_VERSIONS_EDU removed.
+//
+// They were the fallback whenever the admin refdata API was unreachable,
+// and between them they invented: eighteen choice lists with version
+// numbers, option counts and "last updated" dates; an education-level
+// option set that rendered under whichever list the operator had opened;
+// and a version history whose v4 and v3 carried approvals by
+// "Director General · UBOS" on stated dates. Reference-data approvals are
+// governance records. Showing ones that were never given, on the screen
+// an administrator uses to check them, is the most misleading thing this
+// file could have done. See docs/console_mock_data_audit.md.
 
 /* ===========================================================
    Live data overlay — project /api/v1/admin/refdata/choice-lists/
-   onto the mock shape used by the JSX below. When the API isn't
-   reachable, CL_LISTS keeps rendering so the prototype stays alive.
+   onto the shape the JSX below renders. When the API isn't reachable
+   this returns null and the screen reports that, rather than rendering
+   a fixture.
    =========================================================== */
 const _projectChoiceLists = (results) => {
   if (!Array.isArray(results) || results.length === 0) return null;
@@ -118,13 +76,14 @@ const AdminChoiceListsScreen = () => {
     ? useApi("/api/v1/admin/refdata/choice-lists/")
     : [null];
   // eslint-disable-next-line no-shadow
-  const CL_LISTS_LIVE = _projectChoiceLists(resp && resp.results) || CL_LISTS;
+  // No fixture fallback: an unreachable API yields an empty list and the
+  // screen says so, rather than eighteen lists that do not exist.
+  const CL_LISTS_LIVE = _projectChoiceLists(resp && resp.results) || [];
 
   const [view, setView] = useStateCL("list"); // list | detail
   const [selected, setSelected] = useStateCL(null);
   // Carries the live meta row through to the detail screen so it can
-  // render the correct list's badges/options without re-discovering
-  // via a mock find().
+  // render the correct list's badges and options.
   const [selectedMeta, setSelectedMeta] = useStateCL(null);
 
   const [q, setQ] = useStateCL("");
@@ -206,6 +165,13 @@ const AdminChoiceListsScreen = () => {
             </tr>
           </thead>
           <tbody>
+            {rows.length === 0 && (
+              <tr><td colSpan="8" className="muted t-cap" style={{ padding: 14 }}>
+                {total === 0
+                  ? "No choice lists loaded. The reference-data API returned nothing — log into /admin/ first if this is a local session."
+                  : "No choice list matches these filters."}
+              </td></tr>
+            )}
             {rows.map(l => (
               <tr key={l.listName} style={{ cursor: 'pointer' }} onClick={() => { setSelected(l.listName); setSelectedMeta(l); setView("detail"); }}>
                 <td>
@@ -258,9 +224,9 @@ const AdminChoiceListsScreen = () => {
    unreachable so the design preview still renders end-to-end.
    =========================================================== */
 const CLDetail = ({ listName, meta: metaProp, onBack }) => {
-  // Prefer the live row passed from the list view; fall back to the
-  // education_level-shaped mock only if we have nothing else.
-  const meta = metaProp || CL_LISTS.find(l => l.listName === listName);
+  // The live row passed from the list view. There is no fixture to fall
+  // back to; without it the screen renders the version history alone.
+  const meta = metaProp || null;
 
   const [search, setSearch] = useStateCL("");
   const [showDeprecated, setShowDeprecated] = useStateCL(true);
@@ -334,7 +300,7 @@ const CLDetail = ({ listName, meta: metaProp, onBack }) => {
         note: "",
       }));
     }
-    return CL_VERSIONS_EDU;
+    return [];
   }, [versionsLive]);
 
   const selectedVersion = useMemoCL(() => {
@@ -357,13 +323,13 @@ const CLDetail = ({ listName, meta: metaProp, onBack }) => {
   }, [detail]);
 
   const options = useMemoCL(() => {
-    let opts = liveOptions || CL_OPTIONS_EDU;
+    let opts = liveOptions || [];
     if (!showDeprecated) opts = opts.filter(o => o.status === "active");
     if (search) opts = opts.filter(o => o.code.includes(search) || o.label.toLowerCase().includes(search.toLowerCase()));
     return opts;
   }, [liveOptions, search, showDeprecated]);
 
-  const optionsTotal = (liveOptions || CL_OPTIONS_EDU).length;
+  const optionsTotal = (liveOptions || []).length;
   const isDraft = selectedVersion && selectedVersion.status === "draft";
 
   // Inline editor state:
@@ -493,6 +459,32 @@ const CLDetail = ({ listName, meta: metaProp, onBack }) => {
     }
   };
 
+  // Nothing loaded: say which state this is instead of rendering a
+  // version history. All hooks above have run, so this early return is
+  // safe — it is the last statement before the main tree.
+  if (!selectedVersion) {
+    return (
+      <div className="page">
+        <PageHeader
+          back={{ label: "Choice lists", onClick: onBack }}
+          eyebrow={<>ADMIN · REFERENCE DATA · CHOICE LIST · <span className="t-mono">{listName}</span></>}
+          title={meta?.label || listName}
+          sub="Version history"/>
+        <div className="card mt-4" style={{ padding: 24 }}>
+          <div className="t-bodysm muted">
+            {detailError
+              ? `Could not load this list: ${detailError}`
+              : !apiAvailable
+              ? "The reference-data API is not reachable from here. Log in via /admin/ first — session-cookie auth carries through to the API."
+              : detailLoading || versionsLive === null
+              ? "Loading versions…"
+              : "No versions exist for this choice list yet."}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page">
       <PageHeader
@@ -503,7 +495,7 @@ const CLDetail = ({ listName, meta: metaProp, onBack }) => {
         right={<>
           {meta?.draftVersion
             ? <button className="btn" disabled title="A draft already exists for this list — switch to it to edit options">
-                <Icon name="edit" size={14}/> Draft v{meta.draftVersion} exists
+                <Icon name="edit" size={14}/> Draft v{meta?.draftVersion} exists
               </button>
             : <button className="btn btn-primary" onClick={onCloneDraft} disabled={cloning || !apiAvailable}
                       title={apiAvailable ? "Clone the current active version into a new editable draft" : "API not reachable"}>
@@ -529,8 +521,8 @@ const CLDetail = ({ listName, meta: metaProp, onBack }) => {
             <div className="t-cap">Pending draft</div>
             {meta?.draftVersion
               ? <>
-                  <Chip tone="quality" style={{ marginTop: 4 }}>v{meta.draftVersion} · draft</Chip>
-                  <div className="t-cap mt-2">{meta.draftAuthor}</div>
+                  <Chip tone="quality" style={{ marginTop: 4 }}>v{meta?.draftVersion} · draft</Chip>
+                  <div className="t-cap mt-2">{meta?.draftAuthor}</div>
                 </>
               : <div className="t-bodysm muted mt-1">none</div>}
           </div>
@@ -626,7 +618,7 @@ const CLDetail = ({ listName, meta: metaProp, onBack }) => {
           {!isDraft && apiAvailable && (
             <button className="btn btn-sm" onClick={onCloneDraft} disabled={cloning || !!meta?.draftVersion}
                     title={meta?.draftVersion
-                      ? `Switch to the v${meta.draftVersion} draft tab above to edit`
+                      ? `Switch to the v${meta?.draftVersion} draft tab above to edit`
                       : "Active versions are read-only — clone to a draft to add or edit options"}>
               <Icon name="plus" size={12}/> {meta?.draftVersion ? `Edit in draft v${meta.draftVersion}` : "Clone to draft to edit"}
             </button>

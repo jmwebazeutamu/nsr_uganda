@@ -131,6 +131,13 @@ paths:
       description: |
         Returns up to 50 users matching `q` (case-insensitive
         substring on username / first_name / last_name).
+
+        Also backs the Roles & scopes screen's account list, which is
+        why the item carries status, last login and e-mail alongside
+        the picker's four original fields. It reports no MFA state:
+        this system has no MFA implementation, and a security screen
+        showing a posture nothing enforces is worse than one that
+        omits it.
       parameters:
         - in: query
           name: q
@@ -144,6 +151,31 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/UserSearchItem" }
+        "403": { description: caller lacks IsOperatorScopeAdmin }
+
+  /api/v1/security/roles/:
+    get:
+      tags: [security]
+      summary: The role catalogue (ADR-0028)
+      description: |
+        Every role defined in `apps/security/roles.py` — the single
+        definition the Django Groups and the Keycloak realm are both
+        derived from — with the number of users currently in each
+        role's Group.
+
+        Read-only by design. ADR-0028 D1 puts the catalogue in code so
+        the realm, the Groups and the TOR cannot drift apart; a role
+        editor would reintroduce that drift. Membership changes by
+        assigning Groups; data visibility changes through
+        /operator-scopes/.
+      responses:
+        "200":
+          description: The catalogue, in declaration order
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RoleCatalogueItem" }
         "403": { description: caller lacks IsOperatorScopeAdmin }
 
 components:
@@ -173,7 +205,9 @@ components:
 
     UserSearchItem:
       type: object
-      required: [id, username, display_name, groups]
+      required:
+        [id, username, display_name, groups, email, is_active,
+         is_superuser, last_login, date_joined]
       properties:
         id:           { type: integer }
         username:     { type: string }
@@ -181,3 +215,58 @@ components:
         groups:
           type: array
           items: { type: string }
+        email:        { type: string }
+        is_active:
+          type: boolean
+          description: A disabled account cannot sign in.
+        is_superuser:
+          type: boolean
+          description: |
+            Bypasses scope checks entirely, so "no scope granted" is
+            not a finding for one.
+        last_login:
+          type: [string, "null"]
+          format: date-time
+          description: null when the account has never signed in.
+        date_joined:  { type: string, format: date-time }
+
+    RoleCatalogueItem:
+      type: object
+      required:
+        [code, label, permissions, default_scope, external, in_tor,
+         member_count]
+      properties:
+        code:
+          type: string
+          description: |
+            Both the Django Group name and the Keycloak realm role
+            (ADR-0028 D2).
+        label:        { type: string }
+        permissions:
+          type: array
+          description: The eight TOR permissions this role grants.
+          items:
+            type: string
+            enum:
+              [data_view, data_entry, data_modify, data_delete,
+               data_approve, data_export, data_download, data_upload]
+        default_scope:
+          type: string
+          enum: [national, district, sub_county, parish, partner]
+        external:
+          type: boolean
+          description: |
+            Partner-affiliated — scope_code is a Partner.code rather
+            than a geographic code.
+        in_tor:
+          type: boolean
+          description: false for operational roles outside the TOR's 18.
+        adr0006:
+          type: [string, "null"]
+          description: The ADR-0006 realm role, where one exists.
+        notes:        { type: string }
+        member_count:
+          type: integer
+          description: |
+            Users in the matching Group. 0 when the Group does not
+            exist yet (sync_roles not run) — the role is still listed.

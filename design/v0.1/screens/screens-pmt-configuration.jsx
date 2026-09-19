@@ -485,10 +485,15 @@ const PmtConfigurationScreen = ({ onBack }) => {
     if (!api || !selected?.id) return;
     const author = window.prompt("Author email:", selected.author || "");
     if (author === null) return;
-    const steward = window.prompt("MGLSD Data Steward email:", "steward@mglsd.go.ug");
+    // No default addresses. These two name the people who must approve a
+    // PMT model version; pre-filling plausible ones invites an operator to
+    // accept an approver who does not exist by pressing Enter.
+    const steward = window.prompt("MGLSD Data Steward email:", "");
     if (steward === null) return;
-    const dg = window.prompt("UBOS Director General email:", "dg@ubos.go.ug");
+    if (!steward.trim()) { setError("A Data Steward email is required to submit for approval."); return; }
+    const dg = window.prompt("UBOS Director General email:", "");
     if (dg === null) return;
+    if (!dg.trim()) { setError("A UBOS Director General email is required to submit for approval."); return; }
     setSaving("submit");
     setError("");
     try {

@@ -7,6 +7,7 @@ from .api import (
     impersonate_start,
     impersonate_stop,
     me,
+    role_catalogue,
     user_search,
 )
 
@@ -24,6 +25,9 @@ urlpatterns = [
     path("users/me/", me, name="users-me"),
     # US-S11-028 — user search for the Grant Scope modal's user picker.
     path("users/", user_search, name="users-search"),
+    # The role catalogue (ADR-0028), read-only. The Roles & scopes
+    # screen renders this instead of its own nine invented roles.
+    path("roles/", role_catalogue, name="role-catalogue"),
     # US-S11-042 — impersonation. The stop endpoint URL must match
     # ImpersonationGuardMiddleware.GUARD_EXEMPT_PATHS so a writes-
     # disabled session can still revert itself.
