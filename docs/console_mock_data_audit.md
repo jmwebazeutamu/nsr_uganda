@@ -153,11 +153,11 @@ A contract test per screen, in the shape of
 |---|---|
 | 1. Security audit screen | **done** — reads the real chain and reports what the verifier returns, instead of claiming "✓ verified" unconditionally. (The 816 breaks it first reported were a verifier defect, not chain damage — see `apps/security/integrity.py`; the chain verifies clean.) |
 | 2. Five fallback screens | **done** — DIH, UPD, GRM, household, consent-citizen start empty |
-| 3. Geography, roles, PMT config | **done** — all read live endpoints |
+| 3. Geography, roles, PMT config | **partly — reopened 19 Sep 2026.** Geography and PMT config read live endpoints. The roles screen does not: removing `OPERATOR_SCOPE_OPTIONS` left `SEC_USERS` in the same file, and that is what the user list renders from. See the reopened item below. |
 | 4. Consent DPO queue | **done** — reports the module as disabled rather than inventing tickets |
 | 5. Retired `_LEGACY_*` arrays | **done** — 8 fixtures, 377 lines, 151 identities deleted |
 | 6. DIH / UPD / change-request detail views | **done** — no specimen record in any of the three |
-| 7. Admin console (21 scripts) | **done** — DDUP model versions, the DDUP pair detail and the PMT dashboard; 18 of the 21 were already live |
+| 7. Admin console (21 scripts) | **partly** — DDUP model versions, the DDUP pair detail, the PMT dashboard and the five record views are done. `screens-admin-security-roles.jsx` was wrongly counted as live; see below. |
 | 8. PMT configuration band cutoffs | **done** — empirical thresholds now come from the selected version, not the dashboard fixture |
 
 Referenced fabricated fixtures: **20 → 10**. Dead fixtures: **8 → 0**. The
@@ -208,26 +208,50 @@ Deleting the dead arrays exposed a gap in the method above. It looked for
 therefore did not see fabricated records written **inline in JSX**, which
 is where a detail or compare view naturally puts them.
 
-**47 fabricated identities remain in the shipped bundle**, in that shape:
+That table has since been worked through. **Re-swept 19 September 2026**
+against the shipped manifests, looking for NIN-shaped literals, `+256`
+phone numbers and person-name fields:
 
-| Screen | Identities | Where |
-|---|---|---|
-| `screens-dih.jsx` | 12 | the three-column compare view, inline |
-| `screens-home.jsx` | 10 | `ROLE_CONTENT.person` (harness fallback, intended) + the KitScreen design gallery |
-| `change-request/screens-change-request.jsx` | 8 | `ROSTER` / `HH` — the last referenced fixture |
-| `screens-upd.jsx` | 7 | the `UPD` detail record, 23 uses |
-| `screens-capture.jsx` | 4 | inline |
-| others | 6 | inline |
+| Screen | Shipped? | What is left | Assessment |
+|---|---|---|---|
+| `screens-admin-security-roles.jsx` | yes | `SEC_USERS` — **10 fabricated operator accounts** | **reopened — the real one** |
+| `screens-home.jsx` | yes | 9 — `ROLE_CONTENT.person` + KitScreen gallery | intended, documented |
+| `screens-drs-querybuilder.jsx` | yes | 2 — "Buganda North/South" | sub-region names, not people |
+| `screens-household.jsx` | yes | 1 — `reporter_name` in a sample | needs a look |
+| `screens-capture.jsx` | yes | a `+256` number in an SMS notice and a field default | UI sample, not a record |
+| `screens-drs-fieldselector.jsx` | yes | a NIN-shaped literal | `_PREVIEW_ULIDS`, a field-preview placeholder |
+| `_redesign_reference.jsx`, `*.test.jsx` | **no** | 12 between them | not in either manifest |
 
-Not all of these are equal. `ROLE_CONTENT.person` is a documented fallback
-for the standalone harness, and KitScreen is a design gallery whose job is
-to show sample content. The ones that matter are the **detail and compare
-views** — DIH compare, UPD detail, change-request — because they render a
-single record in full, which is exactly the shape an operator reads as
-"this is the household in front of me".
+DIH, UPD and change-request are clear.
 
-Those three need the same treatment as items 1–4: fetch the record, show
-loading and error states, and render nothing rather than a specimen. That
-is the next piece of work, and it is larger than it looks, because the
-fabricated values are woven through the JSX rather than sitting in one
-array.
+### Reopened: `screens-admin-security-roles.jsx`
+
+Item 3 removed `OPERATOR_SCOPE_OPTIONS` from this file and the screen was
+marked done. A **second** fixture in the same file survived and was never
+looked at:
+
+```js
+const SEC_USERS = [
+  { id: "u-akello-p", name: "Akello P.", email: "akello.p@mglsd.go.ug", … },
+  …ten of them
+];
+const [usersState, setUsersState] = useStateSEC(() => secClone(SEC_USERS));
+```
+
+The screen's only `fetch` is for geographic units. **There is no fetch for
+users at all**, so the user-administration screen of the admin console shows
+ten invented operators, always — with plausible government addresses at
+`@mglsd.go.ug`, `@opm.go.ug`, `@gulu.go.ug`, `@lyantonde.go.ug` and
+`@npm.go.ug`, each with a role, scopes and an MFA state.
+
+This is the screen on which an administrator grants and revokes access. It is
+the same defect class as the five record views, and worse in one respect:
+those had no `onSave` wired, whereas this one manages local state as though
+edits mean something.
+
+`/api/v1/security/users/` (`user_search`) already exists and answers, so the
+fix is to wire it, start empty, and guard — the pattern used everywhere else.
+
+**Why the audit missed it twice:** both sweeps keyed on *the fixture named in
+the previous finding*. Once `OPERATOR_SCOPE_OPTIONS` was gone the file looked
+clean. One fixture per file was never a safe assumption.
