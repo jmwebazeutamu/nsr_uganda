@@ -839,17 +839,38 @@ const DIHScreen = () => {
                 fetch(`/api/v1/dih/stage-records/${id}/process/`, {
                   method: "POST",
                   credentials: "same-origin",
-                  headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                  headers: { "Content-Type": "application/json", "Accept": "application/json", "X-CSRFToken": _getCsrfToken() },
                   body: JSON.stringify({ actor: "nsr-reviewer", allow_fast_track: true }),
-                }).then(r => r.ok ? r.json() : Promise.reject(`${id} failed`))
-                  .then(_stageToRow)
-                  .catch(() => null),
+                // Keep WHY a row failed. This swallowed every error and
+                // reported "Re-ran gates on 0 of 62." — true, useless, and
+                // indistinguishable from "the records were ineligible" when
+                // the real answer was a 403 on a missing CSRF header.
+                }).then(async r => {
+                  if (r.ok) return { row: _stageToRow(await r.json()) };
+                  let detail = "";
+                  try {
+                    detail = (await r.json()).detail || "";
+                  } catch { /* an HTML error page, not JSON */ }
+                  return { error: `HTTP ${r.status}${detail ? ` · ${detail}` : ""}` };
+                }).catch(err => ({ error: String(err && err.message ? err.message : err) })),
               )).then(results => {
-                const updated = results.filter(Boolean);
+                const updated = results.filter(r => r.row).map(r => r.row);
+                const failures = results.filter(r => r.error).map(r => r.error);
                 const updatedById = Object.fromEntries(updated.map(r => [r.id, r]));
                 setRows(rows.map(r => updatedById[r.id] || r));
                 setSelection(new Set());
-                setToast(`Re-ran gates on ${updated.length} of ${ids.length}.`);
+                if (failures.length === 0) {
+                  setToast(`Re-ran gates on ${updated.length} of ${ids.length}.`);
+                } else {
+                  // One distinct reason is almost always the whole story:
+                  // these calls succeed or fail together.
+                  const reasons = Array.from(new Set(failures));
+                  setToast(
+                    `Re-ran gates on ${updated.length} of ${ids.length} — `
+                    + `${failures.length} failed: ${reasons.slice(0, 2).join("; ")}`
+                    + (reasons.length > 2 ? ` (+${reasons.length - 2} other reasons)` : ""),
+                  );
+                }
               });
             }}>
             <Icon name="play" size={14}/> Re-run gates ({selection.size})
@@ -1404,7 +1425,7 @@ const DIHScreen = () => {
                 fetch(`/api/v1/dih/stage-records/${current.id}/process/`, {
                   method: "POST",
                   credentials: "same-origin",
-                  headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                  headers: { "Content-Type": "application/json", "Accept": "application/json", "X-CSRFToken": _getCsrfToken() },
                   body: JSON.stringify({ actor: "nsr-reviewer", allow_fast_track: true }),
                 })
                   .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(d.detail || "process failed")))
@@ -1506,7 +1527,7 @@ const DIHScreen = () => {
           fetch(`/api/v1/dih/stage-records/${current.id}/edit/`, {
             method: "POST",
             credentials: "same-origin",
-            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            headers: { "Content-Type": "application/json", "Accept": "application/json", "X-CSRFToken": _getCsrfToken() },
             body: JSON.stringify(body),
           })
             .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(d.detail || "edit failed")))
@@ -1545,7 +1566,7 @@ const DIHScreen = () => {
           fetch(`/api/v1/dih/stage-records/${current.id}/quarantine/`, {
             method: "POST",
             credentials: "same-origin",
-            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            headers: { "Content-Type": "application/json", "Accept": "application/json", "X-CSRFToken": _getCsrfToken() },
             body: JSON.stringify(body),
           })
             .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(d.detail || "archive failed")))
