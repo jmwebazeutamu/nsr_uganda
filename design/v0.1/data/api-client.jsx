@@ -59,6 +59,11 @@ const nsrApi = {
 };
 
 window.nsrApi = nsrApi;
+// Exposed for hand-rolled `fetch` calls that predate this client.
+// Django enforces CSRF on every unsafe method (SessionAuthentication
+// is in DEFAULT_AUTHENTICATION_CLASSES), so a POST without this
+// header is a 403 no matter who is signed in.
+window.nsrCsrfToken = _readCsrf;
 
 // Session controls shared by the operator and admin shells. Logout remains a
 // POST protected by Django's CSRF middleware; if a stale token is rejected,

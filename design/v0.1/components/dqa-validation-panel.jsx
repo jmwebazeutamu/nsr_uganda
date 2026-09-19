@@ -111,7 +111,7 @@ const DqaValidationPanel = ({
       const r = await fetch("/api/v1/dqa/evaluate/household", {
         method: "POST",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-CSRFToken": (window.nsrCsrfToken ? window.nsrCsrfToken() : "") },
         body: JSON.stringify({ payload: p, stage: s }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);

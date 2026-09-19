@@ -888,7 +888,7 @@ const BuildStepV2 = ({
               const r = await fetch("/api/v1/drs/requests/estimate/", {
                 method: "POST",
                 credentials: "same-origin",
-                headers: {
+                headers: { "X-CSRFToken": (window.nsrCsrfToken ? window.nsrCsrfToken() : ""),
                   "Content-Type": "application/json",
                   Accept: "application/json",
                 },

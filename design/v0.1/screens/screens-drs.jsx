@@ -825,7 +825,7 @@ const _drsFetchLiveEstimate = async (tree) => {
           const r = await fetch("/api/v1/drs/requests/estimate/", {
             method: "POST",
             credentials: "same-origin",
-            headers: {
+            headers: { "X-CSRFToken": _odrsCsrf(),
               "Content-Type": "application/json",
               Accept: "application/json",
             },
