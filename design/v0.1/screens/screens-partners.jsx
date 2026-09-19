@@ -1,4 +1,6 @@
-/* global React, Icon, Chip, KPI, Sparkline, PageHeader, Modal, Field, Toast, useChoiceList, useApi, nsrApi */
+/* global React, Icon, Chip, KPI, Sparkline, PageHeader, Modal, Field, Toast, useChoiceList,
+   useApi, nsrApi,
+   useWideView, WideViewButtons, WideShell, wideTableScrollStyle */
 // NSR MIS — Partners domain (US-S23-013, live-wired).
 //
 //   PartnersScreen              dashboard / list of partner organisations + DSA health
@@ -63,6 +65,10 @@ const _fmt = (n) =>
    PARTNERS DASHBOARD
    ============================================================ */
 const PartnersScreen = ({ onRegister, onOpen, onNavigate }) => {
+  // Wide view (ADR-0030). Declared here, above every early return in
+  // this component: a hook that some renders skip changes the hook
+  // order, which React treats as a different component.
+  const wide = useWideView("partners");
   const [q, setQ] = _p_useState("");
   const [typeFilter, setTypeFilter] = _p_useState("");
   const [statusFilter, setStatusFilter] = _p_useState("");
@@ -101,12 +107,14 @@ const PartnersScreen = ({ onRegister, onOpen, onNavigate }) => {
   }, [renewals]);
 
   return (
+    <WideShell wide={wide}>
     <div className="page">
       <PageHeader
         eyebrow="PARTNERS · §11.6 PARTNER & DSA REGISTRY"
         title="Partner organisations"
         sub={<>{partners.length} partner{partners.length === 1 ? "" : "s"} loaded · {summary?.active_dsas ?? "—"} active DSAs</>}
         right={<>
+          <WideViewButtons wide={wide} label="partners"/>
           <button className="btn"><Icon name="download" size={14}/> Export register</button>
           <button className="btn btn-primary" onClick={onRegister}>
             <Icon name="plus" size={14}/> Register partner
@@ -151,7 +159,9 @@ const PartnersScreen = ({ onRegister, onOpen, onNavigate }) => {
             <div style={{flex: 1}}/>
             <span className="t-cap">{partners.length} loaded</span>
           </div>
-          <div style={{overflowX: "auto"}}>
+          <div style={wide.isWide
+            ? { overflow: "auto", maxHeight: "calc(100vh - 300px)" }
+            : { overflowX: "auto" }}>
             <table className="tbl">
               <thead>
                 <tr>
@@ -231,6 +241,7 @@ const PartnersScreen = ({ onRegister, onOpen, onNavigate }) => {
           across all partners by aggregating from the API client-side. */}
       <ActivityRail partners={partners}/>
     </div>
+    </WideShell>
   );
 };
 

@@ -1,4 +1,6 @@
-/* global React, Icon, Chip, PageHeader, KPI, Toast, TweaksPanel, TweakSection, TweakToggle, TweakRadio, useTweaks, useChoiceList, useApi */
+/* global React, Icon, Chip, PageHeader, KPI, Toast, TweaksPanel, TweakSection, TweakToggle,
+   TweakRadio, useTweaks, useChoiceList, useApi,
+   useWideView, WideViewButtons, WideShell, wideTableScrollStyle */
 // NSR MIS — Beneficiary registry (US-180 / US-S25-007 / US-S26-007)
 //
 // Distinct from the household registry:
@@ -160,6 +162,10 @@ const labelOf = (opts, code, fallback = "—") => {
    BENEFICIARIES SCREEN
    ============================================================ */
 const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
+  // Wide view (ADR-0030). Declared here, above every early return in
+  // this component: a hook that some renders skip changes the hook
+  // order, which React treats as a different component.
+  const wide = useWideView("beneficiaries");
   /* ---- ChoiceLists (every coded selector reads from the DB) ---- */
   const [, { allLists: cl }] = useChoiceList([
     "programme_enrolment_status",
@@ -328,12 +334,14 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
   const pendingPay  = (counts.pending || 0) + (counts.suspended || 0);
 
   return (
+    <WideShell wide={wide}>
     <div className="page">
       <PageHeader
         eyebrow="BENEFICIARY REGISTRY · REF module · SAD §5.1"
         title="Beneficiaries"
         sub={<>Per-programme enrolment ledger — one row = one <span className="t-mono">ProgrammeEnrolment</span>. Status reads <span className="t-mono">programme_enrolment_status</span>; pending shows in-flight <span className="t-mono">Referrals</span>.</>}
         right={<>
+          <WideViewButtons wide={wide} label="beneficiaries"/>
           <button className="btn" onClick={exportCsv}><Icon name="download" size={14}/> Export CSV</button>
           <button className="btn" onClick={() => setToast("Import enrolment list is routed through the Programmes API import job once enabled.")}><Icon name="arrowUp" size={14}/> Import enrolment list</button>
           <button className="btn" onClick={onNewProgramme}><Icon name="book" size={14}/> Add programme</button>
@@ -519,6 +527,7 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
             )}
           </div>
         </div>
+        <div style={wideTableScrollStyle(wide, 340)}>
         <table className="tbl">
           <thead>
             <tr>
@@ -636,6 +645,7 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
             })}
           </tbody>
         </table>
+        </div>
         {/* Pagination */}
         <div className="row gap-2" style={{padding:'12px 16px', borderTop:'1px solid var(--neutral-200)', justifyContent:'space-between'}}>
           <span className="t-cap">Showing {rows.length === 0 ? 0 : page*pageSize + 1}–{Math.min((page+1)*pageSize, rows.length)} of {rows.length.toLocaleString()}</span>
@@ -669,6 +679,7 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
         </TweaksPanel>
       )}
     </div>
+    </WideShell>
   );
 };
 

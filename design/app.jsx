@@ -21,7 +21,72 @@ const _appCsrfToken = () => {
 // here says so rather than rendering a normal-width screen in a window
 // the operator opened expressly to get a wider one.
 const WIDE_SCREENS = {
-  dih: { label: "DIH review queue", render: () => <DIHScreen/> },
+  dih:      { label: "DIH review queue", render: () => <DIHScreen/> },
+  registry: {
+    label: "Social Registry",
+    render: (nav) => <RegistryScreen
+      initialView="households"
+      onOpen={(rid) => nav("household", { householdId: rid })}
+      onOpenMember={(mid) => nav("registry-member-detail", { memberId: mid })}
+      onNavigate={nav}/>,
+  },
+  "registry-members": {
+    label: "Members",
+    render: (nav) => <RegistryScreen
+      initialView="members"
+      onOpen={(rid) => nav("household", { householdId: rid })}
+      onOpenMember={(mid) => nav("registry-member-detail", { memberId: mid })}
+      onNavigate={nav}/>,
+  },
+  dedup:    { label: "Duplicates",    render: () => <DedupScreen/> },
+  grm:      { label: "Grievances",    render: (nav) => <GRMScreen onNavigate={nav}/> },
+  drs:      { label: "Data Requests", render: (nav) => <DRSScreen onNavigate={nav}/> },
+  beneficiaries: {
+    label: "Beneficiaries",
+    render: (nav) => <BeneficiariesScreen
+      onOpenHousehold={(rid) => nav("household", { householdId: rid })}
+      onNewProgramme={() => nav("programme-new")}/>,
+  },
+  partners: {
+    label: "Partners",
+    render: (nav) => <PartnersScreen
+      onOpen={(partnerId) => nav("partner-detail", { partnerId })}
+      onNavigate={nav}/>,
+  },
+};
+
+// Records a wide list can open without leaving the window.
+//
+// A wide list is for triage, and triage means opening the thing you
+// found. Without these, a row click in a popped-out window either did
+// nothing or dropped the operator back to the main console — so the
+// second monitor could show a list and not act on it.
+//
+// This is a short stack, not a router: the list is the root, a record
+// opens over it, and Back returns. Anything not here says where to go
+// rather than rendering a screen without the props it needs.
+const WIDE_DETAILS = {
+  household: {
+    label: "Household",
+    render: (nav, payload) => <HouseholdScreen
+      householdId={payload?.householdId} onNavigate={nav}/>,
+  },
+  "registry-member-detail": {
+    label: "Member",
+    render: (nav, payload) => <MemberDetailScreen
+      memberId={payload?.memberId}
+      onBack={() => nav("registry-members")}
+      onOpenHousehold={(rid) => nav("household", { householdId: rid })}
+      onNavigate={nav}/>,
+  },
+  "partner-detail": {
+    label: "Partner",
+    render: (nav, payload) => <PartnerDetailScreen
+      partnerId={payload?.partnerId}
+      onBack={() => nav("partners")}
+      onRegisterProgramme={() => nav("programme-new")}
+      onNavigate={nav}/>,
+  },
 };
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
@@ -200,6 +265,14 @@ function App() {
   const wideWindowScreen = typeof window !== "undefined"
     ? _wideRequestedScreen(window.location.search)
     : null;
+  // The wide window's own short stack: the list it was opened at, plus
+  // whatever record the operator opens from it.
+  const [wideScreen, setWideScreen] = useStateApp(wideWindowScreen);
+  const [widePayload, setWidePayload] = useStateApp(null);
+  const wideNavigate = (next, payload = null) => {
+    setWideScreen(next);
+    setWidePayload(payload);
+  };
   const stopImpersonating = () => {
     fetch("/api/v1/security/impersonate/stop/", {
       method: "POST",
@@ -217,11 +290,21 @@ function App() {
 
   // ── Wide window ───────────────────────────────────────────────────
   if (wideWindowScreen) {
-    const entry = WIDE_SCREENS[wideWindowScreen];
+    const current = wideScreen || wideWindowScreen;
+    const root = WIDE_SCREENS[wideWindowScreen];
+    const entry = WIDE_SCREENS[current] || WIDE_DETAILS[current];
+    const atRoot = current === wideWindowScreen;
     return (
       <div className="wide-window">
         <div className="wide-window-bar">
-          <Icon name="maximize" size={14} color="var(--neutral-500)"/>
+          {atRoot ? (
+            <Icon name="maximize" size={14} color="var(--neutral-500)"/>
+          ) : (
+            <button className="btn btn-sm" onClick={() => wideNavigate(wideWindowScreen)}
+                    title={`Back to ${root ? root.label : "the list"}`}>
+              <Icon name="chevronLeft" size={13}/> {root ? root.label : "Back"}
+            </button>
+          )}
           <span className="t-bodysm" style={{fontWeight:600}}>
             {entry ? entry.label : "Wide view"}
           </span>
@@ -239,14 +322,23 @@ function App() {
         </div>
         <ErrorBoundary>
           {entry
-            ? entry.render()
+            ? entry.render(wideNavigate, widePayload)
             : (
               <div className="card" style={{padding:32}}>
-                <h3 className="t-h3" style={{marginTop:0}}>No wide view for this screen</h3>
+                <h3 className="t-h3" style={{marginTop:0}}>
+                  {atRoot ? "No wide view for this screen" : "Not available in a wide window"}
+                </h3>
                 <p className="muted t-bodysm" style={{marginBottom:0}}>
-                  <span className="t-mono">{wideWindowScreen}</span> does not support the
-                  wide view yet. Close this window and use the console tab.
+                  <span className="t-mono">{current}</span>{" "}
+                  {atRoot
+                    ? "does not support the wide view yet. Close this window and use the console tab."
+                    : "opens in the main console window — this one holds the list."}
                 </p>
+                {!atRoot && (
+                  <button className="btn mt-3" onClick={() => wideNavigate(wideWindowScreen)}>
+                    <Icon name="chevronLeft" size={13}/> Back to {root ? root.label : "the list"}
+                  </button>
+                )}
               </div>
             )}
         </ErrorBoundary>
