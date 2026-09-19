@@ -488,9 +488,21 @@ def evaluate_all(record: Any, *, record_type: str, record_id: str) -> list[Evalu
         DqaRule.objects
         .filter(status=RuleStatus.ACTIVE)
         .exclude(category=RuleCategory.INTRA_HOUSEHOLD)
+        .order_by("rule_id", "-version")
     )
+    # One version per rule, highest wins — the same rule cannot be
+    # evaluated twice against the same record. `services.approve` now
+    # retires the version it supersedes, so this should never have work
+    # to do; it is here because it already did. AC-MEMBER-AGE-MAX sat
+    # with v1 and v2 both ACTIVE and every member was checked twice.
+    # `household_evaluator.load_active_household_rules` has always done
+    # this; the record-scope path did not.
+    seen: set[str] = set()
     evaluations: list[Evaluation] = []
     for rule in qs:
+        if rule.rule_id in seen:
+            continue
+        seen.add(rule.rule_id)
         entity = (rule.applicability_filter or {}).get("entity")
         if entity and entity != record_type:
             continue

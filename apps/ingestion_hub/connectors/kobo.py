@@ -228,6 +228,22 @@ def _kobo_member_to_canonical(raw: dict, line_number: int) -> dict:
         "nin": (m.get("c9_nin") or "").strip().upper()
                 if (m.get("c8_nin_status") or "").strip() == "1" else "",
         # ────────────────────────────────────────────────────────────
+        # C12-C15 — parental survival and, where the parent lives in
+        # this household, their roster line number. The form asks all
+        # four and this mapping dropped all four, so Member's
+        # mother_alive_flag / father_alive_flag / mother_line_number /
+        # father_line_number were null on every one of the 1,283
+        # members in the dev registry. They are what AC-PARENT-AGE and
+        # AC-ORPHAN-FLAG read, and what identifies an orphan for
+        # referral.
+        #
+        # promote_stage_record already reads these exact key names.
+        # ────────────────────────────────────────────────────────────
+        "mother_alive_flag": _kobo_yes_no(m.get("c12_mother_alive")),
+        "father_alive_flag": _kobo_yes_no(m.get("c13_father_alive")),
+        "father_line_number": _to_int(m.get("c14_father_line")),
+        "mother_line_number": _to_int(m.get("c15_mother_line")),
+        # ────────────────────────────────────────────────────────────
         # Detail blocks (US-S11-020) — per-member sections from the
         # questionnaire so the household-detail screen can render
         # Health / Disability, Education, Employment tabs from the
@@ -373,6 +389,21 @@ def _kobo_shocks_coping_block(raw: dict) -> dict:
         "shock_affected": raw.get("k01_shock_affected", ""),
         "coping": {k: raw.get(k, "") for k in coping_keys},
     }
+
+
+def _kobo_yes_no(value) -> bool | None:
+    """Questionnaire convention: 1=Yes, 2=No, 8=Don't know.
+
+    Returns None for "don't know", blank and anything unrecognised —
+    the registry columns are nullable precisely so "not established"
+    stays distinguishable from "no".
+    """
+    code = str(value or "").strip()
+    if code == "1":
+        return True
+    if code == "2":
+        return False
+    return None
 
 
 def _to_int(value) -> int | None:
@@ -547,6 +578,13 @@ def kobo_to_canonical(raw: dict) -> dict:
             "start":             raw.get("start", ""),
             "end":               raw.get("end", ""),
         },
+        # The size the respondent reported, as its own canonical field.
+        # It was carried only inside `interview`, where neither
+        # Household.reported_household_size nor AC-MEMBER-COUNT-MATCH
+        # (which reads `$reported_household_size`) could see it — so the
+        # column was null on all 284 households and the rule compared
+        # the roster against nothing.
+        "reported_household_size": _to_int(raw.get("hh_size")),
         "urban_rural": urban_rural,
         "address_narrative": (raw.get("b3_address") or "").strip(),
         "gps_lat": lat,

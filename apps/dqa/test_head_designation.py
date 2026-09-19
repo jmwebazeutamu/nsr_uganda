@@ -282,3 +282,95 @@ def test_revise_is_idempotent_when_nothing_changed(head_rules):
     before = DqaRule.objects.count()
     assert mod.revise(actor="seed-bot") == 0
     assert DqaRule.objects.count() == before
+
+
+# --- one active version per rule -------------------------------------------
+
+@pytest.mark.django_db
+def test_approving_a_version_retires_the_one_it_supersedes():
+    """AC-MEMBER-AGE-MAX had v1 and v2 both ACTIVE on the dev registry.
+
+    `dqa_evaluate_all` iterates every ACTIVE rule, so both evaluated
+    every member: two DqaResult rows per failure, each finding reported
+    twice, and no defined answer to which version applies.
+    """
+    from apps.dqa.models import Severity
+    from apps.dqa.services import approve, submit_for_approval
+
+    common = dict(
+        rule_id="AC-TEST-SUPERSEDE",
+        description="x", severity=Severity.FLAG,
+        expression={"op": "not_null", "args": ["$.surname"]},
+        error_message_template="missing surname",
+        author="rule-author",
+    )
+    v1 = DqaRule.objects.create(version=1, status=RuleStatus.ACTIVE,
+                                approved_by="qa-lead", **common)
+    v2 = DqaRule.objects.create(version=2, parent_rule=v1,
+                                status=RuleStatus.DRAFT, **common)
+
+    submit_for_approval(v2, actor="rule-author")
+    approve(v2, approver="qa-lead", note="supersedes v1")
+
+    v1.refresh_from_db()
+    v2.refresh_from_db()
+    assert v2.status == RuleStatus.ACTIVE
+    assert v1.status == RuleStatus.RETIRED
+    assert DqaRule.objects.filter(
+        rule_id="AC-TEST-SUPERSEDE", status=RuleStatus.ACTIVE,
+    ).count() == 1
+
+
+@pytest.mark.django_db
+def test_the_retirement_is_in_the_audit_chain():
+    from apps.dqa.models import Severity
+    from apps.dqa.services import approve, submit_for_approval
+    from apps.security.models import AuditEvent
+
+    common = dict(
+        rule_id="AC-TEST-AUDITED-SUPERSEDE",
+        description="x", severity=Severity.FLAG,
+        expression={"op": "not_null", "args": ["$.surname"]},
+        error_message_template="missing surname",
+        author="rule-author",
+    )
+    v1 = DqaRule.objects.create(version=1, status=RuleStatus.ACTIVE,
+                                approved_by="qa-lead", **common)
+    v2 = DqaRule.objects.create(version=2, parent_rule=v1,
+                                status=RuleStatus.DRAFT, **common)
+    submit_for_approval(v2, actor="rule-author")
+    approve(v2, approver="qa-lead", note="supersedes v1")
+
+    actions = set(
+        AuditEvent.objects.filter(entity_id=str(v1.id))
+        .values_list("action", flat=True),
+    )
+    assert "dqa.rule_version.retired" in actions, (
+        "a superseded version must leave the chain retired, not merely "
+        "stop being used"
+    )
+
+
+@pytest.mark.django_db
+def test_the_engine_evaluates_one_version_per_rule_even_if_two_are_active():
+    """The guard for data already in the bad state."""
+    from apps.dqa.engine import evaluate_all as dqa_evaluate_all
+    from apps.dqa.models import Severity
+
+    common = dict(
+        rule_id="AC-TEST-DOUBLE-ACTIVE",
+        description="x", severity=Severity.FLAG,
+        expression={"op": "not_null", "args": ["$.surname"]},
+        error_message_template="missing surname",
+        author="seed", status=RuleStatus.ACTIVE, approved_by="qa-lead",
+        applicability_filter={"entity": "member"},
+    )
+    DqaRule.objects.create(version=1, **common)
+    DqaRule.objects.create(version=2, **common)
+
+    results = dqa_evaluate_all(
+        {"surname": ""}, record_type="member", record_id="M1",
+    )
+    fired = [e for e in results if e.rule.rule_id == "AC-TEST-DOUBLE-ACTIVE"]
+    assert len(fired) == 1, f"rule evaluated {len(fired)} times"
+    assert fired[0].rule.version == 2, "the newest version is the one that applies"

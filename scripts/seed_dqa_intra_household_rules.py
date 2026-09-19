@@ -529,6 +529,27 @@ AC_DUPLICATE_MEMBER = {
 # ─────────────────────────────────────────────────────────────────────
 # AC-DISABILITY-CONSISTENCY — detail fields populated only if flag = yes.
 
+# ─────────────────────────────────────────────────────────────────────
+# OPEN — this rule checks for a contradiction the pipeline cannot
+# produce, and is deliberately left DRAFT until MGLSD decides what it
+# should check instead.
+#
+# It reads `wg_disability_flag` and `wg_seeing`/`wg_hearing`/… on the
+# member. The canonical payload has neither: D3-D8 land in the member's
+# `health` section as `seeing`, `hearing`, `walking`, `remembering`,
+# `self_care`, `communicating` (see kobo.py and
+# update_workflow.MEMBER_PAYLOAD_FIELD_PATHS), and the flag is not a
+# captured field at all — `Disability.save()` computes it from those
+# values, True when any is "03" (a lot of difficulty) or "04" (cannot
+# do at all).
+#
+# So the flag cannot disagree with the detail: it is derived from it.
+# Repointing the paths would make the rule run and find nothing.
+#
+# The check the questionnaire does imply is a different one: D3-D8 is
+# asked of members aged 2 and above, so WG detail on a younger member
+# is the real inconsistency. That is a rule change, not a path fix, and
+# it needs the DQA owner's sign-off.
 AC_DISABILITY_CONSISTENCY = {
     "rule_id": "AC-DISABILITY-CONSISTENCY",
     "description": (
@@ -592,6 +613,20 @@ AC_DISABILITY_CONSISTENCY = {
 # ─────────────────────────────────────────────────────────────────────
 # AC-ORPHAN-FLAG — orphan_flag must be true when both parents dead and age<18.
 
+# ─────────────────────────────────────────────────────────────────────
+# OPEN — `orphan_flag` has no writer, so this rule currently compares a
+# captured value against a column nothing fills.
+#
+# The questionnaire asks C12 and C13 (is the biological mother/father
+# alive) but never asks whether a member is an orphan; `Member.
+# orphan_flag` is nullable and no connector or promote path sets it.
+# Deriving it — both parents not alive, member under 18 — is a
+# defensible reading, but who counts as an orphan is a programme
+# eligibility definition, so MGLSD owns it rather than this seed.
+#
+# C12-C15 now reach the registry (they were dropped by the Kobo
+# mapping until 2026-09-20), so the parental half of this rule has real
+# data behind it for the first time.
 AC_ORPHAN_FLAG = {
     "rule_id": "AC-ORPHAN-FLAG",
     "description": (

@@ -321,22 +321,50 @@ def _create_health(member: Member, m_payload: dict, *, actor: str) -> None:
         _emit_create("health", obj.id, actor=actor)
 
 
+#: Washington Group short set: registry column -> canonical payload key.
+#: The canonical payload carries D3-D8 inside the member's `health`
+#: section under the questionnaire's own wording, which is what
+#: `apps.update_workflow.api.MEMBER_PAYLOAD_FIELD_PATHS` documents and
+#: what every connector emits. The registry splits them into their own
+#: Disability entity with WG column names.
+_WG_PAYLOAD_KEYS = {
+    "seeing": "seeing",
+    "hearing": "hearing",
+    "walking": "walking",
+    "memory": "remembering",
+    "selfcare": "self_care",
+    "communication": "communicating",
+}
+
+
 def _create_disability(
     member: Member, m_payload: dict, *, actor: str,
 ) -> None:
-    sect = m_payload.get("disability") or {}
-    if not sect:
+    """Create the member's Disability row from the WG short set.
+
+    This read `m_payload["disability"]`, a section no connector has ever
+    emitted — kobo, nusaf and pdm all put D3-D8 under `health`. The
+    effect was silent and total: 1,283 members on the dev registry, zero
+    Disability rows, while the answers sat in every staged payload. WG
+    disability status is a targeting input for vulnerability
+    programmes, so losing it is not a cosmetic gap.
+
+    A `disability` section is still honoured when a source supplies one,
+    so this widens the contract rather than swapping one shape for
+    another.
+    """
+    explicit = m_payload.get("disability") or {}
+    health = m_payload.get("health") or {}
+    values = {
+        column: (explicit.get(column) or health.get(payload_key) or "")
+        for column, payload_key in _WG_PAYLOAD_KEYS.items()
+    }
+    if not any(str(v).strip() for v in values.values()):
+        # Nothing was asked or nothing was answered: no row, rather than
+        # a row of blanks that reads as "assessed, no difficulty".
         return
     obj, created = Disability.objects.get_or_create(
-        member=member,
-        defaults={
-            "seeing": sect.get("seeing", ""),
-            "hearing": sect.get("hearing", ""),
-            "walking": sect.get("walking", ""),
-            "memory": sect.get("memory", ""),
-            "selfcare": sect.get("selfcare", ""),
-            "communication": sect.get("communication", ""),
-        },
+        member=member, defaults=values,
     )
     if created:
         _emit_create("disability", obj.id, actor=actor)
@@ -576,6 +604,12 @@ def promote_stage_record(
         gps_accuracy_m=payload.get("gps_accuracy_m"),
         dwelling_tenure=hh_dwelling_tenure,
         residence_status=payload.get("residence_status", ""),
+        # What the respondent said the household size was, kept beside
+        # the roster the enumerator actually recorded. The two
+        # disagreeing is the finding AC-MEMBER-COUNT-MATCH exists to
+        # raise; the column was null on every household because nothing
+        # wrote it.
+        reported_household_size=payload.get("reported_household_size"),
         current_intake_source=intake_source,
     )
 

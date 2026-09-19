@@ -93,10 +93,33 @@ def approve(rule: DqaRule, *, approver: str, note: str = "",
     rule.save(update_fields=[
         "status", "approved_by", "approved_at", "approval_note", "updated_at",
     ])
+    # Approving a version supersedes the one it replaces.
+    #
+    # This did not happen, so AC-MEMBER-AGE-MAX ended up with v1 and v2
+    # both ACTIVE on the dev registry. Nothing in the engine picks
+    # between them — `dqa_evaluate_all` iterates every ACTIVE rule — so
+    # both versions evaluated every member, writing two DqaResult rows
+    # per failure and reporting each finding twice. Where two versions
+    # disagree, which one "wins" is whichever the queryset yields last.
+    #
+    # Retiring here, in the same transaction, makes "approved" and
+    # "supersedes" one act, and leaves the retirement in the audit
+    # chain rather than implying the old version simply vanished.
+    superseded = (
+        DqaRule.objects
+        .filter(rule_id=rule.rule_id, status=RuleStatus.ACTIVE)
+        .exclude(pk=rule.pk)
+    )
+    for old_version in superseded:
+        retire(old_version, actor=actor or approver)
     _emit(
         rule, action="dqa.rule_version.approved",
         actor=actor or approver, before=before, after=rule.status,
-        payload={"approver": approver, "note": rule.approval_note},
+        payload={
+            "approver": approver,
+            "note": rule.approval_note,
+            "superseded_versions": [v.version for v in superseded],
+        },
     )
     return rule
 
