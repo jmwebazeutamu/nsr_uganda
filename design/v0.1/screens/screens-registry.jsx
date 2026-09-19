@@ -1,4 +1,5 @@
-/* global React, Icon, Chip, PageHeader, KPI, useApi, MembersListView */
+/* global React, Icon, Chip, PageHeader, KPI, useApi, MembersListView,
+   useWideView, WideViewButtons, WideShell, wideTableScrollStyle */
 // NSR MIS — Registry browse (US-005 / US-090 read-only registry view).
 //
 // This file owns the two-headed RegistryScreen (Households + Members
@@ -119,10 +120,16 @@ const _projectHousehold = (h) => {
    REGISTRY SCREEN
    ============================================================ */
 const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "households" }) => {
+  // Wide view (ADR-0030). The id follows the tab, so a pop-out from the
+  // Members tab opens on Members rather than on households.
   // Top-level entity toggle — registry is two-headed (households + members).
   // initialView lets a route or nav link land you on the Members tab from
   // outside; default is the household list (the original screen).
   const [view, setView] = useStateReg(initialView === "members" ? "members" : "households");
+  // Wide view (ADR-0030). Declared here, above every early return in
+  // this component: a hook that some renders skip changes the hook
+  // order, which React treats as a different component.
+  const wide = useWideView(view === "members" ? "registry-members" : "registry");
 
   const [q, setQ] = useStateReg("");
   // sub-region picker is keyed by GeographicUnit.code (matches the
@@ -218,6 +225,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
   const programmesEnrolled = aggResp?.programme_enrolled ?? 0;
 
   return (
+    <WideShell wide={wide}>
     <div className="page">
       <PageHeader
         eyebrow="REGISTRY · US-005"
@@ -226,6 +234,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
           ? "Search and browse individuals across every household. Read-only — edits go through the household's UPD workflow."
           : "Search, browse, and open any household. Read-only — edits go through the UPD workflow."}
         right={<>
+          <WideViewButtons wide={wide} label={view === "members" ? "members" : "households"}/>
           <button className="btn" onClick={exportCsv}><Icon name="download" size={14}/> Export CSV</button>
           <button className="btn btn-primary" onClick={() => onNavigate?.("capture")}><Icon name="plus" size={14}/> Start capture</button>
         </>}
@@ -288,7 +297,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
       {/* ---------- MEMBERS VIEW ---------- */}
       {view === "members" && (
         typeof MembersListView === "function"
-          ? <MembersListView onOpenHousehold={onOpen} onOpenMember={onOpenMember}/>
+          ? <MembersListView onOpenHousehold={onOpen} onOpenMember={onOpenMember} wide={wide}/>
           : <div className="card" style={{padding:20}}><span className="muted">Members view requires screens-registry-members.jsx</span></div>
       )}
 
@@ -387,6 +396,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
             Couldn’t load households: {listMeta.error}
           </div>
         )}
+        <div style={wideTableScrollStyle(wide, 330)}>
         <table className="tbl">
           <thead>
             <tr>
@@ -448,6 +458,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
             ))}
           </tbody>
         </table>
+        </div>
 
         {/* Pagination */}
         <div className="row gap-2" style={{padding:'12px 16px', borderTop:'1px solid var(--neutral-200)', justifyContent:'space-between'}}>
@@ -467,6 +478,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
       </div>
       </>)}
     </div>
+    </WideShell>
   );
 };
 

@@ -1,4 +1,5 @@
-/* global React, Icon, Chip, PageHeader, KPI, useApi, useChoiceList */
+/* global React, Icon, Chip, PageHeader, KPI, useApi, useChoiceList,
+   wideTableScrollStyle */
 // NSR MIS — Registry · Members listing (US-005 sibling)
 // =========================================================
 // Per-individual browse across every household in the registry.
@@ -174,7 +175,10 @@ const DisabilityPill = ({ kind }) => {
   </Chip>;
 };
 
-const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
+// `wide` comes from the parent RegistryScreen's useWideView — this is a
+// view inside that screen, not a screen of its own, so it inherits the
+// state rather than calling the hook a second time.
+const MembersListView = ({ onOpenHousehold, onOpenMember, wide = null }) => {
   const [q, setQ] = useStateMem("");
   // Filters are keyed off the same codes the backend accepts so the
   // URL is round-trippable. sex/nin_status carry ChoiceList codes;
@@ -435,6 +439,7 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
             Couldn’t load members: {listMeta.error}
           </div>
         )}
+        <div style={wideTableScrollStyle(wide, 330)}>
         <table className="tbl">
           <thead>
             <tr>
@@ -510,6 +515,7 @@ const MembersListView = ({ onOpenHousehold, onOpenMember }) => {
             ))}
           </tbody>
         </table>
+        </div>
 
         {/* Pagination */}
         <div className="row gap-2" style={{padding:'12px 16px', borderTop:'1px solid var(--neutral-200)', justifyContent:'space-between'}}>

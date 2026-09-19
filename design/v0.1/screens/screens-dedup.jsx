@@ -1,4 +1,5 @@
-/* global React, Icon, Chip, PageHeader, Modal, ReasonModal, ActionBar, Toast */
+/* global React, Icon, Chip, PageHeader, Modal, ReasonModal, ActionBar, Toast,
+   useWideView, WideViewButtons, WideShell, WideDetailHost */
 // NSR MIS — 11.5 Dedup Operator side-by-side compare
 // US-S13-003: live wiring. On mount, fetch the first pending
 // MatchPair from /api/v1/ddup/match-pairs/?status=pending; resolve
@@ -76,6 +77,10 @@ const REASON_OPTS_REJECT = [
 ];
 
 const DedupScreen = () => {
+  // Wide view (ADR-0030). Declared here, above every early return in
+  // this component: a hook that some renders skip changes the hook
+  // order, which React treats as a different component.
+  const wide = useWideView("dedup");
   // Backend-driven queue view. The screen now keeps the FULL pending
   // list at the top and renders the adjudication panel for the
   // selected pair below. Click a row → adjudication switches.
@@ -450,6 +455,7 @@ const DedupScreen = () => {
   }
 
   return (
+    <WideShell wide={wide}>
     <div className="page" style={{paddingBottom:0}}>
       <PageHeader
         eyebrow="DUPLICATES · US-083 · LIVE"
@@ -473,6 +479,7 @@ const DedupScreen = () => {
           </span>
         </>}
         right={<>
+          <WideViewButtons wide={wide} label="duplicate pairs"/>
           <button className="btn" disabled={refreshBusy} onClick={_refreshQueue}
             title="Re-fetch the queue from the server">
             <Icon name="play" size={14}/>
@@ -508,7 +515,9 @@ const DedupScreen = () => {
           <strong className="t-bodysm">Pending pairs</strong>
           <span className="t-cap">{pendingList.length} row{pendingList.length === 1 ? '' : 's'} · click to adjudicate</span>
         </div>
-        <div style={{maxHeight:260, overflowY:'auto'}}>
+        <div style={wide.isWide
+          ? { maxHeight: "calc(100vh - 330px)", minHeight: 300, overflowY: "auto" }
+          : { maxHeight: 260, overflowY: "auto" }}>
           <table className="tbl" style={{boxShadow:'none'}}>
             <thead>
               <tr>
@@ -605,6 +614,12 @@ const DedupScreen = () => {
           </div>
         </div>
       )}
+      <WideDetailHost
+        wide={wide}
+        open={!!livePair}
+        onClose={() => setSelectedPairId(null)}
+        title={activePair ? `Pair ${activePair.id}` : ""}
+        subtitle={activePair ? `${activePair.model} · ${activePair.queue}` : ""}>
       {livePair && <>
       <div className="t-cap" style={{marginBottom:8, display:'flex', alignItems:'center', gap:8}}>
         <Icon name="duplicate" size={12}/> Adjudicating
@@ -842,9 +857,11 @@ const DedupScreen = () => {
         </div>
       </Modal>
       </>}
+      </WideDetailHost>
 
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>
+    </WideShell>
   );
 };
 

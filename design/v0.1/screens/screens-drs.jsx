@@ -1,4 +1,5 @@
-/* global React, Icon, Chip, PageHeader, Modal, Field, ReasonModal, Toast */
+/* global React, Icon, Chip, PageHeader, Modal, Field, ReasonModal, Toast,
+   useWideView, WideViewButtons, WideShell */
 // NSR MIS — 11.7 DRS Query Builder + Field Selector
 // US-S14-002: operator-side list view added in front of the
 // existing wizard. Default mode = "list" (the inbox); "New
@@ -195,6 +196,10 @@ const _drsRenderCriteriaNode = (node, catalogueByKey, depth = 0) => {
 };
 
 const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
+  // Wide view (ADR-0030). Declared here, above every early return in
+  // this component: a hook that some renders skip changes the hook
+  // order, which React treats as a different component.
+  const wide = useWideView("drs");
   // US-S14-002 — operator list view. Mirrors the partner list
   // shape (S13-004) but reads /api/v1/drs/requests/ (full
   // DataRequestSerializer) and offers approve/reject actions
@@ -405,12 +410,14 @@ const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
     : "";
 
   return (
+    <WideShell wide={wide}>
     <div className="page" style={{paddingBottom:0}}>
       <PageHeader
         eyebrow={"DATA REQUESTS · NSR UNIT INBOX" + eyebrowSuffix + eyebrowTurnaround}
         title={<>Data requests <Chip>{rows.length}</Chip></>}
         sub="Triage incoming requests under each active DSA. Approve, reject or hold for clarification."
         right={<>
+          <WideViewButtons wide={wide} label="data requests"/>
           <button
             className="btn btn-primary"
             onClick={onNewRequest}
@@ -456,7 +463,11 @@ const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
       </div>
 
       {/* List + detail */}
-      <div style={{display:"grid", gridTemplateColumns:"1fr 380px", gap:16}}>
+      {/* Wide view stacks the split: a 380px detail rail beside a wide
+          list wastes exactly the width the operator asked for. */}
+      <div style={wide.isWide
+        ? { display: "grid", gridTemplateColumns: "1fr", gap: 16 }
+        : { display: "grid", gridTemplateColumns: "1fr 380px", gap: 16 }}>
         <div className="card">
           <div className="card-toolbar">
             <strong className="t-bodysm">{rows.length} requests</strong>
@@ -751,6 +762,7 @@ const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
 
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>
+    </WideShell>
   );
 };
 

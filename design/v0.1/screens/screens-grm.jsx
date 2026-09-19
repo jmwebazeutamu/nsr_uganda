@@ -1,4 +1,5 @@
-/* global React, Icon, Chip, PageHeader, AuditDrawer, Modal, ReasonModal, ActionBar, Toast */
+/* global React, Icon, Chip, PageHeader, AuditDrawer, Modal, ReasonModal, ActionBar, Toast,
+   useWideView, WideViewButtons, WideShell */
 // NSR MIS — GRM workbench (US-S8-006 / US-S21-002 live wiring).
 // Parity-or-better with the Django admin from S4-005 + S6-001: list
 // + SLA badge + bulk assign/escalate/resolve/close. As of US-S21-002
@@ -187,6 +188,10 @@ const QUICK_FILTERS_GRM = [
 ];
 
 const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
+  // Wide view (ADR-0030). Declared here, above every early return in
+  // this component: a hook that some renders skip changes the hook
+  // order, which React treats as a different component.
+  const wide = useWideView("grm");
   // Live state. allRows is the canonical roster (live or mock); rows
   // is the visible subset after quick-filter. dataSource drives the
   // eyebrow indicator so an operator can see whether they're looking
@@ -522,6 +527,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
   ] : [];
 
   return (
+    <WideShell wide={wide}>
     <div className="page" style={{paddingBottom:0, position:'relative'}}>
       <PageHeader
         eyebrow={dataSource === "live"
@@ -536,6 +542,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
           ? "Live ABAC-scoped data. SLA = 24h L1 / 48h L2 / 72h L3 / 7d L4 (per SAD §11.1)."
           : "Triage, assign, escalate, resolve. SLA = 24h L1 / 48h L2 / 72h L3 / 7d L4 (per SAD §11.1)."}
         right={<>
+          <WideViewButtons wide={wide} label="grievances"/>
           <button className="btn" onClick={() => setAuditOpen(true)}><Icon name="history"/> Audit chain</button>
           <button className="btn" onClick={() => refresh()} disabled={busy}>
             <Icon name="refreshCw"/> {busy ? "…" : "Refresh"}
@@ -587,8 +594,12 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
         </div>
       </div>
 
-      {/* List + detail split */}
-      <div style={{display:"grid", gridTemplateColumns:"1fr 380px", gap:16}}>
+      {/* List + detail split. Wide view stacks them so the list gets the
+          full width; the 380px rail is right beside a narrow list and
+          wrong beside a wide one. */}
+      <div style={wide.isWide
+        ? { display: "grid", gridTemplateColumns: "1fr", gap: 16 }
+        : { display: "grid", gridTemplateColumns: "1fr 380px", gap: 16 }}>
         <div className="card">
           <div className="card-toolbar">
             <strong className="t-bodysm">
@@ -1147,5 +1158,6 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
       <AuditDrawer open={auditOpen} events={auditEvents} onClose={() => setAuditOpen(false)}/>
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
     </div>
+    </WideShell>
   );
 };

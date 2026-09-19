@@ -132,13 +132,41 @@ operator asked for a wider view, so they get the one that cannot be blocked.
   not a router: it is read once at boot and never written. Introducing real
   routing is a larger decision and should have its own ADR.
 
-## Rollout
+## Rollout — complete, 20 September 2026
 
-Proven end to end on the DIH review queue first. The remaining lists —
-Social Registry, Members, Duplicates, Grievances, Data Requests,
-Beneficiaries, Partners — follow with the same three edits per screen:
-`useWideView`, the buttons in the page header, and wrapping the detail in
-`WideDetailHost`. Each needs its own entry in `WIDE_SCREENS` and its own test.
+Proven on the DIH review queue, then applied to the rest. Eight ids are
+registered: `dih`, `registry`, `registry-members`, `dedup`, `grm`, `drs`,
+`beneficiaries`, `partners`.
+
+Three shapes turned up, and the pattern bent to each rather than the
+other way round:
+
+| Shape | Screens | What the wide view does |
+|---|---|---|
+| Table over a detail rail | DIH queue, Duplicates | Detail becomes the drawer; the table takes the window |
+| Table, row opens another screen | Social Registry, Members, Beneficiaries, Partners | No drawer needed — the table takes the window, and a pop-out can open the record in its own window (see below) |
+| List beside a 380px detail column | Grievances, Data Requests | The split stacks: a fixed rail beside a wide list wastes the width the operator just asked for |
+
+Two things the first pass did not anticipate:
+
+- **A pop-out has to be able to open what it lists.** A wide list is for
+  triage, and triage means opening the thing you find. `WIDE_DETAILS`
+  gives the wide window a short stack — the list is the root, a record
+  opens over it, Back returns — covering household, member and partner
+  detail. Anything else says where to go rather than rendering a screen
+  without the props it needs.
+- **The hook must sit above every early return.** Most of these screens
+  return early while loading or when a different view is selected. A
+  `useWideView` below that parses cleanly and then changes hook order
+  between renders, which React treats as a different component — and it
+  only shows up on the branch that returns early. Every hook is declared
+  at the top of its component, and a test asserts it.
+
+`design/v0.1/wide-view-rollout.test.js` holds the registry to its
+promise: every id in `WIDE_SCREENS` is claimed by a shipped screen that
+renders the buttons and wraps itself in `WideShell`, the module loads
+before its callers, the detail targets exist, and no hook sits below a
+top-level return.
 
 ## Tested by
 
