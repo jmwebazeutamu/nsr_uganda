@@ -281,11 +281,29 @@ class BulkGrantResponseSerializer(serializers.Serializer):
 
 
 class UserSearchItemSerializer(serializers.Serializer):
-    """Compact identity for the Grant Scope modal's user picker."""
+    """Identity for the Grant Scope modal's user picker and for the
+    Roles & scopes screen's user list.
+
+    The first four fields are the picker's original contract. The rest
+    were added for the Roles & scopes screen, which previously rendered
+    ten invented operator accounts because no user endpoint returned
+    enough to draw its table. They are additive — the picker ignores
+    what it does not read.
+
+    Deliberately absent: MFA state, phone number, password-reset date
+    and session counts. The design mock showed all four; none of them
+    exists in this system, and a security screen that reports an MFA
+    posture nothing enforces is worse than one that omits it.
+    """
     id = serializers.IntegerField()
     username = serializers.CharField()
     display_name = serializers.CharField()
     groups = serializers.ListField(child=serializers.CharField())
+    email = serializers.CharField(allow_blank=True)
+    is_active = serializers.BooleanField()
+    is_superuser = serializers.BooleanField()
+    last_login = serializers.DateTimeField(allow_null=True)
+    date_joined = serializers.DateTimeField()
 
 
 def _validate_scope_codes(scope_level: str, scope_codes: list[str]) -> list[str]:
@@ -478,7 +496,7 @@ def user_search(request):
     from django.db.models import Q
     User = get_user_model()  # noqa: N806 — matches Django convention
     q = (request.query_params.get("q") or "").strip()
-    qs = User.objects.all().order_by("username")
+    qs = User.objects.all().prefetch_related("groups").order_by("username")
     if q:
         qs = qs.filter(
             Q(username__icontains=q)
@@ -492,8 +510,71 @@ def user_search(request):
             "username": u.username,
             "display_name": u.get_full_name() or u.username,
             "groups": list(u.groups.values_list("name", flat=True)),
+            "email": u.email or "",
+            "is_active": u.is_active,
+            "is_superuser": u.is_superuser,
+            "last_login": u.last_login,
+            "date_joined": u.date_joined,
         }
         for u in qs
+    ]
+    return Response(out)
+
+
+class RoleCatalogueItemSerializer(serializers.Serializer):
+    """One role, as ADR-0028 defines it — plus its live membership count."""
+    code = serializers.CharField()
+    label = serializers.CharField()
+    permissions = serializers.ListField(child=serializers.CharField())
+    default_scope = serializers.CharField()
+    external = serializers.BooleanField()
+    in_tor = serializers.BooleanField()
+    adr0006 = serializers.CharField(allow_null=True)
+    notes = serializers.CharField(allow_blank=True)
+    member_count = serializers.IntegerField()
+
+
+@extend_schema(
+    tags=["security"],
+    summary="The role catalogue (ADR-0028)",
+    description=(
+        "Every role in `apps/security/roles.py` — the single definition "
+        "the Django Groups and the Keycloak realm are both derived from "
+        "— with the number of users currently in each role's Group.\n\n"
+        "Read-only by design. ADR-0028 D1 puts the catalogue in code so "
+        "the realm, the Groups and the TOR cannot drift apart; a role "
+        "editor in the console would reintroduce exactly the drift that "
+        "ADR removed. Membership is changed by assigning Groups; data "
+        "visibility is changed through /operator-scopes/."
+    ),
+    responses={200: RoleCatalogueItemSerializer(many=True)},
+)
+@api_view(["GET"])
+@permission_classes([IsOperatorScopeAdmin])
+def role_catalogue(request):
+    from django.contrib.auth.models import Group
+    from django.db.models import Count
+
+    from .roles import ROLES
+
+    counts = dict(
+        Group.objects.annotate(n=Count("user")).values_list("name", "n"),
+    )
+    out = [
+        {
+            "code": r.code,
+            "label": r.label,
+            "permissions": sorted(r.permissions),
+            "default_scope": r.default_scope,
+            "external": r.external,
+            "in_tor": r.in_tor,
+            "adr0006": r.adr0006,
+            "notes": r.notes,
+            # A catalogue role with no Group yet (sync_roles not run) is 0,
+            # not absent — the screen must show the role either way.
+            "member_count": counts.get(r.code, 0),
+        }
+        for r in ROLES
     ]
     return Response(out)
 

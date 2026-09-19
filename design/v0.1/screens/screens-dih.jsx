@@ -108,6 +108,30 @@ const _stageToRow = (stage) => {
 
 // MOCK_DIH_ROWS removed — it was fabricated records that nothing rendered.
 // See docs/console_mock_data_audit.md.
+
+
+// Project an AuditEvent from /api/v1/security/audit-events/ into the
+// shape AuditDrawer renders. Nothing is synthesised: an event with no
+// reason shows its entity type alone, and the hash prefix is the real
+// one, so a row in the drawer can be found in the chain.
+const _dihAuditWhen = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString("en-GB", {
+    timeZone: "Africa/Kampala", day: "2-digit", month: "short",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+};
+
+const _dihAuditRow = (e) => ({
+  who: e.actor_id || "system",
+  action: String(e.action || "").replace(/[._]/g, " "),
+  detail: [e.entity_type, e.reason].filter(Boolean).join(" · "),
+  time: _dihAuditWhen(e.occurred_at),
+  audit: String(e.self_hash || e.id || "").slice(0, 12),
+  tone: e.actor_kind === "system" ? "system" : "user",
+});
 // Quick-filter definitions. Each carries a `predicate(row)` so the
 // count + the row filtering use the same logic. Counts get computed
 // live in DIHScreen against the rows actually in the queue (the
@@ -384,13 +408,26 @@ const DIHScreen = () => {
     }
   }, [selectedRow]);
 
-  const auditEvents = [
-    { who: "System DIH", action: "received from", detail: "Capture channel CAPI · tablet PCH-7411 · Parish Office Pageya", time: "1h 12m ago", audit: "A-2026-05-14-00471", tone: "system" },
-    { who: "System DQA", action: "evaluated", detail: "Ruleset DQA-v3.4 · 2 warnings raised · 0 blocking", time: "1h 11m ago", audit: "A-2026-05-14-00472", tone: "system" },
-    { who: "System IDV", action: "matched to NIRA", detail: "NIN CM89241023ABCD · confidence 0.97 (AC-IDV-MATCH)", time: "1h 11m ago", audit: "A-2026-05-14-00473", tone: "system" },
-    { who: "System DDUP", action: "found candidate", detail: "Match 01HXP2KR3N8M2QF · composite 0.83 · weak queue", time: "1h 10m ago", audit: "A-2026-05-14-00474", tone: "system" },
-    { who: "Johnson Mwebaze", action: "opened for review", detail: "NSR Unit Coordinator · viewed three-column compare", time: "12m ago", audit: "A-2026-05-14-00501", tone: "user" },
-  ];
+  // The audit drawer reads this record's own chain. It used to render a
+  // fixed array of five invented entries — a NIN, a DDUP match id and a
+  // named reviewer — under the title of whatever real staged record was
+  // selected. Fabricated history on an audit-bearing module is the one
+  // kind of mock data that cannot be excused as a design preview.
+  const [auditEvents, setAuditEvents] = useStateDIH(null);
+  const [auditErr, setAuditErr] = useStateDIH(null);
+  useEffectDIH(() => {
+    const stageId = current?.id;
+    if (!auditOpen || !stageId) return undefined;
+    let cancelled = false;
+    setAuditEvents(null);
+    setAuditErr(null);
+    fetch(`/api/v1/security/audit-events/?entity_id=${encodeURIComponent(stageId)}&page_size=200`,
+      { credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(d => { if (!cancelled) setAuditEvents((d.results || d || []).map(_dihAuditRow)); })
+      .catch(e => { if (!cancelled) { setAuditEvents([]); setAuditErr(String(e.message || e)); } });
+    return () => { cancelled = true; };
+  }, [auditOpen, current?.id]);
 
   const reasonsReject = [
     "Duplicate of existing registered household",
@@ -1081,7 +1118,7 @@ const DIHScreen = () => {
               <h3 className="t-h3" style={{margin:0}}>Decision panel</h3>
             </div>
             <div style={{padding:16}}>
-              {/* DQA — live counts + rule list from dqa_summary; mock fallback. */}
+              {/* DQA — live counts + rule list from dqa_summary. */}
               {(() => {
                 const summary = current._dqaSummary;
                 if (summary) {
@@ -1106,22 +1143,12 @@ const DIHScreen = () => {
                     </div>
                   );
                 }
-                return (
-                  <div>
-                    <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>DQA OUTCOMES</div>
-                    <div className="row-wrap" style={{marginBottom:8}}>
-                      <Chip tone="quality">2 warnings</Chip>
-                      <Chip tone="system">0 info</Chip>
-                      <Chip tone="data">0 blocking</Chip>
-                    </div>
-                    <div className="t-bodysm muted">AC-DQA-PHONE-LENGTH, AC-DQA-AGE-HEAD raised. Acknowledge to clear.</div>
-                  </div>
-                );
+                return null;
               })()}
 
               <div className="divider"/>
 
-              {/* IDV — live label from stage.idv_outcome; mock fallback. */}
+              {/* IDV — live label from stage.idv_outcome. */}
               {(() => {
                 const idvLive = current._stage?.idv_outcome;
                 if (current._payload) {
@@ -1145,13 +1172,7 @@ const DIHScreen = () => {
                     </div>
                   );
                 }
-                return (
-                  <div>
-                    <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>IDV (NIRA)</div>
-                    <Chip tone="identity"><Icon name="check" size={11}/> Matched · 0.97</Chip>
-                    <div className="t-bodysm muted mt-2">NIN CM89241023ABCD reconciled · sex/age aligned · AC-IDV-MATCH passed.</div>
-                  </div>
-                );
+                return null;
               })()}
 
               <div className="divider"/>
@@ -1284,7 +1305,17 @@ const DIHScreen = () => {
       )}
       </>}
 
-      <AuditDrawer open={auditOpen} onClose={() => setAuditOpen(false)} events={auditEvents} title={`Audit · ${current?.head || ""}`}/>
+      <AuditDrawer
+        open={auditOpen}
+        onClose={() => setAuditOpen(false)}
+        events={auditEvents || []}
+        title={auditErr
+          ? `Audit · could not load (${auditErr})`
+          : auditEvents === null
+          ? "Audit · loading…"
+          : auditEvents.length === 0
+          ? "Audit · no events recorded for this record"
+          : `Audit · ${current?.head || ""}`}/>
 
       <ReasonModal open={modal === 'promote'} title="Promote to Registered" intent="success"
         reasonOptions={reasonsPromote} recordLabel={current?.id || ""}

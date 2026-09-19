@@ -153,11 +153,11 @@ A contract test per screen, in the shape of
 |---|---|
 | 1. Security audit screen | **done** — reads the real chain and reports what the verifier returns, instead of claiming "✓ verified" unconditionally. (The 816 breaks it first reported were a verifier defect, not chain damage — see `apps/security/integrity.py`; the chain verifies clean.) |
 | 2. Five fallback screens | **done** — DIH, UPD, GRM, household, consent-citizen start empty |
-| 3. Geography, roles, PMT config | **partly — reopened 19 Sep 2026.** Geography and PMT config read live endpoints. The roles screen does not: removing `OPERATOR_SCOPE_OPTIONS` left `SEC_USERS` in the same file, and that is what the user list renders from. See the reopened item below. |
+| 3. Geography, roles, PMT config | **done 19 Sep 2026** — see the closing pass below. Was reopened: Geography and PMT config read live endpoints. The roles screen does not: removing `OPERATOR_SCOPE_OPTIONS` left `SEC_USERS` in the same file, and that is what the user list renders from. See the reopened item below. |
 | 4. Consent DPO queue | **done** — reports the module as disabled rather than inventing tickets |
 | 5. Retired `_LEGACY_*` arrays | **done** — 8 fixtures, 377 lines, 151 identities deleted |
 | 6. DIH / UPD / change-request detail views | **done** — no specimen record in any of the three |
-| 7. Admin console (21 scripts) | **partly** — DDUP model versions, the DDUP pair detail, the PMT dashboard and the five record views are done. `screens-admin-security-roles.jsx` was wrongly counted as live; see below. |
+| 7. Admin console (21 scripts) | **done 19 Sep 2026** — see the closing pass below. Was partly:  DDUP model versions, the DDUP pair detail, the PMT dashboard and the five record views are done. `screens-admin-security-roles.jsx` was wrongly counted as live; see below. |
 | 8. PMT configuration band cutoffs | **done** — empirical thresholds now come from the selected version, not the dashboard fixture |
 
 Referenced fabricated fixtures: **20 → 10**. Dead fixtures: **8 → 0**. The
@@ -255,3 +255,105 @@ fix is to wire it, start empty, and guard — the pattern used everywhere else.
 **Why the audit missed it twice:** both sweeps keyed on *the fixture named in
 the previous finding*. Once `OPERATOR_SCOPE_OPTIONS` was gone the file looked
 clean. One fixture per file was never a safe assumption.
+
+---
+
+# Closing pass — 19 September 2026
+
+The reopened item is fixed, and the sweep that found it was replaced with one
+that runs in CI. Widening the search beyond "a top-level array of people"
+turned up six more, three of them in places that matter more than a table of
+invented names.
+
+## 1. Roles & scopes — fixed
+
+`screens-admin-security-roles.jsx` is rewritten against three real sources:
+
+| Source | Gives |
+|---|---|
+| `/api/v1/security/users/` | accounts, groups, status, last login, joined |
+| `/api/v1/security/operator-scopes/` | the ABAC scope rows per account |
+| `/api/v1/security/roles/` | **new** — the ADR-0028 catalogue + membership |
+
+The role catalogue endpoint is new: `apps/security/roles.py` already held the
+one true list of 22 roles, but nothing exposed it, which is why the screen
+carried its own nine — including `parish_coordinator`, a role this system has
+never had, with 1,218 users against it.
+
+`user_search` gained `email`, `is_active`, `is_superuser`, `last_login` and
+`date_joined`, additively, so the Grant Scope picker's contract is unchanged.
+
+**Four fields were removed rather than wired: MFA state, MFA method, phone
+number, last password reset, sessions-in-24h.** There is no MFA implementation
+anywhere in this codebase and no phone or session-count field on the user
+model. The screen reported an MFA posture for ten accounts and a KPI reading
+"MFA not enrolled · will be force-enrolled at next login". None of it was
+enforced by anything. A security screen that omits a control is honest; one
+that reports a control it does not have is not.
+
+**The editing surface is gone.** Save and Delete wrote to React state: "Akello
+P. deleted from this workspace" left the account untouched. Roles are defined
+in code so the realm, the Groups and the TOR cannot drift (ADR-0028 D1), and
+scope grants already have an audited surface in the Operator scopes tab. The
+screen now links there and says why it is read-only.
+
+## 2. What the method still could not see
+
+The previous sweep looked for *constants holding three or more fabricated
+identities*. This one looked for the literal shapes — NINs, `+256` subscriber
+numbers, `go.ug` mailboxes — across every file both consoles load, then read
+the surrounding code. Six more, in rising order of consequence:
+
+| Where | What | Now |
+|---|---|---|
+| `screens-household.jsx` | six tabs each carried a `live ? real : fixture` fallback — a grievance from "Sarah Nakato", two change requests, a PDM enrolment, two DQA evaluations, two audit rows with hashes | fallbacks deleted; `live` is structurally always true once a household has loaded, so these were dead — and one edit from rendering |
+| `screens-dih.jsx` | DQA and IDV panels fell back to "2 warnings · AC-DQA-PHONE-LENGTH" and "Matched · 0.97 · NIN CM89241023ABCD" | deleted; both were unreachable only because `canonical_payload \|\| {}` is truthy |
+| `screens-admin-refdata-choicelists.jsx` | 18 invented choice lists, an education-level option set that rendered under whichever list was opened, and a version history whose v4 and v3 carried **approvals by "Director General · UBOS" on stated dates** | fixtures deleted; the screen reports loading / empty / unreachable |
+| `screens-pmt-configuration.jsx` | the submit-for-approval prompts defaulted to `steward@mglsd.go.ug` and `dg@ubos.go.ug` — one Enter away from naming approvers who do not exist on a real PMT model version | defaults removed; both are now required |
+| `screens-dih.jsx` | **the audit drawer was not a fallback.** It passed a fixed five-event array — a NIRA match with a NIN, a DDUP match id, and a named NSR Unit Coordinator — under the title of whatever real staged record was open, every time | reads `/api/v1/security/audit-events/?entity_id=…`, and says loading / empty / failed |
+| `screens-capture.jsx` | **the only one that wrote.** The walk-in submit handler sent `gps_lat: "2.49423", gps_lng: "34.65103", gps_accuracy_m: "6.00"` for every household, ignoring the three GPS inputs, which were themselves unbound. Every walk-in capture landed in DIH on one fabricated point in Karamoja | the inputs are bound and submitted; blank omits GPS entirely, so the record is flagged by AC-GPS-ACCURACY instead of carrying a position it does not have |
+
+Also in `screens-capture.jsx`: a "Live DQA preview" panel showing a fixed
+3 warnings / 0 blocking and three invented rule outcomes beside the operator's
+real data entry, repeated in the submit confirmation. DQA runs server-side on
+submission; nothing client-side could know those numbers. The panel now says
+what actually happens and when.
+
+The GPS defect is the important one in this table. Everything else in three
+audits has been fabricated data *displayed*. This was fabricated data
+*submitted* — through DIH, into the registry, on real households, under a
+promotion path whose whole purpose is that what enters is what was collected.
+
+## 3. The sweep now runs in CI
+
+`design/v0.1/no-fabricated-identities.test.js` parses both console manifests,
+reads each of the 62 `.jsx` files they load, and fails on a NIN, a `+256`
+subscriber number or a `go.ug` mailbox. Exceptions live in an `ALLOWED` map
+and must carry a reason; there are two, both UI copy rather than records:
+
+- `screens-drs-fieldselector.jsx` — `example: "CM12345678ABCD"` shows the NIN
+  column's format in the field picker.
+- `screens-home.jsx` — `KitScreen` is the component gallery.
+
+Backing it: `tests/contract/test_roles_screen_reads_real_accounts.py` (12
+cases) pins the two endpoints and the screen that reads them, and
+`design/v0.1/screens/screens-admin-security-roles.test.jsx` (13 cases) pins
+the behaviour — including that a failed load never renders as an empty
+registry, and that a superuser is not counted as an account with no scope.
+
+The pattern-based guard is the part that matters. Three human sweeps found the
+same file clean twice. A regex that runs on every commit does not get tired of
+`screens-admin-security-roles.jsx`.
+
+## 4. Residual, deliberately not changed
+
+- `screens-admin-workflow-ddup.jsx` falls back to `_DDUP_QUEUE_STATS_MOCK` —
+  all zeros — when the stats API fails, so an outage reads as "0 pending, 0
+  on hold". Nothing is fabricated, but a zeroed all-clear is still a claim.
+  It needs the same null-and-say-so treatment as the KPIs on this screen.
+- `screens-capture.jsx` submits its roster, consent, housing and food/shock
+  sections from wizard state, but the respondent name and phone are still
+  uncontrolled inputs that reach no payload — they now start blank instead of
+  pre-filled, so nothing false is shown, but an operator typing into them
+  achieves nothing. That is a wiring gap, not mock data, and it deserves its
+  own story rather than being folded into this one.
