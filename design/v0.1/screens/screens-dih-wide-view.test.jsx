@@ -168,3 +168,59 @@ describe("pop-out", () => {
     expect(open.mock.calls[0][0]).not.toContain("filters=");
   });
 });
+
+
+describe("bulk selection", () => {
+  const stageWith = (id, state, blocking) => ({
+    id,
+    state,
+    source_system: "Kobo",
+    intake_channel: "Kobo",
+    canonical_payload: {
+      members: [{ is_head: true, surname: "Row", first_name: id }],
+      geographic: { region: "Karamoja", parish: "412.02.05.01" },
+    },
+    dqa_summary: {
+      blocking_failures: blocking
+        ? [{ rule_code: "AC-HOH-EXISTS", message: "no head" }]
+        : [],
+      warnings: [], info: [],
+    },
+    ddup_candidates: [],
+    idv_outcome: "pending",
+    created_at: new Date().toISOString(),
+  });
+
+  // The name appears in the detail rail as well as the table, so find
+  // the queue row itself rather than the first text match.
+  const rowCheckbox = (name) => {
+    const row = [...document.querySelectorAll("tbody tr")]
+      .find(tr => tr.textContent.includes(name));
+    expect(row, `no queue row containing ${name}`).toBeTruthy();
+    return row.querySelector('input[type="checkbox"]');
+  };
+
+  it("lets a blocked record be selected, so it can be bulk re-run", async () => {
+    // The checkbox was disabled by promote-eligibility, which locked a
+    // record with blocking failures out of every bulk action — including
+    // Re-run gates, the one that clears a finding left by a rule that
+    // has since been corrected.
+    globalThis.fetch = vi.fn((url) =>
+      String(url).includes("stage-records")
+        ? jsonOk({ results: [stageWith("BLOCKED", "quality_failed", true)] })
+        : jsonOk({ results: [] }));
+    render(<DIHScreen/>);
+    await waitFor(() => expect(screen.getAllByText("BLOCKED").length).toBeGreaterThan(0));
+    expect(rowCheckbox("BLOCKED").disabled).toBe(false);
+  });
+
+  it("keeps terminal records out of bulk actions", async () => {
+    globalThis.fetch = vi.fn((url) =>
+      String(url).includes("stage-records")
+        ? jsonOk({ results: [stageWith("ARCHIVED", "quarantined", true)] })
+        : jsonOk({ results: [] }));
+    render(<DIHScreen/>);
+    await waitFor(() => expect(screen.getAllByText("ARCHIVED").length).toBeGreaterThan(0));
+    expect(rowCheckbox("ARCHIVED").disabled).toBe(true);
+  });
+});

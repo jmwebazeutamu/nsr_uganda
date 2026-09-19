@@ -577,12 +577,28 @@ const DIHScreen = () => {
     setSelection(next);
   };
 
-  // Select-all-shown — mirrors the per-row disabled rule below
-  // (blocking DQA or pending DDUP review locks a row out of bulk
-  // actions). Hidden rows from the active quickFilter are never
-  // touched; this is "shown", not "everything".
-  const _eligible = (r) => !(r.dqa.b > 0 || r.ddup !== null);
-  const shownEligibleIds = visibleRows.filter(_eligible).map(r => r.id);
+  // What can be SELECTED, as opposed to what can be promoted.
+  //
+  // The row checkbox used to be disabled by promote-eligibility —
+  // `!(dqa.b > 0 || ddup !== null)` — which locked a record with
+  // blocking failures out of EVERY bulk action, including Re-run
+  // gates. That is the one action such a record most needs: when a
+  // rule turns out to be wrong the fix is to correct it and
+  // re-evaluate, and 62 records blocked by a single bad rule could
+  // only be re-run one at a time from their detail panels.
+  //
+  // Selection is now neutral and each bulk action decides for itself.
+  // That is already how the bulk modals work: they filter the
+  // selection down to the state they act on and report `skippedCount`
+  // ("N selected row(s) aren't in the …"), so a mixed selection is a
+  // case this UI already handles and explains.
+  //
+  // Terminal records stay unselectable — nothing bulk can act on a
+  // promoted, rejected or archived record, and the backend refuses
+  // them too (process_stage_record is idempotent on terminal states).
+  const _selectable = (r) =>
+    !["promoted", "rejected", "quarantined"].includes(r.state);
+  const shownEligibleIds = visibleRows.filter(_selectable).map(r => r.id);
   const selectedShownEligibleCount = shownEligibleIds.filter(id => selection.has(id)).length;
   const allShownSelected =
     shownEligibleIds.length > 0 && selectedShownEligibleCount === shownEligibleIds.length;
@@ -889,14 +905,14 @@ const DIHScreen = () => {
                     aria-label={
                       allShownSelected
                         ? "Deselect all shown rows"
-                        : `Select all ${shownEligibleIds.length} eligible shown row${shownEligibleIds.length === 1 ? "" : "s"}`
+                        : `Select all ${shownEligibleIds.length} shown row${shownEligibleIds.length === 1 ? "" : "s"}`
                     }
                     title={
                       shownEligibleIds.length === 0
-                        ? "No rows in the current view are eligible for bulk actions"
+                        ? "Every row in this view is already promoted, rejected or archived"
                         : allShownSelected
                           ? `Deselect ${selectedShownEligibleCount} shown row${selectedShownEligibleCount === 1 ? "" : "s"}`
-                          : `Select all ${shownEligibleIds.length} eligible shown row${shownEligibleIds.length === 1 ? "" : "s"}`
+                          : `Select all ${shownEligibleIds.length} shown row${shownEligibleIds.length === 1 ? "" : "s"}`
                     }
                     disabled={shownEligibleIds.length === 0}
                     checked={allShownSelected}
@@ -924,7 +940,14 @@ const DIHScreen = () => {
               {visibleRows.map(r => (
                 <tr key={r.id} className={r.id === selectedRow ? "selected" : ""} onClick={() => setSelectedRow(r.id)} style={{cursor:'pointer'}}>
                   <td onClick={(e) => { e.stopPropagation(); toggleSel(r.id); }}>
-                    <input type="checkbox" checked={selection.has(r.id)} readOnly disabled={r.dqa.b > 0 || r.ddup !== null}/>
+                    <input
+                      type="checkbox"
+                      checked={selection.has(r.id)}
+                      readOnly
+                      disabled={!_selectable(r)}
+                      title={_selectable(r)
+                        ? undefined
+                        : `${r.status} records take no part in bulk actions`}/>
                   </td>
                   <td className="col-id">{r.id.slice(0,18)}…</td>
                   <td>
