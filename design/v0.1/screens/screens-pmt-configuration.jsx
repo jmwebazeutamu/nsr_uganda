@@ -219,34 +219,7 @@ const PmtConfigurationScreen = ({ onBack }) => {
     () => versions.find(v => v.id === selectedId) || versions[0] || null,
     [selectedId, versions]
   );
-  // With no versions there is nothing to configure. Previously `selected`
-  // could never be null because it fell back to a fabricated version, so
-  // the screen always had something to render — including when the API
-  // was unreachable.
-  if (!selected) {
-    return (
-      <div className="page">
-        <div className="card mt-3" style={{padding:48, textAlign:"center", color:"var(--neutral-500)"}}>
-          <Icon name={error ? "alert" : "clock"} size={32} color="var(--neutral-300)"/>
-          <div className="t-bodysm mt-2">
-            {error
-              ? error
-              : loading
-                ? "Loading PMT model versions\u2026"
-                : "No PMT model versions exist yet."}
-          </div>
-          {error && (
-            <div className="t-cap mt-1">
-              Nothing is shown rather than a sample model — a PMT version is
-              approval-gated and must never be invented.
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  const variables = (selected.variables && selected.variables.length)
+  const variables = !selected ? [] : (selected.variables && selected.variables.length)
     ? selected.variables
     : selected.version === 1 ? PCFG_VARIABLES_V1
       : selected.version === 2 ? PCFG_VARIABLES_V1
@@ -264,7 +237,7 @@ const PmtConfigurationScreen = ({ onBack }) => {
 
   const groups = [...new Set(variables.map(v => pcfgVariableGroup(v)))];
 
-  const isEditable = selected.status === "draft";
+  const isEditable = !!selected && selected.status === "draft";
   const totalAbsWeight = variables.reduce((a, v) => a + Math.abs(pcfgNum(v.weight)), 0);
   const existingVariableNames = new Set(variables.map(v => pcfgVariableName(v)));
   const databaseVariableCatalog = useMemoPCfg(() => {
@@ -560,6 +533,44 @@ const PmtConfigurationScreen = ({ onBack }) => {
     }
     patchSelected({ variables: [...variables, ...imported] }, `Imported ${imported.length} variables from CSV.`);
   };
+
+  // With no versions there is nothing to configure.
+  //
+  // This guard used to sit directly under `selected`, above three
+  // useMemo calls. On the first render `versions` is empty, so it
+  // returned early and those three hooks never ran; when the fetch
+  // landed and a version appeared, they did — and React saw more hooks
+  // than in the previous render (#310), which took the screen down with
+  // "Something went wrong rendering this view".
+  //
+  // It only became reachable when the fabricated fallback version was
+  // removed: before that `selected` was never null, so the early return
+  // never fired and the hook counts never diverged. Removing invented
+  // data made a real state reachable for the first time.
+  //
+  // Below every hook is the only safe place for it.
+  if (!selected) {
+    return (
+      <div className="page">
+        <div className="card mt-3" style={{padding:48, textAlign:"center", color:"var(--neutral-500)"}}>
+          <Icon name={error ? "alert" : "clock"} size={32} color="var(--neutral-300)"/>
+          <div className="t-bodysm mt-2">
+            {error
+              ? error
+              : loading
+                ? "Loading PMT model versions\u2026"
+                : "No PMT model versions exist yet."}
+          </div>
+          {error && (
+            <div className="t-cap mt-1">
+              Nothing is shown rather than a sample model — a PMT version is
+              approval-gated and must never be invented.
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="page">
