@@ -405,6 +405,17 @@ function App() {
         <div className="topbar-spacer"/>
 
         <div className="topbar-actions">
+          {/* The two consoles are separate pages served by separate
+              views, so this is a real anchor: keyboard reachable,
+              middle-clickable, and it shows its target in the status
+              bar. Shown only to users the Admin Console will admit —
+              the same five groups its own view checks. */}
+          {window.nsrCanAdminConsole && window.nsrCanAdminConsole(me) && (
+            <a className="topbar-switch" href="/admin-console/"
+               title="Switch to the Admin Console">
+              <Icon name="sliders" size={14}/> Admin Console
+            </a>
+          )}
           <span className="role-chip" title={me ? `Authenticated as ${me.username}` : "Loading session…"}>
             <span className="muted">Role</span> <strong>{identityRoleLabel}</strong>
           </span>
@@ -472,9 +483,13 @@ function App() {
           <Icon name="barchart" size={18}/>
           <span className="nav-label">Reports</span>
         </button>
+        {/* The sidebar's Admin is the operator-side admin section (DIH
+            sources, operator scopes). The Admin Console linked in the
+            masthead is a separate application; the button title says so. */}
         {role !== "partner-analyst" && (
           <button className={`nav-item ${screen === "admin" ? "active" : ""}`}
-                  onClick={() => navigate("admin")}>
+                  onClick={() => navigate("admin")}
+                  title="Operator admin tools. The full Admin Console is linked in the masthead.">
             <Icon name="shield" size={18}/>
             <span className="nav-label">Admin</span>
           </button>
