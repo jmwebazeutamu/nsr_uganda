@@ -552,25 +552,41 @@ const HomeScreen = ({ role, onNavigate, operatorName }) => {
       <div className="card mt-5">
         <div className="card-header">
           <h3 className="t-h3" style={{margin:0}}>Across the registry</h3>
-          <span className="t-cap">{liveKpis ? "live (one-shot fetch)" : "Refreshed 14:35 EAT · poll 60s"}</span>
+          <span className="t-cap">{liveKpis ? "live (one-shot fetch)" : "loading\u2026"}</span>
         </div>
+        {/* Same rule as the KPI row above: a number the API supplied, or
+            an em dash. This block kept the pre-live fallbacks — 9,847,221
+            households, 48,116,802 individuals, "Refreshed 14:35 EAT" —
+            which is what an operator read while the fetch was in flight
+            or after it failed. It also called .toLocaleString() straight
+            off the payload, so a response missing one field took the
+            whole home screen down with it. */}
         <div className="grid grid-4" style={{padding:20}}>
           <RegistryStat
             label="Total households (Registered)"
-            value={liveKpis ? liveKpis.households_total.toLocaleString() : "9,847,221"}
-            sub={liveKpis ? "in your ABAC scope" : "of 12.1M target (81.4%)"}/>
+            value={_homeNum(liveKpis, "households_total")}
+            sub={liveKpis ? "in your ABAC scope" : "not loaded"}/>
           <RegistryStat
             label="Provisional, pending promotion"
-            value={liveKpis ? liveKpis.stages_pending_promotion.toLocaleString() : "124,309"}
-            sub={liveKpis ? `quality-fail ${liveKpis.stages_quality_failed} · ddup ${liveKpis.stages_ddup_review} · idv ${liveKpis.stages_idv_pending}` : "walk-in 38k · bulk 86k"}/>
+            value={_homeNum(liveKpis, "stages_pending_promotion")}
+            sub={liveKpis
+              ? `quality-fail ${_homeNum(liveKpis, "stages_quality_failed")}`
+                + ` · ddup ${_homeNum(liveKpis, "stages_ddup_review")}`
+                + ` · idv ${_homeNum(liveKpis, "stages_idv_pending")}`
+              : "not loaded"}/>
           <RegistryStat
-            label={liveKpis ? "Households with PMT score" : "Confirmed individuals"}
-            value={liveKpis ? liveKpis.households_with_pmt.toLocaleString() : "48,116,802"}
-            sub={liveKpis ? "ready for programme eligibility" : "avg HH size 4.89"}/>
+            label="Households with PMT score"
+            value={_homeNum(liveKpis, "households_with_pmt")}
+            sub={liveKpis ? "ready for programme eligibility" : "not loaded"}/>
           <RegistryStat
-            label={liveKpis ? "Operator queues" : "Connectors active (7d)"}
-            value={liveKpis ? `UPD ${liveKpis.change_requests_pending} · GRM ${liveKpis.grievances_open}` : "11 / 14"}
-            sub={liveKpis ? `DRS ${liveKpis.data_requests_pending_approval} pending` : "2 paused · 1 quarantined"}/>
+            label="Operator queues"
+            value={liveKpis
+              ? `UPD ${_homeNum(liveKpis, "change_requests_pending")}`
+                + ` · GRM ${_homeNum(liveKpis, "grievances_open")}`
+              : "\u2014"}
+            sub={liveKpis
+              ? `DRS ${_homeNum(liveKpis, "data_requests_pending_approval")} pending`
+              : "not loaded"}/>
         </div>
       </div>
 
@@ -579,6 +595,13 @@ const HomeScreen = ({ role, onNavigate, operatorName }) => {
       </div>
     </div>
   );
+};
+
+// One number from the KPI payload, or an em dash. Never a fabricated
+// stand-in, and never a method call on a field the response omitted.
+const _homeNum = (kpis, field) => {
+  const v = kpis ? kpis[field] : null;
+  return (typeof v === "number") ? v.toLocaleString() : "\u2014";
 };
 
 const RegistryStat = ({ label, value, sub }) => (

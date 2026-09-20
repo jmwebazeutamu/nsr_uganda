@@ -118,7 +118,12 @@ const ChatbotAssistantScreen = () => {
     nsrApi.get("/api/v1/chatbot/conversations/")
       .then((data) => {
         if (cancelled) return;
-        const list = (data && (data.results || data)) || [];
+        // `data.results || data` yields the payload itself when the
+        // response is an object without `results` — an error body, a
+        // 200 with a different envelope — and the render then calls
+        // .map on it. Only a list gets through.
+        const raw = (data && (data.results || data)) || [];
+        const list = Array.isArray(raw) ? raw : [];
         setConversations(list);
         if (list.length > 0) setActiveId(list[0].id);
         setLoadingList(false);
