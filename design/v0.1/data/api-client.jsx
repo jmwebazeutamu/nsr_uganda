@@ -69,6 +69,23 @@ window.nsrCsrfToken = _readCsrf;
 // POST protected by Django's CSRF middleware; if a stale token is rejected,
 // send the operator to the server-rendered confirmation page to mint a fresh
 // token rather than leaving them in a confusing half-signed-in state.
+// Who may open the Admin Console.
+//
+// Mirrors apps/admin_console/permissions.ADMIN_CONSOLE_GROUPS, and the
+// contract test tests/contract/test_console_switcher.py asserts the two
+// lists stay identical. A switcher link shown to someone the server
+// will refuse is worse than no link: it looks like a permission they
+// have and answers 403.
+const NSR_ADMIN_CONSOLE_GROUPS = [
+  "nsr_admin", "mglsd_statistics", "dpo", "nsr_dba", "nsr_security",
+];
+window.nsrAdminConsoleGroups = NSR_ADMIN_CONSOLE_GROUPS;
+window.nsrCanAdminConsole = (me) => {
+  if (!me || !me.is_authenticated) return false;
+  if (me.is_superuser) return true;
+  return (me.roles || []).some(r => NSR_ADMIN_CONSOLE_GROUPS.includes(r));
+};
+
 window.nsrProfile = () => { window.location.assign("/profile/"); };
 window.nsrSignOut = async () => {
   try {

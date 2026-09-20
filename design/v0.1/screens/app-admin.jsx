@@ -134,6 +134,13 @@ const AdminApp = () => {
         </a>
         <div className="topbar-spacer"/>
         <div className="topbar-actions">
+          {/* Back to the operator console. Not gated: /console/ is
+              open to any authenticated session, and anyone who reached
+              this page has one. */}
+          <a className="topbar-switch" href="/console/"
+             title="Switch to the operator console">
+            <Icon name="chevronLeft" size={14}/> Operator Console
+          </a>
           <span className="role-chip">
             <span>Admin Console</span>
           </span>
