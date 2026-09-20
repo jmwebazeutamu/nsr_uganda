@@ -166,28 +166,7 @@ const DpoWithdrawalQueueScreen = () => {
         setQueueState("live");
       })
       .catch(() => { if (!cancelled) setQueueState("offline"); });
-    if (queueState !== "live") {
-    return (
-      <div className="page">
-        <div className="card mt-3" style={{padding:48, textAlign:"center", color:"var(--neutral-500)"}}>
-          <Icon name={queueState === "offline" ? "alert" : "shield"} size={32} color="var(--neutral-300)"/>
-          <div className="t-bodysm mt-2">
-            {queueState === "loading"   && "Loading withdrawal queue\u2026"}
-            {queueState === "disabled"  && "Consent management is not enabled."}
-            {queueState === "offline"   && "Could not load the withdrawal queue."}
-          </div>
-          {queueState === "disabled" && (
-            <div className="t-cap mt-1">
-              CONSENT_MODULE_ENABLED is off pending DPO sign-off (ADR-0024).
-              No withdrawal requests exist to action.
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  return () => { cancelled = true; };
+    return () => { cancelled = true; };
   }, []);
   const [quick, setQuick] = useStateDQ(null);
   const [sel, setSel] = useStateDQ(new Set());
@@ -235,6 +214,33 @@ const DpoWithdrawalQueueScreen = () => {
     { who: "System", action: "opened ticket", detail: `SLA clock started · ${SLA_DAYS}-day statutory deadline`, time: `${current.daysOpen}d ago`, audit: "AC-7C8811", tone: "system" },
     { who: "System", action: "computed impact", detail: `${current.referrals} active referral(s) · ${current.smsSubs} SMS subscription(s) · ${current.extracts} pending extract(s)`, time: `${current.daysOpen}d ago`, audit: "AC-7C8812", tone: "system" },
   ] : [];
+
+  // Loading / disabled / offline — stated, not implied by an empty
+  // queue. This guard was pasted INSIDE the effect above (f09ac3c), so
+  // it never rendered: the effect returned a JSX element where React
+  // expects a cleanup function, and the screen went on to draw an empty
+  // live queue whatever the module's actual state. It belongs here,
+  // below every hook, so no render skips one.
+  if (queueState !== "live") {
+    return (
+      <div className="page">
+        <div className="card mt-3" style={{padding:48, textAlign:"center", color:"var(--neutral-500)"}}>
+          <Icon name={queueState === "offline" ? "alert" : "shield"} size={32} color="var(--neutral-300)"/>
+          <div className="t-bodysm mt-2">
+            {queueState === "loading"   && "Loading withdrawal queue\u2026"}
+            {queueState === "disabled"  && "Consent management is not enabled."}
+            {queueState === "offline"   && "Could not load the withdrawal queue."}
+          </div>
+          {queueState === "disabled" && (
+            <div className="t-cap mt-1">
+              CONSENT_MODULE_ENABLED is off pending DPO sign-off (ADR-0024).
+              No withdrawal requests exist to action.
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ position: "relative" }}>
