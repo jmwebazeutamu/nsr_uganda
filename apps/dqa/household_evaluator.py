@@ -343,6 +343,13 @@ def evaluate_rule(
     """
     now = now or datetime.now(UTC)
     parameters = rule.get("parameters") or {}
+    # Join per-member detail here, not only in evaluate_household: the
+    # Rule Editor's fixture runner and the seed self-test call
+    # evaluate_rule directly, and a rule that behaves one way through
+    # one entry point and another way through the other is worse than
+    # either behaviour. Idempotent, so the aggregate path re-applying it
+    # costs a shallow copy and changes nothing.
+    payload = attach_per_member_details(payload)
     household = payload  # the top-level dict IS the household
     members = household.get("members") or []
     scope = _Scope(
@@ -417,6 +424,77 @@ def _aggregate_outcome(rule_results: list[dict]) -> str:
     return "pass"  # info-only failures don't escalate the aggregate
 
 
+# Per-member detail sections, as the capture payload carries them:
+# a top-level dict keyed by line_number, beside the roster rather than
+# on it. `attach_per_member_details` folds each member's slice onto the
+# member dict so a household rule can reach it with an ordinary path.
+PER_MEMBER_SECTIONS = ("health", "education", "employment", "disability")
+
+
+def attach_per_member_details(payload: dict) -> dict:
+    """Return a shallow copy of `payload` whose members each carry their
+    own detail slices.
+
+    The capture wizard sends per-member answers as
+    `payload["health"]["2"]["health"]["chronic_illness_flag"]` — keyed by
+    line number, in a section beside the roster. A household rule
+    evaluating inside `count_where` is scoped to ONE MEMBER DICT and has
+    no way to reach back out to a sibling top-level section, so nothing
+    in the DQA ruleset could see any per-member answer at all. A record
+    with two of three members' required health answers blank evaluated
+    as "0 blocking, 0 warnings — Clean, all rules passed".
+
+    After this, `$.health.chronic_illness_flag` resolves against the
+    member. Line numbers are matched as strings: JSON object keys are
+    always strings, while `member["line_number"]` is usually an int.
+
+    Pure — the input payload is not mutated. Defensive: a malformed or
+    missing section is skipped rather than raised on, because this runs
+    on the triage path where a crash costs more than a missed rule.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    members = payload.get("members")
+    if not isinstance(members, list) or not members:
+        return payload
+
+    out_members = []
+    for m in members:
+        if not isinstance(m, dict):
+            out_members.append(m)
+            continue
+        line = m.get("line_number")
+        key = str(line) if line is not None else None
+        merged = dict(m)
+        for section in PER_MEMBER_SECTIONS:
+            bag = payload.get(section)
+            if not isinstance(bag, dict) or key is None:
+                continue
+            slice_ = bag.get(key, bag.get(line))
+            if not isinstance(slice_, dict):
+                continue
+            # Two shapes in the wild. `education` / `employment` arrive
+            # flat ({literacy_status: …}); `health` arrives wrapped, with
+            # its own sub-sections ({health: {…}, disability: {…}}) —
+            # that is what the wizard's setHealthData writes. Hoist any
+            # sub-section named like a section so a rule path is the same
+            # either way: `$.health.chronic_illness_flag`,
+            # `$.disability.seeing`, `$.education.literacy_status`.
+            nested = {k: v for k, v in slice_.items()
+                      if k in PER_MEMBER_SECTIONS and isinstance(v, dict)}
+            if section not in merged:
+                merged[section] = slice_
+            for k, v in nested.items():
+                # A connector's own member-level shape wins over a hoist.
+                if k not in m:
+                    merged[k] = v
+        out_members.append(merged)
+
+    joined = dict(payload)
+    joined["members"] = out_members
+    return joined
+
+
 def evaluate_household(
     rules: list[dict], payload: dict, *,
     stage: str, now: datetime | None = None,
@@ -427,8 +505,12 @@ def evaluate_household(
     calling; the evaluator doesn't decide which rules apply. This
     keeps the function deterministic for tests + replayable from
     historical evaluations.
+
+    Per-member detail sections are folded onto their members first (see
+    attach_per_member_details) so member-scoped rules can read them.
     """
     now = now or datetime.now(UTC)
+    payload = attach_per_member_details(payload)
     results = [evaluate_rule(r, payload, now=now) for r in rules]
     return {
         "stage": stage,

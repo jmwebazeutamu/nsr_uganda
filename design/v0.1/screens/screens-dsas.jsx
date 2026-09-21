@@ -9,6 +9,8 @@
 //   POST   /api/v1/dsas/
 //   PATCH  /api/v1/dsas/{id}/
 //   POST   /api/v1/dsas/{id}/submit-for-signoff/
+//   POST   /api/v1/dsas/{id}/sign/{signature_id}/
+//   POST   /api/v1/dsas/{id}/decline/{signature_id}/
 //   POST   /api/v1/dsas/{id}/edit-scope/      via ScopeEditModal
 //   POST   /api/v1/dsas/{id}/renew/
 //   GET    /api/v1/partners/?page_size=200
@@ -304,6 +306,7 @@ const DsasScreen = ({ onOpen, onNew, onNavigate }) => {
 
 const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
   const [dsaResp, dsaMeta] = useApi(dsaId ? `/api/v1/dsas/${dsaId}/` : null);
+  const [meResp] = useApi("/api/v1/security/users/me/");
   // Sibling versions sharing the same reference. Lets the operator
   // jump back and forth between v1 / v2 of the same agreement.
   const [siblingsResp] = useApi(
@@ -321,6 +324,7 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
   const [editOpen, setEditOpen] = useSDsa(false);
   const [deleteOpen, setDeleteOpen] = useSDsa(false);
   const [suspendOpen, setSuspendOpen] = useSDsa(false);
+  const [signatureDecision, setSignatureDecision] = useSDsa(null);
   const [toast, setToast] = useSDsa("");
 
   if (!dsaId) {
@@ -349,6 +353,10 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
   const versions = siblings
     .filter(s => s.reference === d.reference)
     .sort((a, b) => b.version - a.version);
+  const orderedSignatures = [...(d.signatures || [])]
+    .sort((a, b) => a.sequence_order - b.sequence_order);
+  const currentPendingSignature = orderedSignatures.find(s => s.status === "pending");
+  const sessionEmail = (meResp?.email || "").trim().toLowerCase();
 
   return (
     <div className="page" style={{paddingBottom: 0}}>
@@ -469,8 +477,7 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
                 </div>
               ) : (
                 <div className="col gap-2">
-                  {(d.signatures || [])
-                    .sort((a, b) => a.sequence_order - b.sequence_order)
+                  {orderedSignatures
                     .map(s => (
                       <div key={s.id || s.sequence_order} className="row gap-3" style={{
                         padding: 12, borderRadius: 6,
@@ -497,8 +504,30 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
                             {s.method_label || s.method}
                             {s.signed_at && <> · signed {_fmtDate(s.signed_at)}</>}
                             {s.docusign_envelope_id && <> · env {s.docusign_envelope_id.slice(0, 24)}</>}
+                            {s.status === "pending" && currentPendingSignature?.id !== s.id && (
+                              <> · waiting for an earlier sign-off</>
+                            )}
+                            {s.status === "pending" && currentPendingSignature?.id === s.id && s.method === "docusign" && (
+                              <> · awaiting DocuSign completion</>
+                            )}
                           </div>
                         </div>
+                        {s.status === "pending"
+                          && currentPendingSignature?.id === s.id
+                          && s.method === "in_console"
+                          && sessionEmail === (s.signer_email || "").trim().toLowerCase() && (
+                          <div className="row gap-2">
+                            <button className="btn btn-primary btn-sm"
+                                    onClick={() => setSignatureDecision({ signature: s, mode: "sign" })}>
+                              <Icon name="check" size={13}/> Sign
+                            </button>
+                            <button className="btn btn-sm"
+                                    style={{color: "var(--accent-danger)"}}
+                                    onClick={() => setSignatureDecision({ signature: s, mode: "decline" })}>
+                              Decline
+                            </button>
+                          </div>
+                        )}
                         <Chip size="sm" tone={s.status === "signed" ? "eligibility" : "neutral"}>
                           {s.status_label || s.status}
                         </Chip>
@@ -657,6 +686,22 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
           dsaMeta.refresh();
         }}
         onError={(msg) => setToast(`Submit failed: ${msg}`)}
+      />
+
+      <DsaSignatureDecisionModal
+        open={!!signatureDecision}
+        dsa={d}
+        signature={signatureDecision?.signature}
+        mode={signatureDecision?.mode}
+        onClose={() => setSignatureDecision(null)}
+        onCompleted={(result, mode) => {
+          setSignatureDecision(null);
+          setToast(mode === "sign"
+            ? `Signature recorded for ${result.reference}.`
+            : `${result.reference} returned to draft.`);
+          dsaMeta.refresh();
+        }}
+        onError={(msg) => setToast(`Signature action failed: ${msg}`)}
       />
 
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
@@ -1037,6 +1082,89 @@ const DsaSubmitForSignoffModal = ({ open, dsa, onClose, onSubmitted, onError }) 
           </div>
         )}
         {err && <div className="tint-danger" style={{padding: 10, borderRadius: 6, borderLeft: "3px solid var(--accent-danger)"}}>{err}</div>}
+      </div>
+    </Modal>
+  );
+};
+
+
+// ════════════════════════════════════════════════════════════════
+// 4b. Current-signer decision modal — sign / decline an in-console step
+// ════════════════════════════════════════════════════════════════
+
+const DsaSignatureDecisionModal = ({
+  open, dsa, signature, mode, onClose, onCompleted, onError,
+}) => {
+  const [reason, setReason] = useSDsa("");
+  const [busy, setBusy] = useSDsa(false);
+  const [err, setErr] = useSDsa("");
+  const declining = mode === "decline";
+
+  useESDsa(() => {
+    if (!open) return;
+    setReason("");
+    setBusy(false);
+    setErr("");
+  }, [open]);
+
+  const submit = async () => {
+    if (!dsa || !signature || busy || (declining && !reason.trim())) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const endpoint = declining ? "decline" : "sign";
+      const result = await nsrApi.post(
+        `/api/v1/dsas/${dsa.id}/${endpoint}/${signature.id}/`,
+        declining ? { reason: reason.trim() } : {},
+      );
+      onCompleted && onCompleted(result, mode);
+    } catch (e) {
+      const message = String(e.body?.detail || e.message || e);
+      setErr(message);
+      onError && onError(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!dsa || !signature) return null;
+  return (
+    <Modal
+      open={open}
+      onClose={() => busy ? null : onClose && onClose()}
+      title={declining ? "Decline sign-off" : "Confirm sign-off"}
+      width={540}
+      footer={<>
+        <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
+        <button
+          className={declining ? "btn" : "btn btn-primary"}
+          style={declining ? {color: "var(--accent-danger)"} : undefined}
+          disabled={busy || (declining && !reason.trim())}
+          onClick={submit}>
+          <Icon name={declining ? "x" : "check"} size={13}/>
+          {busy ? "Saving…" : declining ? "Decline sign-off" : "Sign agreement"}
+        </button>
+      </>}>
+      <div className="col gap-3">
+        <p style={{margin: 0}}>
+          You are signing as <strong>{signature.signer_role_label || signature.signer_role}</strong>
+          {signature.signer_name ? <> · {signature.signer_name}</> : null}.
+        </p>
+        {declining ? <>
+          <p className="t-bodysm muted" style={{margin: 0}}>
+            Declining returns this DSA to draft and notifies the other signers.
+          </p>
+          <Field label="Reason for declining" required>
+            <textarea className="field-input" rows="4" value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                      placeholder="State what must be corrected before resubmission."/>
+          </Field>
+        </> : (
+          <p className="t-bodysm muted" style={{margin: 0}}>
+            This records your approval and advances the agreement to the next sign-off step.
+          </p>
+        )}
+        {err && <div className="tint-danger" style={{padding: 10, borderRadius: 6}}>{err}</div>}
       </div>
     </Modal>
   );

@@ -1,6 +1,6 @@
 from django.urls import path
 
-from .dashboard_views import OperatorKpisView
+from .dashboard_views import HomeChartsView, OperatorKpisView
 from .views import (
     AuditEventsByAction,
     ChangeRequestRecords,
@@ -113,6 +113,9 @@ urlpatterns = [
     path("dashboards/comparative/",
          ComparativeMetric.as_view(),
          name="rpt-comparative"),
+    path("dashboards/home-charts/",
+         HomeChartsView.as_view(),
+         name="rpt-home-charts"),
     path("dashboards/operator-kpis/",
          OperatorKpisView.as_view(),
          name="rpt-operator-kpis"),

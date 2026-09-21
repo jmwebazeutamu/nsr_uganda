@@ -16,6 +16,29 @@
   --accent-data:        #2E7D32;   /* DAT — Data Management */
   --accent-data-bg:     #E8F4EA;
   --accent-quality:     #B8741A;   /* DAT-DQA — Data Quality */
+
+  /* ---- Chart fills -------------------------------------------------
+     The module accents above are a CATEGORICAL palette for chips and
+     borders, and they are not usable as chart series colours: validated
+     with the dataviz palette checker, --accent-data (#2E7D32) against
+     --accent-quality (#B8741A) is ΔE 3.8 under protanopia, far below the
+     ΔE 8 floor. Two adjacent bars in those colours are the same bar to a
+     protanopic reader.
+
+     So no chart on this product distinguishes series by colour. Identity
+     is carried by the visible label beside every bar; colour carries
+     magnitude only.
+
+     `--chart-seq-*` is a single-hue sequential ramp, light → dark,
+     centred on --accent-data. Verified monotonic in relative luminance
+     and every step ≥ 3:1 against the white chart surface (12.3, 7.3,
+     5.1, 3.5), so the lightest step is still visible on paper. */
+  --chart-seq-1:  #0F3D20;
+  --chart-seq-2:  #1E6329;
+  --chart-seq-3:  #2E7D32;
+  --chart-seq-4:  #4A9A4F;
+  --chart-bar:    var(--accent-data);
+  --chart-track:  var(--neutral-100);
   --accent-quality-bg:  #FFF5E6;
   --accent-danger:      #A93226;   /* DAT-DDUP — Deduplication, errors */
   --accent-danger-bg:   #FFF0F0;

@@ -44,6 +44,10 @@ const NAV_GROUPS = [
     items: [
       { id: "admin-refdata-choicelists", label: "Choice lists", icon: "database" },
       { id: "admin-refdata-geo",         label: "Geography",    icon: "globe" },
+      // ADR-0034 — compare an incoming UBOS instrument against the last
+      // accepted one. Sits under Reference data because a CSPro value
+      // set becomes a ChoiceList, and the reviewer moves between the two.
+      { id: "admin-refdata-instrument",  label: "Questionnaire", icon: "book" },
     ],
   },
   {
@@ -236,6 +240,7 @@ const AdminApp = () => {
           {screen === "admin-approvals"            && <AdminApprovalsScreen onNavigate={setScreen}/>}
           {screen === "admin-refdata-choicelists"  && <AdminChoiceListsScreen/>}
           {screen === "admin-refdata-geo"          && <AdminGeographyScreen/>}
+          {screen === "admin-refdata-instrument"   && <AdminInstrumentReviewScreen/>}
           {screen === "admin-workflow-routing"     && <AdminUpdRoutingScreen/>}
           {screen === "admin-workflow-dqa"         && <AdminDqaRulesScreen/>}
           {screen === "admin-workflow-ddup"        && <AdminDdupScreen/>}

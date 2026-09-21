@@ -168,7 +168,20 @@ const REGISTRATION_STATEMENT_EN = [
   "The National Social Registry (NSR) is run by the Ministry of Gender, Labour and Social Development. We are asking to record information about you and the people in your household so that government and partner programmes can find and support families who need help.",
   "We will keep your information safe and use it only for the purposes you agree to below. You can change your mind later. Withdrawing your consent will not affect support you are already receiving.",
   "Your information is protected under the Data Protection and Privacy Act, 2019. You have the right to see your record, ask us to correct it, and ask us to stop using it for any purpose that depends on your consent.",
+  // Named here because the registry sends it whatever the SMS purpose
+  // says, so the respondent has to be told at the point of consent.
+  // ADR-0031: one service message on a public-task basis; every other
+  // SMS honours the SMS notifications purpose below.
+  "If you give us a phone number, we will send you one text message with your registry tracking number so you can check your application. That one message is part of registering you and is sent even if you say no to text messages below. Any other text message from us — programme news, benefit updates — is only sent if you agree to \u201cSMS notifications\u201d.",
 ];
+
+// The one message ADR-0031 exempts from COMMUNICATIONS_SMS. Anything
+// not on this list honours the purpose.
+const TRANSACTIONAL_SMS = {
+  code: "REGISTRY_ID_RECEIPT",
+  basis: "Public task",
+  description: "One message carrying the provisional Registry ID at submission.",
+};
 
 /* ---------- Small presentational helpers shared across screens ---------- */
 
@@ -228,6 +241,7 @@ Object.assign(window, {
   ConsentStateChip, TicketStateChip, LifecycleChip, BasisChip,
   LAWFUL_BASES, LANGUAGES, PURPOSES, PURPOSE_BY_CODE,
   REFUSAL_REASONS, WITHDRAWAL_REASONS, REGISTRATION_STATEMENT_EN,
+  TRANSACTIONAL_SMS,
   ConsentSectionLabel, StoryTag, Toggle,
   CONSENT_STATE_TONE, TICKET_STATE_TONE,
 });

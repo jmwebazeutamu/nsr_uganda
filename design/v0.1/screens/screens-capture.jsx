@@ -1,10 +1,82 @@
 /* global React, Icon, Chip, KPI, PageHeader, Field, GeoTreePicker, Modal, ReasonModal, ActionBar,
-   useChoiceList,
+   useChoiceList, CAPTURE_CHOICE_LISTS,
+   useWideView, WideViewButtons, WideShell,
    RosterSection, HealthDisabilitySection, EducationSection, EmploymentSection,
-   HousingSection, FoodShocksSection */
+   HousingSection, FoodShocksSection, memberDetailGaps, ageFromDateOfBirth */
 // NSR MIS — 11.1 Parish capture + 11.2 Receipt slip
 
-const { useState: useStateCap } = React;
+const { useState: useStateCap, useEffect: useEffectCap } = React;
+
+/* ============================================================
+   Clock — EAT rendering of a real instant
+   ============================================================
+   CLAUDE.md: persist as UTC, render as EAT (UTC+3). Africa/Kampala is
+   the canonical tz id for Uganda.
+
+   Every timestamp on this screen used to be the literal string
+   "14 May 2026 · 14:34 EAT" — the date the screen was written. It was
+   on the form, in the header, in the status strip, and on both printed
+   slips, so every respondent went home with a receipt dated four months
+   in the past. */
+
+const EAT_TZ = "Africa/Kampala";
+
+const _eatDate = (d) => new Intl.DateTimeFormat("en-GB", {
+  timeZone: EAT_TZ, day: "numeric", month: "long", year: "numeric",
+}).format(d);
+
+const _eatTime = (d) => new Intl.DateTimeFormat("en-GB", {
+  timeZone: EAT_TZ, hour: "2-digit", minute: "2-digit", hour12: false,
+}).format(d);
+
+/** "19 September 2026 · 14:34 EAT" */
+const formatEatStamp = (value) => {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return `${_eatDate(d)} · ${_eatTime(d)} EAT`;
+};
+
+/** "14:34 EAT" */
+const formatEatTime = (value) => {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return `${_eatTime(d)} EAT`;
+};
+
+/* ============================================================
+   The household contact number
+   ============================================================
+   ONE field, decided in ADR-0033: the head member's `telephone_1`.
+
+   Identification used to carry its own "Phone (E.164)" box, marked
+   required, bound to nothing — an uncontrolled <input> whose value was
+   never read into state and never posted. So a household captured with
+   a phone number typed there arrived at the registry with Phone —,
+   while a household that happened to also have the roster's Telephone
+   filled in appeared to work. Two boxes, one of them a decoy.
+
+   `Member.telephone_1` is the column the registry already indexes, that
+   the roster collects, and that the review panel reads. The
+   Identification box now edits THAT value rather than a parallel one,
+   so there is one number and it cannot diverge from itself. */
+
+/** The number the registry will contact this household on, or "". */
+const householdContactPhone = (members) => {
+  const head = (members || []).find(m => m && m.line_number === 1)
+    || (members || [])[0];
+  return ((head && head.telephone_1) || "").trim();
+};
+
+/** A ticking "now", so a wizard left open over a shift does not keep
+    reporting the minute it was opened. One update a minute. */
+const useEatClock = () => {
+  const [now, setNow] = useStateCap(() => new Date());
+  useEffectCap(() => {
+    const t = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(t);
+  }, []);
+  return now;
+};
 
 const SECTIONS = [
   { id: "id",    label: "Identification",     tint: "data",     icon: "mapPin" },
@@ -29,27 +101,37 @@ const SECTIONS = [
    - Section 2 (Roster): at least one member, head has surname +
      first_name + sex + DoB-or-age, every member has surname +
      first_name + sex + relationship_to_head.
-   - Sections 3–7: optional in the prototype — the model accepts
-     partials and the post-promotion edit flow can fill the rest.
-     We DO surface advisory warnings in their step indicator so
-     operators can see at a glance what's still missing.
+   - Sections 3–5 (per member): EVERY member above the section's age
+     threshold must have the section's required answers — not just the
+     one whose chip happens to be selected. Validating only the visible
+     member let a 3-member household walk from section 3 to Submit with
+     two members untouched, and the section never even lost its
+     completion tick.
+   - Sections 6–7 (household-level): advisory — the model accepts
+     partials and the post-promotion edit flow can fill the rest. Their
+     step indicator still shows what is unfilled.
 
-   When detail-entity sections graduate to "strict", flip the
-   ADVISORY-only validators below to return into the errors array
-   rather than the (unused) warnings channel. */
+   The per-member required set is declared once, in
+   screens-capture-sections.jsx (PER_MEMBER_REQUIRED), and read from
+   here via memberDetailGaps() so the validators and the member chips
+   cannot disagree. AC-MEMBER-DETAIL-REQUIRED is the server-side
+   counterpart that fails the staged record on the same gaps. */
 
 const _validateId = ({ geo, consent }) => {
   const errs = [];
   if (!geo.region)    errs.push("Region is required");
-  if (!geo.subregion) errs.push("Sub-region is required");
+  if (!geo.sub_region) errs.push("Sub-region is required");
   if (!geo.district)  errs.push("District is required");
   if (!geo.county)    errs.push("County is required");
-  if (!geo.subcounty) errs.push("Sub-county is required");
+  if (!geo.sub_county) errs.push("Sub-county is required");
   if (!geo.parish)    errs.push("Parish is required");
   // Village is optional — the UBOS frame doesn't carry village rows
   // for every parish, and field ops report village often unknown at
   // capture time. Parish is the lowest mandatory level.
-  if (consent !== "yes") errs.push("Consent must be granted before submission");
+  // Unset is its own failure, distinct from refused: "not asked yet" and
+  // "the respondent said no" must never collapse into one state.
+  if (!consent) errs.push("Registration consent has not been recorded — ask the respondent");
+  else if (consent !== "yes") errs.push("Registration consent was refused — the intake cannot continue");
   return errs;
 };
 
@@ -73,16 +155,24 @@ const _validateRoster = ({ members }) => {
   return errs;
 };
 
-// Sections 3–7 stay advisory in the prototype. Returning empty
-// keeps the Next button enabled; the stepper still shows a count
-// when records are missing so operators see what's unfilled.
+// Sections 6–7 (household-level) stay advisory. Returning empty keeps
+// the Next button enabled; the stepper still shows what's unfilled.
 const _validateAdvisory = () => [];
+
+// Per-member sections: one error per member still missing a required
+// answer, naming the member so the operator knows where to go.
+const _validatePerMember = (sectionId, dataKey) => (state) => {
+  const gaps = (typeof memberDetailGaps === "function")
+    ? memberDetailGaps(sectionId, state.members, state[dataKey])
+    : [];
+  return gaps.map(g => `#${g.line_number} ${g.label}: ${g.missing.join(", ")} required`);
+};
 
 const SECTION_VALIDATORS = {
   id:   _validateId,
   rost: _validateRoster,
-  hd:   _validateAdvisory,
-  ed:   _validateAdvisory,
+  hd:   _validatePerMember("hd", "healthData"),
+  ed:   _validatePerMember("ed", "educationData"),
   emp:  _validateAdvisory,
   hous: _validateAdvisory,
   food: _validateAdvisory,
@@ -90,21 +180,52 @@ const SECTION_VALIDATORS = {
 
 const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
   const [active, setActive] = useStateCap("id");
+  // Real time, not the date this screen was written.
+  const now = useEatClock();
+  // Start-of-capture instant, frozen: the "Date captured" the record
+  // carries is when the interview started, not when it was rendered.
+  const [startedAt] = useStateCap(() => new Date());
+  // #14 — the form column collapses to ~250px at 1104px wide while the
+  // left half of the window is empty. The registry list already has this
+  // control (design/v0.1/components/wide-view.jsx, ADR-0030); the
+  // wizard, which is the screen an enumerator spends the whole
+  // interview in, had none.
+  const wide = (typeof useWideView === "function") ? useWideView("capture") : null;
+  // One request for every lookup the wizard will need, fired before the
+  // first section renders — see CAPTURE_CHOICE_LISTS in
+  // screens-capture-sections.jsx for why. Guarded the same way every
+  // other useChoiceList call in these screens is, so the hook count per
+  // render does not depend on which guard branch was taken.
+  const [, _lookupsMeta] = (typeof useChoiceList === "function")
+    ? useChoiceList(
+        (typeof CAPTURE_CHOICE_LISTS !== "undefined") ? CAPTURE_CHOICE_LISTS : [])
+    : [[], { loading: false, error: null }];
+  const lookupsLoading = !!_lookupsMeta.loading;
   // Empty geo state — operator drills the live GeographicUnit
   // hierarchy starting from Region. Each level resets descendants on
   // change (see GeoTreePicker). 7-level chain matches the UBOS model.
   const [geo, setGeo] = useStateCap({
-    region: "", subregion: "", district: "",
-    county: "", subcounty: "", parish: "", village: "",
+    region: "", sub_region: "", district: "",
+    county: "", sub_county: "", parish: "", village: "",
   });
   // US-CONSENT-03 — per-purpose consent (consent_block). `consent` ("yes"/"no")
   // is derived from REGISTRATION for the submission gate + backward compat.
+  //
+  // Starts UNSET. A consent control that opens pre-answered "Yes" records
+  // a decision the respondent never made; under DPPA 2019 consent must be
+  // a freely given, specific, informed indication — a default is none of
+  // those. The Identification validator refuses to advance until the
+  // operator has actually asked. See ADR-0031.
   const _newConsentBlock = () => (window.defaultConsentBlock
-    ? window.defaultConsentBlock() : { REGISTRATION: "GRANTED" });
+    ? window.defaultConsentBlock() : { REGISTRATION: "" });
   const [consentBlock, setConsentBlock] = useStateCap(_newConsentBlock);
   const consent = consentBlock.REGISTRATION === "GRANTED" ? "yes"
     : (consentBlock.REGISTRATION === "REFUSED" ? "no" : "");
   const [urbanRural, setUR] = useStateCap("2"); // "1"=Urban, "2"=Rural per rural_urban list
+  // Household.address_narrative exists on the model and promotion already
+  // writes it (`payload.get("address_narrative")`) — nothing ever
+  // collected it, so the DIH panel showed "Address —" on every record.
+  const [addressNarrative, setAddressNarrative] = useStateCap("");
   // GPS is what the operator reads off the device. It used to be three
   // uncontrolled inputs showing 2.49423 / 34.65103 / 6.00, while the
   // submit handler sent those same three literals for every walk-in
@@ -124,6 +245,11 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
   // Start with an empty roster. Operators add members via the
   // Roster tab's "+ Add member" button.
   const [members, setMembers] = useStateCap([]);
+  // Who answered the questions. Distinct from the head of household:
+  // a neighbour or an adult child often gives the interview. Carried on
+  // the canonical payload for the audit trail; the CONTACT NUMBER is
+  // not stored here — see the head-telephone binding below.
+  const [respondentName, setRespondentName] = useStateCap("");
   const [healthData, setHealthData] = useStateCap({});       // { line_number: { health: {...}, disability: {...} } }
   const [educationData, setEducationData] = useStateCap({}); // { line_number: { ... } }
   const [employmentData, setEmploymentData] = useStateCap({}); // { line_number: { ... } }
@@ -154,7 +280,7 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
   // validator returns zero errors AND the operator has touched it
   // (we infer "touched" from having any data in the slice).
   const _touched = {
-    id: !!(geo.region || geo.village || consent === "yes"),
+    id: !!(geo.region || geo.village || consent),
     rost: members.length > 0,
     hd: Object.keys(healthData).length > 0,
     ed: Object.keys(educationData).length > 0,
@@ -172,29 +298,35 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
   );
   const _doneCount = Object.values(SECTION_PROG).filter(s => s === "done").length;
   const _progPct = Math.round((_doneCount / 7) * 100);
-  const _nextSectionId = (() => {
-    const order = ["id", "rost", "hd", "ed", "emp", "hous", "food"];
-    const idx = order.indexOf(active);
-    return order[Math.min(idx + 1, order.length - 1)];
-  })();
-  const _nextSectionLabel = SECTIONS.find(s => s.id === _nextSectionId)?.label || "Done";
+  const _sectionOrder = ["id", "rost", "hd", "ed", "emp", "hous", "food"];
+  const _sectionIdx = _sectionOrder.indexOf(active);
+  const _onLastSection = _sectionIdx === _sectionOrder.length - 1;
+  const _nextSectionId = _onLastSection ? null : _sectionOrder[_sectionIdx + 1];
+  // On section 7 of 7 the button used to read "Next: Food & Shocks"
+  // while the operator was already on Food & Shocks, and clicking it
+  // did nothing. There is nowhere further to go, so it says so.
+  const _nextSectionLabel = _onLastSection
+    ? "Review"
+    : (SECTIONS.find(s => s.id === _nextSectionId)?.label || "Done");
   const _totalErrors = Object.values(SECTION_ERRORS).reduce((n, arr) => n + arr.length, 0);
 
   if (device === "capi") {
     return <CapturePadCAPI onChangeDevice={onChangeDevice}/>;
   }
 
-  return (
+  const _body = (
     <div className="page" style={{paddingBottom:0}}>
       <PageHeader
         eyebrow="CAPTURES · US-088, US-112"
         title="Household capture"
-        sub="Parish Office, Nakiloro · Operator: Lokwang Peter (PCH-7411) · Draft saved 14:34 EAT"
+        sub={`Capturing office: Parish Office, Nakiloro · Operator: Lokwang Peter (PCH-7411) · Draft saved ${formatEatTime(now)}`}
         right={<>
           <div className="seg" role="tablist" aria-label="Device variant">
             <button className="on" onClick={() => onChangeDevice?.('desktop')}>Desktop</button>
             <button onClick={() => onChangeDevice?.('capi')}>CAPI tablet</button>
           </div>
+          {wide && typeof WideViewButtons === "function"
+            ? <WideViewButtons wide={wide} label="capture form"/> : null}
           <button className="btn"><Icon name="history"/> Resume draft</button>
         </>}
       />
@@ -257,10 +389,11 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
         })}
       </div>
 
-      {/* 3-column form layout */}
-      <div style={{display:'grid', gridTemplateColumns:'220px 1fr 320px', gap:20, marginTop:20}}>
+      {/* 3-column form layout — see .capture-grid in styles.css for why
+          the middle column has a floor and which rail drops first. */}
+      <div className="capture-grid">
         {/* Left rail — section nav */}
-        <div className="card" style={{padding:8, alignSelf:'start', position:'sticky', top: 140}}>
+        <div className="card capture-section-rail" style={{padding:8, alignSelf:'start', position:'sticky', top: 140}}>
           {SECTIONS.map((s) => {
             const state = SECTION_PROG[s.id];
             const isActive = s.id === active;
@@ -334,10 +467,14 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
           )}
           {active === "id" && (
             <IdentificationSection
+              capturedAt={startedAt}
               geo={geo} setGeo={setGeo}
               urbanRural={urbanRural} setUR={setUR}
               consentBlock={consentBlock} setConsentBlock={setConsentBlock}
               gps={gps} setGps={setGps}
+              members={members} setMembers={setMembers}
+              addressNarrative={addressNarrative} setAddressNarrative={setAddressNarrative}
+              respondentName={respondentName} setRespondentName={setRespondentName}
             />
           )}
           {active === "rost" && (
@@ -370,7 +507,7 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
         </div>
 
         {/* Right rail — helper */}
-        <div className="col gap-4" style={{alignSelf:'start', position:'sticky', top:140}}>
+        <div className="col gap-4 capture-helper-rail" style={{alignSelf:'start', position:'sticky', top:140}}>
           {/* DQA runs server-side on submission (apps.ingestion_hub
               _run_staging_gates), so there is nothing to preview here. The
               card used to show a fixed "3 warnings · 0 blocking" and three
@@ -410,23 +547,25 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
             </div>
           </div>
 
-          {/* Skip-logic hint */}
-          <div className="card" style={{borderLeft:'3px solid var(--accent-update)'}}>
-            <div style={{padding:16}}>
-              <div className="row gap-2" style={{marginBottom:8}}>
-                <Icon name="info" size={16} color="var(--accent-update)"/>
-                <strong className="t-bodysm">Skip-logic hint</strong>
-              </div>
-              <p className="t-bodysm" style={{margin:0, color:'var(--neutral-700)'}}>
-                If you select <strong>Urban</strong> for this household, the <strong>Food & Shocks</strong> section will reduce by 4 questions (rule SKIP-FS-URBAN).
-              </p>
-            </div>
-          </div>
+          {/* The "SKIP-FS-URBAN" hint that used to sit here promised that
+              choosing Urban would drop 4 questions from Food & Shocks. No
+              such rule exists — not in the questionnaire (docs/06), not in
+              the SAD, not in the DQA ruleset, not anywhere in the code. It
+              was never wired up, and it should not be: Food & Shocks is
+              FIES (8 items) and FCS (9 food groups), both standardised
+              scales whose raw scores are only comparable when every item
+              is asked. Dropping 4 items by settlement type would make the
+              urban and rural halves of the registry incommensurable.
+
+              Removed rather than implemented. If MGLSD does want a
+              settlement-conditional instrument, it is a questionnaire
+              change with an ADR and a new FormVersion, not a UI hint. */}
 
           {/* Offline indicator (informational) */}
           <div className="row gap-2 t-cap" style={{padding:'0 4px'}}>
             <div style={{width:8,height:8,borderRadius:'50%',background:'var(--accent-data)'}}/>
-            Online · last sync 14:31 EAT · 0 queued
+            Online · last sync {formatEatTime(now)} · 0 queued
+            {lookupsLoading && <span> · loading lookups…</span>}
           </div>
         </div>
       </div>
@@ -445,18 +584,21 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
               {_totalErrors} unresolved
             </span>
           )}
-          {" · "}<span className="stretchable">Auto-saved 14:34 EAT</span>
+          {" · "}<span className="stretchable">Auto-saved {formatEatTime(now)}</span>
         </>}>
           <button className="btn"><Icon name="save" size={14}/> Save draft</button>
           <button className="btn"
-            disabled={!_canAdvance}
+            disabled={!_canAdvance || _onLastSection}
             title={
-              _canAdvance
-                ? `Advance to ${_nextSectionLabel}`
-                : `Fix ${_currentErrors.length} issue${_currentErrors.length === 1 ? "" : "s"} on this step first`
+              _onLastSection
+                ? "This is the last section — use Submit for promotion"
+                : _canAdvance
+                  ? `Advance to ${_nextSectionLabel}`
+                  : `Fix ${_currentErrors.length} issue${_currentErrors.length === 1 ? "" : "s"} on this step first`
             }
-            onClick={() => _canAdvance && setActive(_nextSectionId)}>
-            <Icon name="arrowRight" size={14}/> Next: {_nextSectionLabel}
+            onClick={() => _canAdvance && _nextSectionId && setActive(_nextSectionId)}>
+            <Icon name="arrowRight" size={14}/>
+            {_onLastSection ? "Review" : `Next: ${_nextSectionLabel}`}
           </button>
           <button className="btn btn-primary"
             disabled={_totalErrors > 0}
@@ -487,8 +629,17 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
               const payload = {
                 geographic: geo,
                 urban_rural: urbanRural,
+                address_narrative: addressNarrative,
                 consent: consent,
                 consent_block: consentBlock,
+                respondent_name: respondentName,
+                // The household contact number of record. Derived, not
+                // separately entered: it IS the head member's
+                // telephone_1, which is the column the registry indexes
+                // and the review panel reads. Sent explicitly so the
+                // receipt can name the number it used without
+                // re-deriving it. See ADR-0033.
+                contact_phone: householdContactPhone(members),
                 ...(gps.lat && gps.lng ? {
                   gps_lat: gps.lat,
                   gps_lng: gps.lng,
@@ -531,7 +682,26 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
               against this record in the DIH review queue.
             </div>
           </div>
-          <div className="t-cap">Audit entry will be written. An SMS will be sent to the respondent\u2019s registered number.</div>
+          {/* ADR-0031. The provisional-Registry-ID message is the one
+              transactional SMS: it carries the respondent's own tracking
+              number, is sent once at submission on a public-task basis,
+              and is named in the registration consent statement they just
+              heard. Every other SMS honours COMMUNICATIONS_SMS.
+
+              The dialog used to assert flatly that "An SMS will be sent",
+              with the apostrophe written as a literal \u2019 escape
+              rendered as text, on a household whose SMS purpose was OFF. */}
+          <div className="t-cap">
+            An audit entry will be written.
+            {" "}
+            {!householdContactPhone(members)
+              ? "No household contact number has been recorded, so no SMS will be sent — the printed slip will be the respondent's only copy of the Registry ID."
+              : consentBlock.COMMUNICATIONS_SMS === "GRANTED"
+              ? "One SMS will carry the provisional Registry ID, and the respondent has agreed to further SMS updates."
+              : consentBlock.COMMUNICATIONS_SMS === "REFUSED"
+                ? "One SMS will carry the provisional Registry ID — a service message sent as part of registration. No other SMS will be sent: the respondent declined SMS notifications."
+                : "One SMS will carry the provisional Registry ID — a service message sent as part of registration. SMS notifications were not asked, so no other SMS will be sent."}
+          </div>
           {submitError && (
             <div className="tint-danger" style={{padding:10, borderRadius:6, borderLeft:'3px solid var(--accent-danger)'}}>
               <strong className="t-bodysm">Submission failed:</strong> <span className="t-bodysm">{submitError}</span>
@@ -544,16 +714,26 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
           tell the shell to navigate away (default: DIH review tab,
           since the household lands in DIH staging next). */}
       {showReceipt && (
-        <ReceiptOverlay provisionalId={provisionalId} onClose={() => {
+        <ReceiptOverlay provisionalId={provisionalId}
+          captured={{
+            at: startedAt,
+            issuedAt: new Date(),
+            geo,
+            smsConsent: consentBlock.COMMUNICATIONS_SMS || "",
+            contactPhone: householdContactPhone(members),
+          }}
+          onClose={() => {
           // Reset every capture slot so a return lands on a fresh form.
           setShowReceipt(false);
           setActive("id");
           setGeo({
-            region: "", subregion: "", district: "",
-            county: "", subcounty: "", parish: "", village: "",
+            region: "", sub_region: "", district: "",
+            county: "", sub_county: "", parish: "", village: "",
           });
           setConsentBlock(_newConsentBlock());
           setUR("2");
+          setAddressNarrative("");
+          setRespondentName("");
           setMembers([]);
           setHealthData({});
           setEducationData({});
@@ -566,15 +746,35 @@ const CaptureScreen = ({ device = "desktop", onChangeDevice, onPromoted }) => {
       )}
     </div>
   );
+
+  return (wide && typeof WideShell === "function")
+    ? <WideShell wide={wide}>{_body}</WideShell>
+    : _body;
 };
 
 /* ============================================================
    Section 1 — Identification (extracted for the conditional shell)
    ============================================================ */
-const IdentificationSection = ({ geo, setGeo, urbanRural, setUR, consentBlock, setConsentBlock, gps, setGps }) => {
+const IdentificationSection = ({
+  capturedAt, geo, setGeo, urbanRural, setUR, consentBlock, setConsentBlock,
+  gps, setGps, members, setMembers, addressNarrative, setAddressNarrative,
+  respondentName, setRespondentName,
+}) => {
   const [urOpts] = (typeof useChoiceList === "function")
     ? useChoiceList("rural_urban")
     : [[]];
+  const head = (members || []).find(m => m && m.line_number === 1) || null;
+  const headName = head
+    ? `${head.first_name || ""} ${head.surname || ""}`.trim()
+    : "";
+  // Writes through to the head member — the single household contact
+  // number (ADR-0033), not a copy of it.
+  const setHeadPhone = (value) => {
+    if (!head || !setMembers) return;
+    setMembers((members || []).map(m => (
+      m.line_number === head.line_number ? { ...m, telephone_1: value } : m
+    )));
+  };
   return (
     <>
       <div className="card-header">
@@ -600,6 +800,7 @@ const IdentificationSection = ({ geo, setGeo, urbanRural, setUR, consentBlock, s
               {(urOpts.length ? urOpts : [{ code: "1", label: "Urban" }, { code: "2", label: "Rural" }]).map(o => (
                 <button key={o.code}
                   className={urbanRural === o.code ? 'on' : ''}
+                  aria-pressed={urbanRural === o.code}
                   onClick={() => setUR(o.code)}>
                   {o.label}
                 </button>
@@ -607,7 +808,7 @@ const IdentificationSection = ({ geo, setGeo, urbanRural, setUR, consentBlock, s
             </div>
           </Field>
           <Field label="Date captured">
-            <div className="row gap-2"><Icon name="clock" size={14} color="var(--neutral-500)"/><span className="t-bodysm">14 May 2026 · 14:34 EAT</span></div>
+            <div className="row gap-2"><Icon name="clock" size={14} color="var(--neutral-500)"/><span className="t-bodysm">{formatEatStamp(capturedAt)}</span></div>
           </Field>
         </div>
 
@@ -645,16 +846,43 @@ const IdentificationSection = ({ geo, setGeo, urbanRural, setUR, consentBlock, s
 
         <h4 className="t-h3" style={{ margin: '8px 0 16px' }}>Respondent</h4>
         <div className="field-row-3">
-          <Field label="Respondent name" required>
-            <input className="field-input" placeholder="As given by the respondent"/>
+          <Field label="Respondent name" required
+            hint="Who answered the questions — not necessarily the head">
+            <input className="field-input" placeholder="As given by the respondent"
+              value={respondentName || ""}
+              onChange={(e) => setRespondentName && setRespondentName(e.target.value)}/>
           </Field>
-          <Field label="Phone (E.164)" required hint="Format: +256 XXX XXXXXX">
-            <input className="field-input" placeholder="+256 XXX XXXXXX"/>
+          {/* Household contact number — the SAME value as Person 1's
+              Telephone on the Roster tab (ADR-0033). Editing either
+              edits the head member's telephone_1; there is no second
+              number to fall out of step. */}
+          <Field label="Household phone (E.164)" required
+            hint={head
+              ? "Format: +256 XXX XXXXXX · same field as Person 1's Telephone"
+              : "Add the head of household on the Roster tab first"}>
+            <input className="field-input" placeholder="+256 XXX XXXXXX"
+              disabled={!head}
+              value={(head && head.telephone_1) || ""}
+              onChange={(e) => setHeadPhone(e.target.value)}/>
           </Field>
-          <Field label="Head of household" hint="Auto-filled from Roster Person 01">
-            <input className="field-input" readOnly placeholder="—" style={{ background: 'var(--neutral-50)', color: 'var(--neutral-700)' }}/>
+          <Field label="Head of household" hint="From Roster Person 01">
+            <input className="field-input" readOnly
+              value={headName}
+              placeholder="—"
+              style={{ background: 'var(--neutral-50)', color: 'var(--neutral-700)' }}/>
           </Field>
         </div>
+
+        <div className="divider mt-5"/>
+
+        <h4 className="t-h3" style={{ margin: '8px 0 16px' }}>Address</h4>
+        <Field label="Address narrative"
+          hint="Landmarks and directions, as given. Free text — the coded location is the geographic chain above.">
+          <input className="field-input"
+            placeholder="e.g. third homestead past Burcoro trading centre, blue gate"
+            value={addressNarrative || ""}
+            onChange={(e) => setAddressNarrative && setAddressNarrative(e.target.value)}/>
+        </Field>
 
         <div className="divider mt-5"/>
 
@@ -690,6 +918,7 @@ const DQARow = ({ tone, rule, detail }) => (
    CAPI tablet variant — single question per screen
    ============================================================ */
 const CapturePadCAPI = ({ onChangeDevice }) => {
+  const now = useEatClock();
   return (
     <div className="page" style={{display:'grid', placeItems:'center', minHeight:'80vh'}}>
       <div className="row gap-3" style={{marginBottom:16}}>
@@ -713,7 +942,7 @@ const CapturePadCAPI = ({ onChangeDevice }) => {
               <span style={{width:6,height:6,borderRadius:'50%',background:'#FFB300'}}/> Offline · 3 queued
             </span>
             <span style={{opacity:0.8}}>92%</span>
-            <span>14:35</span>
+            <span>{_eatTime(now)}</span>
           </div>
         </div>
 
@@ -755,35 +984,83 @@ const CapturePadCAPI = ({ onChangeDevice }) => {
 /* ============================================================
    11.2 Receipt slip overlay
    ============================================================ */
-const ReceiptOverlay = ({ onClose, provisionalId }) => {
-  // Display the server-returned provisional Registry ID when present,
-  // fall back to a stable mock so the file:// preview still looks
-  // realistic. The SMS preview text mirrors whichever ID is shown.
-  const displayId = provisionalId || "01HXY7K3B2N9PVQE4M6FZRWS18";
+const ReceiptOverlay = ({ onClose, provisionalId, captured }) => {
+  // ONE source of truth: the provisional Registry ID the server
+  // persisted on the StageRecord and returned from
+  // /api/v1/dih/walk-in-submissions/. The slip, the SMS preview and the
+  // DIH queue row all render THIS value.
+  //
+  // There is deliberately no invented fallback. A slip that prints a
+  // plausible-looking ID the registry has never heard of is worse than a
+  // slip that says the ID could not be issued: the respondent walks away
+  // holding a tracking number nobody can look up.
+  const displayId = provisionalId || null;
+  const capturedAt = captured || {};
+  const contactPhone = (capturedAt.contactPhone || "").trim();
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" style={{maxWidth:980, display:'grid', gridTemplateColumns:'1fr 1fr', gap:0, padding:0}} onClick={(e) => e.stopPropagation()}>
         {/* Left — A6 slip */}
         <div style={{padding:24, borderRight:'1px solid var(--neutral-200)', background:'var(--neutral-100)'}}>
           <div className="t-cap" style={{marginBottom:8}}>A6 PRINT · 105 × 148 mm · THERMAL-FRIENDLY</div>
-          <ReceiptSlipA6 provisionalId={displayId}/>
+          <ReceiptSlipA6 provisionalId={displayId} captured={capturedAt}/>
         </div>
         {/* Right — SMS + actions */}
         <div style={{padding:24}}>
           <div className="row gap-2" style={{marginBottom:6}}>
             <Chip>Provisional</Chip>
-            <span className="t-cap">Generated 14:35 EAT</span>
+            <span className="t-cap">Generated {formatEatTime(capturedAt.issuedAt || new Date())}</span>
           </div>
-          <h2 className="t-h2" style={{margin:'4px 0 8px'}}>Provisional Registry ID issued</h2>
-          <p className="t-body" style={{color:'var(--neutral-700)', marginTop:0}}>Hand the printed slip to the respondent. An SMS has been queued to the number recorded for this household.</p>
+          <h2 className="t-h2" style={{margin:'4px 0 8px'}}>
+            {displayId ? "Provisional Registry ID issued" : "No Registry ID was issued"}
+          </h2>
+          {displayId ? (
+            <p className="t-body" style={{color:'var(--neutral-700)', marginTop:0}}>
+              Hand the printed slip to the respondent.
+              {" "}
+              {/* Name the number, or say plainly that there isn't one.
+                  "queued to the number recorded for this household" was
+                  asserted on a household whose record held no number at
+                  all — so either nothing was sent, or something was sent
+                  somewhere the record cannot account for. ADR-0033. */}
+              {contactPhone ? (<>
+                One SMS carrying this ID has been queued to{" "}
+                <strong className="t-mono">{contactPhone}</strong>, the household
+                contact number on this record.
+                {" "}
+                {capturedAt.smsConsent === "GRANTED"
+                  ? "The respondent has agreed to further SMS updates."
+                  : "It is a service message sent as part of registration (ADR-0031); no other SMS will follow, because the respondent did not agree to SMS notifications."}
+              </>) : (<>
+                <strong>No SMS has been sent.</strong> This record holds no
+                household contact number, so there is nowhere to send one.
+                The printed slip is the respondent's only copy of this ID —
+                make sure they leave with it. A number can be added to the
+                head of household on the record, and the SMS re-sent, from
+                the DIH review queue.
+              </>)}
+            </p>
+          ) : (
+            <div className="tint-danger" style={{padding:12, borderRadius:6, borderLeft:'3px solid var(--accent-danger)'}}>
+              <div className="t-bodysm">
+                The submission did not return a Registry ID, so there is nothing to
+                print and nothing to send. <strong>Do not hand out a slip.</strong>{" "}
+                Find the household in the DIH review queue and re-issue from there.
+              </div>
+            </div>
+          )}
 
+          {displayId && (
           <div className="card" style={{padding:14, marginTop:12}}>
             <div className="t-cap" style={{marginBottom:6}}>SMS PREVIEW · 160 char</div>
             <div className="t-mono" style={{fontSize:12.5, lineHeight:1.55, padding:10, background:'var(--neutral-50)', borderRadius:4, color:'var(--neutral-900)'}}>
               MGLSD NSR: Your provisional Registry ID is {displayId}. Pending approval. Track via parish office or SMS HELP to 8800.
             </div>
-            <div className="t-cap mt-2">158 / 160 characters · UTF-8 safe</div>
+            <div className="t-cap mt-2">
+              {`MGLSD NSR: Your provisional Registry ID is ${displayId}. Pending approval. Track via parish office or SMS HELP to 8800.`.length} / 160 characters · UTF-8 safe
+            </div>
           </div>
+          )}
 
           <div className="card mt-4" style={{padding:14}}>
             <div className="t-cap" style={{marginBottom:6}}>NEXT IN THE PIPELINE</div>
@@ -808,7 +1085,18 @@ const ReceiptOverlay = ({ onClose, provisionalId }) => {
   );
 };
 
-const ReceiptSlipA6 = ({ provisionalId } = {}) => (
+const ReceiptSlipA6 = ({ provisionalId, captured } = {}) => {
+  const c = captured || {};
+  const labels = (c.geo && c.geo._labels) || {};
+  // The household's OWN place, from the geographic chain the operator
+  // drilled — not the office they happened to be standing in. The slip
+  // used to print "Captured at: Parish Office, Nakiloro · Moroto" for
+  // households in Gulu and Isingiro, with nothing on it to say where the
+  // household actually was.
+  const householdPlace = [labels.parish, labels.sub_county, labels.district]
+    .filter(Boolean).join(" · ");
+  const issued = c.issuedAt || c.at || new Date();
+  return (
   <div style={{
     width: 380, height: 540,
     background:'white', boxShadow:'0 8px 24px rgba(0,0,0,0.12)',
@@ -828,13 +1116,15 @@ const ReceiptSlipA6 = ({ provisionalId } = {}) => (
     <div>
       <div style={{fontSize:9, color:'#444', letterSpacing:'.06em', textTransform:'uppercase'}}>Provisional Registry ID</div>
       <div style={{fontFamily:'"JetBrains Mono", ui-monospace, monospace', fontSize:12.5, letterSpacing:'.02em', wordBreak:'break-all', fontWeight:700, marginTop:2}}>
-        {provisionalId || "01HXY7K3B2N9PVQE4M6FZRWS18"}
+        {provisionalId || "— NOT ISSUED — do not hand out this slip —"}
       </div>
     </div>
 
-    <div style={{display:'grid', gridTemplateColumns:'88px 1fr', rowGap:3, columnGap:6, marginTop:2}}>
-      <div style={{color:'#666'}}>Captured at:</div><div>Parish Office, Nakiloro · Moroto</div>
-      <div style={{color:'#666'}}>Date:</div><div>14 May 2026 · 14:35 EAT</div>
+    <div style={{display:'grid', gridTemplateColumns:'104px 1fr', rowGap:3, columnGap:6, marginTop:2}}>
+      <div style={{color:'#666'}}>Household at:</div><div>{householdPlace || "—"}</div>
+      <div style={{color:'#666'}}>Captured by office:</div><div>Parish Office, Nakiloro · Moroto</div>
+      <div style={{color:'#666'}}>Date:</div><div>{formatEatStamp(issued)}</div>
+      <div style={{color:'#666'}}>Contact number:</div><div>{c.contactPhone || "none recorded"}</div>
       <div style={{color:'#666'}}>Operator:</div><div>Lokwang Peter (PCH-7411)</div>
       <div style={{color:'#666'}}>Status:</div><div style={{fontWeight:700}}>Pending NSR Unit approval</div>
     </div>
@@ -860,7 +1150,8 @@ const ReceiptSlipA6 = ({ provisionalId } = {}) => (
       <div style={{width:56, height:56, background:'repeating-linear-gradient(45deg, #111 0 4px, #fff 4px 8px)', border:'1px solid #111'}}/>
     </div>
   </div>
-);
+  );
+};
 
 const ReceiptScreen = () => (
   <div className="page">
@@ -884,9 +1175,13 @@ const ReceiptScreen = () => (
           <div className="card-header" style={{padding:'12px 16px'}}><h3 className="t-h3" style={{margin:0}}>SMS template</h3><span className="t-cap">160 char limit</span></div>
           <div style={{padding:16}}>
             <div className="t-mono" style={{padding:12, background:'var(--neutral-50)', borderRadius:4, fontSize:13, lineHeight:1.55, border:'1px solid var(--neutral-200)'}}>
-              MGLSD NSR: Your provisional Registry ID is 01HXY7K3B2N9PVQE4M6FZRWS18. Pending approval. Track via parish office or SMS HELP to 8800.
+              MGLSD NSR: Your provisional Registry ID is &#123;provisional_registry_id&#125;. Pending approval. Track via parish office or SMS HELP to 8800.
             </div>
-            <div className="t-cap mt-2">158 / 160 characters · UTF-8 safe</div>
+            <div className="t-cap mt-2">
+              Template. The ID is substituted from the persisted
+              StageRecord.provisional_registry_id at send time — never
+              re-derived, never re-generated.
+            </div>
           </div>
         </div>
 
@@ -896,22 +1191,23 @@ const ReceiptScreen = () => (
             <Chip>Approved</Chip>
           </div>
           <div style={{padding:16}}>
-            {[
+            {(() => { const _blocks = [
               "MGLSD wordmark and full programme name",
               "Provisional Registry ID (ULID, monospace)",
-              "Captured at — Parish name, District",
-              "Date and time (East Africa Time)",
+              "Household at — the household's own Parish · Sub-county · District",
+              "Captured by office — the capturing office, labelled as such",
+              "Date and time (East Africa Time, at capture)",
               "Operator name and code",
               "Status: Pending NSR Unit approval",
               "Track your status — three numbered actions",
               "Provisional → confirmed clarification (same number)",
               "Data Protection and Privacy Act 2019 footer",
-            ].map((line, i) => (
-              <div key={i} className="row gap-3" style={{padding:'6px 0', borderBottom: i < 8 ? '1px solid var(--neutral-200)' : 'none'}}>
+            ]; return _blocks.map((line, i) => (
+              <div key={i} className="row gap-3" style={{padding:'6px 0', borderBottom: i < _blocks.length - 1 ? '1px solid var(--neutral-200)' : 'none'}}>
                 <span style={{width:22, height:22, borderRadius:'50%', background:'var(--accent-data-bg)', color:'var(--accent-data)', display:'grid', placeItems:'center', fontSize:11, fontWeight:600}}>{i+1}</span>
                 <span className="t-bodysm">{line}</span>
               </div>
-            ))}
+            )); })()}
           </div>
         </div>
 
@@ -931,4 +1227,7 @@ const ReceiptScreen = () => (
   </div>
 );
 
-Object.assign(window, { CaptureScreen, ReceiptScreen, ReceiptOverlay, ReceiptSlipA6 });
+Object.assign(window, {
+  CaptureScreen, ReceiptScreen, ReceiptOverlay, ReceiptSlipA6,
+  householdContactPhone, formatEatStamp, formatEatTime,
+});

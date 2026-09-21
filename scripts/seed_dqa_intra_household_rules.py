@@ -15,6 +15,7 @@ Rules:
   AC-DUPLICATE-MEMBER        block      no two members share NIN hash
   AC-DISABILITY-CONSISTENCY  flag       no disability detail when flag=false
   AC-ORPHAN-FLAG             flag       orphan flag set when both parents dead + age<18
+  AC-MEMBER-DETAIL-REQUIRED  block      every member has the per-member required answers
 
 Usage:
   .venv/bin/python scripts/seed_dqa_intra_household_rules.py
@@ -683,6 +684,146 @@ AC_ORPHAN_FLAG = {
 
 
 # ─────────────────────────────────────────────────────────────────────
+# AC-MEMBER-DETAIL-REQUIRED — every member answered, not just one.
+#
+# The per-member sections of the capture wizard (Health & Disability,
+# Education) render ONE MEMBER AT A TIME behind a chip strip. The
+# wizard validated only the member whose chip was selected, so a
+# 3-member household could be submitted with member #1's required
+# answers filled and #2 and #3 untouched — and the server agreed:
+# "0 blocking, 0 warnings — Clean, all rules passed".
+#
+# Two reasons nothing caught it. No rule asked for these fields at all,
+# and no rule COULD: per-member detail arrives in a top-level section
+# keyed by line number, beside the roster rather than on it, and a rule
+# evaluating inside `count_where` is scoped to one member dict.
+# `household_evaluator.attach_per_member_details` folds each member's
+# slice onto the member first, which is what makes `$.health.…`
+# resolvable below.
+#
+# BLOCK, not FLAG. These fields are marked required on the instrument;
+# a record missing them is not a record with a caveat, it is an
+# incomplete interview, and CLAUDE.md is explicit that approval gates
+# are not softened for convenience. A blocked record is not lost — it
+# stages, routes to QUALITY_FAILED and sits in the DIH queue for the
+# parish to complete.
+#
+# `min_age_*` mirror the section thresholds the wizard renders (D: 2+,
+# E: 3+). A member with NO age is NOT excused: an absent age is itself
+# caught by the roster rules, and excusing them here would reopen the
+# same hole from the other end.
+#
+# The field list is mirrored in PER_MEMBER_REQUIRED
+# (design/v0.1/screens/screens-capture-sections.jsx) so the wizard
+# blocks on exactly what the server blocks on; a contract test asserts
+# the two agree.
+AC_MEMBER_DETAIL_REQUIRED = {
+    "rule_id": "AC-MEMBER-DETAIL-REQUIRED",
+    "description": (
+        "Every household member at or above a per-member section's age "
+        "threshold must have that section's required answers: chronic "
+        "illness status (Section D, age 2+) and literacy status "
+        "(Section E, age 3+). Blocks — an unanswered required field on "
+        "any member means the interview is incomplete, however complete "
+        "the first member's answers are."
+    ),
+    "severity": Severity.BLOCK,
+    "parameters": {"min_age_health": 2, "min_age_education": 3},
+    "applies_to": {
+        "fields": [
+            "members.*.age_years",
+            "members.*.health.chronic_illness_flag",
+            "members.*.education.literacy_status",
+        ],
+    },
+    "expression": {
+        "op": "for_each_member",
+        "predicate": {"op": "or", "args": [
+            # Health & Disability (D1) — age 2+.
+            {"op": "and", "args": [
+                {"op": "not", "args": [
+                    {"op": "lt", "args": [
+                        "$.age_years", "$parameters.min_age_health",
+                    ]},
+                ]},
+                {"op": "is_null", "args": ["$.health.chronic_illness_flag"]},
+            ]},
+            # Education (E1) — age 3+.
+            {"op": "and", "args": [
+                {"op": "not", "args": [
+                    {"op": "lt", "args": [
+                        "$.age_years", "$parameters.min_age_education",
+                    ]},
+                ]},
+                {"op": "is_null", "args": ["$.education.literacy_status"]},
+            ]},
+        ]},
+        "_fail_when": {"op": "gt", "args": ["$", 0]},
+    },
+    "error_message_template": (
+        "{expression_result} member(s) are missing a required per-member "
+        "answer: chronic illness status (age {min_age_health}+) or "
+        "literacy status (age {min_age_education}+)."
+    ),
+    "message_template_i18n_key": "dqa.ac_member_detail_required.message",
+    "test_fixtures": [
+        {
+            # Every member answered — the shape a completed interview has.
+            "input": {
+                "members": [
+                    {"id": "01M1", "line_number": 1, "is_head": True, "age_years": 47},
+                    {"id": "01M2", "line_number": 2, "age_years": 30},
+                    {"id": "01M3", "line_number": 3, "age_years": 9},
+                ],
+                "health": {
+                    "1": {"health": {"chronic_illness_flag": "2"}},
+                    "2": {"health": {"chronic_illness_flag": "2"}},
+                    "3": {"health": {"chronic_illness_flag": "2"}},
+                },
+                "education": {
+                    "1": {"literacy_status": "1"},
+                    "2": {"literacy_status": "1"},
+                    "3": {"literacy_status": "2"},
+                },
+            },
+            "expected_outcome": "pass",
+        },
+        {
+            # The reported defect: household 2, three members, only
+            # member #1 answered. Was reported "Clean, all rules passed".
+            "input": {
+                "members": [
+                    {"id": "01M1", "line_number": 1, "is_head": True, "age_years": 44},
+                    {"id": "01M2", "line_number": 2, "age_years": 38},
+                    {"id": "01M3", "line_number": 3, "age_years": 12},
+                ],
+                "health": {"1": {"health": {"chronic_illness_flag": "1"}}},
+                "education": {
+                    "1": {"literacy_status": "1"},
+                    "2": {"literacy_status": "1"},
+                    "3": {"literacy_status": "1"},
+                },
+            },
+            "expected_outcome": "fail",
+        },
+        {
+            # An infant below both thresholds is not asked either
+            # question, so a blank is correct and must not fail.
+            "input": {
+                "members": [
+                    {"id": "01M1", "line_number": 1, "is_head": True, "age_years": 30},
+                    {"id": "01M2", "line_number": 2, "age_years": 1},
+                ],
+                "health": {"1": {"health": {"chronic_illness_flag": "2"}}},
+                "education": {"1": {"literacy_status": "1"}},
+            },
+            "expected_outcome": "pass",
+        },
+    ],
+}
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Driver
 
 ALL_RULES = [
@@ -695,6 +836,7 @@ ALL_RULES = [
     AC_DUPLICATE_MEMBER,
     AC_DISABILITY_CONSISTENCY,
     AC_ORPHAN_FLAG,
+    AC_MEMBER_DETAIL_REQUIRED,
 ]
 
 

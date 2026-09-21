@@ -144,9 +144,25 @@ def stage_from_landing(
 
     The mapping itself is done by the caller (the connector knows its own
     payload shape); this function just records the result + lineage.
+
+    ONE identifier, generated once (AC-DIH-PROVISIONAL-ID). `id` and
+    `provisional_registry_id` are deliberately the same ULID: the stage
+    record, the Registry ID printed on the respondent's receipt slip,
+    and the Household row promotion creates (`id=provisional_registry_id`,
+    see promote_stage_record) are one identity all the way through.
+
+    They used to be two separate `generate_ulid()` calls — `id` from the
+    field default, `provisional_registry_id` from this function — issued
+    microseconds apart. python-ulid is monotonic within a millisecond, so
+    the two came out ONE INCREMENT APART in Crockford base32 (…M1YT vs
+    …M1YV). The DIH queue rendered `id`, the receipt slip rendered
+    `provisional_registry_id`, and every respondent walked out with a
+    tracking number one step off the record they were tracking.
     """
+    registry_id = generate_ulid()
     stage = StageRecord.objects.create(
-        provisional_registry_id=generate_ulid(),
+        id=registry_id,
+        provisional_registry_id=registry_id,
         raw_landing=landing,
         connector_run=landing.connector_run,
         mapping_rule_version=mapping_rule_version,
@@ -513,6 +529,46 @@ def promote_stage_record(
     if stage.state == StageRecordState.PROMOTED and stage.promoted_household_id:
         return Household.objects.get(pk=stage.promoted_household_id)
 
+    # Idempotency is keyed on the REGISTRY, not on the stage record's own
+    # bookkeeping.
+    #
+    # The check above only fires when the stage says it was promoted AND
+    # remembers which household it became. If those two facts disagree
+    # with the registry — a crash between the Household insert and the
+    # stage update, a retried request, two operators clicking Promote on
+    # the same row — this function used to fall through and try to INSERT
+    # a household whose primary key already exists. That surfaced as an
+    # IntegrityError escaping to a 500, which the console then tried to
+    # parse as JSON: "Unexpected token 'I', \"IntegrityE\"... is not
+    # valid JSON".
+    #
+    # The Registry ID IS the Household primary key (one ULID, issued
+    # once, see stage_from_landing), so a household under this ID
+    # existing means this record is already in the registry, whatever
+    # the stage record believes. Reconcile the bookkeeping to the
+    # registry and return — never insert over it.
+    already = Household.objects.filter(pk=stage.provisional_registry_id).first()
+    if already is not None:
+        if (stage.state != StageRecordState.PROMOTED
+                or stage.promoted_household_id != already.id):
+            stage.state = StageRecordState.PROMOTED
+            stage.promoted_household_id = already.id
+            stage.promoted_at = stage.promoted_at or timezone.now()
+            stage.save(update_fields=[
+                "state", "promoted_household_id", "promoted_at", "updated_at",
+            ])
+            # Audited, not silent: the stage record and the registry had
+            # drifted apart, and that is worth being able to find later.
+            _emit_audit(
+                "promote", "stage_record", stage.id, actor=actor,
+                reason=(
+                    "already in the registry — stage bookkeeping "
+                    f"reconciled (was state={stage.state!r})"
+                ),
+                field_changes={"household_id": already.id},
+            )
+        return already
+
     if stage.state in (StageRecordState.REJECTED, StageRecordState.QUARANTINED):
         raise DihError(f"cannot promote a {stage.state} stage record")
 
@@ -553,7 +609,7 @@ def promote_stage_record(
     _optional_levels = {"village"}
 
     def _geo(level: str):
-        code = geo_payload.get(level)
+        code = geo_payload.get(level) or geo_payload.get(GEO_LEVEL_ALIASES.get(level, ""))
         if not code:
             if level in _optional_levels:
                 return None
@@ -643,9 +699,27 @@ def promote_stage_record(
             father_line_number=m.get("father_line_number"),
             identification_documents=m.get("identification_documents") or [],
         )
+        # What the roster actually collects, and what promotion used to
+        # drop on the floor.
+        #
+        # The parish capture wizard asks for NIN STATUS and the LAST FOUR
+        # DIGITS — never the full NIN (the full number is taken at the
+        # IDV step against NIRA). This block only ever read `m["nin"]`,
+        # so a household captured with status "Yes, has card" and last-4
+        # 4821 promoted with nin_status blank and nin_last4 blank. The
+        # registry showed "Head NIN —" for every walk-in household and
+        # the whole identity-verification gate reported "No NIN provided".
+        nin_status = (m.get("nin_status") or "").strip()
+        nin_last4 = (m.get("nin_last4") or "").strip()
+        if nin_status:
+            member_kwargs["nin_status"] = nin_status
+        if nin_last4:
+            member_kwargs["nin_last4"] = nin_last4
         if nin:
             # NIN trio per ADR-0002 — populated via the canonical helpers so
             # the encrypted value, hash, and display suffix stay in lockstep.
+            # A full NIN is authoritative: it overrides whatever the roster
+            # typed, because these three must agree with each other.
             member_kwargs["nin_value"] = nin.encode("utf-8")
             member_kwargs["nin_hash"] = compute_nin_hash(nin)
             member_kwargs["nin_last4"] = compute_nin_last4(nin)
@@ -787,6 +861,39 @@ def _first_member_nin(payload: dict) -> str | None:
         if nin:
             return nin
     return None
+
+
+# IDV outcome for "the respondent produced a card and we recorded the
+# last four digits, but nobody has the full number to send to NIRA".
+# Distinct from "" (no NIN offered at all) and from a NIRA verdict.
+IDV_NIN_PARTIAL = "nin_partial"
+
+#: dqa_summary rule_id for "identity evidence exists, NIRA never
+#: answered". Like GATE_NOT_RUN_RULE_ID this is synthesised by the
+#: pipeline rather than evaluated from the DSL — the finding depends on
+#: StageRecord.idv_outcome, which is set AFTER the DQA pass and is not
+#: part of the canonical payload a household rule can see.
+IDV_NOT_RUN_RULE_ID = "AC-IDV-NOT-RUN"
+
+
+def _any_member_nin_last4(payload: dict) -> bool:
+    """True when any roster member carries a NIN last-4 or a NIN status
+    that asserts a card, i.e. identity evidence exists but not enough of
+    it to verify against NIRA."""
+    for m in (payload or {}).get("members") or []:
+        m = m or {}
+        if (m.get("nin_last4") or "").strip():
+            return True
+        # "1" = "Yes, has card" on the seeded nin_status list (ADR-0010).
+        if (m.get("nin_status") or "").strip() == "1":
+            return True
+    return False
+
+
+def _has_identity_evidence(payload: dict) -> bool:
+    """Any NIN signal at all on the roster: a full number, a last-4, or
+    a status asserting a card."""
+    return bool(_first_member_nin(payload)) or _any_member_nin_last4(payload)
 
 
 # Severity bucket classifier lives in apps.dqa.models alongside the
@@ -946,6 +1053,49 @@ def _intra_household_summary(payload: dict, *, stage_id: str = "") -> dict:
             "offending_member_ids": r.get("offending_member_ids", []),
         })
     return out
+
+
+#: dqa_summary rule_id used when the staging gates could not run at all.
+#: Not a rule failure — a pipeline failure — but it rides in the same
+#: bucket so every surface that reads blocking_failures shows it without
+#: needing to learn a new shape.
+GATE_NOT_RUN_RULE_ID = "AC-DIH-GATES-NOT-RUN"
+
+
+@transaction.atomic
+def record_gate_failure(stage: StageRecord, *, actor: str, reason: str) -> StageRecord:
+    """Persist the reason the staging gates could not run.
+
+    An empty `dqa_summary` is indistinguishable, on every surface that
+    reads it, from a record that passed every rule — the review queue
+    renders both as "clean · 0 blocking · 0 warnings". A record whose
+    gates never executed must not look like a record that passed them.
+
+    Routes to QUALITY_FAILED because that is the queue's "needs a human"
+    state; the reason names the pipeline fault rather than a rule.
+    """
+    summary = dict(stage.dqa_summary or {})
+    blocking = list(summary.get("blocking_failures") or [])
+    blocking.append({
+        "rule_id": GATE_NOT_RUN_RULE_ID,
+        "record_id": stage.provisional_registry_id,
+        "reason": f"staging gates did not run: {reason}",
+        "severity": "block",
+        "scope": "pipeline",
+    })
+    summary["blocking_failures"] = blocking
+    summary.setdefault("warnings", [])
+    summary.setdefault("flagged", summary["warnings"])
+    summary.setdefault("info", [])
+    stage.dqa_summary = summary
+    stage.state = StageRecordState.QUALITY_FAILED
+    stage.save(update_fields=["dqa_summary", "state", "updated_at"])
+    _emit_audit(
+        "evaluate", "stage_record", stage.id, actor=actor,
+        reason="staging gates did not run",
+        field_changes={"error": reason},
+    )
+    return stage
 
 
 @transaction.atomic
@@ -1259,9 +1409,19 @@ def process_stage_record(
                     reason="dqa-blocking", field_changes={"dqa": dqa_summary})
         return stage
 
-    # 2. IDV — only when a NIN is in the payload.
+    # 2. IDV — only when a FULL NIN is in the payload.
+    #
+    # The parish wizard collects NIN status + last-4 only; NIRA needs the
+    # whole number, so a walk-in cannot be verified at ingest. That is a
+    # real, expected state and it is recorded as its own outcome
+    # (`nin_partial`) rather than left blank. Blank read as "no NIN was
+    # ever offered", which is what the Decision panel told the operator
+    # about households that HAD produced a card at the desk.
     nin = _first_member_nin(payload)
     idv_status = ""
+    if not nin and _any_member_nin_last4(payload):
+        idv_status = IDV_NIN_PARTIAL
+        stage.idv_outcome = idv_status
     if nin:
         try:
             idv = verify_nin(nin)
@@ -1276,6 +1436,31 @@ def process_stage_record(
                         reason=f"idv-{idv_status}",
                         field_changes={"idv_outcome": idv_status})
             return stage
+
+    # 2b. AC-IDV-NOT-RUN — identity evidence exists, NIRA never answered.
+    #
+    # A household that produced a NIN card at the desk and was never
+    # verified against NIRA is not the same thing as a household with no
+    # NIN, and it must not fast-track: `idv_ok` below is satisfied by
+    # `not nin`, so before this a walk-in carrying a NIN last-4 sailed
+    # through auto-promote with no verification of any kind.
+    #
+    # Raised as a DQA flag rather than a hard block: the evidence is
+    # real and the record is promotable, it just needs a human to look
+    # at it. A flag is also what keeps it out of the fast-track, since
+    # AC-DIH-FT-AUTO requires zero warnings.
+    if _has_identity_evidence(payload) and idv_status not in ("match",):
+        dqa_summary["warnings"].append({
+            "rule_id": IDV_NOT_RUN_RULE_ID,
+            "record_id": stage.provisional_registry_id,
+            "reason": (
+                "a NIN was recorded for this household but NIRA verification "
+                f"has not returned a match (idv_outcome={idv_status or 'not run'})"
+            ),
+            "severity": "flag",
+            "scope": "household",
+        })
+        stage.dqa_summary = dqa_summary
 
     # 3. DDUP — tier 1 NIN-exact against registry.
     candidates = _discover_stage_candidates(payload)
@@ -1338,6 +1523,54 @@ def process_stage_record(
 # under the dedicated PARISH-WALKIN source system. The provisional
 # Registry ID returned here is THE Registry ID once promoted.
 
+# Two spellings of the same two levels.
+#
+# The registry's canonical geographic keys are `sub_region` and
+# `sub_county`. The capture wizard's form state has always used
+# `subregion` and `subcounty` (no underscore) and posted that state
+# verbatim as canonical_payload.geographic, so EVERY walk-in capture
+# failed promotion on "canonical_payload.geographic.sub_region required"
+# — and walk_in_submit swallowed the DihError, leaving the record at
+# `provisional` with an empty dqa_summary, which the review queue
+# renders as "clean, 0 blocking, 0 warnings".
+#
+# Four captures, four records stuck, nothing anywhere saying so.
+#
+# The wizard now posts the canonical keys (screens-capture.jsx). This
+# alias map is what lets the records already staged under the old
+# spelling be processed rather than stranded; it is read ONLY as a
+# fallback, after the canonical key misses.
+GEO_LEVEL_ALIASES = {
+    "sub_region": "subregion",
+    "sub_county": "subcounty",
+}
+
+
+def normalise_geographic_keys(payload: dict) -> dict:
+    """Return `payload` with canonical geographic level keys.
+
+    Non-destructive: an alias is copied to its canonical key only when
+    the canonical key is absent or empty, and the alias is left in place
+    so the raw landing and the canonical payload stay comparable.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    geo = payload.get("geographic")
+    if not isinstance(geo, dict):
+        return payload
+    fixed = dict(geo)
+    changed = False
+    for canonical, alias in GEO_LEVEL_ALIASES.items():
+        if not fixed.get(canonical) and geo.get(alias):
+            fixed[canonical] = geo[alias]
+            changed = True
+    if not changed:
+        return payload
+    out = dict(payload)
+    out["geographic"] = fixed
+    return out
+
+
 PARISH_WALKIN_SOURCE_CODE = "PARISH-WALKIN"
 PARISH_WALKIN_CONNECTOR_NAME = "parish-walkin"
 
@@ -1361,6 +1594,11 @@ def submit_walk_in_capture(
         raise DihError("payload must be a non-empty object")
     if not actor:
         raise DihError("actor is required")
+
+    # Canonicalise the geographic keys before anything is staged, so the
+    # record lands ready for promotion rather than failing its gates
+    # silently three functions later.
+    payload = normalise_geographic_keys(payload)
 
     try:
         connector = (
@@ -1457,11 +1695,43 @@ def quarantine_stage_record(
 #
 # Paths support `members.<int>.<field>` for per-row corrections.
 
+# US-S24-DIH-REVIEW widened this to the questionnaire's detail answers.
+# Before, the only correctable fields were GPS and seven member
+# name/phone/DoB fields — everything the household was actually asked
+# about was read-only, so an operator reviewing a record in detail could
+# see a wrong answer and had no way to fix it short of sending the
+# household back to the parish for re-capture.
+#
+# The three categories the policy above puts out of bounds STAY out, and
+# the patterns below are written so they cannot reach them:
+#   - NIN / nin_last4 / nin_hash   never matched (no `nin` alternative)
+#   - geographic.*                 no pattern begins `geographic`
+#   - consent / urban_rural        no pattern matches either
+#
+# Repeat groups (assets, crops, livestock, shocks, coping) are excluded
+# by negative lookahead: their paths index array elements, and
+# `_set_dotted` refuses to extend a list, so a correction there is an
+# add/remove operation this whitelist has no vocabulary for. Correcting
+# a row within one is a separate story.
 EDITABLE_PATH_PATTERNS = (
     _re.compile(r"^gps_(?:lat|lng|accuracy_m)$"),
+    _re.compile(r"^address_narrative$"),
+    _re.compile(r"^reported_household_size$"),
     _re.compile(
         r"^members\.\d+\.(?:surname|first_name|other_name|date_of_birth|age_years|telephone_1|telephone_2)$",
     ),
+    # Per-member detail — Kobo puts it on the member, the parish wizard
+    # puts it in a top-level bag keyed by line number. Both shapes.
+    _re.compile(r"^members\.\d+\.(?:health|education|employment|disability)\.\w+$"),
+    _re.compile(r"^(?:health|education|employment)\.\d+\.\w+(?:\.\w+)?$"),
+    # Household detail — nested (wizard) and flat (Kobo).
+    _re.compile(r"^housing\.(?:dwelling|utilities|livelihood)\.\w+$"),
+    _re.compile(r"^housing\.(?!assets|crops|livestock)\w+(?:\.\w+)?$"),
+    _re.compile(r"^agriculture\.\w+$"),
+    _re.compile(r"^food_shocks\.(?:food_security|food_consumption)\.\w+$"),
+    _re.compile(r"^food_security\.(?:fies|food_groups)\.\w+(?:\.\w+)?$"),
+    _re.compile(r"^shocks_coping\.(?:coping|shocks)\.\w+$"),
+    _re.compile(r"^interview\.(?!consent$)\w+$"),
 )
 
 
@@ -1469,7 +1739,21 @@ class StageEditError(Exception):
     """The edit is forbidden under current state or path policy."""
 
 
+#: Leaf names that are never correctable, wherever they appear.
+#:
+#: The patterns above use `\w+` for leaf segments, so a generic one can
+#: swallow a protected field that happens to sit somewhere unexpected —
+#: `housing.nin` matches the housing pattern, and would if a connector
+#: ever put a NIN there. Scattering negative lookaheads through twelve
+#: regexes would make the guarantee depend on nobody forgetting one.
+#: Stating it once, structurally, does not.
+_PROTECTED_LEAF_PREFIXES = ("nin",)
+
+
 def _path_editable(path: str) -> bool:
+    leaf = path.rsplit(".", 1)[-1]
+    if leaf.startswith(_PROTECTED_LEAF_PREFIXES):
+        return False          # legal identity — re-capture only
     return any(p.match(path) for p in EDITABLE_PATH_PATTERNS)
 
 

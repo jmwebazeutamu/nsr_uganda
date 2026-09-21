@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, KPI, PageHeader, AuditDrawer, ActionBar, ReasonModal, Modal, Toast, useNavCounts, useWideView, WideViewButtons, WideShell, WideDetailHost */
+/* global React, Icon, Chip, IdvChip, idvOutcome, HouseholdReview, KPI, PageHeader, AuditDrawer, ActionBar, ReasonModal, Modal, Toast, useNavCounts, useWideView, WideViewButtons, WideShell, WideDetailHost */
 // NSR MIS — 11.3 NSR Unit DIH review queue
 // US-S11-013: live-data wiring. The screen tries to fetch from
 // /api/v1/dih/stage-records/?state=pending_promotion on mount; if
@@ -29,6 +29,130 @@ const _getCsrfToken = () => {
 };
 
 
+// Render a stored ChoiceOption code as its label.
+//
+// The review panel printed raw codes: "Urban / rural: 2", "REL 01",
+// "SEX 2". A reviewer decides whether to promote a household into the
+// national registry on the strength of this panel, and "2" is not a
+// fact anyone can check — the code frames are not memorable and two of
+// them (see the dwelling/employment lists) had duplicate labels.
+//
+// Falls back to the raw code when the list has not loaded or the code
+// is not in it, so an unmappable value stays visible rather than
+// vanishing behind an em-dash.
+const CodedValue = ({ listName, code, fallback = "—" }) => {
+  const [options] = (typeof useChoiceList === "function")
+    ? useChoiceList(listName)
+    : [[]];
+  if (code === null || code === undefined || code === "") return <span>{fallback}</span>;
+  const hit = (options || []).find(o => String(o.code) === String(code));
+  if (hit) return <span>{hit.label}</span>;
+  return <span title={`code ${code} is not in the ${listName} list`}>{String(code)}</span>;
+};
+
+/** A readable region for the queue + its filter.
+ *
+ *  Rows carry whatever their canonical payload holds: a Kobo pull
+ *  carries a name ("northern"), a wizard capture carries the
+ *  GeographicUnit code ("R-NORTHERN"). The filter listed both, side by
+ *  side, as if they were six different regions.
+ *
+ *  The stored value stays the filter key — this only decides what the
+ *  operator reads. An unrecognised value is returned as-is rather than
+ *  mangled. */
+/** "06:01 EAT today", or "18 Sep, 06:01 EAT" once it is not today.
+ *  CLAUDE.md: persist UTC, render EAT (UTC+3). */
+const _capturedLine = (iso) => {
+  if (!iso) return "— (no timestamp)";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "— (no timestamp)";
+  const time = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Kampala", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(d);
+  const dayOf = (x) => new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Kampala", day: "2-digit", month: "short", year: "numeric",
+  }).format(x);
+  // "today" is today in Kampala, not in whatever timezone the browser
+  // happens to be in.
+  return dayOf(d) === dayOf(new Date())
+    ? `${time} EAT today`
+    : `${dayOf(d)}, ${time} EAT`;
+};
+
+/** Minutes as "22h 48m" / "48m". */
+const _durationLabel = (minutes) => {
+  const m = Math.max(0, Math.round(minutes));
+  const h = Math.floor(m / 60);
+  return h ? `${h}h ${m % 60}m` : `${m}m`;
+};
+
+/** The four UBOS regions, as (code, name). Small, fixed and national —
+ *  the filter is built from this rather than from whatever distinct
+ *  strings happen to be in the loaded page of records, so a region with
+ *  no records on screen is still an option and a region with records
+ *  under two spellings is still one option.
+ *
+ *  UG-N is deliberately absent: retired in
+ *  reference_data/0018_retire_duplicate_northern_region. */
+const REGION_CODES = [
+  ["R-CENTRAL", "Central"],
+  ["R-EASTERN", "Eastern"],
+  ["R-NORTHERN", "Northern"],
+  ["R-WESTERN", "Western"],
+];
+
+const _regionCodeFromName = (name) => {
+  if (!name) return "";
+  const wanted = String(name).trim().toLowerCase();
+  const hit = REGION_CODES.find(([, label]) => label.toLowerCase() === wanted);
+  // An unrecognised value is returned as-is rather than dropped: better
+  // a visible oddity in the filter than a record that quietly cannot be
+  // filtered to at all.
+  return hit ? hit[0] : String(name).trim();
+};
+
+const _regionLabel = (value) => {
+  if (!value) return "—";
+  const raw = String(value).trim();
+  const known = REGION_CODES.find(([code]) => code === raw);
+  if (known) return known[1];
+  // Region codes in the UBOS frame are "R-<NAME>"; the retired "UG-N"
+  // family is handled by reference data, not here.
+  const m = /^R-(.+)$/i.exec(raw);
+  const base = m ? m[1] : raw;
+  if (/[a-z]/.test(base) && /[A-Z]/.test(base)) return base;  // already a name
+  return base.charAt(0).toUpperCase() + base.slice(1).toLowerCase();
+};
+
+/** What the panel can honestly say about a member's NIN.
+ *  Full number → masked to its last four. Last-four only → the same
+ *  mask, because that is genuinely all the registry holds. A status of
+ *  "has card" with no digits → say so rather than print nothing. */
+const _ninDisplay = (m) => {
+  if (!m) return "—";
+  if (m.nin) return `•••• ${String(m.nin).slice(-4)}`;
+  if (m.nin_last4) return `•••• ${m.nin_last4}`;
+  if (String(m.nin_status || "") === "1") return "card seen · digits not recorded";
+  return "—";
+};
+
+/** Parish line: the household's place, not a Kobo-only field.
+ *  This read `${geo.parish} · ${sourceKeys.kobo_village_name || "—"}`,
+ *  so a walk-in household always rendered as "418.1.03.02 · —". */
+const _placeLine = (geo, sourceKeys) => {
+  const labels = (geo && geo._labels) || {};
+  const parts = [
+    labels.parish || geo.parish || "",
+    labels.sub_county || labels.subcounty || "",
+    labels.district || "",
+    sourceKeys.kobo_village_name || labels.village || "",
+  ].filter(Boolean);
+  // Keep the code beside the name — the reviewer cross-checks against
+  // the UBOS frame — but never show the code alone when a name exists.
+  if (labels.parish && geo.parish) parts[0] = `${labels.parish} (${geo.parish})`;
+  return parts.length ? parts.join(" · ") : "—";
+};
+
 // Map an API StageRecord into the row shape the table renders. The
 // API ships canonical_payload + dqa_summary + ddup_candidates + a
 // state; we synthesise the display-only fields (ageH, sla) on the
@@ -41,10 +165,23 @@ const _stageToRow = (stage) => {
   const geo = payload.geographic || {};
   const sourceKeys = payload._source_keys || {};
   const isKobo = Boolean(sourceKeys.kobo_form_id);
-  const regionLabel = sourceKeys.kobo_region_name
-    ? sourceKeys.kobo_region_name.replace(/^./, c => c.toUpperCase())
-    : (geo.region || "");
-  const parishLabel = geo.parish || "";
+  const geoLabels = geo._labels || {};
+  // The row's region is the CODE, always.
+  //
+  // This used to prefer whatever display name was lying around — the
+  // Kobo connector's `_source_keys.kobo_region_name`, or the wizard's
+  // `_labels.region` — and fall back to the code. So the same region
+  // reached the filter under two different keys depending on which
+  // connector produced the record, and the filter, built from the
+  // distinct values it found, listed "Northern" beside "R-NORTHERN"
+  // and "Western" beside "R-WESTERN". Picking one silently returned a
+  // subset with nothing to say the rest existed.
+  //
+  // The label is resolved from the code at render time (_regionLabel),
+  // so there is one key per region and one name per key.
+  const regionCode = geo.region
+    || _regionCodeFromName(sourceKeys.kobo_region_name || geoLabels.region || "");
+  const parishLabel = geoLabels.parish || geo.parish || "";
 
   // DQA counts pulled from the staged summary written by
   // process_stage_record. Pre-S2 stages may have an empty dict.
@@ -78,12 +215,21 @@ const _stageToRow = (stage) => {
     : ageMin > 24 * 60 ? "crit"
     : ageMin > 12 * 60 ? "warn"
     : "ok";
+  // Minutes left of the 24h walk-in SLA. Negative once breached.
+  const slaMinutesLeft = ageMin == null ? null : (24 * 60) - ageMin;
 
   return {
     id: stage.id,
+    // The Registry ID — what the receipt slip printed, what the citizen
+    // quotes at a parish office, and what the Household row is keyed on
+    // once promoted. `id` stays the API handle for /process/, /edit/ etc.
+    // Backend now issues one ULID for both (services.stage_from_landing);
+    // records staged before that fix have two, and for those the value
+    // the citizen holds is provisional_registry_id, never `id`.
+    registryId: stage.provisional_registry_id || stage.id,
     head: headName || "(no head)",
     hh: members.length,
-    region: regionLabel,
+    region: regionCode,
     parish: parishLabel,
     source: isKobo ? "Kobo" : "Walk-in",
     channel: isKobo ? "Kobo" : "CAPI",
@@ -92,6 +238,8 @@ const _stageToRow = (stage) => {
     idv: idvLabel,
     ageH,
     sla,
+    createdAt: stage.created_at || "",
+    slaMinutesLeft,
     state: stage.state || "pending",
     status: (stage.state || "pending").replace(/_/g, " "),
     rejected_reason: stage.rejected_reason || "",
@@ -181,7 +329,12 @@ const QUICK_FILTERS = [
   // most operators want; the others surface what's blocked + why.
   { id: "state_pending_promotion", label: "Pending promotion", icon: "checkCircle", tone: "eligibility",
     predicate: r => r.state === "pending_promotion" },
-  { id: "state_idv_pending",       label: "IDV pending",       icon: "shield",      tone: "update",
+  // "Held for IDV", not "IDV pending": this counts a QUEUE STATE — rows
+  // stopped until someone resolves an identity — and sat beside an IDV
+  // column showing verdicts. Two different things under one word, and
+  // the obvious reading of "IDV pending 0" beside a column of "Pending"
+  // is that one of them is broken.
+  { id: "state_idv_pending",       label: "Held for IDV",      icon: "shield",      tone: "update",
     predicate: r => r.state === "idv_pending" },
   { id: "state_quality_failed",    label: "Quality failed",    icon: "alert",       tone: "quality",
     predicate: r => r.state === "quality_failed" },
@@ -256,8 +409,38 @@ const DIHScreen = () => {
   // US-S11-041 — Bulk Promote / Bulk Clear IDV modal state. Each
   // modal lists the actionable subset of the current selection.
   const [bulkPromoteOpen, setBulkPromoteOpen] = useStateDIH(false);
+  // Detailed household review (US-S24-DIH-REVIEW). Opens as a third
+  // mode of the wide view, so it can be maximised in place or popped to
+  // a second monitor beside the queue.
+  const [reviewOpen, setReviewOpen] = useStateDIH(false);
+  const [reviewDraft, setReviewDraft] = useStateDIH({});
+  const [reviewSaving, setReviewSaving] = useStateDIH(false);
   const [bulkIdvOpen, setBulkIdvOpen] = useStateDIH(false);
   const [bulkSubmitting, setBulkSubmitting] = useStateDIH(false);
+
+  /** The most useful sentence available about a failed request.
+   *
+   *  DRF hands back {detail}; a serializer error hands back per-field
+   *  lists; an unhandled exception hands back an HTML page whose first
+   *  line names the exception. Take whichever exists, in that order,
+   *  rather than showing the operator a parser error. */
+  const _serverError = (body, text, status) => {
+    if (body && typeof body === "object") {
+      if (body.detail) return String(body.detail);
+      const fields = Object.entries(body)
+        .map(([k, v]) => `${k}: ${[].concat(v).join(", ")}`)
+        .join(" · ");
+      if (fields) return fields;
+    }
+    if (text) {
+      // Django's debug page opens with "<title>ExceptionName at /path".
+      const titled = /<title>([^<]{0,160})<\/title>/i.exec(text);
+      if (titled) return `HTTP ${status} — ${titled[1].trim()}`;
+      const firstLine = text.trim().split("\n")[0].slice(0, 160);
+      if (firstLine) return `HTTP ${status} — ${firstLine}`;
+    }
+    return `HTTP ${status}`;
+  };
 
   const _runBulk = ({ endpoint, reason, kind, setOpen }) => {
     // Compute the actionable rows again at submit-time so we don't
@@ -287,12 +470,24 @@ const DIHScreen = () => {
         stage_ids, actor: "nsr-reviewer", reason: reason || "",
       }),
     })
-      .then(r => r.json().then(body => ({ ok: r.ok, body })))
-      .then(({ ok, body }) => {
+      // Read the body as TEXT first, then try to parse it.
+      //
+      // This called r.json() unconditionally. A 500 returns Django's
+      // HTML error page, JSON.parse threw on the first character, and
+      // the operator was told "Promoted failed: SyntaxError: Unexpected
+      // token 'I', \"IntegrityE\"... is not valid JSON" — which names
+      // the parser's problem, not the registry's, and buries the one
+      // word ("IntegrityError") that would have explained it.
+      .then(r => r.text().then(text => {
+        let body = null;
+        try { body = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
+        return { ok: r.ok, status: r.status, body, text };
+      }))
+      .then(({ ok, status, body, text }) => {
         setBulkSubmitting(false);
         setOpen(false);
         if (!ok) {
-          setToast(`${kind} failed: ${body.detail || "unknown error"}`);
+          setToast(`${kind} failed: ${_serverError(body, text, status)}`);
           return;
         }
         // Drop succeeded rows from the visible queue (they've left
@@ -311,8 +506,16 @@ const DIHScreen = () => {
             return next;
           });
         }
+        // A row that failed is reported in `results`, not by the status
+        // code — the call is 200 whether every row worked or none did.
+        // Saying "Promoted 0 · skipped 12" without saying why sends the
+        // operator to open twelve records one at a time.
+        const failed = (body.results || []).filter(r => !r.ok);
+        const firstReason = failed.length ? failed[0].detail : "";
         setToast(
-          `${kind} ${body.succeeded} · skipped ${body.skipped} · audit chain updated.`,
+          `${kind} ${body.succeeded} · skipped ${body.skipped}`
+          + (firstReason ? ` — first skipped: ${firstReason}` : "")
+          + " · audit chain updated.",
         );
       })
       .catch(err => {
@@ -407,7 +610,13 @@ const DIHScreen = () => {
     const _u = (arr) => Array.from(new Set(arr.filter(Boolean))).sort();
     return {
       sources: _u(rows.map(r => r.source)),
-      regions: _u(rows.map(r => r.region)),
+      // The national code list, plus anything unrecognised that is
+      // actually present — so an unmappable value stays reachable
+      // instead of becoming a record nobody can filter to.
+      regions: _u([
+        ...REGION_CODES.map(([code]) => code),
+        ...rows.map(r => r.region),
+      ]),
       channels: _u(rows.map(r => r.channel)),
       idvs: _u(rows.map(r => r.idv)),
     };
@@ -430,7 +639,7 @@ const DIHScreen = () => {
   const exportVisibleRows = () => {
     dihDownloadCsv("dih-review-queue.csv", [
       ["stage_id", "head", "household_members", "region", "parish", "source", "channel", "dqa_blocking", "dqa_warnings", "dqa_info", "idv", "ddup_score", "age", "sla", "state"],
-      ...visibleRows.map(r => [r.id, r.head, r.hh, r.region, r.parish, r.source, r.channel, r.dqa?.b || 0, r.dqa?.w || 0, r.dqa?.i || 0, r.idv, r.ddup ?? "", r.ageH, r.sla, r.state]),
+      ...visibleRows.map(r => [r.registryId, r.head, r.hh, r.region, r.parish, r.source, r.channel, r.dqa?.b || 0, r.dqa?.w || 0, r.dqa?.i || 0, r.idv, r.ddup ?? "", r.ageH, r.sla, r.state]),
     ]);
     setToast(`Exported ${visibleRows.length} DIH row(s).`);
   };
@@ -711,7 +920,7 @@ const DIHScreen = () => {
               )}
               {archiveRows.map(r => (
                 <tr key={r.id}>
-                  <td className="t-mono">{(r.id || "").slice(0, 12)}…</td>
+                  <td className="t-mono">{(r.registryId || "").slice(0, 12)}…</td>
                   <td>{r.head || "—"}</td>
                   <td><Chip size="sm">{r.source || "—"}</Chip></td>
                   <td className="t-bodysm" style={{ color: "var(--neutral-700)" }}>{r.rejected_reason || "—"}</td>
@@ -768,7 +977,20 @@ const DIHScreen = () => {
             title="Region as captured on the form"
           >
             <option value="">Region · any</option>
-            {filterOptions.regions.map(o => <option key={o} value={o}>{o}</option>)}
+            {/* Built from the region code list, not from the distinct
+                values found in the loaded records.
+                
+                Building it from the data listed "Northern, R-CENTRAL,
+                R-EASTERN, R-NORTHERN, R-WESTERN, Western" — four
+                regions as six options, two pairs sharing a label —
+                because rows were keyed on whatever spelling their
+                connector happened to use. Rows are now keyed on the
+                code; this makes the option set fixed as well, so the
+                filter cannot reacquire a duplicate from a page of data
+                that happens to contain one. */}
+            {filterOptions.regions.map(o => (
+              <option key={o} value={o}>{_regionLabel(o)}</option>
+            ))}
           </select>
           <select
             className="field-select"
@@ -798,7 +1020,12 @@ const DIHScreen = () => {
             title="IDV outcome — values are the StageRecord.idv_outcome strings"
           >
             <option value="">IDV · any</option>
-            {filterOptions.idvs.map(o => <option key={o} value={o}>{o}</option>)}
+            {/* Labels, not raw codes — the same fix the Region filter
+                needed. The VALUE stays the stored code, which is what
+                the row filter compares. */}
+            {filterOptions.idvs.map(o => (
+              <option key={o} value={o}>{idvOutcome(o).label || o}</option>
+            ))}
           </select>
 
           <div style={{flex:1}}/>
@@ -970,7 +1197,7 @@ const DIHScreen = () => {
                         ? undefined
                         : `${r.status} records take no part in bulk actions`}/>
                   </td>
-                  <td className="col-id">{r.id.slice(0,18)}…</td>
+                  <td className="col-id">{(r.registryId || "").slice(0,18)}…</td>
                   <td>
                     <div style={{fontWeight:500}}>{r.head}</div>
                     <div className="t-cap">HH {r.hh} · {r.parish}</div>
@@ -990,9 +1217,12 @@ const DIHScreen = () => {
                     </div>
                   </td>
                   <td>
-                    {r.idv === "Matched" ? <Chip size="sm" tone="identity"><Icon name="check" size={11}/> Matched</Chip>
-                    : r.idv === "Mismatch" ? <Chip size="sm" tone="danger">Mismatch</Chip>
-                    : <Chip size="sm" tone="quality">Pending</Chip>}
+                    {/* One vocabulary, shared with the decision panel and
+                        the filter (components/idv-outcomes.jsx). This used
+                        to compare against "Matched" / "Mismatch" — words
+                        the backend never writes — so every outcome, a NIRA
+                        mismatch included, rendered as amber "Pending". */}
+                    <IdvChip outcome={r.idv}/>
                   </td>
                   <td>
                     {r.ddup === null
@@ -1019,7 +1249,7 @@ const DIHScreen = () => {
         onClose={() => setSelectedRow(null)}
         title={current ? current.head : ""}
         subtitle={current
-          ? `${current.id.slice(0, 18)}… · ${current.parish || "—"} · ${rows.indexOf(current) + 1} of ${rows.length}`
+          ? `${(current.registryId || "").slice(0, 18)}… · ${current.parish || "—"} · ${rows.indexOf(current) + 1} of ${rows.length}`
           : ""}>
       {/* Three-column compare — only rendered when a row is selected */}
       {!current && (
@@ -1040,7 +1270,15 @@ const DIHScreen = () => {
             <div>
               <div className="t-cap" style={{color:'var(--accent-data)'}}><Icon name="database" size={11}/> STAGED RECORD</div>
               <h3 className="t-h3" style={{margin:'2px 0 0'}}>{current.head}</h3>
-              <div className="t-cap">{current.parish} · HH {current.hh} · Captured 14:35 EAT today</div>
+              {/* Defect 11 was fixed on the capture form; the same
+                  hardcoded "Captured 14:35 EAT today" survived here, on
+                  the panel a reviewer reads before deciding to promote.
+                  The queue row beside it was already computing the real
+                  age from created_at — so the two disagreed on screen,
+                  one of them reading "0m" and the other "14:35". */}
+              <div className="t-cap">
+                {current.parish} · HH {current.hh} · Captured {_capturedLine(current.createdAt)}
+              </div>
               {current._stage && current._stage.last_edited_by && (
                 <div className="t-cap" style={{marginTop:4, color:'var(--accent-update)'}}>
                   <Icon name="edit" size={10}/> Last edited by {current._stage.last_edited_by}
@@ -1093,31 +1331,46 @@ const DIHScreen = () => {
                   ? `${Number(payload.gps_lat).toFixed(5)}, ${Number(payload.gps_lng).toFixed(5)}` +
                     (payload.gps_accuracy_m ? ` · ${payload.gps_accuracy_m}m` : "")
                   : "—";
+                // "—" was wrong for every walk-in: the source is known
+                // (it is how the record got here), it just was not a Kobo
+                // pull. The queue row for the same record already said
+                // "Walk-in".
                 const sourceLine = sourceKeys.kobo_form_id
                   ? `Kobo · form ${sourceKeys.kobo_form_id} · submitted by ${sourceKeys.kobo_submitted_by || "unknown"}`
-                  : "—";
+                  : `${current.source || "—"}${current.channel && current.channel !== current.source ? ` · ${current.channel}` : ""}`;
                 return (
                   <>
                     <RecordSummary
                       fields={[
-                        ["Provisional ID", current.id, "mono"],
-                        ["Head NIN", head.nin || "—", "mono"],
-                        ["Phone", head.telephone_1 || "—"],
-                        ["Parish", `${geo.parish || "—"} · ${sourceKeys.kobo_village_name || "—"}`],
+                        ["Provisional Registry ID", current.registryId, "mono"],
+                        // The wizard collects NIN status + last-4, never
+                        // the full number (that is taken at the IDV step).
+                        // Reading `head.nin` alone therefore showed "—"
+                        // for every walk-in household that HAD produced a
+                        // card at the desk.
+                        ["Head NIN", _ninDisplay(head), "mono"],
+                        // The household contact number of record is the
+                        // head member's telephone_1 (ADR-0033). Labelled
+                        // as such so a reviewer knows which number the
+                        // registry will actually use.
+                        ["Contact number", head.telephone_1 || "none recorded", "mono"],
+                        ["Respondent", payload.respondent_name || "—"],
+                        ["Parish", _placeLine(geo, sourceKeys)],
                         ["GPS", gpsLine, "mono"],
                         ["Members", `${members.length}`],
                         ["Address", payload.address_narrative || "—"],
-                        ["Urban / rural", payload.urban_rural || "—"],
+                        ["Urban / rural", <CodedValue listName="rural_urban" code={payload.urban_rural}/>],
                         ["Source", sourceLine],
                       ]}
                     />
                     <SectionAccordion title={`Roster (${members.length} members)`} tint="identity" defaultOpen>
                       <RosterTable members={members.map(m => ({
                         name: [m.surname, m.first_name].filter(Boolean).join(" "),
-                        rel: m.is_head ? "Head" : (m.relationship_to_head || "—"),
-                        sex: m.sex || "—",
+                        rel: m.is_head ? "Head"
+                          : <CodedValue listName="relationship" code={m.relationship_to_head}/>,
+                        sex: <CodedValue listName="sex" code={m.sex}/>,
                         age: m.age_years != null ? m.age_years : "—",
-                        nin: m.nin || "—",
+                        nin: _ninDisplay(m),
                       }))}/>
                     </SectionAccordion>
                   </>
@@ -1143,22 +1396,35 @@ const DIHScreen = () => {
                 </div>
               );
             })()}
-            {/* Health / Education / Housing accordions stay mock-only
-                for now — these come from later modules (PMT, etc.) and
-                aren't carried on the canonical_payload yet. Hidden in
-                live mode so operators don't see misleading numbers. */}
-            {!current._payload && (
-              <>
-                <SectionAccordion title="Health & Disability" tint="danger">
-                  <SimpleKV rows={[["Members with disability","0"],["Chronic conditions","none reported"],["Pregnant / lactating","1 (head)"]]}/>
-                </SectionAccordion>
-                <SectionAccordion title="Education" tint="update">
-                  <SimpleKV rows={[["School-age children","3 of 3 enrolled"],["Adult literacy","head literate"]]}/>
-                </SectionAccordion>
-                <SectionAccordion title="Housing & Assets" tint="eligibility">
-                  <SimpleKV rows={[["Roof","Iron sheets"],["Walls","Brick (burnt)"],["Floor","Cement"],["Toilet","Pit latrine (covered)"],["Water source","Borehole, < 1 km"]]}/>
-                </SectionAccordion>
-              </>
+            {/* The Health / Education / Housing accordions that used to
+                sit here were FABRICATED — "Roof: Iron sheets, Walls:
+                Brick (burnt), Floor: Cement", "3 of 3 enrolled" — the
+                same invented content for every household, with a
+                comment saying the real data "isn't carried on the
+                canonical_payload yet".
+
+                It is, and always was: housing, health, education,
+                employment, food security, shocks and coping are all on
+                canonical_payload. Nothing read them. They are now in
+                the detailed review, from the record. */}
+            {current._payload && (
+              <div className="card" style={{marginTop:12, padding:14, borderLeft:'3px solid var(--accent-data)'}}>
+                <div className="row gap-3" style={{alignItems:'flex-start'}}>
+                  <Icon name="inbox" size={16} color="var(--accent-data)"/>
+                  <div style={{flex:1}}>
+                    <strong className="t-bodysm">Everything collected for this household</strong>
+                    <div className="t-bodysm muted" style={{marginTop:4, lineHeight:1.6}}>
+                      Housing, utilities, livelihood, per-member health,
+                      education and employment, food security, shocks and
+                      coping — as collected, nothing summarised away.
+                    </div>
+                  </div>
+                  <button className="btn btn-sm btn-primary"
+                    onClick={() => setReviewOpen(true)}>
+                    <Icon name="search" size={13}/> Detailed review
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>
@@ -1317,23 +1583,17 @@ const DIHScreen = () => {
               {(() => {
                 const idvLive = current._stage?.idv_outcome;
                 if (current._payload) {
-                  const tone = idvLive === "matched" ? "identity"
-                    : idvLive === "mismatch" ? "danger"
-                    : "data";
-                  const icon = idvLive === "matched" ? "check" : "info";
+                  // Same table as the queue column. This branch had the
+                  // identical fault from the other direction: it tested
+                  // for "matched" where the backend writes "match", so a
+                  // NIRA-confirmed record fell all the way through to
+                  // "No NIN was offered" — the opposite of the truth.
+                  const o = idvOutcome(idvLive);
                   return (
                     <div>
                       <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>IDV (NIRA)</div>
-                      <Chip tone={tone}><Icon name={icon} size={11}/> {idvLive || "not run"}</Chip>
-                      <div className="t-bodysm muted mt-2">
-                        {idvLive === "matched"
-                          ? "NIN reconciled with NIRA."
-                          : idvLive === "mismatch"
-                          ? "NIN found but demographics didn't align — reconcile before promote."
-                          : idvLive === "pending"
-                          ? "NIRA queue retry pending."
-                          : "No NIN provided or IDV not yet run."}
-                      </div>
+                      <IdvChip outcome={idvLive} size="md"/>
+                      <div className="t-bodysm muted mt-2">{o.detail}</div>
                     </div>
                   );
                 }
@@ -1385,13 +1645,39 @@ const DIHScreen = () => {
 
               <div className="divider"/>
 
-              {/* Walk-in SLA */}
-              <div className="row gap-2" style={{padding:'10px 12px', background:'var(--accent-quality-bg)', borderRadius:4, borderLeft:'3px solid var(--accent-quality)'}}>
-                <Icon name="clock" size={16} color="var(--accent-quality)"/>
-                <div className="t-bodysm" style={{color:'var(--neutral-900)'}}>
-                  <strong>SLA at risk:</strong> 22h 48m until walk-in cutoff (24h from capture).
-                </div>
-              </div>
+              {/* Walk-in SLA — computed, not a fixed string.
+                  "22h 48m until walk-in cutoff" was printed on every
+                  record regardless of age, including ones the queue's
+                  own AGE column reported as 0m, and including ones
+                  already past the cutoff. */}
+              {(() => {
+                const left = current.slaMinutesLeft;
+                if (left == null) {
+                  return (
+                    <div className="row gap-2" style={{padding:'10px 12px', background:'var(--neutral-100)', borderRadius:4, borderLeft:'3px solid var(--neutral-300)'}}>
+                      <Icon name="clock" size={16} color="var(--neutral-500)"/>
+                      <div className="t-bodysm muted">
+                        No capture timestamp on this record — SLA cannot be computed.
+                      </div>
+                    </div>
+                  );
+                }
+                const breached = left <= 0;
+                const atRisk = !breached && left <= 12 * 60;
+                const tone = breached ? "danger" : atRisk ? "quality" : "data";
+                return (
+                  <div className="row gap-2" style={{padding:'10px 12px', background:`var(--accent-${tone}-bg)`, borderRadius:4, borderLeft:`3px solid var(--accent-${tone})`}}>
+                    <Icon name="clock" size={16} color={`var(--accent-${tone})`}/>
+                    <div className="t-bodysm" style={{color:'var(--neutral-900)'}}>
+                      {breached
+                        ? <><strong>SLA breached:</strong> {_durationLabel(-left)} past the walk-in cutoff (24h from capture).</>
+                        : atRisk
+                        ? <><strong>SLA at risk:</strong> {_durationLabel(left)} until walk-in cutoff (24h from capture).</>
+                        : <><strong>Within SLA:</strong> {_durationLabel(left)} until walk-in cutoff (24h from capture).</>}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
 
@@ -1413,7 +1699,7 @@ const DIHScreen = () => {
         <div style={wide.isWide
           ? { margin: '16px 0 0', position: 'sticky', bottom: 0, zIndex: 20 }
           : { margin: '16px -24px 0', position: 'sticky', bottom: 0, zIndex: 20 }}>
-          <ActionBar left={<>Reviewing <span className="t-mono" style={{color:'var(--neutral-900)'}}>{current.id.slice(0,18)}…</span> · {current.head} · {rows.indexOf(current) + 1} of {rows.length}</>}>
+          <ActionBar left={<>Reviewing <span className="t-mono" style={{color:'var(--neutral-900)'}}>{(current.registryId || "").slice(0,18)}…</span> · {current.head} · {rows.indexOf(current) + 1} of {rows.length}</>}>
             {!["promoted", "rejected", "quarantined"].includes(current.state) && (
               <button className="btn"
                 title={
@@ -1626,6 +1912,55 @@ const DIHScreen = () => {
           }}
         />
       )}
+      {reviewOpen && current && (
+        <HouseholdReviewPanel
+          record={current}
+          draft={reviewDraft}
+          saving={reviewSaving}
+          onEdit={(path, value) => setReviewDraft(d => ({ ...d, [path]: value }))}
+          onDiscard={() => setReviewDraft({})}
+          onClose={() => { setReviewOpen(false); setReviewDraft({}); }}
+          onSave={(reason) => {
+            setReviewSaving(true);
+            fetch(`/api/v1/dih/stage-records/${current.id}/edit/`, {
+              method: "POST",
+              credentials: "same-origin",
+              headers: {
+                "Content-Type": "application/json", Accept: "application/json",
+                "X-CSRFToken": _getCsrfToken(),
+              },
+              body: JSON.stringify({ reason, field_changes: reviewDraft }),
+            })
+              // Text first, then parse — a 500 returns an HTML page and
+              // JSON.parse on it reports the parser's problem, not the
+              // server's. Same lesson as the bulk actions.
+              .then(r => r.text().then(text => {
+                let body = null;
+                try { body = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
+                return { ok: r.ok, status: r.status, body, text };
+              }))
+              .then(({ ok, status, body, text }) => {
+                setReviewSaving(false);
+                if (!ok) {
+                  setToast(`Save failed: ${_serverError(body, text, status)}`);
+                  return;
+                }
+                setRows(rows.map(r => (r.id === body.id ? _stageToRow(body) : r)));
+                const n = Object.keys(reviewDraft).length;
+                setReviewDraft({});
+                setToast(
+                  `Saved ${n} correction${n === 1 ? "" : "s"} — DQA re-run, `
+                  + "audit emitted. You cannot also promote this record.",
+                );
+              })
+              .catch(err => {
+                setReviewSaving(false);
+                setToast(`Save failed: ${err}`);
+              });
+          }}
+        />
+      )}
+
       {bulkPromoteOpen && (
         <BulkStageActionModal
           title="Bulk Promote"
@@ -2073,6 +2408,105 @@ const ResolveDdupModal = ({ stageId, headName, candidates, onClose, onResolved, 
 // One component, two callers. Lists the eligible rows so the operator
 // can visually confirm exactly which records will move. Reason is
 // mandatory (the audit chain is the only paper trail after submit).
+/* ───────────────────────────────────────────────────────────────
+   Detailed household review panel
+   ───────────────────────────────────────────────────────────────
+   A full-window overlay rather than a modal: seven sections of
+   questionnaire inside a scrolling modal means scrolling within
+   scrolling, and this is a document an operator reads top to bottom
+   and sometimes prints.
+
+   `_EDITABLE_STATES` on the server is provisional / quality_failed /
+   ddup_review — a record routed for approval is deliberately NOT
+   editable, because editing it would bypass the gates it has already
+   cleared. The panel says so rather than offering inputs whose save
+   would be refused. */
+
+const REVIEW_EDITABLE_STATES = new Set([
+  "provisional", "quality_failed", "ddup_review",
+]);
+
+const HouseholdReviewPanel = ({
+  record, draft, saving, onEdit, onSave, onDiscard, onClose,
+}) => {
+  const [reason, setReason] = useStateDIH("");
+  const dirtyCount = Object.keys(draft || {}).length;
+  const canEdit = REVIEW_EDITABLE_STATES.has(record.state);
+  const blockedReason = canEdit ? "" : (
+    record.state === "pending_promotion"
+      ? "This record has cleared its gates and is awaiting promotion. "
+        + "Correcting it now would bypass the checks it already passed, "
+        + "so edits are only accepted while a record is provisional, "
+        + "quality-failed or in duplicate review."
+      : `A ${String(record.state).replace(/_/g, " ")} record cannot be corrected.`
+  );
+
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape" && !saving) onClose?.();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [saving, onClose]);
+
+  return (
+    <div className="wide-shell" role="region" aria-label="Household detailed review"
+      style={{ background: "var(--neutral-50)", overflow: "auto" }}>
+      <div style={{ padding: 20, maxWidth: 1180, margin: "0 auto" }}>
+        <div className="row gap-3" style={{ alignItems: "flex-start", marginBottom: 14 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="t-cap">DETAILED REVIEW · {record.state.replace(/_/g, " ")}</div>
+            <h2 className="t-h2" style={{ margin: "2px 0 0" }}>{record.head}</h2>
+            <div className="t-cap t-mono">{record.registryId}</div>
+          </div>
+          {dirtyCount > 0 && <Chip tone="update">{dirtyCount} unsaved</Chip>}
+          <button className="btn" onClick={onClose} disabled={saving}>
+            <Icon name="x" size={14}/> Close
+          </button>
+        </div>
+
+        <HouseholdReview
+          payload={record._payload}
+          canEdit={canEdit}
+          editBlockedReason={blockedReason}
+          draft={draft}
+          onEdit={onEdit}/>
+
+        {canEdit && dirtyCount > 0 && (
+          <div className="card" style={{
+            marginTop: 16, padding: 14, position: "sticky", bottom: 0,
+            borderLeft: "3px solid var(--accent-update)",
+          }}>
+            <div className="t-bodysm" style={{ marginBottom: 8 }}>
+              <strong>{dirtyCount} correction{dirtyCount === 1 ? "" : "s"}.</strong>{" "}
+              Every one is written to the audit chain with your name against
+              it, and DQA re-runs on the corrected record. Whoever corrects a
+              record cannot also be the one who promotes it.
+            </div>
+            <label className="t-cap" htmlFor="review-reason">Reason (required)</label>
+            <textarea id="review-reason" className="field-input" rows={2}
+              style={{ marginTop: 4 }}
+              placeholder="What was wrong, and how do you know?"
+              value={reason} onChange={e => setReason(e.target.value)}/>
+            <div className="row gap-3" style={{ marginTop: 10, justifyContent: "flex-end" }}>
+              <button className="btn" onClick={onDiscard} disabled={saving}>
+                Discard changes
+              </button>
+              <button className="btn btn-primary"
+                disabled={saving || !reason.trim()}
+                title={reason.trim() ? "Save corrections" : "A reason is required"}
+                onClick={() => onSave(reason.trim())}>
+                <Icon name="save" size={14}/>
+                {saving ? "Saving…" : `Save ${dirtyCount}`}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const BulkStageActionModal = ({
   title, intent, buttonLabel,
   rows, skippedCount, submitting,

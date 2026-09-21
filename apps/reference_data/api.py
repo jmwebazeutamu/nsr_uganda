@@ -45,10 +45,21 @@ class GeographicUnitSerializer(serializers.ModelSerializer):
 class GeographicUnitViewSet(viewsets.ReadOnlyModelViewSet):
     """UBOS administrative hierarchy. Read-only; sourced from the UBOS loader."""
 
+    # Ordered by NAME, not code.
+    #
+    # The GeoTreePicker renders these rows straight into a <select> in
+    # the order they arrive, and the operator scans that list by name —
+    # nobody drills a hierarchy by hunting for 102.1.01.08. Ordering by
+    # code put Kampala Central's parishes in the order III, I, II,
+    # because the codes are shuffled against their alphabetical position
+    # (.07 = Kisenyi III, .08 = Kisenyi I, .09 = Kisenyi II).
+    #
+    # `code` stays as the tiebreaker so the ordering is total and the
+    # page boundary is stable.
     queryset = (
         GeographicUnit.objects
         .select_related("parent")   # parent_code lookup is N+1 without this
-        .order_by("level", "code")
+        .order_by("level", "name", "code")
     )
     serializer_class = GeographicUnitSerializer
 
