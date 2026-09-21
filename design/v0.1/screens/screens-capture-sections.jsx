@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, Field, useChoiceList */
+/* global React, Icon, Chip, Field, useChoiceList, useFieldLabel */
 // NSR MIS — Household capture · Sections 2–7
 // =====================================================
 // Form components for the wizard's remaining tabs.
@@ -20,6 +20,140 @@
 const { useState: useStateSec, useMemo: useMemoSec } = React;
 
 /* ───────────────────────────────────────────────────────────────
+   Age — derived from date of birth
+   ───────────────────────────────────────────────────────────────
+   The hint under the Age box used to read "Computed from DoB on save
+   when both supplied", which is circular: it computed the age only once
+   an age was already there. Nothing ever derived it, so a member
+   entered with a date of birth and a blank Age counted as age 0, and
+   sections 3/4/5 — which filter on age thresholds of 2, 3 and 7 —
+   showed "No members meet the age threshold" for a 47-year-old head.
+
+   Age is now derived on every DoB change and kept in sync. It stays
+   writable: the questionnaire allows an estimated age when a respondent
+   does not know their date of birth, so a manually entered age is not
+   overwritten unless the DoB itself changes. */
+
+/** Completed years between `dob` (YYYY-MM-DD) and `asOf` (default today).
+ *  Returns null for a missing, malformed, future, or implausible date. */
+const ageFromDateOfBirth = (dob, asOf) => {
+  if (!dob || typeof dob !== "string") return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dob.trim());
+  if (!m) return null;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const born = new Date(Date.UTC(y, mo - 1, d));
+  // Reject dates the calendar rolled over (e.g. 2026-02-31).
+  if (born.getUTCFullYear() !== y || born.getUTCMonth() !== mo - 1
+      || born.getUTCDate() !== d) return null;
+  const ref = asOf ? (asOf instanceof Date ? asOf : new Date(asOf)) : new Date();
+  if (Number.isNaN(ref.getTime())) return null;
+  let age = ref.getUTCFullYear() - y;
+  const hadBirthday = (ref.getUTCMonth() + 1) > mo
+    || ((ref.getUTCMonth() + 1) === mo && ref.getUTCDate() >= d);
+  if (!hadBirthday) age -= 1;
+  if (age < 0 || age > 120) return null;
+  return age;
+};
+
+/** The age the age-threshold filters should use for a member: the
+ *  derived value when a DoB is present, else whatever was typed. */
+const memberAge = (m) => {
+  if (!m) return null;
+  const derived = ageFromDateOfBirth(m.date_of_birth);
+  if (derived != null) return derived;
+  return (m.age_years === "" || m.age_years == null) ? null : Number(m.age_years);
+};
+
+/* ───────────────────────────────────────────────────────────────
+   Per-member required fields
+   ───────────────────────────────────────────────────────────────
+   A per-member section renders one member at a time. Validating only
+   the visible member meant a 3-member household could reach Submit with
+   two members' required answers untouched — and, because the wizard
+   never surfaced it, the operator had no way to see which.
+
+   `PER_MEMBER_REQUIRED` is the single declaration of what a per-member
+   section requires; both the wizard validators and the member chips
+   read it, so the two cannot drift. `minAge` matches the section's own
+   age threshold — a member below it is not asked the question at all
+   and so cannot be incomplete.
+
+   The server-side counterpart is the DQA rule AC-MEMBER-DETAIL-REQUIRED
+   (apps/dqa seed), which fails a staged record carrying the same gaps.
+   The two lists are asserted equal by a contract test. */
+
+const PER_MEMBER_REQUIRED = {
+  hd: { slice: "health", minAge: 2, fields: [
+    ["chronic_illness_flag", "Has chronic illness?"],
+  ]},
+  ed: { slice: null, minAge: 3, fields: [
+    ["literacy_status", "Literacy status"],
+  ]},
+};
+
+/** Members of a per-member section that still have a required answer
+ *  missing. Returns [{ line_number, label, missing: [fieldLabel, …] }]. */
+const memberDetailGaps = (sectionId, members, sectionData) => {
+  const spec = PER_MEMBER_REQUIRED[sectionId];
+  if (!spec) return [];
+  const rows = [];
+  (members || []).forEach(m => {
+    const age = memberAge(m);
+    // Unknown age is not treated as below-threshold: a member with no
+    // age at all is caught by the Roster validator, and silently
+    // skipping them here would reopen the same hole from the other end.
+    if (age != null && age < spec.minAge) return;
+    const perMember = (sectionData || {})[m.line_number] || {};
+    const bag = spec.slice ? (perMember[spec.slice] || {}) : perMember;
+    const missing = spec.fields
+      .filter(([key]) => bag[key] === undefined || bag[key] === null || bag[key] === "")
+      .map(([, label]) => label);
+    if (missing.length) {
+      rows.push({
+        line_number: m.line_number,
+        label: `${m.first_name || ""} ${m.surname || ""}`.trim() || `Person ${m.line_number}`,
+        missing,
+      });
+    }
+  });
+  return rows;
+};
+
+/* ───────────────────────────────────────────────────────────────
+   The choice lists this wizard needs, all of them
+   ───────────────────────────────────────────────────────────────
+   Every <ChoiceSelect> calls useChoiceList with ONE list name, and the
+   hook opens one request per distinct name — so the wizard fired
+   41 separate calls to /choice-list-bundle/, staggered as each
+   section mounted. Six lookups (Drinking water source, Toilet facility,
+   Main livelihood, Agricultural purpose, Land ownership, Land title)
+   sat on "Loading…" for seconds after their section opened; on a CAPI
+   tablet on a weak link an enumerator scrolls straight past them.
+
+   CaptureScreen prefetches this whole set in a single request before
+   the first section renders. Each select then resolves out of the
+   hook's per-list cache synchronously.
+
+   A name missing from this list is not an error — that select simply
+   falls back to fetching its own. A contract test keeps the list in
+   step with what the sections actually reference. */
+
+const CAPTURE_CHOICE_LISTS = [
+  "agricultural_purpose", "asset_type", "birth_certificate",
+  "cooking_fuel", "coping_frequency", "coping_strategy_type",
+  "crop_name", "drinking_water_source", "dwelling_tenure",
+  "dwelling_type", "employment_main_activity", "employment_sector",
+  "employment_status", "floor_material", "food_source", "highest_grade",
+  "land_ownership", "land_title", "lighting_energy", "literacy_status",
+  "livestock_type", "main_livelihood", "marital_status", "nationality",
+  "never_attended_reason", "nin_status", "not_working_reason",
+  "relationship", "residency_status", "roof_material", "rural_urban",
+  "savings_location", "severity_level", "sex", "shock_type",
+  "toilet_facility", "wall_material", "waste_disposal",
+  "why_stopped_school", "work_frequency", "yes_no",
+];
+
+/* ───────────────────────────────────────────────────────────────
    Shared primitives
    ─────────────────────────────────────────────────────────────── */
 
@@ -29,9 +163,15 @@ const ChoiceSelect = ({ listName, value, onChange, allowBlank = true, disabled =
   const [options, meta] = (typeof useChoiceList === "function")
     ? useChoiceList(listName)
     : [[], { loading: false, error: null }];
+  // Claim the id + label the enclosing <Field> generated. Without this
+  // the select is one level below the child Field can clone, so it
+  // carried no id, no aria-label and no aria-labelledby — every
+  // dropdown in the wizard announced as an unnamed combobox.
+  const labelProps = (typeof useFieldLabel === "function") ? useFieldLabel() : {};
   return (
     <select
       className="field-input"
+      {...labelProps}
       value={value || ""}
       onChange={(e) => onChange && onChange(e.target.value)}
       disabled={disabled || (meta && meta.loading)}
@@ -57,6 +197,10 @@ const YesNoSeg = ({ value, onChange }) => {
       {(opts.length ? opts : [{ code: "1", label: "Yes" }, { code: "2", label: "No" }]).map(o => (
         <button key={o.code}
           className={value === o.code ? "on" : ""}
+          // Selection was communicated by CSS class alone, so a screen
+          // reader could read both buttons and tell you nothing about
+          // which one the operator had chosen.
+          aria-pressed={value === o.code}
           onClick={() => onChange && onChange(o.code)}>
           {o.label}
         </button>
@@ -79,7 +223,7 @@ const SectionHead = ({ title, sub, right }) => (
 // Member selector — used by per-member sections (Health, Education,
 // Employment, Disability). Renders a horizontal chip strip; clicking
 // a chip switches the active member for the section.
-const MemberPicker = ({ members, value, onChange, minAge = 0 }) => {
+const MemberPicker = ({ members, value, onChange, minAge = 0, gaps = [] }) => {
   if (!members || members.length === 0) {
     return (
       <div className="tint-quality" style={{ padding: 12, borderRadius: 6, borderLeft: "3px solid var(--accent-quality)" }}>
@@ -87,29 +231,84 @@ const MemberPicker = ({ members, value, onChange, minAge = 0 }) => {
       </div>
     );
   }
-  const eligible = members.filter(m => (m.age_years || 0) >= minAge);
+  // Derived age, not the raw box. A member with a date of birth and a
+  // blank Age used to read as 0 and drop out of every threshold filter.
+  // A member with NO age at all stays in the list: the Roster validator
+  // is what chases the missing age, and hiding them here would let an
+  // un-aged member slip past this section unanswered.
+  const eligible = members.filter(m => {
+    const age = memberAge(m);
+    return age == null || age >= minAge;
+  });
+  const gapLines = new Set((gaps || []).map(g => g.line_number));
   return (
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "0 0 12px" }}>
       {eligible.map(m => {
         const active = value === m.line_number;
+        const incomplete = gapLines.has(m.line_number);
+        const age = memberAge(m);
+        const name = `${m.first_name || "—"} ${m.surname || ""}`.trim();
         return (
           <button key={m.line_number}
             onClick={() => onChange && onChange(m.line_number)}
+            aria-label={`Person ${m.line_number}, ${name}${incomplete ? " — required answers missing" : ""}`}
+            title={incomplete ? "Required answers missing for this member" : undefined}
             style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
               padding: "6px 12px", border: "1px solid",
-              borderColor: active ? "var(--accent-data)" : "var(--neutral-300)",
-              background: active ? "var(--accent-data-bg)" : "var(--neutral-0)",
-              color: active ? "var(--accent-data)" : "var(--neutral-900)",
+              borderColor: active ? "var(--accent-data)"
+                : incomplete ? "var(--accent-danger)" : "var(--neutral-300)",
+              background: active ? "var(--accent-data-bg)"
+                : incomplete ? "var(--accent-danger-bg)" : "var(--neutral-0)",
+              color: active ? "var(--accent-data)"
+                : incomplete ? "var(--accent-danger)" : "var(--neutral-900)",
               borderRadius: 4, cursor: "pointer", fontSize: 12.5,
               fontWeight: active ? 600 : 500,
             }}>
-            #{m.line_number} · {(m.first_name || "—")} {m.surname || ""}{m.age_years != null && ` · ${m.age_years}y`}
+            {incomplete && <Icon name="alert" size={12} color="var(--accent-danger)"/>}
+            <span>#{m.line_number} · {name}{age != null ? ` · ${age}y` : " · age —"}</span>
           </button>
         );
       })}
       {eligible.length === 0 && (
         <span className="t-cap">No members meet the age threshold ({minAge}+).</span>
       )}
+    </div>
+  );
+};
+
+// Names the members a per-member section is still missing answers for,
+// and jumps to one on click. Without this the operator can see that the
+// section is incomplete but not which member is incomplete — which for a
+// 12-member household is not actionable information.
+const MemberGapList = ({ gaps, onPick }) => {
+  if (!gaps || gaps.length === 0) return null;
+  return (
+    <div className="tint-danger" style={{
+      padding: 12, borderRadius: 6, marginBottom: 14,
+      borderLeft: "3px solid var(--accent-danger)",
+    }}>
+      <div className="row gap-2" style={{ marginBottom: 6 }}>
+        <Icon name="alert" size={14} color="var(--accent-danger)"/>
+        <strong className="t-bodysm">
+          Required answers missing for {gaps.length} member{gaps.length === 1 ? "" : "s"}
+        </strong>
+      </div>
+      <ul className="t-bodysm" style={{ margin: "4px 0 0 22px", color: "var(--neutral-700)", lineHeight: 1.65 }}>
+        {gaps.map(g => (
+          <li key={g.line_number}>
+            <button onClick={() => onPick && onPick(g.line_number)}
+              style={{
+                border: 0, background: "transparent", padding: 0,
+                color: "var(--accent-danger)", fontWeight: 600,
+                cursor: "pointer", font: "inherit", textDecoration: "underline",
+              }}>
+              #{g.line_number} {g.label}
+            </button>
+            {" — "}{g.missing.join(", ")}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 };
@@ -154,7 +353,19 @@ const RosterSection = ({ members, setMembers }) => {
   };
 
   const update = (line, patch) => {
-    setMembers(members.map(m => m.line_number === line ? { ...m, ...patch } : m));
+    setMembers(members.map(m => {
+      if (m.line_number !== line) return m;
+      const next = { ...m, ...patch };
+      // Derive age whenever the date of birth changes. A typed age is
+      // left alone otherwise — the questionnaire allows an estimate when
+      // the respondent does not know their date of birth.
+      if ("date_of_birth" in patch) {
+        const derived = ageFromDateOfBirth(next.date_of_birth);
+        if (derived != null) next.age_years = derived;
+        else if (!next.date_of_birth) next.age_years = m.age_years;
+      }
+      return next;
+    }));
   };
 
   const current = members.find(m => m.line_number === editing);
@@ -254,7 +465,10 @@ const RosterMemberForm = ({ member, isHead, onChange, onRemove }) => (
         <input className="field-input t-mono" type="date" value={member.date_of_birth || ""}
           onChange={(e) => onChange({ date_of_birth: e.target.value })}/>
       </Field>
-      <Field label="Age (years)" hint="Computed from DoB on save when both supplied">
+      <Field label="Age (years)"
+        hint={ageFromDateOfBirth(member.date_of_birth) != null
+          ? "Derived from the date of birth. Overwrite only to record an estimate."
+          : "Enter an estimate when the date of birth is unknown."}>
         <input className="field-input t-num" type="number" min="0" max="120"
           value={member.age_years ?? ""}
           onChange={(e) => onChange({ age_years: e.target.value === "" ? null : Number(e.target.value) })}/>
@@ -314,6 +528,7 @@ const RosterMemberForm = ({ member, isHead, onChange, onRemove }) => (
 const HealthDisabilitySection = ({ members, healthData, setHealthData }) => {
   const [active, setActive] = useStateSec(members[0]?.line_number || null);
   const data = healthData[active] || { health: {}, disability: {} };
+  const gaps = memberDetailGaps("hd", members, healthData);
 
   const update = (slice, patch) => {
     setHealthData({
@@ -328,9 +543,13 @@ const HealthDisabilitySection = ({ members, healthData, setHealthData }) => {
   return (
     <>
       <SectionHead title="Health & Disability"
-        sub="SECTION 3 OF 7 · PER MEMBER (Section D · age 2+)"/>
+        sub="SECTION 3 OF 7 · PER MEMBER (Section D · age 2+)"
+        right={gaps.length > 0
+          ? <Chip tone="danger">{gaps.length} member{gaps.length === 1 ? "" : "s"} incomplete</Chip>
+          : null}/>
       <div style={{ padding: 20 }}>
-        <MemberPicker members={members} value={active} onChange={setActive} minAge={2}/>
+        <MemberPicker members={members} value={active} onChange={setActive} minAge={2} gaps={gaps}/>
+        <MemberGapList gaps={gaps} onPick={setActive}/>
         {active != null && (
           <>
             <h4 className="t-h3" style={{ margin: "8px 0 12px" }}>Health (D1–D2)</h4>
@@ -370,6 +589,7 @@ const HealthDisabilitySection = ({ members, healthData, setHealthData }) => {
                   {[["01", "None"], ["02", "Some"], ["03", "A lot"], ["04", "Cannot"]].map(([code, lbl]) => (
                     <button key={code}
                       className={data.disability[field] === code ? "on" : ""}
+                      aria-pressed={data.disability[field] === code}
                       onClick={() => update("disability", { [field]: code })}>
                       {lbl}
                     </button>
@@ -389,8 +609,10 @@ const HealthDisabilitySection = ({ members, healthData, setHealthData }) => {
    ─────────────────────────────────────────────────────────────── */
 
 const EducationSection = ({ members, educationData, setEducationData }) => {
-  const [active, setActive] = useStateSec(members.find(m => (m.age_years || 0) >= 3)?.line_number || null);
+  const [active, setActive] = useStateSec(
+    members.find(m => { const a = memberAge(m); return a == null || a >= 3; })?.line_number || null);
   const data = educationData[active] || {};
+  const gaps = memberDetailGaps("ed", members, educationData);
 
   const update = (patch) => {
     setEducationData({ ...educationData, [active]: { ...(educationData[active] || {}), ...patch } });
@@ -399,9 +621,13 @@ const EducationSection = ({ members, educationData, setEducationData }) => {
   return (
     <>
       <SectionHead title="Education"
-        sub="SECTION 4 OF 7 · PER MEMBER (Section E · age 3+)"/>
+        sub="SECTION 4 OF 7 · PER MEMBER (Section E · age 3+)"
+        right={gaps.length > 0
+          ? <Chip tone="danger">{gaps.length} member{gaps.length === 1 ? "" : "s"} incomplete</Chip>
+          : null}/>
       <div style={{ padding: 20 }}>
-        <MemberPicker members={members} value={active} onChange={setActive} minAge={3}/>
+        <MemberPicker members={members} value={active} onChange={setActive} minAge={3} gaps={gaps}/>
+        <MemberGapList gaps={gaps} onPick={setActive}/>
         {active != null && (
           <div className="col gap-4">
             <Field label="Literacy status" required>
@@ -450,7 +676,8 @@ const EducationSection = ({ members, educationData, setEducationData }) => {
    ─────────────────────────────────────────────────────────────── */
 
 const EmploymentSection = ({ members, employmentData, setEmploymentData }) => {
-  const [active, setActive] = useStateSec(members.find(m => (m.age_years || 0) >= 7)?.line_number || null);
+  const [active, setActive] = useStateSec(
+    members.find(m => { const a = memberAge(m); return a == null || a >= 7; })?.line_number || null);
   const data = employmentData[active] || {};
 
   const update = (patch) => {
@@ -852,8 +1079,10 @@ const FoodShocksSection = ({ foodShocks, setFoodShocks }) => {
             )},
             { key: "category", label: "Category (food/livelihood)", render: (v, onChange) => (
               <div className="seg" style={{ maxWidth: 220 }}>
-                <button className={v === "food" ? "on" : ""} onClick={() => onChange("food")}>Food</button>
-                <button className={v === "livelihood" ? "on" : ""} onClick={() => onChange("livelihood")}>Livelihood</button>
+                <button className={v === "food" ? "on" : ""}
+                  aria-pressed={v === "food"} onClick={() => onChange("food")}>Food</button>
+                <button className={v === "livelihood" ? "on" : ""}
+                  aria-pressed={v === "livelihood"} onClick={() => onChange("livelihood")}>Livelihood</button>
               </div>
             )},
           ]}
@@ -889,7 +1118,15 @@ const RepeatGroup = ({ rows, onChange, columns, emptyRow }) => {
                 <td key={c.key}>{c.render(row[c.key], (v) => update(i, c.key, v))}</td>
               ))}
               <td style={{ textAlign: "right" }}>
-                <button className="icon-btn" title="Remove" onClick={() => remove(i)}>
+                {/* Icon-only, so it needs a name of its own. `title`
+                    alone is a last-resort fallback in the accessible-name
+                    spec and several screen readers skip it — the Assets /
+                    Crops / Livestock / Shocks / Coping delete buttons all
+                    announced as an unnamed button. The row number makes
+                    each one distinguishable from the others. */}
+                <button className="icon-btn" title="Remove row"
+                  aria-label={`Remove row ${i + 1}`}
+                  onClick={() => remove(i)}>
                   <Icon name="trash" size={12}/>
                 </button>
               </td>
@@ -912,6 +1149,12 @@ const RepeatGroup = ({ rows, onChange, columns, emptyRow }) => {
 };
 
 Object.assign(window, {
+  CAPTURE_CHOICE_LISTS,
+  MemberGapList,
+  ageFromDateOfBirth,
+  memberAge,
+  memberDetailGaps,
+  PER_MEMBER_REQUIRED,
   RosterSection,
   HealthDisabilitySection,
   EducationSection,

@@ -10,15 +10,27 @@
 
 const { useState: useStateCB } = React;
 
-// Build the default block: REGISTRATION granted by default (operator flips to
-// Refused if declined); non-consent bases (public task / statistical) apply;
-// optional consent purposes follow their `defaultOn`.
+// Build the default block.
+//
+// Every CONSENT-basis purpose starts UNSET (""), including REGISTRATION.
+// DPPA 2019 §1 defines consent as a "freely given, specific, informed and
+// unambiguous indication" by the data subject — a pre-ticked box is an
+// indication by the form designer, not by the respondent, so a default of
+// GRANTED records consent nobody gave. Opening a fresh capture used to
+// show "✓ Yes — consented" already selected plus four optional purposes
+// already ON.
+//
+// Purposes on a non-consent lawful basis (public task, statistical
+// exemption) are NOT consent and do not have an unset state — they apply
+// by law and are shown as such. They stay GRANTED.
+//
+// `defaultOn` is retained on the purpose vocabulary because the citizen
+// portal uses it to order and recommend purposes; it no longer pre-grants
+// anything at capture. See ADR-0031.
 const defaultConsentBlock = () => {
   const block = { _method: "DIGITAL", _witness_name: "", _witness_role: "", _refusal_reason: "" };
   (window.PURPOSES || []).forEach(p => {
-    if (p.code === "REGISTRATION") block[p.code] = "GRANTED";
-    else if (p.basis !== "Consent") block[p.code] = "GRANTED";
-    else block[p.code] = p.defaultOn ? "GRANTED" : "";
+    block[p.code] = p.basis === "Consent" ? "" : "GRANTED";
   });
   return block;
 };
@@ -79,11 +91,28 @@ const ConsentCaptureBlock = ({ value, onChange }) => {
             {optional.map(p => (
               <div key={p.code} className="row" style={{ justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: 13 }}>{p.name}</div>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>
+                    {p.name}
+                    {!v[p.code] && (
+                      <span className="t-cap" style={{ marginLeft: 8, color: "var(--neutral-500)", fontWeight: 500 }}>
+                        not asked
+                      </span>
+                    )}
+                  </div>
                   <div className="t-cap" style={{ maxWidth: 360 }}>{p.blurb}</div>
                 </div>
-                <Toggle on={v[p.code] === "GRANTED"} ariaLabel={p.name}
-                  onChange={(on) => set({ [p.code]: on ? "GRANTED" : "REFUSED" })}/>
+                {/* Three states, not two: unset ("not asked"), granted,
+                    refused. A plain on/off toggle cannot represent "the
+                    respondent was never asked", which is the state a
+                    fresh form is actually in. */}
+                <div className="seg" role="group" aria-label={p.name}>
+                  <button className={v[p.code] === "GRANTED" ? "on" : ""}
+                    aria-pressed={v[p.code] === "GRANTED"}
+                    onClick={() => set({ [p.code]: "GRANTED" })}>Yes</button>
+                  <button className={v[p.code] === "REFUSED" ? "on" : ""}
+                    aria-pressed={v[p.code] === "REFUSED"}
+                    onClick={() => set({ [p.code]: "REFUSED" })}>No</button>
+                </div>
               </div>
             ))}
           </div>

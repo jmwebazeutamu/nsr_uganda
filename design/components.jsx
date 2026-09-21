@@ -260,14 +260,112 @@ const ActionBar = ({ left, children }) => (
 /* ============================================================
    Field block
    ============================================================ */
-const Field = ({ label, required, hint, error, children }) => (
-  <div className="field">
-    <label className="field-label">{label}{required && <span className="req">*</span>}</label>
-    {children}
-    {hint && !error && <span className="field-help">{hint}</span>}
-    {error && <span className="field-error">{error}</span>}
-  </div>
-);
+// Every form control in the console goes through <Field>, so this is
+// the one place that has to get the accessible name right — and it was
+// not: the label carried no `htmlFor` and the control no `id`, so every
+// input, select and textarea in the capture wizard returned an EMPTY
+// accessible name. A screen-reader user heard "edit, blank" seven
+// sections deep into a household interview.
+//
+// What this does:
+//   * single form control (input/select/textarea) — clone it with a
+//     generated id and point the <label> at it, the association a
+//     browser and an AT both understand;
+//   * anything else (a segmented button group, a composite widget) —
+//     wrap in role="group" + aria-labelledby, because a <label for> may
+//     only target one labelable element and a group of buttons is not
+//     one;
+//   * hint and error text are joined onto aria-describedby, so the
+//     "≤ 10m (AC-GPS-ACCURACY)" rule and any validation message are
+//     announced with the field rather than stranded beside it.
+//
+// `React.useId` keeps ids stable across renders and unique across
+// instances (three "Age (years)" fields on one screen is normal here).
+const LABELABLE = new Set(["input", "select", "textarea"]);
+
+/* Labelling context.
+ *
+ * The clone-the-child trick only reaches a RAW DOM element. Most of the
+ * capture wizard's selects are not raw: they are <ChoiceSelect> and
+ * <GeoLevel> components that render a <select> one level down, so
+ * `only.type` is a function, `isControl` is false, and the select got
+ * nothing. Fourteen selects on the Identification tab alone, every one
+ * of them returning an empty accessible name, while the text and number
+ * inputs beside them were correctly labelled — which is exactly the
+ * shape of a fix that looks complete and is not.
+ *
+ * Field publishes the ids it generated; any descendant rendering the
+ * real control claims them with useFieldLabel(). The group wrapper
+ * stays for genuine button groups, which are not labelable elements and
+ * need aria-labelledby rather than a <label for>. */
+const FieldLabelContext = React.createContext(null);
+
+/** Props a control should spread onto itself to be named by its Field.
+ *  Returns {} outside a Field, so a control stays usable standalone. */
+const useFieldLabel = () => {
+  const ctx = React.useContext(FieldLabelContext);
+  if (!ctx) return {};
+  return {
+    id: ctx.controlId,
+    "aria-labelledby": ctx.labelId,
+    ...(ctx.describedBy ? { "aria-describedby": ctx.describedBy } : {}),
+    ...(ctx.required ? { "aria-required": true } : {}),
+    ...(ctx.invalid ? { "aria-invalid": true } : {}),
+  };
+};
+
+const Field = ({ label, required, hint, error, children }) => {
+  const uid = React.useId();
+  const controlId = `f-${uid}`;
+  const labelId = `l-${uid}`;
+  const hintId = `h-${uid}`;
+  const errorId = `e-${uid}`;
+  const describedBy = [hint && !error ? hintId : null, error ? errorId : null]
+    .filter(Boolean).join(" ") || undefined;
+
+  const only = React.Children.count(children) === 1
+    ? React.Children.toArray(children)[0] : null;
+  const isControl = only && React.isValidElement(only)
+    && typeof only.type === "string" && LABELABLE.has(only.type);
+
+  const body = isControl
+    ? React.cloneElement(only, {
+        // A control that already declares its own id or description
+        // keeps them — the caller knew something we do not.
+        id: only.props.id || controlId,
+        "aria-describedby": only.props["aria-describedby"] || describedBy,
+        "aria-invalid": error ? true : only.props["aria-invalid"],
+        "aria-required": required ? true : only.props["aria-required"],
+      })
+    : (
+      // Not a raw control. Publish the ids for a nested one to claim,
+      // and keep the group naming for the case where there is no single
+      // control at all (a segmented set of buttons).
+      <FieldLabelContext.Provider
+        value={{ controlId, labelId, describedBy, required: !!required, invalid: !!error }}>
+        <div role="group" aria-labelledby={labelId} aria-describedby={describedBy}>
+          {children}
+        </div>
+      </FieldLabelContext.Provider>
+    );
+
+  return (
+    <div className="field">
+      {/* `htmlFor` only on the raw-control path, where this Field knows
+          the id landed on a labelable element. A nested control names
+          itself with aria-labelledby against this label's id instead;
+          a <label for> pointing at an id that may not exist is worse
+          than no `for` at all. */}
+      <label className="field-label" id={labelId}
+             htmlFor={isControl ? (only.props.id || controlId) : undefined}>
+        {label}{required && <span className="req">*</span>}
+      </label>
+      {body}
+      {hint && !error && <span className="field-help" id={hintId}>{hint}</span>}
+      {error && <span className="field-error" id={errorId}>{error}</span>}
+    </div>
+  );
+};
 
 /* ============================================================
    Geographic Tree Picker
@@ -300,10 +398,26 @@ const GeoLevel = ({ label, level, parentCode, parentReady, value, onSelect, plac
   const loading = meta && meta.loading;
   return (
     <Field label={optional ? `${label} (optional)` : label} required={!optional}>
+      {/* The field-label hook is deliberately NOT used here. This
+          <select> is a RAW element and is <Field>'s direct child, so
+          Field's clone path already gives it the id and the
+          <label for>. Calling the hook would also run it in GeoLevel's
+          own render scope — above the provider Field renders, not
+          inside it — so it would return an empty object and read as
+          labelling that is not happening. */}
       <select className="field-select"
         value={value || ""}
         disabled={!parentReady || loading}
-        onChange={(e) => onSelect && onSelect(e.target.value)}>
+        onChange={(e) => {
+          const code = e.target.value;
+          const row = rows.find(r => r.code === code);
+          // Hand the NAME up alongside the code. Downstream surfaces —
+          // the receipt slip, the DIH review panel — need to print
+          // "Awach, Gulu", not "304.1.01.01", and nothing else has the
+          // rows in hand to resolve it.
+          onSelect && onSelect(code, row ? row.name : "");
+        }}>
+
         <option value="">
           {!parentReady ? placeholder : (loading ? "Loading…" : "Select…")}
         </option>
@@ -317,13 +431,25 @@ const GeoLevel = ({ label, level, parentCode, parentReady, value, onSelect, plac
 
 const GeoTreePicker = ({ value, onChange }) => {
   const v = value || {};
-  const set = (k, val) => {
-    const next = { ...v, [k]: val };
+  const set = (k, val, name) => {
+    // `_labels` mirrors the codes with the display names the operator
+    // actually chose, so consumers can render a place instead of a
+    // number without a second round-trip to reference data.
+    const labels = { ...(v._labels || {}) };
+    const next = { ...v, [k]: val, _labels: labels };
+    labels[k] = name || "";
     // Cascading reset — clear every descendant level on a change.
-    const chain = ["region", "subregion", "district", "county", "subcounty", "parish", "village"];
+    // Canonical registry level names. These keys are posted verbatim as
+    // canonical_payload.geographic, and the registry resolves the ladder
+    // by `sub_region` / `sub_county`. They used to be `subregion` /
+    // `subcounty` here, so every walk-in capture failed promotion on
+    // "canonical_payload.geographic.sub_region required" — and the error
+    // was swallowed, so the record sat at `provisional` with an empty
+    // dqa_summary that the review queue renders as "clean".
+    const chain = ["region", "sub_region", "district", "county", "sub_county", "parish", "village"];
     const idx = chain.indexOf(k);
     if (idx >= 0) {
-      chain.slice(idx + 1).forEach((c) => { next[c] = ""; });
+      chain.slice(idx + 1).forEach((c) => { next[c] = ""; labels[c] = ""; });
     }
     onChange && onChange(next);
   };
@@ -333,41 +459,41 @@ const GeoTreePicker = ({ value, onChange }) => {
         <GeoLevel label="Region" level="region"
           parentCode="" parentReady={true}
           value={v.region}
-          onSelect={(c) => set("region", c)}/>
+          onSelect={(c, n) => set("region", c, n)}/>
         <GeoLevel label="Sub-region" level="sub_region"
           parentCode={v.region} parentReady={!!v.region}
           placeholder="Choose region first"
-          value={v.subregion}
-          onSelect={(c) => set("subregion", c)}/>
+          value={v.sub_region}
+          onSelect={(c, n) => set("sub_region", c, n)}/>
         <GeoLevel label="District" level="district"
-          parentCode={v.subregion} parentReady={!!v.subregion}
+          parentCode={v.sub_region} parentReady={!!v.sub_region}
           placeholder="Choose sub-region first"
           value={v.district}
-          onSelect={(c) => set("district", c)}/>
+          onSelect={(c, n) => set("district", c, n)}/>
       </div>
       <div className="field-row-3">
         <GeoLevel label="County" level="county"
           parentCode={v.district} parentReady={!!v.district}
           placeholder="Choose district first"
           value={v.county}
-          onSelect={(c) => set("county", c)}/>
+          onSelect={(c, n) => set("county", c, n)}/>
         <GeoLevel label="Sub-county" level="sub_county"
           parentCode={v.county} parentReady={!!v.county}
           placeholder="Choose county first"
-          value={v.subcounty}
-          onSelect={(c) => set("subcounty", c)}/>
+          value={v.sub_county}
+          onSelect={(c, n) => set("sub_county", c, n)}/>
         <GeoLevel label="Parish" level="parish"
-          parentCode={v.subcounty} parentReady={!!v.subcounty}
+          parentCode={v.sub_county} parentReady={!!v.sub_county}
           placeholder="Choose sub-county first"
           value={v.parish}
-          onSelect={(c) => set("parish", c)}/>
+          onSelect={(c, n) => set("parish", c, n)}/>
       </div>
       <div className="field-row-3">
         <GeoLevel label="Village" level="village"
           parentCode={v.parish} parentReady={!!v.parish}
           placeholder="Choose parish first"
           value={v.village}
-          onSelect={(c) => set("village", c)}
+          onSelect={(c, n) => set("village", c, n)}
           optional/>
         <Field label="Enumeration Area" required hint="UBOS 2024 EA frame">
           <input className="field-input" placeholder="EA-7411-002" defaultValue="EA-7411-002"/>
@@ -471,5 +597,6 @@ Object.assign(window, {
   Icon, Chip, KPI, Sparkline,
   Modal, ReasonModal,
   ActionBar, Field, GeoTreePicker, AuditDrawer, Toast, PageHeader,
+  FieldLabelContext, useFieldLabel,
   initials,
 });

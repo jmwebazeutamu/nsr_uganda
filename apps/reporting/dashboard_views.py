@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import serializers
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -45,6 +45,10 @@ class OperatorKpisSerializer(serializers.Serializer):
     grievances_l2_open = serializers.IntegerField()
     data_requests_pending_approval = serializers.IntegerField()
     data_requests_delivered_7d = serializers.IntegerField()
+    # Partner-side, like the DRS counts: national regardless of the
+    # geographic drill-down, because a partner is not in a sub-region.
+    partners_total = serializers.IntegerField()
+    programmes_active = serializers.IntegerField()
 
 
 def _scoped_household_ids(user, *, region: str | None = None):
@@ -145,6 +149,19 @@ def _count_delivered_recent(user, days: int) -> int:
     ).count()
 
 
+def _count_partners() -> int:
+    """Registered partners. Not geographic and not ABAC-scoped by
+    sub-region — a partner organisation is national, and the DRS counts
+    above already set that precedent."""
+    from apps.partners.models import Partner
+    return Partner.objects.count()
+
+
+def _count_active_programmes() -> int:
+    from apps.partners.models import Programme
+    return Programme.objects.filter(status="active").count()
+
+
 def compute_operator_kpis(user, *, region: str | None = None) -> dict:
     """The home-screen KPI payload for `user`, ABAC-scoped.
 
@@ -197,6 +214,233 @@ def compute_operator_kpis(user, *, region: str | None = None) -> dict:
         "grievances_l2_open": _count_open_grievances(user, tier="L2", region=region),
         "data_requests_pending_approval": _count_data_requests(user, "submitted"),
         "data_requests_delivered_7d": _count_delivered_recent(user, 7),
+        "partners_total": _count_partners(),
+        "programmes_active": _count_active_programmes(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Home-screen charts (US-S24-HOME-CHARTS)
+#
+# One aggregator, for the same reason compute_operator_kpis is one: the
+# home screen mounts cold on every navigation, and five separate
+# dashboard endpoints would be five round-trips plus five
+# `dashboard_read` audit events for a single page view.
+#
+# Separate from compute_operator_kpis, though, because these are heavier
+# aggregates over Member and DqaResult. The KPI strip must paint
+# immediately; the charts can arrive a beat later rather than holding
+# the numbers hostage to a join.
+#
+# Every series follows the sub-region drill-down, like the KPIs do, and
+# each carries its own `region` echo so the rendered chart can state the
+# scope it is showing. A printed chart that silently covers one
+# sub-region while reading as national is the same class of error as the
+# duplicated region filter — it is wrong and it looks authoritative.
+
+
+def _band_series(counts: dict[str, int]) -> list[dict]:
+    """Every band, in policy order, zero-filled.
+
+    Omitting a band with no households would quietly redraw the chart's
+    axis between one wave and the next, so "no households are in extreme
+    poverty" and "we stopped measuring extreme poverty" would look
+    identical. Bands present in the data but absent from the vocabulary
+    are appended rather than dropped — an unrecognised value is a fact,
+    not something to hide.
+    """
+    from apps.pmt.models import Band
+
+    series = [
+        {"key": band.value,
+         "label": band.value.replace("_", " ").capitalize(),
+         "count": counts.get(band.value, 0)}
+        for band in Band
+    ]
+    known = {band.value for band in Band}
+    for key, n in sorted(counts.items()):
+        if key and key not in known:
+            series.append({"key": key, "label": key, "count": n})
+    unscored = counts.get("", 0) + counts.get(None, 0)
+    if unscored:
+        series.append({"key": "", "label": "Not scored", "count": unscored})
+    return series
+
+
+def _scoped_households(user, *, region: str | None):
+    """Households visible to `user`, narrowed to `region` when given.
+    Returns None when the drill-down is outside the caller's scope —
+    callers render empty rather than raising."""
+    codes = _scoped_codes(user)
+    if region and codes is not None and region not in codes:
+        return None
+    qs = Household.objects.filter(scope_q_for_field(user, "sub_region_code"))
+    if region:
+        qs = qs.filter(sub_region_code=region)
+    return qs
+
+
+def households_by_pmt_band(user, *, region: str | None = None) -> list[dict]:
+    """Scored households grouped by their current vulnerability band."""
+    from django.db.models import Count
+
+    scoped = _scoped_households(user, region=region)
+    if scoped is None:
+        return _band_series({})
+    rows = (
+        scoped.values("current_vulnerability_band")
+        .annotate(n=Count("id")).order_by()
+    )
+    return _band_series({r["current_vulnerability_band"]: r["n"] for r in rows})
+
+
+def members_by_pmt_band(user, *, region: str | None = None) -> list[dict]:
+    """Members grouped by THEIR HOUSEHOLD'S band.
+
+    A member has no band of their own — the PMT scores a household. This
+    answers "how many people are in households at each band", which is
+    the figure that matters for programme sizing and is not derivable
+    from the household chart, because household size varies sharply by
+    band.
+    """
+    from django.db.models import Count
+
+    from apps.data_management.models import Member
+
+    codes = _scoped_codes(user)
+    if region and codes is not None and region not in codes:
+        return _band_series({})
+    qs = Member.objects.filter(
+        scope_q_for_field(user, "sub_region_code"), is_deleted=False,
+    )
+    if region:
+        qs = qs.filter(sub_region_code=region)
+    rows = (
+        qs.values("household__current_vulnerability_band")
+        .annotate(n=Count("id")).order_by()
+    )
+    return _band_series(
+        {r["household__current_vulnerability_band"]: r["n"] for r in rows},
+    )
+
+
+def dih_backlog_by_reason(user, *, region: str | None = None) -> list[dict]:
+    """Staged records held before promotion, by what is holding them.
+
+    The size of the quality backlog and its composition in one series:
+    a queue of 40 held on DQA failures is a different day's work from 40
+    held awaiting NIRA.
+    """
+    from apps.ingestion_hub.models import StageRecordState
+
+    reasons = [
+        (StageRecordState.QUALITY_FAILED, "DQA failure"),
+        (StageRecordState.DDUP_REVIEW, "Duplicate review"),
+        (StageRecordState.IDV_PENDING, "Identity (NIRA)"),
+        (StageRecordState.PENDING_PROMOTION, "Awaiting promotion"),
+    ]
+    return [
+        {"key": str(state), "label": label,
+         "count": _count_pending_stages(user, state, region=region)}
+        for state, label in reasons
+    ]
+
+
+def dqa_failures_by_rule(
+    user, *, region: str | None = None, limit: int = 8, days: int = 30,
+) -> list[dict]:
+    """Which rules are failing most — where the quality problem is.
+
+    Only failures are persisted (passes would grow the table at intake
+    rate x every active rule), so this is a count of failures, not a
+    failure RATE. Labelled as such on the chart; a bar here does not
+    mean "this rule fails often", it means "this rule produced this many
+    findings".
+    """
+    from django.db.models import Count
+    from django.db.models.functions import Substr
+    from django.utils import timezone
+
+    from apps.dqa.models import DqaResult
+
+    since = timezone.now() - timedelta(days=days)
+    base = (
+        DqaResult.objects
+        .filter(passed=False, executed_at__gte=since)
+        .select_related("rule")
+    )
+
+    hh_ids = _scoped_household_ids(user, region=region)
+    if hh_ids is not None:
+        if not hh_ids:
+            return []
+        # DqaResult.record_id is '<household_id>' for a household rule
+        # and '<household_id>:<line>' for a member rule, and carries no
+        # FK to scope through. Every externally visible id is a
+        # 26-character ULID (ADR-0002), so the household is the first 26
+        # characters in both shapes.
+        #
+        # Deliberately NOT reusing reporting.views._dqa_record_id_scope_q,
+        # which ORs one `record_id__startswith` per household id — fine
+        # over a few hundred households, a query with millions of OR
+        # clauses at national load.
+        base = base.annotate(_hh=Substr("record_id", 1, 26)).filter(_hh__in=hh_ids)
+
+    rows = (
+        base.values("rule__rule_id", "rule__severity")
+        .annotate(n=Count("id"))
+        .order_by("-n")[:limit]
+    )
+    return [
+        {"key": r["rule__rule_id"] or "(unknown rule)",
+         "label": r["rule__rule_id"] or "(unknown rule)",
+         "severity": r["rule__severity"] or "",
+         "count": r["n"]}
+        for r in rows
+    ]
+
+
+def enrolments_by_programme(user, *, region: str | None = None) -> list[dict]:
+    """Active enrolments per programme.
+
+    ProgrammeEnrolment is keyed on household, so this counts HOUSEHOLDS
+    enrolled, not people. The chart says so: conflating the two would
+    overstate every programme's reach by a factor of household size.
+    """
+    from django.db.models import Count
+
+    from apps.referral.models import ProgrammeEnrolment
+
+    codes = _scoped_codes(user)
+    if region and codes is not None and region not in codes:
+        return []
+    qs = ProgrammeEnrolment.objects.filter(
+        scope_q_for_field(user, "household__sub_region_code"),
+        status="active",
+    )
+    if region:
+        qs = qs.filter(household__sub_region_code=region)
+    rows = (
+        qs.values("programme__code", "programme__name")
+        .annotate(n=Count("id")).order_by("-n")
+    )
+    return [
+        {"key": r["programme__code"] or "",
+         "label": r["programme__name"] or r["programme__code"] or "(unnamed)",
+         "count": r["n"]}
+        for r in rows
+    ]
+
+
+def compute_home_charts(user, *, region: str | None = None) -> dict:
+    """Every home-screen chart series in one payload."""
+    return {
+        "region": region or "",
+        "households_by_pmt_band": households_by_pmt_band(user, region=region),
+        "members_by_pmt_band": members_by_pmt_band(user, region=region),
+        "dih_backlog_by_reason": dih_backlog_by_reason(user, region=region),
+        "dqa_failures_by_rule": dqa_failures_by_rule(user, region=region),
+        "enrolments_by_programme": enrolments_by_programme(user, region=region),
     }
 
 
@@ -247,6 +491,32 @@ class OperatorKpisView(APIView):
                 f"households_total={payload['households_total']} "
                 f"region={region or 'all'}"
             ),
+            ip_address=_client_ip(request),
+            user_agent=request.META.get("HTTP_USER_AGENT", ""),
+        )
+        return Response(payload)
+
+
+@extend_schema(
+    tags=["rpt"],
+    summary="Home-screen chart series in one round-trip",
+    responses={200: OpenApiResponse(description="Chart series keyed by chart name")},
+)
+class HomeChartsView(APIView):
+    """Five aggregate series for the home screen's chart band.
+
+    Split from OperatorKpisView on purpose: these are heavier joins over
+    Member and DqaResult, and the KPI strip should not wait on them.
+    One AuditEvent for the set, matching the KPI endpoint's rationale.
+    """
+
+    def get(self, request):
+        region = (request.query_params.get("region") or "").strip() or None
+        payload = compute_home_charts(request.user, region=region)
+        emit_audit(
+            "dashboard_read", "rpt_dashboard", "home_charts",
+            actor=getattr(request.user, "username", "") or "anonymous",
+            reason=f"region={region or 'all'}",
             ip_address=_client_ip(request),
             user_agent=request.META.get("HTTP_USER_AGENT", ""),
         )

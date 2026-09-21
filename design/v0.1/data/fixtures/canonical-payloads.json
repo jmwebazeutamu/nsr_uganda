@@ -1,0 +1,575 @@
+{
+ "kobo": {
+  "_fixture": "kobo",
+  "_source_keys": {
+   "kobo_enumeration_area": "EA-026",
+   "kobo_form_id": "aRpVGbQLmPbVo3e4XUjSGe",
+   "kobo_household_number": "HH-00001",
+   "kobo_region_name": "northern",
+   "kobo_submission_id": "753454107",
+   "kobo_submission_time": "2026-05-15T15:37:09",
+   "kobo_submitted_by": "redacted",
+   "kobo_subregion_name": "west_nile",
+   "kobo_uuid": "redacted",
+   "kobo_village_name": "redacted"
+  },
+  "address_narrative": "OMBIA-BURA, YIVU",
+  "agriculture": {
+   "ag_purpose": "",
+   "crop_production": "5",
+   "crops_grown": "",
+   "land_ownership": "1",
+   "livestock": "5",
+   "livestock_counts": ""
+  },
+  "food_security": {
+   "fies": {
+    "i1_fies": "2",
+    "i2_fies": "2",
+    "i3_fies": "2",
+    "i4_fies": "2",
+    "i5_fies": "8",
+    "i6_fies": "9",
+    "i7_fies": "9",
+    "i8_fies": "2"
+   },
+   "food_groups": {
+    "condiments": {
+     "days": 1,
+     "source_primary": "aid",
+     "source_secondary": "purchase",
+     "yesterday": "2"
+    },
+    "fruits": {
+     "days": 3,
+     "source_primary": "purchase",
+     "source_secondary": "",
+     "yesterday": "2"
+    },
+    "meat_fish_eggs": {
+     "days": 3,
+     "source_primary": "own_production",
+     "source_secondary": "",
+     "yesterday": "1"
+    },
+    "milk_dairy": {
+     "days": 0,
+     "source_primary": "",
+     "source_secondary": "",
+     "yesterday": ""
+    },
+    "oils_fats": {
+     "days": 7,
+     "source_primary": "purchase",
+     "source_secondary": "",
+     "yesterday": "2"
+    },
+    "pulses_nuts": {
+     "days": 3,
+     "source_primary": "aid",
+     "source_secondary": "",
+     "yesterday": "1"
+    },
+    "staples": {
+     "days": 7,
+     "source_primary": "purchase",
+     "source_secondary": "",
+     "yesterday": "1"
+    },
+    "sugar_sweets": {
+     "days": 1,
+     "source_primary": "gift",
+     "source_secondary": "aid",
+     "yesterday": "1"
+    },
+    "vegetables": {
+     "days": 1,
+     "source_primary": "gift",
+     "source_secondary": "",
+     "yesterday": "1"
+    }
+   }
+  },
+  "geographic": {
+   "county": "320.02",
+   "district": "320",
+   "parish": "320.02.11.08",
+   "region": "R-NORTHERN",
+   "sub_county": "320.02.11",
+   "sub_region": "SR-WEST_NILE-NORTHERN",
+   "village": "320.02.11.08.NAMATA-VILLAGE"
+  },
+  "gps_accuracy_m": 9.0,
+  "gps_lat": 0.583107,
+  "gps_lng": 29.747704,
+  "housing": {
+   "asset_counts": {
+    "bed": null,
+    "bicycle": null,
+    "mattress": 2,
+    "phone": null,
+    "solar": null,
+    "tv": 8
+   },
+   "assets_owned": "livestock radio mattress motorcycle tv",
+   "cooking_fuel": "09",
+   "dwelling_type": "12",
+   "floor_material": "11",
+   "lighting_source": "01",
+   "livelihood_source": "13",
+   "roof_material": "18",
+   "rooms_sleeping": 0,
+   "rooms_total": 7,
+   "share_toilet": "2",
+   "share_toilet_households": null,
+   "tenure": "13",
+   "toilet_type": "10",
+   "wall_material": "16",
+   "waste_disposal": "12",
+   "water_source": "22"
+  },
+  "interview": {
+   "consent": "1",
+   "deviceid": "redacted",
+   "end": "2026-05-15T06:39:43",
+   "head_name": "redacted",
+   "hh_size": 5,
+   "interview_result": "1",
+   "interviewer": "redacted",
+   "respondent_name": "redacted",
+   "respondent_phone": "redacted",
+   "start": "2026-05-15T05:44:43",
+   "supervisor": "redacted"
+  },
+  "members": [
+   {
+    "_source_keys": {
+     "c11_residency_status": "03",
+     "c8_nin_status": "3",
+     "kobo_member_index": "1"
+    },
+    "age_years": 36,
+    "date_of_birth": "",
+    "education": {
+     "currently_attending": "",
+     "ever_school": "1",
+     "highest_grade": "13",
+     "literacy": "4",
+     "never_school_reason": ""
+    },
+    "employment": {
+     "currently_benefiting": "2",
+     "gov_program_beneficiary": "1",
+     "made_savings": "1",
+     "main_job": "02",
+     "not_working_reason": "",
+     "programmes": "B",
+     "savings_place": "8",
+     "work_frequency": "05",
+     "work_sector": "20",
+     "work_status": "06"
+    },
+    "first_name": "Given1",
+    "health": {
+     "chronic_illness": "2",
+     "communicating": "04",
+     "hearing": "01",
+     "remembering": "02",
+     "seeing": "01",
+     "self_care": "01",
+     "walking": "04"
+    },
+    "is_head": true,
+    "line_number": 1,
+    "nin": "",
+    "other_name": "",
+    "relationship_to_head": "",
+    "sex": "F",
+    "surname": "Surname1",
+    "telephone_1": "",
+    "telephone_2": ""
+   },
+   {
+    "_source_keys": {
+     "c11_residency_status": "02",
+     "c8_nin_status": "3",
+     "kobo_member_index": "2"
+    },
+    "age_years": 2,
+    "date_of_birth": "",
+    "education": {
+     "currently_attending": "",
+     "ever_school": "2",
+     "highest_grade": "",
+     "literacy": "",
+     "never_school_reason": "02"
+    },
+    "employment": {
+     "currently_benefiting": "",
+     "gov_program_beneficiary": "",
+     "made_savings": "",
+     "main_job": "",
+     "not_working_reason": "",
+     "programmes": "",
+     "savings_place": "",
+     "work_frequency": "",
+     "work_sector": "",
+     "work_status": ""
+    },
+    "first_name": "Given2",
+    "health": {
+     "chronic_illness": "8",
+     "communicating": "01",
+     "hearing": "01",
+     "remembering": "01",
+     "seeing": "01",
+     "self_care": "01",
+     "walking": "02"
+    },
+    "is_head": false,
+    "line_number": 2,
+    "nin": "",
+    "other_name": "",
+    "relationship_to_head": "04",
+    "sex": "M",
+    "surname": "Surname2",
+    "telephone_1": "",
+    "telephone_2": ""
+   },
+   {
+    "_source_keys": {
+     "c11_residency_status": "03",
+     "c8_nin_status": "1",
+     "kobo_member_index": "3"
+    },
+    "age_years": 10,
+    "date_of_birth": "",
+    "education": {
+     "currently_attending": "2",
+     "ever_school": "1",
+     "highest_grade": "03",
+     "literacy": "",
+     "never_school_reason": ""
+    },
+    "employment": {
+     "currently_benefiting": "",
+     "gov_program_beneficiary": "2",
+     "made_savings": "1",
+     "main_job": "05",
+     "not_working_reason": "04",
+     "programmes": "",
+     "savings_place": "8",
+     "work_frequency": "",
+     "work_sector": "",
+     "work_status": ""
+    },
+    "first_name": "Given3",
+    "health": {
+     "chronic_illness": "8",
+     "communicating": "01",
+     "hearing": "02",
+     "remembering": "04",
+     "seeing": "01",
+     "self_care": "02",
+     "walking": "03"
+    },
+    "is_head": false,
+    "line_number": 3,
+    "nin": "",
+    "other_name": "",
+    "relationship_to_head": "02",
+    "sex": "M",
+    "surname": "Surname3",
+    "telephone_1": "",
+    "telephone_2": ""
+   },
+   {
+    "_source_keys": {
+     "c11_residency_status": "05",
+     "c8_nin_status": "1",
+     "kobo_member_index": "4"
+    },
+    "age_years": 4,
+    "date_of_birth": "",
+    "education": {
+     "currently_attending": "1",
+     "ever_school": "1",
+     "highest_grade": "13",
+     "literacy": "",
+     "never_school_reason": ""
+    },
+    "employment": {
+     "currently_benefiting": "",
+     "gov_program_beneficiary": "",
+     "made_savings": "",
+     "main_job": "",
+     "not_working_reason": "",
+     "programmes": "",
+     "savings_place": "",
+     "work_frequency": "",
+     "work_sector": "",
+     "work_status": ""
+    },
+    "first_name": "Given4",
+    "health": {
+     "chronic_illness": "2",
+     "communicating": "04",
+     "hearing": "01",
+     "remembering": "01",
+     "seeing": "01",
+     "self_care": "01",
+     "walking": "01"
+    },
+    "is_head": false,
+    "line_number": 4,
+    "nin": "",
+    "other_name": "",
+    "relationship_to_head": "10",
+    "sex": "M",
+    "surname": "Surname4",
+    "telephone_1": "",
+    "telephone_2": ""
+   },
+   {
+    "_source_keys": {
+     "c11_residency_status": "05",
+     "c8_nin_status": "1",
+     "kobo_member_index": "5"
+    },
+    "age_years": 2,
+    "date_of_birth": "",
+    "education": {
+     "currently_attending": "",
+     "ever_school": "2",
+     "highest_grade": "",
+     "literacy": "",
+     "never_school_reason": "08"
+    },
+    "employment": {
+     "currently_benefiting": "",
+     "gov_program_beneficiary": "",
+     "made_savings": "",
+     "main_job": "",
+     "not_working_reason": "",
+     "programmes": "",
+     "savings_place": "",
+     "work_frequency": "",
+     "work_sector": "",
+     "work_status": ""
+    },
+    "first_name": "Given5",
+    "health": {
+     "chronic_illness": "2",
+     "communicating": "03",
+     "hearing": "01",
+     "remembering": "03",
+     "seeing": "01",
+     "self_care": "01",
+     "walking": "01"
+    },
+    "is_head": false,
+    "line_number": 5,
+    "nin": "",
+    "other_name": "",
+    "relationship_to_head": "04",
+    "sex": "F",
+    "surname": "Surname5",
+    "telephone_1": "",
+    "telephone_2": ""
+   }
+  ],
+  "shocks_coping": {
+   "coping": {
+    "l01a_casual_labor": "4",
+    "l01b_sell_assets": "3",
+    "l01c_borrow_money": "4",
+    "l01d_assistance_friends": "4",
+    "l01e_assistance_agencies": "1",
+    "l01f_remittances": "2",
+    "l01g_sand_gravel": "2",
+    "l01h_relocate": "4",
+    "l01i_begging": "4",
+    "l02a_less_preferred_food": "3",
+    "l02b_borrow_food_money": "4",
+    "l02c_reduce_portions": "2",
+    "l02d_reduce_meals": "1",
+    "l02e_restrict_adults": "4",
+    "l02f_day_without_eating": "3",
+    "l02g_wild_food": "1",
+    "l02h_merge_households": "4",
+    "l02i_begging": "3"
+   },
+   "shock_affected": "2"
+  },
+  "urban_rural": "urban"
+ },
+ "wizard": {
+  "_fixture": "wizard",
+  "consent": "yes",
+  "consent_block": {
+   "COMMUNICATIONS_SMS": "",
+   "COMMUNICATIONS_USSD": "",
+   "ELIGIBILITY": "GRANTED",
+   "GRIEVANCE_CONTACT": "GRANTED",
+   "PAYMENTS": "GRANTED",
+   "REFERRAL": "GRANTED",
+   "REGISTRATION": "GRANTED",
+   "RESEARCH": "",
+   "STATISTICS": "GRANTED",
+   "_method": "DIGITAL",
+   "_refusal_reason": "",
+   "_witness_name": "",
+   "_witness_role": ""
+  },
+  "education": {
+   "1": {
+    "currently_attending": "2",
+    "ever_attended": "1",
+    "highest_grade": "07",
+    "literacy_status": "1",
+    "why_stopped": "1"
+   }
+  },
+  "employment": {
+   "1": {
+    "employment_status": "2",
+    "made_savings": "1",
+    "main_activity_last_30d": "2",
+    "savings_location": "4",
+    "sector": "1"
+   }
+  },
+  "food_shocks": {
+   "coping": [
+    {
+     "category": "food",
+     "frequency": "4",
+     "strategy_type": "reduced_meals"
+    }
+   ],
+   "food_consumption": {
+    "condiments_days": 5,
+    "dairy_days": 0,
+    "fruits_days": 1,
+    "meat_days": 1,
+    "oils_days": 2,
+    "pulses_days": 3,
+    "staples_days": 7,
+    "staples_source": "1",
+    "sugar_days": 1,
+    "vegetables_days": 4
+   },
+   "food_security": {
+    "ate_less": "2",
+    "hungry_no_eat": "2",
+    "limited_variety": "1",
+    "ran_out_food": "2",
+    "skipped_meal": "2",
+    "unhealthy_food": "1",
+    "whole_day_no_eat": "2",
+    "worried_food": "1"
+   },
+   "shocks": [
+    {
+     "event_date": "2026-02-15",
+     "severity": "3",
+     "shock_type": "01"
+    }
+   ]
+  },
+  "geographic": {
+   "county": "304.1",
+   "district": "304",
+   "parish": "304.1.01.01",
+   "region": "R-NORTHERN",
+   "sub_county": "304.1.01",
+   "sub_region": "SR-ACHOLI-NORTHERN",
+   "subcounty": "304.1.01",
+   "subregion": "SR-ACHOLI-NORTHERN",
+   "village": ""
+  },
+  "gps_accuracy_m": "6",
+  "gps_lat": "2.7746",
+  "gps_lng": "32.2990",
+  "health": {
+   "1": {
+    "disability": {
+     "communication": "01",
+     "hearing": "01",
+     "memory": "01",
+     "seeing": "01",
+     "selfcare": "01",
+     "walking": "01"
+    },
+    "health": {
+     "chronic_illness_flag": "2"
+    }
+   }
+  },
+  "housing": {
+   "assets": [
+    {
+     "asset_type": "phone",
+     "count": 2
+    }
+   ],
+   "crops": [
+    {
+     "crop_name": "sorghum",
+     "rank_order": 1
+    }
+   ],
+   "dwelling": {
+    "dwelling_type": "5",
+    "floor_material": "3",
+    "roof_material": "1",
+    "sleeping_rooms": 2,
+    "tenure": "1",
+    "total_rooms": 3,
+    "wall_material": "17"
+   },
+   "livelihood": {
+    "agricultural_purpose": "1",
+    "land_hectares": 1.2,
+    "land_ownership": "1",
+    "land_title": "1",
+    "main_livelihood": "1"
+   },
+   "livestock": [
+    {
+     "count": 4,
+     "livestock_type": "goat"
+    }
+   ],
+   "utilities": {
+    "cooking_fuel": "1",
+    "drinking_water_source": "3",
+    "lighting_energy": "2",
+    "toilet_facility": "1",
+    "waste_disposal": "2"
+   }
+  },
+  "members": [
+   {
+    "age_years": 47,
+    "birth_certificate_status": "1",
+    "date_of_birth": "",
+    "first_name": "Given1",
+    "line_number": 1,
+    "marital_status": "19",
+    "nationality": "1",
+    "nin_last4": "",
+    "nin_status": "1",
+    "other_name": "",
+    "relationship_to_head": "01",
+    "residency_status": "01",
+    "sex": "2",
+    "surname": "Surname1",
+    "telephone_1": "",
+    "telephone_2": ""
+   }
+  ],
+  "source_channel": "parish_walkin",
+  "urban_rural": "2"
+ }
+}

@@ -533,6 +533,38 @@ button:focus-visible { outline: 0; box-shadow: var(--focus-ring); }
 }
 .field-row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-4) var(--space-5); }
 
+/* The capture wizard's three columns: section rail · form · helper rail.
+ *
+ * This was a fixed `220px 1fr 320px`. `1fr` is minmax(auto, 1fr), and
+ * every <select> inside carries `min-width: 0`, so the form column was
+ * free to collapse: at a 1104px window it settled around 250px and the
+ * selects truncated to "— S" and "Aswa Cou" — the operator could not
+ * read back the answer they had just given. Meanwhile the helper rail
+ * kept its full 320px and the left half of the screen sat empty.
+ *
+ * The form column now has a floor. Below it the helper rail drops away
+ * first (it is advisory), then the section rail (the stepper across the
+ * top navigates the same sections), so the form keeps the width. */
+.capture-grid {
+  display: grid;
+  grid-template-columns: 220px minmax(520px, 1fr) 320px;
+  gap: var(--space-5);
+  margin-top: var(--space-5);
+}
+@media (max-width: 1320px) {
+  .capture-grid { grid-template-columns: 220px minmax(0, 1fr); }
+  .capture-grid > .capture-helper-rail { display: none; }
+}
+@media (max-width: 900px) {
+  .capture-grid { grid-template-columns: minmax(0, 1fr); }
+  .capture-grid > .capture-section-rail { display: none; }
+}
+/* A select whose text does not fit tells the operator so, rather than
+ * silently clipping it. */
+.capture-grid select.field-select,
+.capture-grid select.field-input { text-overflow: ellipsis; }
+
+
 .input-affix {
   display: flex; align-items: center;
   height: 34px;
@@ -885,3 +917,70 @@ button:focus-visible { outline: 0; box-shadow: var(--focus-ring); }
 }
 .topbar-switch:hover { background: rgba(255,255,255,0.18); }
 .topbar-switch:focus-visible { outline: 2px solid #FCDC04; outline-offset: 2px; }
+
+/* ---- Home chart band ------------------------------------------------
+   Bars are CSS fills, so they vanish from a print by default: browsers
+   drop background colours unless told otherwise. This surface is
+   explicitly meant to be printed and handed to someone (the home screen
+   already has an Export brief button and a @media print rule), and a
+   printed chart of four empty outlines is worse than no chart. */
+.chart-bar-track {
+  height: 18px;
+  background: var(--chart-track);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.chart-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--chart-bar);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+.chart-row {
+  display: grid;
+  grid-template-columns: minmax(96px, 38%) 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+.chart-row + .chart-row { margin-top: 8px; }
+.chart-row-label {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chart-row-value { font-size: 13px; text-align: right; white-space: nowrap; }
+
+@media (max-width: 900px) {
+  .chart-row { grid-template-columns: minmax(80px, 46%) 1fr auto; }
+}
+
+/* ---- Household detailed review (US-S24-DIH-REVIEW) -------------------
+   Label · value · state. The third column is narrow on purpose: it
+   carries read-only and edited markers, which must be visible without
+   competing with the answer itself. */
+.review-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 32%) 1fr minmax(88px, auto);
+  gap: 10px;
+  align-items: center;
+  padding: 5px 6px;
+  border-radius: 4px;
+}
+.review-row + .review-row { border-top: 1px solid var(--neutral-100); }
+.review-row-label { font-size: 12.5px; color: var(--neutral-700); }
+.review-row-value { font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.review-row-value .field-input { height: 28px; font-size: 12.5px; }
+.review-row-flag { text-align: right; white-space: nowrap; }
+
+@media (max-width: 900px) {
+  .review-row { grid-template-columns: minmax(110px, 40%) 1fr auto; }
+}
+
+/* The review is a long document. Printing it is a legitimate way to
+   take a household to a supervisor, so the sections must not be
+   clipped mid-row. */
+@media print {
+  .review-row { break-inside: avoid; }
+}

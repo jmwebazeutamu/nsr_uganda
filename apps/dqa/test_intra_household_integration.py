@@ -202,6 +202,15 @@ class TestPlantedViolationsSmoke:
         DqaRule.objects.filter(rule_id="AC-DUPLICATE-MEMBER").update(
             status=RuleStatus.RETIRED,
         )
+        # Same reason: the planted payload carries no per-member health
+        # or education answers, so AC-MEMBER-DETAIL-REQUIRED blocks it
+        # too, and this case needs exactly one overridable finding to
+        # demonstrate the override path. Retired here, not softened —
+        # AC-MEMBER-DETAIL-REQUIRED is BLOCK by design and is exercised
+        # in apps/dqa/test_per_member_required.py.
+        DqaRule.objects.filter(rule_id="AC-MEMBER-DETAIL-REQUIRED").update(
+            status=RuleStatus.RETIRED,
+        )
         before = AuditEvent.objects.filter(
             action="dqa.household.override",
         ).count()

@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, KPI, PageHeader */
+/* global React, Icon, Chip, KPI, PageHeader, HomeChartBand */
 // NSR MIS — Home (role-aware dashboard) + Kit page
 
 const { useState: useStateHome, useEffect: useEffectHome } = React;
@@ -404,7 +404,13 @@ const HomeScreen = ({ role, onNavigate, operatorName }) => {
     }
     return {
       ...q,
-      items: live.items,
+      // `items` is read as `q.items.length` three times below, so a
+      // queue entry without one takes the whole home screen down with
+      // "Cannot read properties of undefined (reading 'length')" — the
+      // error boundary's SCREEN CRASHED card, on the first thing an
+      // operator sees. The setter always supplies an array today; this
+      // is the guard that stops a future writer having to know that.
+      items: Array.isArray(live.items) ? live.items : [],
       count: live.total,
       _live: true,
       _target: HOME_QUEUE_LIVE_MAP[q.title]?.target || "home",
@@ -501,54 +507,6 @@ const HomeScreen = ({ role, onNavigate, operatorName }) => {
         <DsaWorkspaceTile onNavigate={onNavigate}/>
       )}
 
-      <div className="grid grid-2 mt-5">
-        {queues.map((q, i) => {
-          const target = q._target || "dih";
-          return (
-            <div className="card" key={i}>
-              <div className="card-header">
-                <div className="row gap-3">
-                  <div style={{width:32, height:32, borderRadius:6, background:'var(--primary-100)', color:'var(--primary-900)', display:'grid', placeItems:'center'}}>
-                    <Icon name={q.icon} size={18}/>
-                  </div>
-                  <div>
-                    <h3 className="t-h3" style={{margin:0}}>
-                      {q.title}
-                      {q._live && <span className="t-cap" style={{marginLeft:8, color:"var(--accent-eligibility)"}}>· live</span>}
-                    </h3>
-                    <div className="t-cap">{q.count} {q.items.length === 1 ? "open" : "open"}</div>
-                  </div>
-                </div>
-                <button className="btn btn-ghost btn-sm" onClick={() => onNavigate?.(target)}>
-                  Open queue <Icon name="chevronRight" size={14}/>
-                </button>
-              </div>
-              <div>
-                {q.items.length === 0 && (
-                  <div className="t-bodysm muted" style={{padding:"24px 20px", textAlign:"center"}}>
-                    Queue empty.
-                  </div>
-                )}
-                {q.items.map((item, j) => (
-                  <div key={j} className="row gap-3" style={{padding:'12px 20px', borderBottom: j < q.items.length - 1 ? '1px solid var(--neutral-200)' : 'none', cursor:'pointer'}}
-                       onClick={() => onNavigate?.(target)}>
-                    <div style={{minWidth:0, flex:1}}>
-                      <div className="t-mono" style={{color:'var(--neutral-700)', fontSize:12, marginBottom:2}}>{item.id}</div>
-                      <div style={{fontWeight:500}}>{item.who}</div>
-                      <div className="t-bodysm muted" style={{marginTop:2}}>{item.note}</div>
-                    </div>
-                    <div className="col" style={{alignItems:'flex-end', gap:6}}>
-                      <Chip>{item.chip}</Chip>
-                      <span className="t-cap">{item.age}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
       <div className="card mt-5">
         <div className="card-header">
           <h3 className="t-h3" style={{margin:0}}>Across the registry</h3>
@@ -561,7 +519,10 @@ const HomeScreen = ({ role, onNavigate, operatorName }) => {
             or after it failed. It also called .toLocaleString() straight
             off the payload, so a response missing one field took the
             whole home screen down with it. */}
-        <div className="grid grid-4" style={{padding:20}}>
+        {/* Six stats now, so three-up rather than four: at four columns
+            the sixth wraps alone onto a second row and reads as an
+            afterthought. */}
+        <div className="grid grid-3" style={{padding:20}}>
           <RegistryStat
             label="Total households (Registered)"
             value={_homeNum(liveKpis, "households_total")}
@@ -579,6 +540,14 @@ const HomeScreen = ({ role, onNavigate, operatorName }) => {
             value={_homeNum(liveKpis, "households_with_pmt")}
             sub={liveKpis ? "ready for programme eligibility" : "not loaded"}/>
           <RegistryStat
+            label="Registered partners"
+            value={_homeNum(liveKpis, "partners_total")}
+            sub={liveKpis ? "national — a partner is not in a sub-region" : "not loaded"}/>
+          <RegistryStat
+            label="Active programmes"
+            value={_homeNum(liveKpis, "programmes_active")}
+            sub={liveKpis ? "accepting enrolments" : "not loaded"}/>
+          <RegistryStat
             label="Operator queues"
             value={liveKpis
               ? `UPD ${_homeNum(liveKpis, "change_requests_pending")}`
@@ -588,6 +557,66 @@ const HomeScreen = ({ role, onNavigate, operatorName }) => {
               ? `DRS ${_homeNum(liveKpis, "data_requests_pending_approval")} pending`
               : "not loaded"}/>
         </div>
+      </div>
+
+      {/* Chart band (US-S24-HOME-CHARTS). Sits between the registry
+          stats and the queues: the stats say how big the registry is,
+          the charts say what shape it is, the queues say what to do
+          today. Follows the sub-region drill-down like the KPIs do, and
+          every card states its own scope so a printed copy cannot be
+          read as national when it is not. */}
+      {typeof HomeChartBand === "function" && (
+        <HomeChartBand
+          region={region}
+          regionLabel={(subRegions.find(s => s.code === region) || {}).name}/>
+      )}
+
+      <div className="grid grid-2 mt-5">
+        {queues.map((q, i) => {
+          const target = q._target || "dih";
+          return (
+            <div className="card" key={i}>
+              <div className="card-header">
+                <div className="row gap-3">
+                  <div style={{width:32, height:32, borderRadius:6, background:'var(--primary-100)', color:'var(--primary-900)', display:'grid', placeItems:'center'}}>
+                    <Icon name={q.icon} size={18}/>
+                  </div>
+                  <div>
+                    <h3 className="t-h3" style={{margin:0}}>
+                      {q.title}
+                      {q._live && <span className="t-cap" style={{marginLeft:8, color:"var(--accent-eligibility)"}}>· live</span>}
+                    </h3>
+                    <div className="t-cap">{(q.items || []).length} open</div>
+                  </div>
+                </div>
+                <button className="btn btn-ghost btn-sm" onClick={() => onNavigate?.(target)}>
+                  Open queue <Icon name="chevronRight" size={14}/>
+                </button>
+              </div>
+              <div>
+                {(q.items || []).length === 0 && (
+                  <div className="t-bodysm muted" style={{padding:"24px 20px", textAlign:"center"}}>
+                    Queue empty.
+                  </div>
+                )}
+                {(q.items || []).map((item, j) => (
+                  <div key={j} className="row gap-3" style={{padding:'12px 20px', borderBottom: j < (q.items || []).length - 1 ? '1px solid var(--neutral-200)' : 'none', cursor:'pointer'}}
+                       onClick={() => onNavigate?.(target)}>
+                    <div style={{minWidth:0, flex:1}}>
+                      <div className="t-mono" style={{color:'var(--neutral-700)', fontSize:12, marginBottom:2}}>{item.id}</div>
+                      <div style={{fontWeight:500}}>{item.who}</div>
+                      <div className="t-bodysm muted" style={{marginTop:2}}>{item.note}</div>
+                    </div>
+                    <div className="col" style={{alignItems:'flex-end', gap:6}}>
+                      <Chip>{item.chip}</Chip>
+                      <span className="t-cap">{item.age}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <div className="t-cap" style={{marginTop:24, textAlign:'center'}}>

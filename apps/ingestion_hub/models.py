@@ -277,8 +277,21 @@ class StageRecord(models.Model):
     no re-issue (per AC-DIH-PROVISIONAL-ID and SAD §4.6.3).
     """
 
+    # ONE identifier. `provisional_registry_id` defaults to `id` on save
+    # so the stage record, the Registry ID on the respondent's receipt
+    # slip, and the promoted Household row (`Household.id =
+    # provisional_registry_id`) are the same ULID end to end.
+    #
+    # They were two independent `generate_ulid()` calls until 2026-09-20,
+    # which — python-ulid being monotonic — produced two consecutive
+    # values, and the citizen's tracking number was reliably one
+    # increment off the record it was meant to track.
     id = ULIDField(primary_key=True)
-    provisional_registry_id = ULIDField(unique=True)
+    # No independent default — save() copies `id` into it. ULIDField
+    # would otherwise mint a second ULID here, which is exactly the bug.
+    # (ULIDField.deconstruct() drops `default`, so this is not a schema
+    # change and needs no migration.)
+    provisional_registry_id = ULIDField(unique=True, default="")
 
     raw_landing = models.OneToOneField(
         RawLanding, on_delete=models.PROTECT, related_name="stage_record", null=True, blank=True,
@@ -325,6 +338,14 @@ class StageRecord(models.Model):
 
     def __str__(self) -> str:
         return f"stage {self.provisional_registry_id} [{self.state}]"
+
+    def save(self, *args, **kwargs):
+        # Backstop for the one-identifier invariant above: any writer
+        # that omits provisional_registry_id inherits `id` rather than
+        # minting a second ULID from the field default.
+        if not self.provisional_registry_id:
+            self.provisional_registry_id = self.id
+        super().save(*args, **kwargs)
 
 
 # --- Decisions and quarantine ---------------------------------------------

@@ -81,6 +81,7 @@ beforeAll(async () => {
   globalThis.Toast = () => null;
   globalThis.useNavCounts = () => [{}];
   await import("../components/wide-view.jsx");
+  await import("../components/idv-outcomes.jsx");
   await import("./screens-dih.jsx");
   ({ DIHScreen } = globalThis);
 });

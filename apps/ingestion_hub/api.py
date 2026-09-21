@@ -1,3 +1,6 @@
+import logging
+
+from django.db import transaction
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
@@ -26,6 +29,7 @@ from .services import (
     process_stage_record,
     promote_stage_record,
     quarantine_stage_record,
+    record_gate_failure,
     record_promote_dqa_block,
     reject_stage_record,
     resolve_ddup_as_duplicate,
@@ -35,6 +39,8 @@ from .services import (
     submit_walk_in_capture,
     trigger_connector_pull,
 )
+
+logger = logging.getLogger(__name__)
 
 # --- Serializers -----------------------------------------------------------
 
@@ -834,7 +840,31 @@ class StageRecordViewSet(
                 })
                 skipped += 1
                 continue
-            ok, detail = action_fn(stage)
+            # One row must never take down the batch.
+            #
+            # `action_fn` catches DihError, which is the expected refusal
+            # — wrong state, self-approve, DQA block. Anything else used
+            # to escape the view entirely: the operator got a 500 with an
+            # HTML error page, the console tried to JSON.parse it, and
+            # the reported failure was "Unexpected token 'I'" rather than
+            # what actually went wrong. Meanwhile the rows that HAD
+            # succeeded before the bad one were promoted but never
+            # reported, so the queue looked untouched.
+            #
+            # Each row runs in its own savepoint so a database error
+            # rolls back that row alone and leaves the connection usable
+            # for the rest. The failure is reported in `results` beside
+            # every other outcome, which is what the results array is
+            # for.
+            try:
+                with transaction.atomic():
+                    ok, detail = action_fn(stage)
+            except Exception as exc:  # noqa: BLE001 — reported, not swallowed
+                logger.exception(
+                    "bulk action failed on stage %s", sid,
+                )
+                ok = False
+                detail = f"{type(exc).__name__}: {exc}"
             stage.refresh_from_db()
             results.append({
                 "stage_id": sid, "ok": ok,
@@ -973,13 +1003,23 @@ def walk_in_submit(request):
         return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
     # Auto-run the staging gates so a clean walk-in fast-tracks to
     # promoted, and a dirty one routes to quality_failed / ddup_review /
-    # idv_pending without an extra operator click. Failures here don't
-    # invalidate the submission — the record stays at provisional and
-    # the operator can re-run via /process/ from the DIH detail rail.
+    # idv_pending without an extra operator click.
+    #
+    # A failure here does not invalidate the submission — the record is
+    # staged and the Registry ID is issued either way — but it must not
+    # be SILENT. `except DihError: pass` left the record at `provisional`
+    # with an empty dqa_summary, and an empty summary is what the review
+    # queue renders as "clean · 0 blocking · 0 warnings". Every walk-in
+    # capture ever taken sat in the queue looking gated and passed, with
+    # no gate having run: the wizard posted `subregion`, promotion wanted
+    # `sub_region`, and the DihError went into this `pass`.
+    #
+    # Now the reason is written onto the record, so the queue shows a
+    # record whose gates did not run as exactly that.
     try:
         stage = process_stage_record(stage, actor=actor)
-    except DihError:  # noqa: PERF203 — surface as 201 with payload state
-        pass
+    except DihError as e:
+        stage = record_gate_failure(stage, actor=actor, reason=str(e))
     return Response(
         StageRecordSerializer(stage).data,
         status=status.HTTP_201_CREATED,
