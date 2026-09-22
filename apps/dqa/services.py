@@ -86,6 +86,27 @@ def approve(rule: DqaRule, *, approver: str, note: str = "",
     if not note or not note.strip():
         raise ApprovalError("approval note is required")
     before = rule.status
+
+    # Retire the version being superseded BEFORE activating this one.
+    #
+    # The order matters now that the database enforces one active version
+    # per rule: activating first would put two rows at status=active for
+    # the length of a statement, and the constraint is checked per
+    # statement, not deferred to commit. Approving any second version
+    # would fail.
+    #
+    # It is also the more honest sequence. The old version stops being
+    # the policy at the moment the new one starts being it, and both
+    # writes are in one transaction, so no evaluation can fall between
+    # them and see a rule with no active version.
+    superseded = list(
+        DqaRule.objects
+        .filter(rule_id=rule.rule_id, status=RuleStatus.ACTIVE)
+        .exclude(pk=rule.pk)
+    )
+    for old_version in superseded:
+        retire(old_version, actor=actor or approver)
+
     rule.status = RuleStatus.ACTIVE
     rule.approved_by = approver
     rule.approved_at = timezone.now()
@@ -93,25 +114,6 @@ def approve(rule: DqaRule, *, approver: str, note: str = "",
     rule.save(update_fields=[
         "status", "approved_by", "approved_at", "approval_note", "updated_at",
     ])
-    # Approving a version supersedes the one it replaces.
-    #
-    # This did not happen, so AC-MEMBER-AGE-MAX ended up with v1 and v2
-    # both ACTIVE on the dev registry. Nothing in the engine picks
-    # between them — `dqa_evaluate_all` iterates every ACTIVE rule — so
-    # both versions evaluated every member, writing two DqaResult rows
-    # per failure and reporting each finding twice. Where two versions
-    # disagree, which one "wins" is whichever the queryset yields last.
-    #
-    # Retiring here, in the same transaction, makes "approved" and
-    # "supersedes" one act, and leaves the retirement in the audit
-    # chain rather than implying the old version simply vanished.
-    superseded = (
-        DqaRule.objects
-        .filter(rule_id=rule.rule_id, status=RuleStatus.ACTIVE)
-        .exclude(pk=rule.pk)
-    )
-    for old_version in superseded:
-        retire(old_version, actor=actor or approver)
     _emit(
         rule, action="dqa.rule_version.approved",
         actor=actor or approver, before=before, after=rule.status,
