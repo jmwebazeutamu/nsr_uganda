@@ -220,6 +220,27 @@ SHOCKS = {
     "k02_livelihood_affected": ["livelihood_affected"],
 }
 
+# Section K asks the shock questions once per livelihood: K03 is "main
+# shock affecting crops / livestock / labour / other" and K04 is the
+# severity of that shock. The question name carries the livelihood, and
+# the `shock_livelihood` ChoiceList codes it.
+#
+# That correspondence is not derivable from either side — "labour_
+# employment" in the question name is "03 Labour/employment" in the code
+# frame — so it is declared here, once, next to the rest of the
+# instrument mapping. A contract test checks these codes still match the
+# active shock_livelihood list, so a code-frame change fails a test
+# rather than silently mismapping every shock in the country.
+#
+# (livelihood code, the infix in the K03/K04 question names)
+SHOCK_LIVELIHOODS = (
+    ("01", "crops"),
+    ("02", "livestock"),
+    ("03", "labour_employment"),
+    ("04", "other"),
+)
+SHOCK_LIVELIHOOD_LIST = "shock_livelihood"
+
 # Every L question is one coping strategy on the same frequency scale.
 # Kobo keys each by question name; the wizard emits rows of
 # {strategy_type, frequency}.
@@ -255,6 +276,7 @@ REPEAT_COLUMNS = {
     "strategy_type": ("Coping strategy", None),
     "frequency": ("How often", "coping_frequency"),
     "asset_type": ("Asset", "asset_type"),
+    "livelihoods_affected": ("Livelihoods affected", "shock_livelihood"),
     "crop_name": ("Crop", None),
     "livestock_type": ("Livestock", None),
     "count": ("Number", None),

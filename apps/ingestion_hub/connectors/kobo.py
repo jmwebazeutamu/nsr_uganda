@@ -52,6 +52,8 @@ from typing import Any
 import requests
 from requests.exceptions import RequestException
 
+from apps.intake.canonical_fields import SHOCK_LIVELIHOODS
+
 from .base import ConnectionTestResult, register_connector
 
 logger = logging.getLogger(__name__)
@@ -372,6 +374,41 @@ def _kobo_food_security_block(raw: dict) -> dict:
     }
 
 
+def _kobo_shock_rows(raw: dict) -> list[dict]:
+    """Section K02-K04 as rows the registry's Shock entity accepts.
+
+    The form asks the shock questions once per livelihood — K03 "main
+    shock affecting crops / livestock / labour / other" and K04 its
+    severity — so one submission can describe up to four different
+    shocks. `Shock` holds one shock_type per row, so each answered
+    livelihood becomes its own row; folding them into one row would keep
+    a single shock_type and discard the rest.
+
+    Field names are the Shock model's own columns, because
+    promote_stage_record() reads this list straight into it.
+
+    `severity` carries the K04 code and `livelihoods_affected` says which
+    livelihood the row is about, which together identify the row
+    completely. The per-livelihood `*_severity_score` columns on Shock
+    would restate the same fact a second way, so they are left alone —
+    they exist for the one-row-many-livelihoods shape, not this one.
+    """
+    rows: list[dict] = []
+    for code, infix in SHOCK_LIVELIHOODS:
+        shock_type = str(raw.get(f"k03_{infix}_shock_type", "") or "").strip()
+        if not shock_type:
+            # Nothing recorded for this livelihood. An absent key means
+            # the enumerator was skipped past it, not that there was no
+            # shock, so no row rather than an empty one.
+            continue
+        rows.append({
+            "shock_type": shock_type,
+            "severity": str(raw.get(f"k04_{infix}_shock_severity", "") or "").strip(),
+            "livelihoods_affected": [code],
+        })
+    return rows
+
+
 def _kobo_shocks_coping_block(raw: dict) -> dict:
     """Shock affected flag + per-strategy coping responses. The form
     codes are 1-4 (always/often/sometimes/never) on each strategy."""
@@ -387,6 +424,10 @@ def _kobo_shocks_coping_block(raw: dict) -> dict:
     ]
     return {
         "shock_affected": raw.get("k01_shock_affected", ""),
+        # K02: which livelihoods the household says were affected. A
+        # household-level answer, so it stays here rather than on the
+        # per-livelihood rows.
+        "livelihood_affected": raw.get("k02_livelihood_affected", ""),
         "coping": {k: raw.get(k, "") for k in coping_keys},
     }
 
@@ -564,6 +605,10 @@ def kobo_to_canonical(raw: dict) -> dict:
         "agriculture":   _kobo_agriculture_block(raw),
         "food_security": _kobo_food_security_block(raw),
         "shocks_coping": _kobo_shocks_coping_block(raw),
+        # Top-level, because promote_stage_record() reads payload["shocks"]
+        # straight into the registry's Shock rows. Section K detail was
+        # collected from the first wave onward and dropped here until now.
+        "shocks": _kobo_shock_rows(raw),
         "interview": {
             # Form-level metadata an operator might want at a glance.
             "respondent_name":   raw.get("b1_respondent_name", ""),

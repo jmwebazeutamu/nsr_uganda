@@ -409,3 +409,48 @@ class TestSourceKindThreading:
         stage = _stage_with_payload(c, geo_codes, _base_payload(geo_codes))
         hh = promote_stage_record(stage, actor="op")
         assert hh.current_intake_source == kind_value
+
+
+@pytest.mark.django_db
+class TestKoboShockDetailReachesTheRegistry:
+    """The whole chain, not just the connector.
+
+    Section K detail was dropped at the mapping step, so this asserts the
+    connector's output survives promotion into Shock rows — the thing
+    that actually matters. 360 households were in the registry with 0
+    Shock rows between them when this was found.
+    """
+
+    def test_connector_output_promotes_into_shock_rows(self, connector, geo_codes):
+        from apps.ingestion_hub.connectors.kobo import _kobo_shock_rows
+
+        raw = {
+            "k03_crops_shock_type": "01", "k04_crops_shock_severity": "1",
+            "k03_livestock_shock_type": "04", "k04_livestock_shock_severity": "3",
+        }
+        # Exactly what the connector puts on the canonical payload.
+        payload = _base_payload(geo_codes, shocks=_kobo_shock_rows(raw))
+        stage = _stage_with_payload(connector, geo_codes, payload)
+        hh = promote_stage_record(stage, actor="op")
+
+        rows = Shock.objects.filter(household=hh)
+        assert rows.count() == 2
+        by_livelihood = {r.livelihoods_affected[0]: r for r in rows}
+        assert by_livelihood["01"].shock_type == "01"
+        assert by_livelihood["01"].severity == "1"
+        assert by_livelihood["02"].shock_type == "04"
+        assert by_livelihood["02"].severity == "3"
+
+    def test_a_household_with_no_shock_detail_creates_no_rows(
+        self, connector, geo_codes,
+    ):
+        """K01 saying "yes, affected" with no K03 answer must not invent
+        a shock — a Shock row with no type is not a shock."""
+        from apps.ingestion_hub.connectors.kobo import _kobo_shock_rows
+
+        payload = _base_payload(
+            geo_codes, shocks=_kobo_shock_rows({"k01_shock_affected": "1"}),
+        )
+        stage = _stage_with_payload(connector, geo_codes, payload)
+        hh = promote_stage_record(stage, actor="op")
+        assert Shock.objects.filter(household=hh).count() == 0

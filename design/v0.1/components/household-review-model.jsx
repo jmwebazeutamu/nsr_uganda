@@ -358,7 +358,13 @@ const TABLE_SPECS = [
   { id: "assets", title: "Assets owned", get: (p) => (p.housing || {}).assets, path: "housing.assets" },
   { id: "crops", title: "Crops grown", get: (p) => (p.housing || {}).crops, path: "housing.crops" },
   { id: "livestock", title: "Livestock", get: (p) => (p.housing || {}).livestock, path: "housing.livestock" },
-  { id: "shock_rows", title: "Shock events", get: (p) => (p.food_shocks || {}).shocks, path: "food_shocks.shocks" },
+  // Two producers, two locations: the wizard nests shock rows under
+  // food_shocks, the Kobo connector emits them top-level because that is
+  // where promote_stage_record() reads them from. Whichever is present
+  // renders in the same table.
+  { id: "shock_rows", title: "Shock events",
+    get: (p) => (p.food_shocks || {}).shocks || p.shocks,
+    path: (p) => ((p.food_shocks || {}).shocks ? "food_shocks.shocks" : "shocks") },
   { id: "coping_rows", title: "Coping strategies", get: (p) => (p.food_shocks || {}).coping, path: "food_shocks.coping" },
 ];
 
@@ -401,6 +407,10 @@ const _claimedKeys = () => {
   for (const k of LINEAGE_KEYS) claimed.add(k);
   // Per-member bags, whichever shape.
   for (const k of ["health", "education", "employment", "disability", "food_shocks"]) claimed.add(k);
+  // Top-level repeat rows rendered as tables, not as key/value rows.
+  // Unclaimed they would appear twice: once in the table and again in
+  // the "everything else" bucket.
+  claimed.add("shocks");
   return claimed;
 };
 
@@ -428,7 +438,14 @@ const buildReviewModel = (payload, dictionary = null) => {
     .filter(s => s.rows.length > 0);
 
   const tables = TABLE_SPECS
-    .map(spec => ({ id: spec.id, title: spec.title, table: tableFrom(spec.get(p), spec.path, dictionary) }))
+    .map(spec => ({
+      id: spec.id, title: spec.title,
+      table: tableFrom(
+        spec.get(p),
+        typeof spec.path === "function" ? spec.path(p) : spec.path,
+        dictionary,
+      ),
+    }))
     .filter(t => t.table);
 
   const claimed = _claimedKeys();
