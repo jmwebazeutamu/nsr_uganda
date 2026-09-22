@@ -783,3 +783,69 @@ attempt 1, all 8 services up, 35G free.
    `design/v0.1/components/household-review.jsx` ships as
    `/app/static/console/js/v0.1-components-household-review.js`. `find -name
    '*.jsx'` will not find it.
+
+## 2026-09-22 — deploy 98f45ed → 0a69762 (US-S24 registry field dictionary)
+
+Household review reads its field vocabulary from the active FormVersion
+instead of hardcoded maps. Five new `intake` migrations, two of which
+mutate data.
+
+**Pre-deploy backup.** `pg_dump -Fc` →
+`/opt/nsrmis/backups/pre-us-s24-fielddict-20260922-012653Z.dump` (9.5M,
+exit 0). Verified: 131 tables with data, including `intake_formquestion`,
+`intake_formversion`, `ingestion_hub_stagerecord`,
+`reference_data_choiceoption` and `data_management_household`.
+
+**Verification trap (new).** `pg_restore -l` is **not installed on the
+host**, and piping a dump into `docker compose exec -T db pg_restore -l
+/dev/stdin` fails with *"did not find magic string in file header"* — the
+dump is fine, the pipe is not. That looks exactly like a corrupt backup.
+Verify by mounting the directory into a throwaway container instead:
+
+```bash
+docker run --rm -v /opt/nsrmis/backups:/b:ro postgis/postgis:16-3.4 \
+  pg_restore -l /b/<dumpfile>
+```
+
+**Deploy.** `ssh nsr-prod 'cd /opt/nsrmis && ./deploy.sh'` (as jmwebaze,
+not root). Build 4m18s, healthz ok on attempt 1, all 8 services up,
+33G free. No retries needed; the Docker Hub CDN behaved this time.
+
+**Migrations applied:** intake 0007, 0008, 0009, 0010, 0011 — all `[X]`.
+
+**Post-deploy verification**
+
+- 156 questions carry `payload_aliases`; dictionary serves 221 entries,
+  0 conflicts.
+- Both producers' names resolve to one question: `rooms_sleeping` (Kobo)
+  and `sleeping_rooms` (wizard) both → "How many rooms are used for
+  sleeping?".
+- All 18 coping questions resolve; `L01.i` and `L02.i` keep their codes
+  because both strip to "Begging".
+- Repeat columns name the column: `shock_type` → "Shock type",
+  `strategy_type` → "Coping strategy".
+- `/healthz` `/` `/home/` `/console/` → 200. The field-dictionary
+  endpoint returns **403 unauthenticated** and serves no content — it
+  describes the questionnaire, not personal data, but it is not public.
+
+**Two prod-only findings — NOT changed, they need a decision.**
+
+1. **Two age-boundary DQA rules are not approved on prod.**
+   `AC-HOH-AGE` is active, but `AC-HOH-AGE-CHILD-LED` is **draft** and
+   `AC-ORPHAN-FLAG` is **pending_approval** (both are active on dev).
+   The composition panel reads thresholds only from ACTIVE rules, by
+   design, so on prod it now shows "not configured" for Child-headed,
+   Members-under-N and Dependency ratio where it previously drew them
+   from hardcoded 12/18/60. The panel is telling the truth: no approved
+   rule defines those boundaries on prod. Fixing it is an **approval
+   action through the dual-approval workflow** and is the Ministry's to
+   make — nothing here activates a rule on production. See CLAUDE.md,
+   "do not soften approval gates".
+
+2. **29 active questions carry no payload alias**, including
+   `a8_enumeration_area`, `a9_household_number`, `b5_observations`,
+   `c21_id_documents` and `c22_id_number`. That is consistent — no
+   payload carries them, which is why field coverage is still 0
+   unresolved — but it means the questionnaire collects answers the
+   canonical payload does not carry. Worth checking against the
+   connector mapping; not touched here.
