@@ -10,7 +10,7 @@
    ChatbotAssistantScreen,
    ConsentPurposesScreen, ConsentStatementsScreen,
    ConsentCoverageScreen, DpoWithdrawalQueueScreen,
-   ErrorBoundary, Icon, AccountMenu */
+   ErrorBoundary, Icon, AccountMenu, AdminUsersScreen */
 // NSR MIS — Admin shell
 // =====================================================
 // Wraps the two new PMT screens (Dashboard, Configuration) plus
@@ -77,6 +77,7 @@ const NAV_GROUPS = [
   {
     label: "Security",
     items: [
+        { id: "admin-users", label: "User management", icon: "users" },
       { id: "admin-security-roles", label: "Roles & scopes", icon: "lock" },
       { id: "admin-security-audit", label: "Audit chain",    icon: "file" },
     ],
@@ -247,6 +248,7 @@ const AdminApp = () => {
           {screen === "admin-pmt-configuration" && (
             <PmtConfigurationScreen onBack={() => setScreen("admin-pmt-dashboard")}/>
           )}
+          {screen === "admin-users"                && <AdminUsersScreen onNavigate={setScreen}/>}
           {screen === "admin-approvals"            && <AdminApprovalsScreen onNavigate={setScreen}/>}
           {screen === "admin-refdata-choicelists"  && <AdminChoiceListsScreen/>}
           {screen === "admin-refdata-geo"          && <AdminGeographyScreen/>}

@@ -10,6 +10,7 @@ from .api import (
     role_catalogue,
     user_search,
 )
+from .user_api import UserAdminViewSet
 
 router = DefaultRouter()
 router.register(r"audit-events", AuditEventViewSet, basename="audit-event")
@@ -17,6 +18,18 @@ router.register(r"audit-events", AuditEventViewSet, basename="audit-event")
 # > Operator scopes console tab. The bulk-grant @action is mounted
 # at /operator-scopes/bulk-grant/ by the router.
 router.register(r"operator-scopes", OperatorScopeViewSet, basename="operator-scope")
+# Account administration for the console's User management screen. Gated
+# on nsr_admin alone, narrower than the admin console's own five-group
+# gate — see user_api.IsUserAdmin.
+#
+# Mounted at user-accounts/, NOT users/. `users/` is already the scope
+# picker's search endpoint (path("users/", user_search) below), with a
+# different permission class and a different response shape. Registering
+# a router on `users` shadows it — router urls come first — which would
+# have left the Roles & scopes screen and the Grant Scope modal reading
+# an endpoint that returns something else and refuses most of their
+# callers.
+router.register(r"user-accounts", UserAdminViewSet, basename="managed-user")
 
 urlpatterns = [
     *router.urls,
