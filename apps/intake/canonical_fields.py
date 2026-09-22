@@ -241,6 +241,64 @@ SHOCK_LIVELIHOODS = (
 )
 SHOCK_LIVELIHOOD_LIST = "shock_livelihood"
 
+# Section L: each question is one coping strategy scored on the
+# `coping_frequency` scale (1 Never .. 5 Daily).
+#
+# The registry stores these as CopingStrategy rows keyed by a
+# `coping_strategy_type` code, and only eight of the eighteen questions
+# have one. The five codes the frame holds that no L question uses
+# (sold_livestock, migrated_work, withdrew_school, skipped_health,
+# depleted_savings) came from a different instrument, so this is not a
+# naming mismatch that could be resolved by looking harder — the frame
+# genuinely does not cover ten of the strategies the questionnaire asks
+# about. CopingStrategy's docstring says the list covers "L01a-i and
+# L02a-i"; it does not.
+#
+# The ten are NOT coerced to "98 Other". CopingStrategy is unique on
+# (household, strategy_type, category), so ten strategies sharing one
+# code would collide and nine of them would silently disappear —
+# destructive rather than merely lossy. They are declared below instead,
+# and a contract test keeps the declaration exhaustive so a new L
+# question cannot be dropped in silence the way section K was.
+#
+# Nothing is lost from the record either way: the full eighteen answers
+# stay in the canonical payload under shocks_coping.coping, which is why
+# that block remains even though it overlaps these rows.
+#
+# question -> (category, coping_strategy_type code)
+COPING_STRATEGIES = {
+    "l01a_casual_labor": ("livelihood", "casual_labor"),
+    "l01b_sell_assets": ("livelihood", "sold_asset"),
+    "l01c_borrow_money": ("livelihood", "took_loan"),
+    "l02a_less_preferred_food": ("food", "less_preferred_food"),
+    "l02b_borrow_food_money": ("food", "borrowed_food"),
+    "l02c_reduce_portions": ("food", "smaller_portions"),
+    "l02d_reduce_meals": ("food", "reduced_meals"),
+    "l02e_restrict_adults": ("food", "limited_adult_intake"),
+}
+
+# Answered, carried in the payload, and not representable as a registry
+# row until the frame gains a code. Value is what the code would mean.
+COPING_STRATEGIES_WITHOUT_A_CODE = {
+    "l01d_assistance_friends": "assistance from friends / community",
+    "l01e_assistance_agencies": "assistance from relief agencies",
+    "l01f_remittances": "relying on remittances",
+    "l01g_sand_gravel": "sand and gravel mining",
+    "l01h_relocate": "relocating the family",
+    "l01i_begging": "begging (livelihood coping)",
+    "l02f_day_without_eating": "whole day(s) without eating",
+    "l02g_wild_food": "harvesting wild food / hunting",
+    "l02h_merge_households": "merging households to eat together",
+    "l02i_begging": "begging (food coping)",
+}
+
+COPING_STRATEGY_LIST = "coping_strategy_type"
+COPING_FREQUENCY_LIST = "coping_frequency"
+# `coping_frequency` code 1 is "Never" — the strategy was asked about and
+# not used. The row is still written, because "asked and not used" is an
+# answer; used_flag is what distinguishes it.
+COPING_FREQUENCY_NOT_USED = "1"
+
 # Every L question is one coping strategy on the same frequency scale.
 # Kobo keys each by question name; the wizard emits rows of
 # {strategy_type, frequency}.

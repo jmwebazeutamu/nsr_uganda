@@ -365,7 +365,9 @@ const TABLE_SPECS = [
   { id: "shock_rows", title: "Shock events",
     get: (p) => (p.food_shocks || {}).shocks || p.shocks,
     path: (p) => ((p.food_shocks || {}).shocks ? "food_shocks.shocks" : "shocks") },
-  { id: "coping_rows", title: "Coping strategies", get: (p) => (p.food_shocks || {}).coping, path: "food_shocks.coping" },
+  { id: "coping_rows", title: "Coping strategies",
+    get: (p) => (p.food_shocks || {}).coping || p.coping_strategies,
+    path: (p) => ((p.food_shocks || {}).coping ? "food_shocks.coping" : "coping_strategies") },
 ];
 
 /** Per-member detail, from whichever shape the payload uses. */
@@ -411,6 +413,7 @@ const _claimedKeys = () => {
   // Unclaimed they would appear twice: once in the table and again in
   // the "everything else" bucket.
   claimed.add("shocks");
+  claimed.add("coping_strategies");
   return claimed;
 };
 

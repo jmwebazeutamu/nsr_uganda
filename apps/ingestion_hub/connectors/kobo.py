@@ -52,7 +52,11 @@ from typing import Any
 import requests
 from requests.exceptions import RequestException
 
-from apps.intake.canonical_fields import SHOCK_LIVELIHOODS
+from apps.intake.canonical_fields import (
+    COPING_FREQUENCY_NOT_USED,
+    COPING_STRATEGIES,
+    SHOCK_LIVELIHOODS,
+)
 
 from .base import ConnectionTestResult, register_connector
 
@@ -409,9 +413,43 @@ def _kobo_shock_rows(raw: dict) -> list[dict]:
     return rows
 
 
+def _kobo_coping_rows(raw: dict) -> list[dict]:
+    """Section L as rows the registry's CopingStrategy entity accepts.
+
+    Eighteen questions, each a strategy scored on `coping_frequency`
+    (1 Never .. 5 Daily). Eight have a `coping_strategy_type` code and
+    become rows; the other ten have none and are left to the full answer
+    set on shocks_coping.coping. They are not coerced to "98 Other" —
+    CopingStrategy is unique on (household, strategy_type, category), so
+    ten strategies sharing one code would collide and nine would vanish.
+
+    A "Never" answer still becomes a row. It was asked and answered, and
+    used_flag is what separates it from a strategy the household used.
+    """
+    rows: list[dict] = []
+    for question, (category, strategy_type) in COPING_STRATEGIES.items():
+        frequency = str(raw.get(question, "") or "").strip()
+        if not frequency:
+            # Not asked, or skipped past. Absent, not "never".
+            continue
+        rows.append({
+            "strategy_type": strategy_type,
+            "category": category,
+            "frequency": frequency,
+            "used_flag": frequency != COPING_FREQUENCY_NOT_USED,
+        })
+    return rows
+
+
 def _kobo_shocks_coping_block(raw: dict) -> dict:
-    """Shock affected flag + per-strategy coping responses. The form
-    codes are 1-4 (always/often/sometimes/never) on each strategy."""
+    """Shock affected flag + per-strategy coping responses.
+
+    Every one of the eighteen L answers is kept here, on the
+    `coping_frequency` scale (1 Never .. 5 Daily), because ten of them
+    have no `coping_strategy_type` code and so cannot survive as
+    CopingStrategy rows. This block is the complete record; the rows are
+    the part the code frame can express.
+    """
     coping_keys = [
         # l01* — financial / asset coping
         "l01a_casual_labor", "l01b_sell_assets", "l01c_borrow_money",
@@ -609,6 +647,9 @@ def kobo_to_canonical(raw: dict) -> dict:
         # straight into the registry's Shock rows. Section K detail was
         # collected from the first wave onward and dropped here until now.
         "shocks": _kobo_shock_rows(raw),
+        # Likewise top-level: _create_coping_strategies() reads
+        # payload["coping_strategies"].
+        "coping_strategies": _kobo_coping_rows(raw),
         "interview": {
             # Form-level metadata an operator might want at a glance.
             "respondent_name":   raw.get("b1_respondent_name", ""),

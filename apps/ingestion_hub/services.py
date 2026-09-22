@@ -473,8 +473,47 @@ def _create_livestock(hh: Household, payload: dict, *, actor: str) -> None:
             _emit_create("livestock", obj.id, actor=actor)
 
 
+# Where a producer puts its repeat rows.
+#
+# Promotion has always read payload["shocks"] and
+# payload["coping_strategies"], and until now nothing wrote them there:
+# the Kobo connector dropped section K entirely and put coping under
+# shocks_coping, and the capture wizard nests both under food_shocks.
+# The result was 360 households in the registry with no Shock and no
+# CopingStrategy rows between them.
+#
+# The top-level names stay the contract — they match the entities and the
+# fan-out tests — and these are the other places a payload may carry the
+# same rows. First non-empty wins; nothing is read twice.
+_DETAIL_ROW_LOCATIONS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "shocks": (
+        ("shocks",),
+        ("food_shocks", "shocks"),
+        ("shocks_coping", "shocks"),
+    ),
+    "coping_strategies": (
+        ("coping_strategies",),
+        ("food_shocks", "coping"),
+    ),
+}
+
+
+def _detail_rows(payload: dict, entity: str) -> list[dict]:
+    """The repeat rows for `entity`, from wherever the producer put them."""
+    for path in _DETAIL_ROW_LOCATIONS[entity]:
+        node: object = payload
+        for segment in path:
+            node = node.get(segment) if isinstance(node, dict) else None
+        # A dict here is the per-question form (Kobo's shocks_coping.coping),
+        # which is the complete answer set rather than registry rows; the
+        # connector derives the rows separately. Only lists are rows.
+        if isinstance(node, list) and node:
+            return [r for r in node if isinstance(r, dict)]
+    return []
+
+
 def _create_shocks(hh: Household, payload: dict, *, actor: str) -> None:
-    for row in payload.get("shocks") or []:
+    for row in _detail_rows(payload, "shocks"):
         kind = (row.get("shock_type") or "").strip()
         if not kind:
             continue
@@ -494,7 +533,7 @@ def _create_shocks(hh: Household, payload: dict, *, actor: str) -> None:
 def _create_coping_strategies(
     hh: Household, payload: dict, *, actor: str,
 ) -> None:
-    for row in payload.get("coping_strategies") or []:
+    for row in _detail_rows(payload, "coping_strategies"):
         kind = (row.get("strategy_type") or "").strip()
         category = (row.get("category") or "").strip()
         if not kind or not category:
