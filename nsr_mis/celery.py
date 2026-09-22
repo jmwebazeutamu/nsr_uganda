@@ -76,6 +76,24 @@ app.conf.beat_schedule = {
         # aggregate endpoint returns 503 (data not ready).
         "schedule": crontab(minute=0, hour=1),
     },
+    "ddup-nightly-discovery": {
+        "task": "apps.ddup.tasks.discover_pairs_task",
+        # 04:00 EAT — last in the nightly chain: 01:00 matview refresh,
+        # 02:00 PMT band recompute, 03:00 audit-chain scan, then this.
+        # Discovery reads every live Member, so it runs after the jobs
+        # that write them rather than 30 minutes behind one that could
+        # run long.
+        #
+        # Until this existed nothing called the discover_* services at
+        # all: tier 2 and tier 3 had never produced a single pair, and
+        # the auto-merge sweep below had nothing to sweep.
+        #
+        # Incremental — tier 3 only revisits village blocks holding a
+        # member touched since the last successful run. A full sweep is
+        # `manage.py discover_duplicates --full` and stays deliberate:
+        # at the 12M-household target it is ~2x10^10 comparisons.
+        "schedule": crontab(minute=0, hour=4),
+    },
     "auto-merge-high-confidence-pairs": {
         "task": "apps.ddup.tasks.auto_merge_high_confidence_pairs_task",
         # Hourly — high-confidence tier-3 pairs are rare; we don't

@@ -17,6 +17,8 @@ from apps.data_management.models import Member
 from apps.security.audit import emit as emit_audit
 
 from .models import (
+    DdupDiscoveryRun,
+    DiscoveryRunStatus,
     DdupModelVersion,
     MatchPair,
     MergeAction,
@@ -177,6 +179,57 @@ def _record_pair(
         )
         return pair
     return None
+
+
+# --- Tier 1: the one definition -------------------------------------------
+#
+# Two members are tier-1 duplicates iff they share a non-null nin_hash and
+# neither is deleted. That rule had two implementations: this module's
+# discover_nin_pairs(), and _discover_stage_candidates() in
+# ingestion_hub/services.py, which the DIH gate uses to decide whether a
+# staged record needs DDUP_REVIEW.
+#
+# CLAUDE.md is explicit that DDUP is a shared service — "one
+# implementation, two callers" — and two implementations of a matching
+# rule is how the registry starts disagreeing with itself about who is
+# the same person. The predicate now lives here and the DIH calls it.
+#
+# The two callers need different shapes, not different rules: the registry
+# pairs Member against Member, while the DIH has a payload and no Member
+# id yet (the stage is not promoted). Both go through
+# members_sharing_nin_hash().
+
+TIER1_REASON = "nin"
+TIER1_SCORE = 1.0
+
+
+def members_sharing_nin_hash(nin_hash) -> list[str]:
+    """Ids of live members carrying this nin_hash. The tier-1 predicate."""
+    if not nin_hash:
+        return []
+    return list(
+        Member.objects
+        .filter(nin_hash=nin_hash, is_deleted=False)
+        .values_list("id", flat=True)
+    )
+
+
+def tier1_candidates_for_nin(nin: str | None) -> list[dict]:
+    """Tier-1 candidates for a NIN that has no Member row of its own yet.
+
+    Used by the DIH gate, where the record being checked is still a
+    StageRecord. Returns the shape the stage stores in
+    `ddup_candidates`: [{member_id, score, reason}, ...].
+    """
+    if not nin:
+        return []
+    from apps.security.hashing import nin_hash as compute_nin_hash
+
+    return [
+        {"member_id": member_id, "score": TIER1_SCORE,
+         "reason": f"tier1-{TIER1_REASON}-exact"}
+        for member_id in members_sharing_nin_hash(compute_nin_hash(nin))
+    ]
 
 
 @transaction.atomic
@@ -571,6 +624,9 @@ def auto_merge_high_confidence_pairs(
     DdupModelVersion's auto_merge_threshold (default 0.95) and merge
     them with no manual intervention.
 
+    Disabled unless the active model version sets
+    config["tier3"]["auto_merge_enabled"] — see below.
+
     Per-pair surviving_id selection: the older Member wins
     (lexicographic ULID order ascending — ULIDs are time-sortable, so
     this picks the earlier-registered record). chosen_field_values is
@@ -589,6 +645,22 @@ def auto_merge_high_confidence_pairs(
     """
     model = get_active_model_version()
     cfg = (model.config or {}).get("tier3") or {}
+
+    # Off unless the approved model version says otherwise.
+    #
+    # Auto-merge soft-deletes a Member with nobody in the loop. Tier-3
+    # discovery had never run, so the hourly sweep had nothing to act on
+    # and the switch was effectively off by accident; the first discovery
+    # run would have merged thirteen pairs on dev within the hour.
+    #
+    # The flag lives in the model version's config rather than in
+    # settings, so enabling it is a DdupModelVersion change and goes
+    # through the same dual approval as the weights and the threshold —
+    # which is the right gate for something that edits the registry
+    # unattended. Absent means off.
+    if not cfg.get("auto_merge_enabled", False):
+        return {"processed": 0, "merged": 0, "skipped": 0, "disabled": 1}
+
     auto_threshold = cfg.get("auto_merge_threshold", 0.95)
 
     qs = MatchPair.objects.filter(
@@ -738,3 +810,161 @@ def reject_pair(pair: MatchPair, *, actor: str, reason: str) -> MergeDecision:
         actor=actor, reason=reason,
     )
     return decision
+
+
+# --- Scheduled discovery ---------------------------------------------------
+#
+# The three discover_* services above were never called by anything: not
+# the DIH pipeline, not beat, not an endpoint, not a command. Tier 2 and
+# tier 3 had therefore never produced a single pair, and the hourly
+# auto-merge sweep had been a no-op since the day it was scheduled.
+#
+# This is the entry point that runs them, and it runs them incrementally.
+# Tiers 1 and 2 group on an exact key, so they are cheap to re-derive in
+# full. Tier 3 compares every pair inside a village block, which at the
+# 12M-household target is ~2x10^10 comparisons — days of work. So tier 3
+# only considers blocks containing a member touched since the last run,
+# and inside those blocks only pairs where at least one side is new.
+#
+# Re-running is safe at any cadence: _record_pair does get_or_create on
+# (record_type, a, b), so a pair an operator already rejected or merged is
+# never resurrected as pending.
+
+def _last_successful_discovery():
+    return (
+        DdupDiscoveryRun.objects
+        .filter(status=DiscoveryRunStatus.SUCCEEDED)
+        .order_by("-started_at")
+        .first()
+    )
+
+
+@transaction.atomic
+def discover_incremental_tier3(
+    *, since, actor: str = "system",
+) -> tuple[list[MatchPair], int]:
+    """Tier 3 over village blocks touched since `since`.
+
+    Returns (created pairs, comparisons made). `since=None` is a full
+    sweep and compares every block.
+    """
+    from collections import defaultdict
+    from decimal import Decimal
+
+    from .similarity import (
+        composite_score, exact, jaro_winkler, year_proximity,
+    )
+
+    model = get_active_model_version()
+    cfg = (model.config or {}).get("tier3") or {}
+    weights = cfg.get("weights") or {
+        "surname": 0.30, "first_name": 0.30,
+        "date_of_birth": 0.15, "sex": 0.10, "village": 0.15,
+    }
+    threshold = cfg.get("threshold", 0.85)
+
+    members = (
+        Member.objects
+        .filter(is_deleted=False)
+        .select_related("household")
+        .only("id", "surname", "first_name", "date_of_birth", "sex",
+              "updated_at", "household__village_id")
+    )
+
+    by_village: dict[str, list] = defaultdict(list)
+    for m in members:
+        by_village[getattr(m.household, "village_id", None)].append(m)
+
+    def is_new(m) -> bool:
+        return since is None or (m.updated_at and m.updated_at >= since)
+
+    created: list[MatchPair] = []
+    comparisons = 0
+    for block in by_village.values():
+        fresh = [m for m in block if is_new(m)]
+        if not fresh:
+            # Nothing in this village has changed; every pair inside it
+            # was compared by an earlier run.
+            continue
+        for a in fresh:
+            for b in block:
+                if a.id >= b.id:
+                    # Each unordered pair once. Two fresh members still
+                    # meet exactly once because the smaller id drives.
+                    continue
+                comparisons += 1
+                scores = {
+                    "surname": jaro_winkler(a.surname or "", b.surname or ""),
+                    "first_name": jaro_winkler(a.first_name or "", b.first_name or ""),
+                    "date_of_birth": year_proximity(a.date_of_birth, b.date_of_birth),
+                    "sex": exact(a.sex, b.sex),
+                    "village": exact(
+                        getattr(a.household, "village_id", None),
+                        getattr(b.household, "village_id", None),
+                    ),
+                }
+                composite = composite_score(
+                    [(weights.get(k, 0.0), s) for k, s in scores.items()],
+                )
+                if composite < threshold:
+                    continue
+                pair = _record_pair(
+                    record_a_id=a.id, record_b_id=b.id, tier=3,
+                    match_reason="probabilistic", model=model, actor=actor,
+                )
+                if pair is not None:
+                    pair.composite_score = Decimal(f"{composite:.3f}")
+                    pair.per_field_scores = {k: round(s, 3) for k, s in scores.items()}
+                    pair.save(update_fields=[
+                        "composite_score", "per_field_scores", "updated_at",
+                    ])
+                    created.append(pair)
+    return created, comparisons
+
+
+def run_discovery(
+    *, full: bool = False, actor: str = "system",
+) -> DdupDiscoveryRun:
+    """Run all three tiers and record what happened.
+
+    Incremental by default: tier 3 only looks at village blocks holding a
+    member touched since the last successful run. `full=True` forces a
+    complete sweep.
+    """
+    previous = _last_successful_discovery()
+    since = None if full else (previous.started_at if previous else None)
+
+    run = DdupDiscoveryRun.objects.create(
+        scanned_from=since, actor=actor,
+        members_considered=Member.objects.filter(is_deleted=False).count(),
+    )
+    try:
+        tier1 = discover_nin_pairs(actor=actor)
+        tier2 = discover_phone_pairs(actor=actor)
+        tier3, comparisons = discover_incremental_tier3(since=since, actor=actor)
+    except Exception as exc:  # noqa: BLE001 — the run row must record the failure
+        run.status = DiscoveryRunStatus.FAILED
+        run.finished_at = timezone.now()
+        run.note = f"{type(exc).__name__}: {exc}"
+        run.save(update_fields=["status", "finished_at", "note"])
+        raise
+
+    run.tier1_created = len(tier1)
+    run.tier2_created = len(tier2)
+    run.tier3_created = len(tier3)
+    run.comparisons = comparisons
+    run.status = DiscoveryRunStatus.SUCCEEDED
+    run.finished_at = timezone.now()
+    run.save(update_fields=[
+        "tier1_created", "tier2_created", "tier3_created", "comparisons",
+        "status", "finished_at",
+    ])
+    _emit_audit(
+        action="run", entity_type="ddup_discovery_run", entity_id=run.id,
+        actor=actor,
+        reason=(
+            f"{'full sweep' if since is None else f'since {since:%Y-%m-%d %H:%M}'}: "
+            f"{run.pairs_created} pair(s) from {comparisons} tier-3 comparison(s)"
+        ),
+    )
+    return run

@@ -1255,15 +1255,18 @@ def resolve_idv_pending(
 
 
 def _discover_stage_candidates(payload: dict) -> list[dict]:
-    """Tier 1 NIN-exact match against existing registry Members. Returns
-    [{member_id, score, reason}, ...]. Empty if no NIN supplied."""
-    nin = _first_member_nin(payload)
-    if not nin:
-        return []
-    rows = Member.objects.filter(
-        nin_hash=compute_nin_hash(nin), is_deleted=False,
-    ).values_list("id", flat=True)
-    return [{"member_id": rid, "score": 1.0, "reason": "tier1-nin-exact"} for rid in rows]
+    """Tier 1 NIN-exact match against existing registry Members.
+
+    Delegates to apps.ddup — the tier-1 predicate is defined there and
+    this is the second caller of it, not a second implementation of it.
+    CLAUDE.md: "Do not duplicate DQA or DDUP logic inside DIH and the
+    registry. Call the shared service."
+
+    Returns [{member_id, score, reason}, ...]; empty if no NIN supplied.
+    """
+    from apps.ddup.services import tier1_candidates_for_nin
+
+    return tier1_candidates_for_nin(_first_member_nin(payload))
 
 
 # ---------------------------------------------------------------------------
