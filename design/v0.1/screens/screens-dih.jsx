@@ -352,10 +352,18 @@ const QUICK_FILTERS = [
 ];
 
 const DIHScreen = () => {
-  // Two-tab layout: "queue" shows everything actionable (provisional,
-  // pending_promotion, quality_failed, ddup_review, idv_pending);
-  // "archive" shows quarantined rows — operators land them there when
-  // a quality_failed record can't be fixed.
+  // Three tabs, one per outcome a stage record can reach:
+  //   queue    — everything still actionable (?queue=review)
+  //   archive  — quarantined: a quality_failed record nobody could fix
+  //   rejected — refused outright; the provisional ID is burned
+  //
+  // Rejected had no surface at all until now. The records were written,
+  // audited and kept — fourteen of them on production, each holding a
+  // full household payload — and no screen fetched them, so the only
+  // way to see a rejection was the API or the database. Archive showed
+  // the rejected_reason / rejected_at / rejected_by columns, which made
+  // it look as though it covered them; quarantine simply writes those
+  // same fields.
   // Wide view (ADR-0030). `useWideView` is a global from
   // v0.1/components/wide-view.jsx, which both console manifests load
   // before any screen — so this call is unconditional and the hook
@@ -363,7 +371,9 @@ const DIHScreen = () => {
   const wide = useWideView("dih");
   // Filters a pop-out was opened with. Empty in the normal window.
   const _inherited = wide.inheritedFilters || {};
-  const [tab, setTab] = useStateDIH(_inherited.tab === "archive" ? "archive" : "queue");
+  const [tab, setTab] = useStateDIH(
+    ["archive", "rejected"].includes(_inherited.tab) ? _inherited.tab : "queue",
+  );
   // Live row state; starts as the mock so the design preview renders
   // immediately. The effect below replaces it with live API rows when
   // available.
@@ -380,6 +390,7 @@ const DIHScreen = () => {
   const [navCounts] = (typeof useNavCounts === "function") ? useNavCounts() : [{}];
   const dedupPendingCount = (navCounts && typeof navCounts.dedup === "number") ? navCounts.dedup : 0;
   const [archiveRows, setArchiveRows] = useStateDIH([]);
+  const [rejectedRows, setRejectedRows] = useStateDIH([]);
   const [dataSource, setDataSource] = useStateDIH("loading"); // 'loading' | 'live' | 'live-empty' | 'offline'
   const [selectedRow, setSelectedRow] = useStateDIH(null);
   const [auditOpen, setAuditOpen] = useStateDIH(false);
@@ -580,6 +591,20 @@ const DIHScreen = () => {
         setArchiveRows((data.results || data).map(_stageToRow));
       })
       .catch(() => { /* archive stays empty */ });
+
+    // Rejected tab. A single terminal state, not a queue — the queue
+    // definition lives on the server (?queue=review) precisely so that
+    // no caller spells a multi-state list out again.
+    fetch("/api/v1/dih/stage-records/?state=rejected&page_size=500", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (cancelled) return;
+        setRejectedRows((data.results || data).map(_stageToRow));
+      })
+      .catch(() => { /* rejected stays empty */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -868,6 +893,7 @@ const DIHScreen = () => {
         {[
           { id: "queue",   label: "Review queue",  count: rows.length, icon: "inbox" },
           { id: "archive", label: "Archive",       count: archiveRows.length, icon: "archive" },
+          { id: "rejected", label: "Rejected",     count: rejectedRows.length, icon: "x-circle" },
         ].map(t => {
           const active = tab === t.id;
           return (
@@ -919,6 +945,54 @@ const DIHScreen = () => {
                 </td></tr>
               )}
               {archiveRows.map(r => (
+                <tr key={r.id}>
+                  <td className="t-mono">{(r.registryId || "").slice(0, 12)}…</td>
+                  <td>{r.head || "—"}</td>
+                  <td><Chip size="sm">{r.source || "—"}</Chip></td>
+                  <td className="t-bodysm" style={{ color: "var(--neutral-700)" }}>{r.rejected_reason || "—"}</td>
+                  <td className="t-cap">{r.rejected_at ? r.rejected_at.slice(0, 10) : "—"}</td>
+                  <td className="t-cap">{r.rejected_by || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Rejected tab — read-only listing of refused records.
+          Same shape as Archive, because the two are the same kind of
+          thing: a terminal outcome carrying a reason, an actor and a
+          timestamp. They differ in what they mean, which is why they are
+          two tabs rather than one filter. */}
+      {tab === "rejected" && (
+        <div className="card" style={{ padding: 0 }}>
+          <div className="card-header" style={{ padding: "12px 16px" }}>
+            <strong>Rejected records</strong>
+            <span className="t-cap">
+              Records refused outright. The provisional Registry ID is voided
+              and never issued, so nothing listed here has a registry entry.
+              Read-only — a rejection is undone by re-submitting the
+              household, not by editing this record.
+            </span>
+          </div>
+          <table className="tbl" style={{ boxShadow: "none", marginBottom: 0 }}>
+            <thead>
+              <tr>
+                <th>Voided ID</th>
+                <th>Head</th>
+                <th>Source</th>
+                <th>Reason</th>
+                <th>Rejected at</th>
+                <th>Rejected by</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rejectedRows.length === 0 && (
+                <tr><td colSpan={6} className="t-cap" style={{ padding: 16, color: "var(--neutral-500)" }}>
+                  No rejected records.
+                </td></tr>
+              )}
+              {rejectedRows.map(r => (
                 <tr key={r.id}>
                   <td className="t-mono">{(r.registryId || "").slice(0, 12)}…</td>
                   <td>{r.head || "—"}</td>

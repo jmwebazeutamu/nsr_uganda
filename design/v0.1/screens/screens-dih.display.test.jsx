@@ -280,12 +280,29 @@ describe("#5 the detail panel clock is real", () => {
     await waitFor(() => expect(summaryValue("Urban / rural")).toBeTruthy());
   };
 
+  // The clock is frozen for this block.
+  //
+  // The test used to pin 03:01Z on today's date and assert "06:01 EAT
+  // today". That only holds when the suite runs between 03:01 UTC and
+  // midnight; run just after midnight EAT it asserted that a record
+  // captured hours in the future had been captured today, and failed for
+  // a reason with nothing to do with the screen. Making the offset
+  // relative does not fix it either — two hours before 00:11 EAT is
+  // yesterday. A panel that formats a clock has to be tested against a
+  // known clock.
+  const FROZEN_NOW = new Date("2026-09-22T09:00:00Z");   // 12:00 EAT
+  const CAPTURED_AT = new Date("2026-09-22T03:01:00Z");  // 06:01 EAT, same day
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(FROZEN_NOW);
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
   it("renders the record's own capture time in EAT", async () => {
-    // 03:01Z is 06:01 in Kampala (UTC+3) — the household 4 timestamp.
-    const today = new Date();
-    today.setUTCHours(3, 1, 0, 0);
-    await renderAt(today.toISOString());
+    await renderAt(CAPTURED_AT.toISOString());
     expect(document.body.textContent).toMatch(/Captured 06:01 EAT today/);
+    // The frozen string the panel used to print on every record.
     expect(document.body.textContent).not.toMatch(/Captured 14:35 EAT today/);
   });
 
