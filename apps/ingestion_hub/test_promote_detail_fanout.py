@@ -409,3 +409,134 @@ class TestSourceKindThreading:
         stage = _stage_with_payload(c, geo_codes, _base_payload(geo_codes))
         hh = promote_stage_record(stage, actor="op")
         assert hh.current_intake_source == kind_value
+
+
+@pytest.mark.django_db
+class TestKoboShockDetailReachesTheRegistry:
+    """The whole chain, not just the connector.
+
+    Section K detail was dropped at the mapping step, so this asserts the
+    connector's output survives promotion into Shock rows — the thing
+    that actually matters. 360 households were in the registry with 0
+    Shock rows between them when this was found.
+    """
+
+    def test_connector_output_promotes_into_shock_rows(self, connector, geo_codes):
+        from apps.ingestion_hub.connectors.kobo import _kobo_shock_rows
+
+        raw = {
+            "k03_crops_shock_type": "01", "k04_crops_shock_severity": "1",
+            "k03_livestock_shock_type": "04", "k04_livestock_shock_severity": "3",
+        }
+        # Exactly what the connector puts on the canonical payload.
+        payload = _base_payload(geo_codes, shocks=_kobo_shock_rows(raw))
+        stage = _stage_with_payload(connector, geo_codes, payload)
+        hh = promote_stage_record(stage, actor="op")
+
+        rows = Shock.objects.filter(household=hh)
+        assert rows.count() == 2
+        by_livelihood = {r.livelihoods_affected[0]: r for r in rows}
+        assert by_livelihood["01"].shock_type == "01"
+        assert by_livelihood["01"].severity == "1"
+        assert by_livelihood["02"].shock_type == "04"
+        assert by_livelihood["02"].severity == "3"
+
+    def test_a_household_with_no_shock_detail_creates_no_rows(
+        self, connector, geo_codes,
+    ):
+        """K01 saying "yes, affected" with no K03 answer must not invent
+        a shock — a Shock row with no type is not a shock."""
+        from apps.ingestion_hub.connectors.kobo import _kobo_shock_rows
+
+        payload = _base_payload(
+            geo_codes, shocks=_kobo_shock_rows({"k01_shock_affected": "1"}),
+        )
+        stage = _stage_with_payload(connector, geo_codes, payload)
+        hh = promote_stage_record(stage, actor="op")
+        assert Shock.objects.filter(household=hh).count() == 0
+
+
+@pytest.mark.django_db
+class TestDetailRowsPromoteFromEitherProducer:
+    """Promotion reads top-level `shocks` and `coping_strategies`.
+
+    Nothing wrote them there: the Kobo connector dropped section K and put
+    coping under shocks_coping, while the capture wizard nests both under
+    food_shocks. 360 households were in the registry with 0 Shock and 0
+    CopingStrategy rows between them. Both locations now resolve.
+    """
+
+    def test_kobo_coping_output_promotes(self, connector, geo_codes):
+        from apps.ingestion_hub.connectors.kobo import _kobo_coping_rows
+
+        rows = _kobo_coping_rows({
+            "l01a_casual_labor": "4",       # used
+            "l01c_borrow_money": "1",       # never — still an answer
+            "l02d_reduce_meals": "5",
+        })
+        payload = _base_payload(geo_codes, coping_strategies=rows)
+        stage = _stage_with_payload(connector, geo_codes, payload)
+        hh = promote_stage_record(stage, actor="op")
+
+        created = {
+            c.strategy_type: c
+            for c in CopingStrategy.objects.filter(household=hh)
+        }
+        assert set(created) == {"casual_labor", "took_loan", "reduced_meals"}
+        assert created["casual_labor"].used_flag is True
+        assert created["took_loan"].used_flag is False
+        assert created["casual_labor"].category == "livelihood"
+        assert created["reduced_meals"].category == "food"
+
+    def test_the_wizards_nested_rows_promote_too(self, connector, geo_codes):
+        """The wizard already wrote correct rows in the right shape — just
+        in a place promotion never looked."""
+        payload = _base_payload(geo_codes)
+        payload["food_shocks"] = {
+            "coping": [
+                {"category": "food", "frequency": "4",
+                 "strategy_type": "reduced_meals"},
+            ],
+            "shocks": [
+                {"shock_type": "01", "severity": "2",
+                 "livelihoods_affected": ["01"]},
+            ],
+        }
+        stage = _stage_with_payload(connector, geo_codes, payload)
+        hh = promote_stage_record(stage, actor="op")
+
+        assert CopingStrategy.objects.filter(household=hh).count() == 1
+        assert Shock.objects.filter(household=hh).count() == 1
+
+    def test_the_top_level_contract_still_wins(self, connector, geo_codes):
+        """Top-level stays the contract; the other locations are
+        fallbacks, not equals."""
+        payload = _base_payload(geo_codes, coping_strategies=[
+            {"strategy_type": "took_loan", "category": "livelihood",
+             "frequency": "3", "used_flag": True},
+        ])
+        payload["food_shocks"] = {"coping": [
+            {"strategy_type": "reduced_meals", "category": "food",
+             "frequency": "5", "used_flag": True},
+        ]}
+        stage = _stage_with_payload(connector, geo_codes, payload)
+        hh = promote_stage_record(stage, actor="op")
+
+        rows = CopingStrategy.objects.filter(household=hh)
+        assert [r.strategy_type for r in rows] == ["took_loan"], (
+            "both locations were read — rows would be created twice"
+        )
+
+    def test_the_per_question_dict_is_not_mistaken_for_rows(
+        self, connector, geo_codes,
+    ):
+        """Kobo's shocks_coping.coping is the complete answer set keyed by
+        question, not registry rows. Reading it as rows would create
+        garbage strategy_types."""
+        payload = _base_payload(geo_codes)
+        payload["shocks_coping"] = {
+            "coping": {"l01a_casual_labor": "4", "l02d_reduce_meals": "5"},
+        }
+        stage = _stage_with_payload(connector, geo_codes, payload)
+        hh = promote_stage_record(stage, actor="op")
+        assert CopingStrategy.objects.filter(household=hh).count() == 0
