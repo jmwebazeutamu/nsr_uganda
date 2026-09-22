@@ -849,3 +849,61 @@ not root). Build 4m18s, healthz ok on attempt 1, all 8 services up,
    unresolved — but it means the questionnaire collects answers the
    canonical payload does not carry. Worth checking against the
    connector mapping; not touched here.
+
+## 2026-09-22 — deploy 0a69762 → 129ee46 (US-S24 section K/L detail)
+
+Kobo connector carries section K shock detail and section L coping rows;
+promotion resolves detail rows from either producer's location.
+
+**Code-only deploy — no migrations.** Pre-deploy dump taken anyway
+(prod has no automated backup):
+`/opt/nsrmis/backups/pre-us-s24-detailrows-20260922-165324Z.dump`
+(9.6M, exit 0, 131 tables verified via the mounted-container method).
+
+Build 4m54s, healthz ok on attempt 1, all 8 services up, 31G free.
+
+**Verified:** `/healthz` `/` `/home/` `/console/` → 200; `_kobo_shock_rows`,
+`_kobo_coping_rows` and `_detail_rows` present in the image.
+
+**Registry state at deploy:** 284 households, 0 Shock rows, 0
+CopingStrategy rows. The fix applies to new pulls only; existing records
+need the backfill.
+
+**Backfill NOT run.** Dry run on prod for scope:
+
+```
+scanned 377 landing(s)
+  shocks:            40 stage payloads,  32 promoted households
+  coping_strategies: 377 stage payloads, 284 promoted households
+```
+
+`manage.py backfill_detail_rows --apply` is required to write. It updates
+staged payloads and creates registry rows for already-promoted
+households, so it needs an explicit decision — it is a data change to
+promoted records, not a deploy step.
+
+**Regression scope checked before/after (evidence in the session):**
+
+- **PMT is insulated.** No PMTModelVersion — active v1, rejected v22001-3,
+  or pending v22004 — carries a shock or coping variable. Backfilling
+  cannot move a PMT score or a band under any current model.
+- **No DQA rule** references shocks or coping.
+- **data_management API** already serialises `shocks` and
+  `coping_strategies` on household detail; they have been returning `[]`
+  and will start returning rows. Schema unchanged, values change.
+- **choice_field_map** already decodes `shock_type`,
+  `coping_strategy_type` and `coping_frequency`, so labels work with no
+  further change.
+- **Data Explorer** declares a `household_shocks` dataset backed by
+  `mv_explorer_household_shocks_subregion` — **that matview does not
+  exist in the database** (only 2 matviews are present). Pre-existing
+  gap, and it becomes visible once shock rows exist.
+- No reporting view, search index or DRS export reads either entity.
+
+**Latent issue, not triggered today:** `_create_shocks()` uses
+`Shock.objects.create()` and `Shock` has no uniqueness constraint, so it
+is not idempotent — unlike `_create_coping_strategies()`, which uses
+`get_or_create` against a unique constraint. The backfill guards this by
+skipping any household that already has shock rows, and promotion's
+own idempotency check prevents a second fan-out, so nothing duplicates
+today. It would matter to any future re-run path.
