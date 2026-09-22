@@ -117,19 +117,81 @@ const notEditableReason = (path) => {
 //: Prefixed for that reason, not for style.
 //: design/v0.1/no-duplicate-globals.test.js now fails on a new
 //: collision rather than leaving it to be found in a browser.
-const HhCodedCell = ({ listName, value }) => {
+const HhCodedCell = ({ listName, value, type = "" }) => {
+  // include_deprecated: this is a review surface. A household coded
+  // against a retired frame — and the ones captured before the UBOS 2024
+  // migration are — would otherwise render as a bare number, which is
+  // exactly the record an operator most needs to read. The retired label
+  // is shown and marked as retired rather than withheld.
   const [options] = (listName && typeof useChoiceList === "function")
-    ? useChoiceList(listName)
+    ? useChoiceList(listName, { includeDeprecated: true })
     : [[]];
   if (value === null || value === undefined || value === "") {
     return <span className="muted">—</span>;
   }
-  const hit = (options || []).find(o => String(o.code) === String(value));
-  if (!hit) {
-    return <span className="t-mono">{String(value)}</span>;
+  const decode = (code) => (options || []).find(o => String(o.code) === String(code));
+
+  // A select_multiple answer is a space-separated list of codes. Decoding
+  // the whole string as one code finds nothing, so the screen showed the
+  // raw "phone radio bed mattress" — every selection undecoded on the
+  // one field where the operator most wants to read the selections.
+  if (type === "select_multiple" && String(value).trim().includes(" ")) {
+    const codes = String(value).trim().split(/\s+/);
+    return (
+      <span>
+        {codes.map((code, i) => {
+          const one = decode(code);
+          return (
+            <span key={code + i}>
+              {i > 0 && ", "}
+              {one ? one.label : <span className="t-mono">{code}</span>}
+              <span className="t-cap t-mono"> ({code})</span>
+              {one && one.status && one.status !== "active" && (
+                <span className="t-cap muted" title="Coded against a retired frame.">
+                  {" "}<Icon name="clock" size={10}/>
+                </span>
+              )}
+            </span>
+          );
+        })}
+      </span>
+    );
   }
+
+  const hit = decode(value);
+  if (!hit) {
+    // No option carries this code in any frame, current or retired. The
+    // value is shown as stored and flagged, because a code that decodes
+    // to nothing is a data fault, not a display one.
+    return (
+      <span>
+        <span className="t-mono">{String(value)}</span>
+        <span className="t-cap muted" style={{ marginLeft: 6 }}
+              title={
+                `No option in "${listName}" carries the code ${value}, in the `
+                + "current frame or any retired one, so it cannot be shown as "
+                + "words. The stored value is what was captured."
+              }>
+          <Icon name="alert-triangle" size={11}/> unknown code
+        </span>
+      </span>
+    );
+  }
+  const retired = hit.status && hit.status !== "active";
   return (
-    <span>{hit.label} <span className="t-cap t-mono">({String(value)})</span></span>
+    <span>
+      {hit.label} <span className="t-cap t-mono">({String(value)})</span>
+      {retired && (
+        <span className="t-cap muted" style={{ marginLeft: 6 }}
+              title={
+                "This answer was coded against a retired code frame. The "
+                + "label is the one that applied when it was captured; the "
+                + "current frame uses different codes."
+              }>
+          <Icon name="clock" size={11}/> retired code
+        </span>
+      )}
+    </span>
   );
 };
 
@@ -147,12 +209,15 @@ const HhReviewRow = ({ row, draft, onEdit }) => {
         {row.missing && (
           <span className="t-cap muted" style={{ marginLeft: 6 }}
                 title={
-                  "No question in the active instrument maps to this field, so "
-                  + "its name here is the raw payload key and any code it holds "
-                  + "cannot be decoded. This is a schema gap to close in the "
-                  + "Questionnaire Authoring data dictionary, not a display fault."
+                  "No question in the active questionnaire produces this field, "
+                  + "so the name shown is the raw key the payload used and any "
+                  + "code it holds cannot be turned into words. Either the "
+                  + "connector is sending something the questionnaire does not "
+                  + "ask, or the question exists but nothing records that it "
+                  + "feeds this field. Both are fixed in Questionnaire "
+                  + "Authoring, not here."
                 }>
-            <Icon name="alert-triangle" size={11}/> unmapped
+            <Icon name="alert-triangle" size={11}/> not in questionnaire
           </span>
         )}
       </div>
@@ -164,7 +229,7 @@ const HhReviewRow = ({ row, draft, onEdit }) => {
             value={shown === null || shown === undefined ? "" : String(shown)}
             onChange={(e) => onEdit(row.path, e.target.value)}/>
         ) : row.choiceList ? (
-          <HhCodedCell listName={row.choiceList} value={shown}/>
+          <HhCodedCell listName={row.choiceList} value={shown} type={row.type}/>
         ) : (
           <span className={row.empty ? "muted" : ""}>
             {row.empty ? "—" : String(shown)}
@@ -212,8 +277,8 @@ const HhRepeatTable = ({ table }) => (
           {c.missing && (
             <span className="t-cap muted" style={{ marginLeft: 4 }}
                   title={
-                    "No question in the active instrument maps to this "
-                    + "column, so its codes cannot be decoded."
+                    "No question in the active questionnaire produces this "
+                    + "column, so its codes cannot be turned into words."
                   }>
               <Icon name="alert-triangle" size={10}/>
             </span>
@@ -227,7 +292,7 @@ const HhRepeatTable = ({ table }) => (
           {table.columns.map(c => (
             <td key={c.key}>
               {c.choiceList
-                ? <HhCodedCell listName={c.choiceList} value={row[c.key]}/>
+                ? <HhCodedCell listName={c.choiceList} value={row[c.key]} type={c.type}/>
                 : (row[c.key] === null || row[c.key] === undefined || row[c.key] === ""
                     ? <span className="muted">—</span> : String(row[c.key]))}
             </td>
@@ -297,8 +362,14 @@ const useFieldDictionary = () => {
 
 const HouseholdReview = ({
   payload, canEdit = false, draft = {}, onEdit, editBlockedReason = "",
+  dictionary: dictionaryProp = null,
 }) => {
-  const { dictionary, loading: dictLoading, error: dictError } = useFieldDictionary();
+  // A caller that already holds the dictionary passes it in rather than
+  // making the screen fetch it again; the hook is the fallback.
+  const fetched = useFieldDictionary();
+  const dictionary = dictionaryProp || fetched.dictionary;
+  const dictLoading = dictionaryProp ? false : fetched.loading;
+  const dictError = dictionaryProp ? null : fetched.error;
   const model = useMemoHR(
     () => (typeof buildReviewModel === "function"
       ? buildReviewModel(payload, dictionary) : null),
@@ -361,15 +432,16 @@ const HouseholdReview = ({
           <div className="row gap-2" style={{ alignItems: "flex-start" }}>
             <Icon name="info" size={15} color="var(--accent-quality)"/>
             <div className="t-bodysm" style={{ color: "var(--neutral-700)" }}>
-              <strong>Schema gaps.</strong>{" "}
+              <strong>Not in the questionnaire.</strong>{" "}
               {unmappedFields.length > 0 && (
                 <span>
                   {unmappedFields.length} field
                   {unmappedFields.length === 1 ? " on this record is" : "s on this record are"}
-                  {" "}not defined by the active instrument
+                  {" "}not produced by any question in the active questionnaire
                   {" "}({unmappedFields.slice(0, 6).join(", ")}
                   {unmappedFields.length > 6 ? `, +${unmappedFields.length - 6} more` : ""}),
-                  {" "}so they show their raw key and their codes are not decoded.{" "}
+                  {" "}so they show the raw key the payload used and their codes
+                  {" "}are not turned into words.{" "}
                 </span>
               )}
               {missingThresholds.map(([key, why]) => (

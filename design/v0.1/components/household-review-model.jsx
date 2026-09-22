@@ -69,13 +69,25 @@ const LINEAGE_KEYS = new Set(["_source_keys", "_labels"]);
  *  `missing: true` means no FormQuestion maps to this key: the screen
  *  shows the raw key and flags it, so the gap is visible to whoever can
  *  close it rather than hidden behind a guess. */
-const resolveField = (key, dictionary) => {
-  const entry = (dictionary && dictionary.fields) ? dictionary.fields[key] : null;
+const resolveField = (key, dictionary, path = "") => {
+  const fields = (dictionary && dictionary.fields) || null;
+  // Kobo nests the food groups — food_security.food_groups.staples.days —
+  // so "days" alone is ambiguous across nine groups and only the parent
+  // segment distinguishes them. The wizard flattens the same fact to
+  // "staples_days", which is the alias the registry holds, so trying the
+  // parent-qualified form resolves both shapes from one entry.
+  let entry = fields ? fields[key] : null;
+  if (!entry && fields && path) {
+    const segments = String(path).split(".");
+    const parent = segments.length >= 2 ? segments[segments.length - 2] : "";
+    if (parent && !/^\d+$/.test(parent)) entry = fields[`${parent}_${key}`] || null;
+  }
   if (entry) {
     return {
       label: entry.label || String(key),
       questionLabel: entry.question_label || entry.label || "",
       choiceList: entry.choice_list || null,
+      type: entry.type || "",
       questionName: entry.question_name || "",
       section: entry.section || "",
       source: entry.source || "instrument",
@@ -86,6 +98,7 @@ const resolveField = (key, dictionary) => {
     label: String(key),
     questionLabel: "",
     choiceList: null,
+    type: "",
     questionName: "",
     section: "",
     source: "unmapped",
@@ -122,7 +135,7 @@ const rowsFrom = (obj, prefix, { skip = new Set(), dictionary = null } = {}) => 
       rows.push(...rowsFrom(value, path, { skip, dictionary }));
       continue;
     }
-    const field = resolveField(key, dictionary);
+    const field = resolveField(key, dictionary, path);
     rows.push({
       path,
       key,
@@ -130,6 +143,7 @@ const rowsFrom = (obj, prefix, { skip = new Set(), dictionary = null } = {}) => 
       title: field.questionLabel,
       value,
       choiceList: field.choiceList,
+      type: field.type,
       missing: field.missing,
       source: field.source,
       questionName: field.questionName,
@@ -145,12 +159,13 @@ const tableFrom = (list, prefix, dictionary = null) => {
   const columns = [...new Set(list.flatMap(r => Object.keys(r || {})))];
   return {
     columns: columns.map((c) => {
-      const field = resolveField(c, dictionary);
+      const field = resolveField(c, dictionary, `${prefix}.${c}`);
       return {
         key: c,
         label: field.missing ? humaniseKey(c) : field.label,
         title: field.questionLabel,
         choiceList: field.choiceList,
+        type: field.type,
         missing: field.missing,
         source: field.source,
       };

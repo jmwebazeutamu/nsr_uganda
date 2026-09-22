@@ -218,3 +218,88 @@ class TestLanguageFallback:
         sex = next(lst for lst in r.data["lists"] if lst["list_name"] == "sex")
         opt1 = next(o for o in sex["options"] if o["code"] == "1")
         assert opt1["label"] == "Male"
+
+
+@pytest.mark.django_db
+class TestDeprecatedCodesForReviewSurfaces:
+    """A record coded against a retired frame must still read as words.
+
+    Households captured before the UBOS 2024 migration carry codes that
+    migration 0019 deprecated. The bundle serves only ACTIVE options, so
+    the household review screen rendered those answers as bare numbers —
+    on the one screen whose entire purpose is reading what was collected.
+
+    Capture surfaces must keep seeing ACTIVE only: offering a retired
+    code in a dropdown would put the frame back into new data.
+    """
+
+    @pytest.fixture
+    def retired_and_current(self, db):
+        from apps.reference_data.models import (
+            ChoiceList, ChoiceListStatus, ChoiceOption,
+        )
+        cl = ChoiceList.objects.create(
+            list_name="frame_demo", version=1, status=ChoiceListStatus.ACTIVE,
+        )
+        ChoiceOption.objects.create(
+            choice_list=cl, code="1", label="Brick (legacy frame)",
+            language="en", sort_order=1, status=ChoiceOption.Status.DEPRECATED,
+        )
+        ChoiceOption.objects.create(
+            choice_list=cl, code="11", label="Concrete/Stones",
+            language="en", sort_order=1, status=ChoiceOption.Status.ACTIVE,
+        )
+        return cl
+
+    def _codes(self, client, extra=""):
+        response = client.get(f"{URL}?lists=frame_demo{extra}")
+        assert response.status_code == 200
+        lists = response.json()["lists"]
+        assert lists, "frame_demo missing from the bundle"
+        return {o["code"]: o for o in lists[0]["options"]}
+
+    def test_capture_surfaces_still_see_only_current_codes(
+        self, client, django_user_model, retired_and_current,
+    ):
+        user = django_user_model.objects.create_user(username="cap", password="pw")
+        client.force_login(user)
+        codes = self._codes(client)
+        assert "1" not in codes, (
+            "a retired code reached the default bundle — a capture dropdown "
+            "would offer it and put the old frame back into new data"
+        )
+        assert "11" in codes
+
+    def test_review_surfaces_can_ask_for_retired_codes(
+        self, client, django_user_model, retired_and_current,
+    ):
+        user = django_user_model.objects.create_user(username="rev", password="pw")
+        client.force_login(user)
+        codes = self._codes(client, "&include_deprecated=1")
+        assert "1" in codes, (
+            "without this a household coded against the retired frame shows "
+            "a bare number on the review screen"
+        )
+        assert codes["1"]["label"] == "Brick (legacy frame)"
+
+    def test_a_retired_code_is_marked_so_the_screen_can_say_so(
+        self, client, django_user_model, retired_and_current,
+    ):
+        """Showing the label is right; showing it as though the frame were
+        current is not."""
+        user = django_user_model.objects.create_user(username="rev2", password="pw")
+        client.force_login(user)
+        codes = self._codes(client, "&include_deprecated=1")
+        assert codes["1"]["status"] == "deprecated"
+        assert codes["11"]["status"] == "active"
+
+    def test_the_two_bundles_do_not_share_an_etag(
+        self, client, django_user_model, retired_and_current,
+    ):
+        """Different content must not collide in any cache keyed on ETag,
+        or a review fetch would poison the capture dropdowns."""
+        user = django_user_model.objects.create_user(username="rev3", password="pw")
+        client.force_login(user)
+        plain = client.get(f"{URL}?lists=frame_demo")
+        with_dep = client.get(f"{URL}?lists=frame_demo&include_deprecated=1")
+        assert plain["ETag"] != with_dep["ETag"]

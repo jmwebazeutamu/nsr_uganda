@@ -422,3 +422,92 @@ describe("missing thresholds", () => {
     expect(rows.some(r => r.label === "Members 65 and over")).toBe(true);
   });
 });
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   Coded answers read as words, including retired frames
+   ═══════════════════════════════════════════════════════════════════
+   Households captured before the UBOS 2024 code-frame migration carry
+   codes that migration 0019 deprecated. The bundle serves ACTIVE options
+   only, so those answers rendered as bare numbers — "1", "2", "3" — on
+   the one screen built for reading what was collected. */
+
+describe("coded answers", () => {
+  const DICT = {
+    fields: {
+      wall_material: {
+        label: "Main wall material", question_label: "G6. Main wall material",
+        choice_list: "wall_material", question_name: "g6_wall_material",
+        section: "G", type: "select_one", source: "instrument",
+      },
+    },
+    thresholds: {}, missing_thresholds: {}, conflicts: [],
+  };
+
+  let lastOpts = null;
+  const withOptions = (options) => {
+    globalThis.useChoiceList = (name, opts) => { lastOpts = opts; return [options, { loading: false }]; };
+  };
+  // Sections start collapsed; the rows are not in the DOM until opened.
+  const show = (payload) => {
+    render(React.createElement(HouseholdReview, { payload, dictionary: DICT }));
+    for (const b of screen.getAllByRole("button")) fireEvent.click(b);
+  };
+
+  it("shows the label with the code beside it, not the code alone", () => {
+    withOptions([{ code: "11", label: "Concrete/Stones", status: "active" }]);
+    show({ members: [], housing: { wall_material: "11" } });
+    expect(screen.getByText(/Concrete\/Stones/)).toBeTruthy();
+    expect(screen.getByText("(11)")).toBeTruthy();
+  });
+
+  it("asks for retired codes, because this is a review surface", () => {
+    withOptions([{ code: "11", label: "Concrete/Stones", status: "active" }]);
+    show({ members: [], housing: { wall_material: "11" } });
+    expect(lastOpts && lastOpts.includeDeprecated).toBe(true);
+  });
+
+  it("reads a retired code as words and marks it retired", () => {
+    // The exact case from the two pre-migration households: stored "1",
+    // deprecated by 0019, previously rendered as a bare "1".
+    withOptions([{ code: "1", label: "Brick (burnt / unburnt)", status: "deprecated" }]);
+    show({ members: [], housing: { wall_material: "1" } });
+    expect(screen.getByText(/Brick \(burnt \/ unburnt\)/)).toBeTruthy();
+    expect(screen.getByText(/retired code/)).toBeTruthy();
+  });
+
+  it("decodes every selection of a multi-select, not the string as one code", () => {
+    // "phone radio bed mattress" was rendered raw, because the whole
+    // string was looked up as a single code.
+    globalThis.useChoiceList = () => [[
+      { code: "phone", label: "Mobile phone", status: "active" },
+      { code: "radio", label: "Radio", status: "active" },
+      { code: "bed", label: "Bed", status: "active" },
+    ], { loading: false }];
+    render(React.createElement(HouseholdReview, {
+      payload: { members: [], housing: { assets_owned: "phone radio bed" } },
+      dictionary: {
+        fields: {
+          assets_owned: {
+            label: "Assets owned", question_label: "G15. Assets owned",
+            choice_list: "asset_type", question_name: "g15_assets_owned",
+            section: "G", type: "select_multiple", source: "instrument",
+          },
+        },
+        thresholds: {}, missing_thresholds: {}, conflicts: [],
+      },
+    }));
+    for (const b of screen.getAllByRole("button")) fireEvent.click(b);
+    expect(screen.getByText(/Mobile phone/)).toBeTruthy();
+    expect(screen.getByText(/Radio/)).toBeTruthy();
+    expect(screen.getByText(/Bed/)).toBeTruthy();
+  });
+
+  it("flags a code that decodes in no frame at all", () => {
+    // tenure "1" is this case: not in the current frame and never
+    // deprecated either, so it is a data fault, not a display one.
+    withOptions([{ code: "11", label: "Concrete/Stones", status: "active" }]);
+    show({ members: [], housing: { wall_material: "9" } });
+    expect(screen.getByText(/unknown code/)).toBeTruthy();
+  });
+});

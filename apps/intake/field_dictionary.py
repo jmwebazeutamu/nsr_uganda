@@ -18,7 +18,7 @@ from dataclasses import dataclass, field as dc_field
 
 from apps.dqa.models import DqaRule, RuleStatus
 
-from .canonical_fields import CAPTURE_METADATA
+from .canonical_fields import DERIVED_FIELDS
 from .models import FormQuestion, FormVersion
 
 # Age thresholds the household composition summary needs, and the rule
@@ -140,7 +140,9 @@ def build_field_dictionary(form_version: FormVersion | None = None) -> FieldDict
             .order_by("section__order", "order_in_section")
         )
         for question in questions:
-            canonical = question.canonical_field
+            aliases = list(question.payload_aliases or [])
+            if question.canonical_field and question.canonical_field not in aliases:
+                aliases.insert(0, question.canonical_field)
             choice_list = getattr(question.choice_list_ref, "list_name", None)
             entry = FieldEntry(
                 label=strip_question_code(question.label),
@@ -150,31 +152,33 @@ def build_field_dictionary(form_version: FormVersion | None = None) -> FieldDict
                 section=question.section.code,
                 type=question.type,
             )
-            existing = dictionary.fields.get(canonical)
-            if existing is None:
-                dictionary.fields[canonical] = entry
-                continue
-            # Several questions feeding one canonical column is expected
-            # in repeat blocks (the K03 shock-type set). Them disagreeing
-            # about the choice list is not — that is the drift this whole
-            # exercise exists to surface, so it is reported rather than
-            # silently resolved by load order.
-            if existing.choice_list != entry.choice_list:
-                dictionary.conflicts.append({
-                    "canonical_field": canonical,
-                    "kept": existing.question_name,
-                    "ignored": question.name,
-                    "reason": (
-                        f"choice list differs: {existing.choice_list!r} "
-                        f"vs {entry.choice_list!r}"
-                    ),
-                })
+            for canonical in aliases:
+                existing = dictionary.fields.get(canonical)
+                if existing is None:
+                    dictionary.fields[canonical] = entry
+                    continue
+                # Several questions feeding one key is expected in repeat
+                # blocks (the K03 shock-type set). Them disagreeing about
+                # the choice list is not — that is the drift this whole
+                # exercise exists to surface, so it is reported rather
+                # than silently resolved by load order.
+                if existing.choice_list != entry.choice_list:
+                    dictionary.conflicts.append({
+                        "canonical_field": canonical,
+                        "kept": existing.question_name,
+                        "ignored": question.name,
+                        "reason": (
+                            f"choice list differs: {existing.choice_list!r} "
+                            f"vs {entry.choice_list!r}"
+                        ),
+                    })
 
-    # Capture metadata: emitted by the channel, never asked of a
-    # respondent, so no FormQuestion owns it. Declared once, server-side.
-    for name, label in CAPTURE_METADATA.items():
+    # Derived and capture-channel fields: produced by the connector, never
+    # asked of a respondent, so no FormQuestion owns them. Declared once,
+    # server-side, so the design layer holds no field vocabulary of its own.
+    for name, label in DERIVED_FIELDS.items():
         dictionary.fields.setdefault(
-            name, FieldEntry(label=label, source="capture-metadata"),
+            name, FieldEntry(label=label, source="derived"),
         )
 
     for key, (rule_id, parameter) in THRESHOLD_SOURCES.items():

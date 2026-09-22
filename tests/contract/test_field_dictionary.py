@@ -16,7 +16,9 @@ import pytest
 from django.urls import reverse
 
 from apps.dqa.models import DqaRule, RuleStatus
-from apps.intake.canonical_fields import CAPTURE_METADATA, QUESTION_TO_CANONICAL
+from apps.intake.canonical_fields import (
+    DERIVED_FIELDS, QUESTION_ALIASES, QUESTION_TO_CANONICAL,
+)
 from apps.intake.field_dictionary import build_field_dictionary, strip_question_code
 from apps.intake.models import FormQuestion, FormVersion
 
@@ -52,7 +54,7 @@ class TestCanonicalFieldSeeding:
             .filter(section__form_version=active)
             .values_list("name", flat=True)
         )
-        unknown = sorted(set(QUESTION_TO_CANONICAL) - names)
+        unknown = sorted(set(QUESTION_ALIASES) - names)
         assert not unknown, (
             f"canonical_fields.py maps questions that are not in the active "
             f"instrument: {unknown}"
@@ -81,35 +83,102 @@ class TestCanonicalFieldSeeding:
 
 @pytest.mark.django_db
 class TestFieldDictionary:
-    def test_the_fields_the_review_screen_needs_resolve(self):
-        """The keys the old hardcoded maps carried are exactly the keys
-        the screen renders. Every one that the instrument genuinely asks
-        must now resolve from the registry."""
-        dictionary = build_field_dictionary().as_dict()
-        fields = dictionary["fields"]
-        # A representative slice, deliberately including the four the
-        # prefix-stripping heuristic would have got wrong.
-        must_resolve = {
-            "wall_material": "g6_wall_material",
-            "sleeping_rooms": "g4_rooms_sleeping",   # words swap
-            "land_title": "h8_title_deed",           # different words
-            "contact_phone": "b2_telephone_number",  # different words
-            "start": "a15_start_time",               # different words
-            "cooking_fuel": "g8_cooking_fuel",
-            "water_source": "g10_water_source",
-            "toilet_type": "g11_toilet_type",
-            "literacy_status": "e1_literacy",
-            "main_activity_last_30d": "f1_main_job",
-            "sex": "c4_sex",
-            "marital_status": "c3_marital_status",
+    def test_both_producers_field_names_resolve_to_one_question(self):
+        """The defect this whole mapping exists to stop.
+
+        Kobo and the parish wizard name the same fields differently —
+        rooms_sleeping vs sleeping_rooms, self_care vs selfcare, main_job
+        vs main_activity_last_30d. The review screen's old hardcoded map
+        held only the wizard's names, so every Kobo-shaped record showed
+        raw keys and undecoded codes. Both names must now reach the same
+        question, with the same label and the same choice list.
+        """
+        fields = build_field_dictionary().as_dict()["fields"]
+        pairs = {
+            "g4_rooms_sleeping": ("rooms_sleeping", "sleeping_rooms"),
+            "g3_rooms_total": ("rooms_total", "total_rooms"),
+            "g9_lighting_source": ("lighting_source", "lighting_energy"),
+            "g10_water_source": ("water_source", "drinking_water_source"),
+            "g11_toilet_type": ("toilet_type", "toilet_facility"),
+            "g16_livelihood_source": ("livelihood_source", "main_livelihood"),
+            "d6_remembering": ("remembering", "memory"),
+            "d7_self_care": ("self_care", "selfcare"),
+            "d8_communicating": ("communicating", "communication"),
+            "e1_literacy": ("literacy", "literacy_status"),
+            "f1_main_job": ("main_job", "main_activity_last_30d"),
+            "f3_work_sector": ("work_sector", "sector"),
+            "f4_work_status": ("work_status", "employment_status"),
+            "f10_savings_place": ("savings_place", "savings_location"),
+            "h4_ag_purpose": ("ag_purpose", "agricultural_purpose"),
         }
-        for canonical, question_name in must_resolve.items():
-            assert canonical in fields, f"{canonical} does not resolve"
-            assert fields[canonical]["question_name"] == question_name, (
-                f"{canonical} resolves to {fields[canonical]['question_name']}, "
-                f"expected {question_name}"
+        for question_name, (kobo_key, wizard_key) in pairs.items():
+            for key in (kobo_key, wizard_key):
+                assert key in fields, (
+                    f"{key} does not resolve — a {question_name} answer would "
+                    f"render as a raw key with its code undecoded"
+                )
+                assert fields[key]["question_name"] == question_name
+            assert fields[kobo_key]["label"] == fields[wizard_key]["label"], (
+                f"{kobo_key} and {wizard_key} are the same question but "
+                f"render different labels"
             )
-            assert fields[canonical]["label"], f"{canonical} has an empty label"
+            assert fields[kobo_key]["choice_list"] == fields[wizard_key]["choice_list"]
+
+    def test_every_key_real_payloads_carry_resolves(self):
+        """Assert against the payloads, not against a copy of the map.
+
+        The previous mapping passed its own tests and still resolved
+        nothing on real data, because it was built from the console's
+        vocabulary rather than from what the connectors emit.
+        """
+        import json
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parent.parent.parent
+        payloads = json.loads(
+            (repo / "design" / "v0.1" / "data" / "fixtures"
+             / "canonical-payloads.json").read_text()
+        )
+        fields = build_field_dictionary().as_dict()["fields"]
+
+        def leaves(node, prefix="", out=None):
+            out = [] if out is None else out
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if isinstance(value, dict):
+                        leaves(value, f"{prefix}{key}.", out)
+                    elif isinstance(value, list):
+                        for item in value:
+                            if isinstance(item, dict):
+                                leaves(item, f"{prefix}{key}.", out)
+                            else:
+                                out.append((key, prefix))
+                    else:
+                        out.append((key, prefix))
+            return out
+
+        def resolves(key, prefix):
+            if key in fields:
+                return True
+            # Kobo nests the food groups, so the parent segment
+            # disambiguates "days" across nine of them.
+            segments = [s for s in prefix.rstrip(".").split(".") if s]
+            if segments and not segments[-1].isdigit():
+                return f"{segments[-1]}_{key}" in fields
+            return False
+
+        for shape, payload in payloads.items():
+            unresolved = sorted({
+                key for key, prefix in leaves(payload)
+                if key != "_fixture"
+                and "_source_keys" not in prefix
+                and not prefix.startswith("consent_block")
+                and not resolves(key, prefix)
+            })
+            assert not unresolved, (
+                f"{shape} payload carries {len(unresolved)} field(s) the "
+                f"registry cannot name: {unresolved}"
+            )
 
     def test_coded_fields_carry_their_choice_list(self):
         fields = build_field_dictionary().as_dict()["fields"]
@@ -141,13 +210,15 @@ class TestFieldDictionary:
         fields = build_field_dictionary().as_dict()["fields"]
         assert fields["wall_material"]["label"] == "Main wall material (revised wording)"
 
-    def test_capture_metadata_is_labelled_and_marked_as_such(self):
-        """Fields the channel emits are not questions. They still need
-        labels, but the screen must be able to say they were not asked."""
+    def test_derived_fields_are_labelled_and_marked_as_such(self):
+        """Fields the connector produces are not questions. They still
+        need labels, but the screen must be able to say they were not
+        asked — first_name and surname are split out of C1 Full Name, and
+        showing all three as "Full Name" would be worse than useless."""
         fields = build_field_dictionary().as_dict()["fields"]
-        for name in CAPTURE_METADATA:
+        for name in DERIVED_FIELDS:
             assert name in fields, f"{name} has no label at all"
-            assert fields[name]["source"] == "capture-metadata"
+            assert fields[name]["source"] == "derived"
             assert fields[name]["question_name"] == ""
 
     def test_question_code_prefixes_are_stripped_for_display_only(self):

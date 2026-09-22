@@ -153,7 +153,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 1,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -172,7 +173,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 2,
-   "canonical_field": "consent"
+   "canonical_field": "consent",
+   "payload_aliases": [
+    "consent"
+   ]
   },
   {
    "form_version": 1,
@@ -191,7 +195,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 3,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -210,7 +215,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 1,
-   "canonical_field": ""
+   "canonical_field": "region",
+   "payload_aliases": [
+    "region"
+   ]
   },
   {
    "form_version": 1,
@@ -229,7 +237,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 2,
-   "canonical_field": ""
+   "canonical_field": "sub_region",
+   "payload_aliases": [
+    "sub_region",
+    "subregion"
+   ]
   },
   {
    "form_version": 1,
@@ -248,7 +260,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 3,
-   "canonical_field": ""
+   "canonical_field": "district",
+   "payload_aliases": [
+    "district"
+   ]
   },
   {
    "form_version": 1,
@@ -267,7 +282,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 4,
-   "canonical_field": ""
+   "canonical_field": "county",
+   "payload_aliases": [
+    "county"
+   ]
   },
   {
    "form_version": 1,
@@ -286,7 +304,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 5,
-   "canonical_field": ""
+   "canonical_field": "sub_county",
+   "payload_aliases": [
+    "sub_county",
+    "subcounty"
+   ]
   },
   {
    "form_version": 1,
@@ -305,7 +327,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 6,
-   "canonical_field": ""
+   "canonical_field": "parish",
+   "payload_aliases": [
+    "parish"
+   ]
   },
   {
    "form_version": 1,
@@ -324,7 +349,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 7,
-   "canonical_field": ""
+   "canonical_field": "village",
+   "payload_aliases": [
+    "village"
+   ]
   },
   {
    "form_version": 1,
@@ -343,7 +371,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 8,
-   "canonical_field": "urban_rural"
+   "canonical_field": "urban_rural",
+   "payload_aliases": [
+    "urban_rural"
+   ]
   },
   {
    "form_version": 1,
@@ -362,7 +393,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 9,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -381,7 +413,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 10,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -400,7 +433,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 11,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -419,7 +453,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 12,
-   "canonical_field": "interviewer"
+   "canonical_field": "interviewer",
+   "payload_aliases": [
+    "interviewer"
+   ]
   },
   {
    "form_version": 1,
@@ -438,7 +475,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 13,
-   "canonical_field": "supervisor"
+   "canonical_field": "supervisor",
+   "payload_aliases": [
+    "supervisor"
+   ]
   },
   {
    "form_version": 1,
@@ -457,7 +497,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 14,
-   "canonical_field": "start"
+   "canonical_field": "start",
+   "payload_aliases": [
+    "start"
+   ]
   },
   {
    "form_version": 1,
@@ -476,7 +519,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 1,
-   "canonical_field": "respondent_name"
+   "canonical_field": "respondent_name",
+   "payload_aliases": [
+    "respondent_name"
+   ]
   },
   {
    "form_version": 1,
@@ -495,7 +541,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 2,
-   "canonical_field": "contact_phone"
+   "canonical_field": "contact_phone",
+   "payload_aliases": [
+    "contact_phone",
+    "respondent_phone"
+   ]
   },
   {
    "form_version": 1,
@@ -514,7 +564,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 3,
-   "canonical_field": "address_narrative"
+   "canonical_field": "address_narrative",
+   "payload_aliases": [
+    "address_narrative"
+   ]
   },
   {
    "form_version": 1,
@@ -533,7 +586,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 4,
-   "canonical_field": "head_name"
+   "canonical_field": "head_name",
+   "payload_aliases": [
+    "head_name"
+   ]
   },
   {
    "form_version": 1,
@@ -552,7 +608,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 5,
-   "canonical_field": "interview_result"
+   "canonical_field": "interview_result",
+   "payload_aliases": [
+    "interview_result"
+   ]
   },
   {
    "form_version": 1,
@@ -571,7 +630,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 6,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -590,7 +650,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 7,
-   "canonical_field": "reported_household_size"
+   "canonical_field": "reported_household_size",
+   "payload_aliases": [
+    "reported_household_size",
+    "hh_size"
+   ]
   },
   {
    "form_version": 1,
@@ -609,7 +673,8 @@
    "parameters": {},
    "calculation": "position(..)",
    "order_in_section": 1,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -628,7 +693,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 2,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -647,7 +713,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 3,
-   "canonical_field": "relationship_to_head"
+   "canonical_field": "relationship_to_head",
+   "payload_aliases": [
+    "relationship_to_head"
+   ]
   },
   {
    "form_version": 1,
@@ -666,7 +735,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 4,
-   "canonical_field": "marital_status"
+   "canonical_field": "marital_status",
+   "payload_aliases": [
+    "marital_status"
+   ]
   },
   {
    "form_version": 1,
@@ -685,7 +757,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 5,
-   "canonical_field": "sex"
+   "canonical_field": "sex",
+   "payload_aliases": [
+    "sex"
+   ]
   },
   {
    "form_version": 1,
@@ -704,7 +779,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 6,
-   "canonical_field": "date_of_birth"
+   "canonical_field": "date_of_birth",
+   "payload_aliases": [
+    "date_of_birth"
+   ]
   },
   {
    "form_version": 1,
@@ -723,7 +801,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 7,
-   "canonical_field": "age_years"
+   "canonical_field": "age_years",
+   "payload_aliases": [
+    "age_years"
+   ]
   },
   {
    "form_version": 1,
@@ -742,7 +823,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 8,
-   "canonical_field": "birth_certificate_status"
+   "canonical_field": "birth_certificate_status",
+   "payload_aliases": [
+    "birth_certificate_status"
+   ]
   },
   {
    "form_version": 1,
@@ -761,7 +845,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 9,
-   "canonical_field": "nin_status"
+   "canonical_field": "nin_status",
+   "payload_aliases": [
+    "nin_status"
+   ]
   },
   {
    "form_version": 1,
@@ -780,7 +867,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 10,
-   "canonical_field": ""
+   "canonical_field": "nin",
+   "payload_aliases": [
+    "nin"
+   ]
   },
   {
    "form_version": 1,
@@ -799,7 +889,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 11,
-   "canonical_field": "nationality"
+   "canonical_field": "nationality",
+   "payload_aliases": [
+    "nationality"
+   ]
   },
   {
    "form_version": 1,
@@ -818,7 +911,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 12,
-   "canonical_field": "residency_status"
+   "canonical_field": "residency_status",
+   "payload_aliases": [
+    "residency_status"
+   ]
   },
   {
    "form_version": 1,
@@ -837,7 +933,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 13,
-   "canonical_field": ""
+   "canonical_field": "mother_alive_flag",
+   "payload_aliases": [
+    "mother_alive_flag"
+   ]
   },
   {
    "form_version": 1,
@@ -856,7 +955,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 14,
-   "canonical_field": ""
+   "canonical_field": "father_alive_flag",
+   "payload_aliases": [
+    "father_alive_flag"
+   ]
   },
   {
    "form_version": 1,
@@ -875,7 +977,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 15,
-   "canonical_field": ""
+   "canonical_field": "father_line_number",
+   "payload_aliases": [
+    "father_line_number"
+   ]
   },
   {
    "form_version": 1,
@@ -894,7 +999,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 16,
-   "canonical_field": ""
+   "canonical_field": "mother_line_number",
+   "payload_aliases": [
+    "mother_line_number"
+   ]
   },
   {
    "form_version": 1,
@@ -913,7 +1021,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 17,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -932,7 +1041,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 18,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -951,7 +1061,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 19,
-   "canonical_field": ""
+   "canonical_field": "telephone_1",
+   "payload_aliases": [
+    "telephone_1"
+   ]
   },
   {
    "form_version": 1,
@@ -970,7 +1083,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 20,
-   "canonical_field": ""
+   "canonical_field": "telephone_2",
+   "payload_aliases": [
+    "telephone_2"
+   ]
   },
   {
    "form_version": 1,
@@ -989,7 +1105,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 21,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -1008,7 +1125,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 22,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -1029,7 +1147,8 @@
    },
    "calculation": "",
    "order_in_section": 23,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -1048,7 +1167,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 24,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -1067,7 +1187,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 25,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -1086,7 +1207,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 26,
-   "canonical_field": "chronic_illness_flag"
+   "canonical_field": "chronic_illness_flag",
+   "payload_aliases": [
+    "chronic_illness_flag",
+    "chronic_illness"
+   ]
   },
   {
    "form_version": 1,
@@ -1105,7 +1230,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 27,
-   "canonical_field": "chronic_illness_types"
+   "canonical_field": "chronic_illness_types",
+   "payload_aliases": [
+    "chronic_illness_types"
+   ]
   },
   {
    "form_version": 1,
@@ -1124,7 +1252,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 28,
-   "canonical_field": "seeing"
+   "canonical_field": "seeing",
+   "payload_aliases": [
+    "seeing"
+   ]
   },
   {
    "form_version": 1,
@@ -1143,7 +1274,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 29,
-   "canonical_field": "hearing"
+   "canonical_field": "hearing",
+   "payload_aliases": [
+    "hearing"
+   ]
   },
   {
    "form_version": 1,
@@ -1162,7 +1296,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 30,
-   "canonical_field": "walking"
+   "canonical_field": "walking",
+   "payload_aliases": [
+    "walking"
+   ]
   },
   {
    "form_version": 1,
@@ -1181,7 +1318,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 31,
-   "canonical_field": "memory"
+   "canonical_field": "memory",
+   "payload_aliases": [
+    "memory",
+    "remembering"
+   ]
   },
   {
    "form_version": 1,
@@ -1200,7 +1341,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 32,
-   "canonical_field": "selfcare"
+   "canonical_field": "selfcare",
+   "payload_aliases": [
+    "selfcare",
+    "self_care"
+   ]
   },
   {
    "form_version": 1,
@@ -1219,7 +1364,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 33,
-   "canonical_field": "communication"
+   "canonical_field": "communication",
+   "payload_aliases": [
+    "communication",
+    "communicating"
+   ]
   },
   {
    "form_version": 1,
@@ -1238,7 +1387,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 34,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -1257,7 +1407,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 35,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -1276,7 +1427,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 36,
-   "canonical_field": "literacy_status"
+   "canonical_field": "literacy_status",
+   "payload_aliases": [
+    "literacy_status",
+    "literacy"
+   ]
   },
   {
    "form_version": 1,
@@ -1295,7 +1450,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 37,
-   "canonical_field": "ever_attended"
+   "canonical_field": "ever_attended",
+   "payload_aliases": [
+    "ever_attended",
+    "ever_school"
+   ]
   },
   {
    "form_version": 1,
@@ -1314,7 +1473,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 38,
-   "canonical_field": "never_attended_reason"
+   "canonical_field": "never_attended_reason",
+   "payload_aliases": [
+    "never_attended_reason",
+    "never_school_reason"
+   ]
   },
   {
    "form_version": 1,
@@ -1333,7 +1496,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 39,
-   "canonical_field": "highest_grade"
+   "canonical_field": "highest_grade",
+   "payload_aliases": [
+    "highest_grade"
+   ]
   },
   {
    "form_version": 1,
@@ -1352,7 +1518,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 40,
-   "canonical_field": "currently_attending"
+   "canonical_field": "currently_attending",
+   "payload_aliases": [
+    "currently_attending"
+   ]
   },
   {
    "form_version": 1,
@@ -1371,7 +1540,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 41,
-   "canonical_field": "why_stopped"
+   "canonical_field": "why_stopped",
+   "payload_aliases": [
+    "why_stopped",
+    "stopped_school_reason"
+   ]
   },
   {
    "form_version": 1,
@@ -1390,7 +1563,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 42,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -1409,7 +1583,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 43,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -1428,7 +1603,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 44,
-   "canonical_field": "main_activity_last_30d"
+   "canonical_field": "main_activity_last_30d",
+   "payload_aliases": [
+    "main_activity_last_30d",
+    "main_job"
+   ]
   },
   {
    "form_version": 1,
@@ -1447,7 +1626,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 45,
-   "canonical_field": "work_frequency"
+   "canonical_field": "work_frequency",
+   "payload_aliases": [
+    "work_frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -1466,7 +1648,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 46,
-   "canonical_field": "sector"
+   "canonical_field": "sector",
+   "payload_aliases": [
+    "sector",
+    "work_sector"
+   ]
   },
   {
    "form_version": 1,
@@ -1485,7 +1671,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 47,
-   "canonical_field": "employment_status"
+   "canonical_field": "employment_status",
+   "payload_aliases": [
+    "employment_status",
+    "work_status"
+   ]
   },
   {
    "form_version": 1,
@@ -1504,7 +1694,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 48,
-   "canonical_field": "not_working_reason"
+   "canonical_field": "not_working_reason",
+   "payload_aliases": [
+    "not_working_reason"
+   ]
   },
   {
    "form_version": 1,
@@ -1523,7 +1716,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 49,
-   "canonical_field": ""
+   "canonical_field": "gov_program_beneficiary",
+   "payload_aliases": [
+    "gov_program_beneficiary"
+   ]
   },
   {
    "form_version": 1,
@@ -1542,7 +1738,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 50,
-   "canonical_field": ""
+   "canonical_field": "programmes",
+   "payload_aliases": [
+    "programmes"
+   ]
   },
   {
    "form_version": 1,
@@ -1561,7 +1760,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 51,
-   "canonical_field": ""
+   "canonical_field": "currently_benefiting",
+   "payload_aliases": [
+    "currently_benefiting"
+   ]
   },
   {
    "form_version": 1,
@@ -1580,7 +1782,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 52,
-   "canonical_field": "made_savings"
+   "canonical_field": "made_savings",
+   "payload_aliases": [
+    "made_savings"
+   ]
   },
   {
    "form_version": 1,
@@ -1599,7 +1804,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 53,
-   "canonical_field": "savings_location"
+   "canonical_field": "savings_location",
+   "payload_aliases": [
+    "savings_location",
+    "savings_place"
+   ]
   },
   {
    "form_version": 1,
@@ -1618,7 +1827,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 54,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -1637,7 +1847,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 1,
-   "canonical_field": "tenure"
+   "canonical_field": "tenure",
+   "payload_aliases": [
+    "tenure"
+   ]
   },
   {
    "form_version": 1,
@@ -1656,7 +1869,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 2,
-   "canonical_field": "dwelling_type"
+   "canonical_field": "dwelling_type",
+   "payload_aliases": [
+    "dwelling_type"
+   ]
   },
   {
    "form_version": 1,
@@ -1675,7 +1891,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 3,
-   "canonical_field": "rooms_total"
+   "canonical_field": "total_rooms",
+   "payload_aliases": [
+    "total_rooms",
+    "rooms_total"
+   ]
   },
   {
    "form_version": 1,
@@ -1694,7 +1914,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 4,
-   "canonical_field": "sleeping_rooms"
+   "canonical_field": "sleeping_rooms",
+   "payload_aliases": [
+    "sleeping_rooms",
+    "rooms_sleeping"
+   ]
   },
   {
    "form_version": 1,
@@ -1713,7 +1937,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 5,
-   "canonical_field": "roof_material"
+   "canonical_field": "roof_material",
+   "payload_aliases": [
+    "roof_material"
+   ]
   },
   {
    "form_version": 1,
@@ -1732,7 +1959,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 6,
-   "canonical_field": "wall_material"
+   "canonical_field": "wall_material",
+   "payload_aliases": [
+    "wall_material"
+   ]
   },
   {
    "form_version": 1,
@@ -1751,7 +1981,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 7,
-   "canonical_field": "floor_material"
+   "canonical_field": "floor_material",
+   "payload_aliases": [
+    "floor_material"
+   ]
   },
   {
    "form_version": 1,
@@ -1770,7 +2003,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 8,
-   "canonical_field": "cooking_fuel"
+   "canonical_field": "cooking_fuel",
+   "payload_aliases": [
+    "cooking_fuel"
+   ]
   },
   {
    "form_version": 1,
@@ -1789,7 +2025,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 9,
-   "canonical_field": "lighting_energy"
+   "canonical_field": "lighting_energy",
+   "payload_aliases": [
+    "lighting_energy",
+    "lighting_source"
+   ]
   },
   {
    "form_version": 1,
@@ -1808,7 +2048,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 10,
-   "canonical_field": "water_source"
+   "canonical_field": "drinking_water_source",
+   "payload_aliases": [
+    "drinking_water_source",
+    "water_source"
+   ]
   },
   {
    "form_version": 1,
@@ -1827,7 +2071,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 11,
-   "canonical_field": "toilet_type"
+   "canonical_field": "toilet_facility",
+   "payload_aliases": [
+    "toilet_facility",
+    "toilet_type"
+   ]
   },
   {
    "form_version": 1,
@@ -1846,7 +2094,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 12,
-   "canonical_field": "share_toilet"
+   "canonical_field": "toilet_shared",
+   "payload_aliases": [
+    "toilet_shared",
+    "share_toilet"
+   ]
   },
   {
    "form_version": 1,
@@ -1865,7 +2117,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 13,
-   "canonical_field": "households_sharing_toilet"
+   "canonical_field": "households_sharing_toilet",
+   "payload_aliases": [
+    "households_sharing_toilet",
+    "share_toilet_households"
+   ]
   },
   {
    "form_version": 1,
@@ -1884,7 +2140,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 14,
-   "canonical_field": "waste_disposal"
+   "canonical_field": "waste_disposal",
+   "payload_aliases": [
+    "waste_disposal"
+   ]
   },
   {
    "form_version": 1,
@@ -1903,7 +2162,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 15,
-   "canonical_field": "assets_owned"
+   "canonical_field": "assets_owned",
+   "payload_aliases": [
+    "assets_owned",
+    "asset_type"
+   ]
   },
   {
    "form_version": 1,
@@ -1922,7 +2185,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 16,
-   "canonical_field": ""
+   "canonical_field": "radio",
+   "payload_aliases": [
+    "radio"
+   ]
   },
   {
    "form_version": 1,
@@ -1941,7 +2207,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 17,
-   "canonical_field": ""
+   "canonical_field": "tv",
+   "payload_aliases": [
+    "tv"
+   ]
   },
   {
    "form_version": 1,
@@ -1960,7 +2229,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 18,
-   "canonical_field": ""
+   "canonical_field": "phone",
+   "payload_aliases": [
+    "phone"
+   ]
   },
   {
    "form_version": 1,
@@ -1979,7 +2251,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 19,
-   "canonical_field": ""
+   "canonical_field": "bicycle",
+   "payload_aliases": [
+    "bicycle"
+   ]
   },
   {
    "form_version": 1,
@@ -1998,7 +2273,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 20,
-   "canonical_field": ""
+   "canonical_field": "motorcycle",
+   "payload_aliases": [
+    "motorcycle"
+   ]
   },
   {
    "form_version": 1,
@@ -2017,7 +2295,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 21,
-   "canonical_field": ""
+   "canonical_field": "car",
+   "payload_aliases": [
+    "car"
+   ]
   },
   {
    "form_version": 1,
@@ -2036,7 +2317,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 22,
-   "canonical_field": ""
+   "canonical_field": "bed",
+   "payload_aliases": [
+    "bed"
+   ]
   },
   {
    "form_version": 1,
@@ -2055,7 +2339,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 23,
-   "canonical_field": ""
+   "canonical_field": "mattress",
+   "payload_aliases": [
+    "mattress"
+   ]
   },
   {
    "form_version": 1,
@@ -2074,7 +2361,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 24,
-   "canonical_field": ""
+   "canonical_field": "solar",
+   "payload_aliases": [
+    "solar"
+   ]
   },
   {
    "form_version": 1,
@@ -2093,7 +2383,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 25,
-   "canonical_field": ""
+   "canonical_field": "livestock_count",
+   "payload_aliases": [
+    "livestock_count"
+   ]
   },
   {
    "form_version": 1,
@@ -2112,7 +2405,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 26,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -2131,7 +2425,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 27,
-   "canonical_field": "main_livelihood"
+   "canonical_field": "main_livelihood",
+   "payload_aliases": [
+    "main_livelihood",
+    "livelihood_source"
+   ]
   },
   {
    "form_version": 1,
@@ -2150,7 +2448,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 1,
-   "canonical_field": "crop_production"
+   "canonical_field": "crop_production",
+   "payload_aliases": [
+    "crop_production"
+   ]
   },
   {
    "form_version": 1,
@@ -2169,7 +2470,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 2,
-   "canonical_field": "livestock"
+   "canonical_field": "livestock",
+   "payload_aliases": [
+    "livestock"
+   ]
   },
   {
    "form_version": 1,
@@ -2188,7 +2492,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 3,
-   "canonical_field": "livestock_counts"
+   "canonical_field": "livestock_counts",
+   "payload_aliases": [
+    "livestock_counts"
+   ]
   },
   {
    "form_version": 1,
@@ -2207,7 +2514,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 4,
-   "canonical_field": "ag_purpose"
+   "canonical_field": "agricultural_purpose",
+   "payload_aliases": [
+    "agricultural_purpose",
+    "ag_purpose"
+   ]
   },
   {
    "form_version": 1,
@@ -2226,7 +2537,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 5,
-   "canonical_field": "crops_grown"
+   "canonical_field": "crops_grown",
+   "payload_aliases": [
+    "crops_grown",
+    "crop_name"
+   ]
   },
   {
    "form_version": 1,
@@ -2245,7 +2560,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 6,
-   "canonical_field": "land_ownership"
+   "canonical_field": "land_ownership",
+   "payload_aliases": [
+    "land_ownership"
+   ]
   },
   {
    "form_version": 1,
@@ -2264,7 +2582,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 7,
-   "canonical_field": "land_hectares"
+   "canonical_field": "land_hectares",
+   "payload_aliases": [
+    "land_hectares"
+   ]
   },
   {
    "form_version": 1,
@@ -2283,7 +2604,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 8,
-   "canonical_field": "land_title"
+   "canonical_field": "land_title",
+   "payload_aliases": [
+    "land_title"
+   ]
   },
   {
    "form_version": 1,
@@ -2302,7 +2626,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 1,
-   "canonical_field": ""
+   "canonical_field": "i1_fies",
+   "payload_aliases": [
+    "i1_fies",
+    "worried_food"
+   ]
   },
   {
    "form_version": 1,
@@ -2321,7 +2649,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 2,
-   "canonical_field": ""
+   "canonical_field": "i2_fies",
+   "payload_aliases": [
+    "i2_fies",
+    "unhealthy_food"
+   ]
   },
   {
    "form_version": 1,
@@ -2340,7 +2672,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 3,
-   "canonical_field": ""
+   "canonical_field": "i3_fies",
+   "payload_aliases": [
+    "i3_fies",
+    "limited_variety"
+   ]
   },
   {
    "form_version": 1,
@@ -2359,7 +2695,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 4,
-   "canonical_field": ""
+   "canonical_field": "i4_fies",
+   "payload_aliases": [
+    "i4_fies",
+    "skipped_meal"
+   ]
   },
   {
    "form_version": 1,
@@ -2378,7 +2718,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 5,
-   "canonical_field": ""
+   "canonical_field": "i5_fies",
+   "payload_aliases": [
+    "i5_fies",
+    "ate_less"
+   ]
   },
   {
    "form_version": 1,
@@ -2397,7 +2741,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 6,
-   "canonical_field": ""
+   "canonical_field": "i6_fies",
+   "payload_aliases": [
+    "i6_fies",
+    "ran_out_food"
+   ]
   },
   {
    "form_version": 1,
@@ -2416,7 +2764,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 7,
-   "canonical_field": ""
+   "canonical_field": "i7_fies",
+   "payload_aliases": [
+    "i7_fies",
+    "hungry_no_eat"
+   ]
   },
   {
    "form_version": 1,
@@ -2435,7 +2787,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 8,
-   "canonical_field": ""
+   "canonical_field": "i8_fies",
+   "payload_aliases": [
+    "i8_fies",
+    "whole_day_no_eat"
+   ]
   },
   {
    "form_version": 1,
@@ -2454,7 +2810,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 9,
-   "canonical_field": ""
+   "canonical_field": "staples_days",
+   "payload_aliases": [
+    "staples_days"
+   ]
   },
   {
    "form_version": 1,
@@ -2473,7 +2832,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 10,
-   "canonical_field": ""
+   "canonical_field": "staples_yesterday",
+   "payload_aliases": [
+    "staples_yesterday"
+   ]
   },
   {
    "form_version": 1,
@@ -2492,7 +2854,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 11,
-   "canonical_field": ""
+   "canonical_field": "staples_source_primary",
+   "payload_aliases": [
+    "staples_source_primary",
+    "staples_source"
+   ]
   },
   {
    "form_version": 1,
@@ -2511,7 +2877,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 12,
-   "canonical_field": ""
+   "canonical_field": "staples_source_secondary",
+   "payload_aliases": [
+    "staples_source_secondary"
+   ]
   },
   {
    "form_version": 1,
@@ -2530,7 +2899,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 13,
-   "canonical_field": ""
+   "canonical_field": "pulses_nuts_days",
+   "payload_aliases": [
+    "pulses_nuts_days",
+    "pulses_days"
+   ]
   },
   {
    "form_version": 1,
@@ -2549,7 +2922,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 14,
-   "canonical_field": ""
+   "canonical_field": "pulses_nuts_yesterday",
+   "payload_aliases": [
+    "pulses_nuts_yesterday"
+   ]
   },
   {
    "form_version": 1,
@@ -2568,7 +2944,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 15,
-   "canonical_field": ""
+   "canonical_field": "pulses_nuts_source_primary",
+   "payload_aliases": [
+    "pulses_nuts_source_primary"
+   ]
   },
   {
    "form_version": 1,
@@ -2587,7 +2966,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 16,
-   "canonical_field": ""
+   "canonical_field": "pulses_nuts_source_secondary",
+   "payload_aliases": [
+    "pulses_nuts_source_secondary"
+   ]
   },
   {
    "form_version": 1,
@@ -2606,7 +2988,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 17,
-   "canonical_field": ""
+   "canonical_field": "milk_dairy_days",
+   "payload_aliases": [
+    "milk_dairy_days",
+    "dairy_days"
+   ]
   },
   {
    "form_version": 1,
@@ -2625,7 +3011,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 18,
-   "canonical_field": ""
+   "canonical_field": "milk_dairy_yesterday",
+   "payload_aliases": [
+    "milk_dairy_yesterday"
+   ]
   },
   {
    "form_version": 1,
@@ -2644,7 +3033,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 19,
-   "canonical_field": ""
+   "canonical_field": "milk_dairy_source_primary",
+   "payload_aliases": [
+    "milk_dairy_source_primary"
+   ]
   },
   {
    "form_version": 1,
@@ -2663,7 +3055,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 20,
-   "canonical_field": ""
+   "canonical_field": "milk_dairy_source_secondary",
+   "payload_aliases": [
+    "milk_dairy_source_secondary"
+   ]
   },
   {
    "form_version": 1,
@@ -2682,7 +3077,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 21,
-   "canonical_field": ""
+   "canonical_field": "meat_fish_eggs_days",
+   "payload_aliases": [
+    "meat_fish_eggs_days",
+    "meat_days"
+   ]
   },
   {
    "form_version": 1,
@@ -2701,7 +3100,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 22,
-   "canonical_field": ""
+   "canonical_field": "meat_fish_eggs_yesterday",
+   "payload_aliases": [
+    "meat_fish_eggs_yesterday"
+   ]
   },
   {
    "form_version": 1,
@@ -2720,7 +3122,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 23,
-   "canonical_field": ""
+   "canonical_field": "meat_fish_eggs_source_primary",
+   "payload_aliases": [
+    "meat_fish_eggs_source_primary"
+   ]
   },
   {
    "form_version": 1,
@@ -2739,7 +3144,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 24,
-   "canonical_field": ""
+   "canonical_field": "meat_fish_eggs_source_secondary",
+   "payload_aliases": [
+    "meat_fish_eggs_source_secondary"
+   ]
   },
   {
    "form_version": 1,
@@ -2758,7 +3166,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 25,
-   "canonical_field": ""
+   "canonical_field": "vegetables_days",
+   "payload_aliases": [
+    "vegetables_days"
+   ]
   },
   {
    "form_version": 1,
@@ -2777,7 +3188,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 26,
-   "canonical_field": ""
+   "canonical_field": "vegetables_yesterday",
+   "payload_aliases": [
+    "vegetables_yesterday"
+   ]
   },
   {
    "form_version": 1,
@@ -2796,7 +3210,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 27,
-   "canonical_field": ""
+   "canonical_field": "vegetables_source_primary",
+   "payload_aliases": [
+    "vegetables_source_primary"
+   ]
   },
   {
    "form_version": 1,
@@ -2815,7 +3232,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 28,
-   "canonical_field": ""
+   "canonical_field": "vegetables_source_secondary",
+   "payload_aliases": [
+    "vegetables_source_secondary"
+   ]
   },
   {
    "form_version": 1,
@@ -2834,7 +3254,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 29,
-   "canonical_field": ""
+   "canonical_field": "fruits_days",
+   "payload_aliases": [
+    "fruits_days"
+   ]
   },
   {
    "form_version": 1,
@@ -2853,7 +3276,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 30,
-   "canonical_field": ""
+   "canonical_field": "fruits_yesterday",
+   "payload_aliases": [
+    "fruits_yesterday"
+   ]
   },
   {
    "form_version": 1,
@@ -2872,7 +3298,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 31,
-   "canonical_field": ""
+   "canonical_field": "fruits_source_primary",
+   "payload_aliases": [
+    "fruits_source_primary"
+   ]
   },
   {
    "form_version": 1,
@@ -2891,7 +3320,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 32,
-   "canonical_field": ""
+   "canonical_field": "fruits_source_secondary",
+   "payload_aliases": [
+    "fruits_source_secondary"
+   ]
   },
   {
    "form_version": 1,
@@ -2910,7 +3342,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 33,
-   "canonical_field": ""
+   "canonical_field": "oils_fats_days",
+   "payload_aliases": [
+    "oils_fats_days",
+    "oils_days"
+   ]
   },
   {
    "form_version": 1,
@@ -2929,7 +3365,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 34,
-   "canonical_field": ""
+   "canonical_field": "oils_fats_yesterday",
+   "payload_aliases": [
+    "oils_fats_yesterday"
+   ]
   },
   {
    "form_version": 1,
@@ -2948,7 +3387,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 35,
-   "canonical_field": ""
+   "canonical_field": "oils_fats_source_primary",
+   "payload_aliases": [
+    "oils_fats_source_primary"
+   ]
   },
   {
    "form_version": 1,
@@ -2967,7 +3409,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 36,
-   "canonical_field": ""
+   "canonical_field": "oils_fats_source_secondary",
+   "payload_aliases": [
+    "oils_fats_source_secondary"
+   ]
   },
   {
    "form_version": 1,
@@ -2986,7 +3431,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 37,
-   "canonical_field": ""
+   "canonical_field": "sugar_sweets_days",
+   "payload_aliases": [
+    "sugar_sweets_days",
+    "sugar_days"
+   ]
   },
   {
    "form_version": 1,
@@ -3005,7 +3454,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 38,
-   "canonical_field": ""
+   "canonical_field": "sugar_sweets_yesterday",
+   "payload_aliases": [
+    "sugar_sweets_yesterday"
+   ]
   },
   {
    "form_version": 1,
@@ -3024,7 +3476,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 39,
-   "canonical_field": ""
+   "canonical_field": "sugar_sweets_source_primary",
+   "payload_aliases": [
+    "sugar_sweets_source_primary"
+   ]
   },
   {
    "form_version": 1,
@@ -3043,7 +3498,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 40,
-   "canonical_field": ""
+   "canonical_field": "sugar_sweets_source_secondary",
+   "payload_aliases": [
+    "sugar_sweets_source_secondary"
+   ]
   },
   {
    "form_version": 1,
@@ -3062,7 +3520,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 41,
-   "canonical_field": ""
+   "canonical_field": "condiments_days",
+   "payload_aliases": [
+    "condiments_days"
+   ]
   },
   {
    "form_version": 1,
@@ -3081,7 +3542,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 42,
-   "canonical_field": ""
+   "canonical_field": "condiments_yesterday",
+   "payload_aliases": [
+    "condiments_yesterday"
+   ]
   },
   {
    "form_version": 1,
@@ -3100,7 +3564,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 43,
-   "canonical_field": ""
+   "canonical_field": "condiments_source_primary",
+   "payload_aliases": [
+    "condiments_source_primary"
+   ]
   },
   {
    "form_version": 1,
@@ -3119,7 +3586,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 44,
-   "canonical_field": ""
+   "canonical_field": "condiments_source_secondary",
+   "payload_aliases": [
+    "condiments_source_secondary"
+   ]
   },
   {
    "form_version": 1,
@@ -3138,7 +3608,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 1,
-   "canonical_field": "shock_affected"
+   "canonical_field": "shock_affected",
+   "payload_aliases": [
+    "shock_affected"
+   ]
   },
   {
    "form_version": 1,
@@ -3157,7 +3630,11 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 2,
-   "canonical_field": "livelihood_affected"
+   "canonical_field": "livelihood_affected",
+   "payload_aliases": [
+    "livelihood_affected",
+    "category"
+   ]
   },
   {
    "form_version": 1,
@@ -3176,7 +3653,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 3,
-   "canonical_field": "shock_type"
+   "canonical_field": "shock_type",
+   "payload_aliases": [
+    "shock_type"
+   ]
   },
   {
    "form_version": 1,
@@ -3195,7 +3675,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 4,
-   "canonical_field": "severity"
+   "canonical_field": "severity",
+   "payload_aliases": [
+    "severity"
+   ]
   },
   {
    "form_version": 1,
@@ -3214,7 +3697,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 5,
-   "canonical_field": "shock_type"
+   "canonical_field": "shock_type",
+   "payload_aliases": [
+    "shock_type"
+   ]
   },
   {
    "form_version": 1,
@@ -3233,7 +3719,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 6,
-   "canonical_field": "severity"
+   "canonical_field": "severity",
+   "payload_aliases": [
+    "severity"
+   ]
   },
   {
    "form_version": 1,
@@ -3252,7 +3741,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 7,
-   "canonical_field": "shock_type"
+   "canonical_field": "shock_type",
+   "payload_aliases": [
+    "shock_type"
+   ]
   },
   {
    "form_version": 1,
@@ -3271,7 +3763,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 8,
-   "canonical_field": "severity"
+   "canonical_field": "severity",
+   "payload_aliases": [
+    "severity"
+   ]
   },
   {
    "form_version": 1,
@@ -3290,7 +3785,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 9,
-   "canonical_field": "shock_type"
+   "canonical_field": "shock_type",
+   "payload_aliases": [
+    "shock_type"
+   ]
   },
   {
    "form_version": 1,
@@ -3309,7 +3807,10 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 10,
-   "canonical_field": "severity"
+   "canonical_field": "severity",
+   "payload_aliases": [
+    "severity"
+   ]
   },
   {
    "form_version": 1,
@@ -3328,7 +3829,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 1,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l01a_casual_labor",
+   "payload_aliases": [
+    "l01a_casual_labor",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3347,7 +3853,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 2,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l01b_sell_assets",
+   "payload_aliases": [
+    "l01b_sell_assets",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3366,7 +3877,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 3,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l01c_borrow_money",
+   "payload_aliases": [
+    "l01c_borrow_money",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3385,7 +3901,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 4,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l01d_assistance_friends",
+   "payload_aliases": [
+    "l01d_assistance_friends",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3404,7 +3925,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 5,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l01e_assistance_agencies",
+   "payload_aliases": [
+    "l01e_assistance_agencies",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3423,7 +3949,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 6,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l01f_remittances",
+   "payload_aliases": [
+    "l01f_remittances",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3442,7 +3973,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 7,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l01g_sand_gravel",
+   "payload_aliases": [
+    "l01g_sand_gravel",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3461,7 +3997,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 8,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l01h_relocate",
+   "payload_aliases": [
+    "l01h_relocate",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3480,7 +4021,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 9,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l01i_begging",
+   "payload_aliases": [
+    "l01i_begging",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3499,7 +4045,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 10,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l02a_less_preferred_food",
+   "payload_aliases": [
+    "l02a_less_preferred_food",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3518,7 +4069,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 11,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l02b_borrow_food_money",
+   "payload_aliases": [
+    "l02b_borrow_food_money",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3537,7 +4093,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 12,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l02c_reduce_portions",
+   "payload_aliases": [
+    "l02c_reduce_portions",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3556,7 +4117,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 13,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l02d_reduce_meals",
+   "payload_aliases": [
+    "l02d_reduce_meals",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3575,7 +4141,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 14,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l02e_restrict_adults",
+   "payload_aliases": [
+    "l02e_restrict_adults",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3594,7 +4165,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 15,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l02f_day_without_eating",
+   "payload_aliases": [
+    "l02f_day_without_eating",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3613,7 +4189,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 16,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l02g_wild_food",
+   "payload_aliases": [
+    "l02g_wild_food",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3632,7 +4213,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 17,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l02h_merge_households",
+   "payload_aliases": [
+    "l02h_merge_households",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 1,
@@ -3651,7 +4237,12 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 18,
-   "canonical_field": "strategy_type"
+   "canonical_field": "l02i_begging",
+   "payload_aliases": [
+    "l02i_begging",
+    "strategy_type",
+    "frequency"
+   ]
   },
   {
    "form_version": 2026,
@@ -3670,7 +4261,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 1,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 2026,
@@ -3689,7 +4281,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 2,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 2026,
@@ -3708,7 +4301,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 1,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 2026,
@@ -3727,7 +4321,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 2,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 2026,
@@ -3746,7 +4341,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 3,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 2026,
@@ -3765,7 +4361,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 1,
-   "canonical_field": ""
+   "canonical_field": "",
+   "payload_aliases": []
   }
  ]
 }

@@ -261,6 +261,15 @@ class FormQuestion(models.Model):
     # `shock_type`).
     canonical_field = models.CharField(max_length=64, blank=True, default="")
 
+    # Every payload key that feeds this question, primary first.
+    #
+    # One question, several names: the Kobo connector emits
+    # `rooms_sleeping` and the parish wizard `sleeping_rooms` for G4. Both
+    # are the same question and must render the same label and decode
+    # through the same choice list, so the correspondence is many-to-one
+    # rather than one-to-one. `canonical_field` is the first of these.
+    payload_aliases = models.JSONField(default=list, blank=True)
+
     order_in_section = models.PositiveIntegerField(default=0)
 
     created_at = models.DateTimeField(auto_now_add=True)
