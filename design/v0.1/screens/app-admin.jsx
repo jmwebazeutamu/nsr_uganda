@@ -10,20 +10,36 @@
    ChatbotAssistantScreen,
    ConsentPurposesScreen, ConsentStatementsScreen,
    ConsentCoverageScreen, DpoWithdrawalQueueScreen,
-   ErrorBoundary, Icon */
+   ErrorBoundary, Icon, AccountMenu */
 // NSR MIS — Admin shell
 // =====================================================
 // Wraps the two new PMT screens (Dashboard, Configuration) plus
 // future Admin children (Reference data, Approvals, etc.). Uses
 // a left sidebar so Admin reads as its own section.
 //
-// Honours window.__defaultScreen:
-//   "admin-pmt-dashboard"     → Dashboard (default)
-//   "admin-pmt-configuration" → Configuration
+// Honours window.__defaultScreen, so a host page can open the shell on
+// any screen. Nothing sets it today — the Django view renders
+// console/index.html with no such variable — so the fallback below is
+// what the console actually opens on.
+//
+// That fallback is Approvals, not the PMT dashboard. Approvals is the
+// first item in the first nav group and it is the only screen here that
+// is a queue: rule versions, choice lists and PMT models waiting on a
+// decision that blocks other people's work. An admin opening the console
+// is nearly always coming to clear it. The PMT dashboard is a thing you
+// go and look at, which is a different kind of visit.
+//
+// This mattered in practice: three DQA rule versions sat pending
+// approval on production while every quality_failed record was blocked
+// on the rule they superseded, and the screen that would have shown them
+// was one click away from where the console opened.
 
 const { useState: useStateAdmin, useEffect: useEffectAdmin } = React;
 
-const initialFromHost = (typeof window !== "undefined" && window.__defaultScreen) || "admin-pmt-dashboard";
+const ADMIN_DEFAULT_SCREEN = "admin-approvals";
+
+const initialFromHost =
+  (typeof window !== "undefined" && window.__defaultScreen) || ADMIN_DEFAULT_SCREEN;
 
 const NAV_GROUPS = [
   {
@@ -148,13 +164,7 @@ const AdminApp = () => {
           <span className="role-chip">
             <span>Admin Console</span>
           </span>
-          <button className="icon-btn" title="My profile" onClick={() => window.nsrProfile()}>
-            <Icon name="settings" size={18}/>
-          </button>
-          <button className="avatar" title={`Open profile for ${profileName}`} onClick={() => window.nsrProfile()}>{profileInitials}</button>
-          <button className="icon-btn" title="Sign out" aria-label="Sign out" onClick={() => window.nsrSignOut()}>
-            <Icon name="x" size={18}/>
-          </button>
+          <AccountMenu name={profileName} initials={profileInitials}/>
         </div>
       </header>
 
