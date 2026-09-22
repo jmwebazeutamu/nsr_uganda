@@ -907,3 +907,77 @@ is not idempotent — unlike `_create_coping_strategies()`, which uses
 skipping any household that already has shock rows, and promotion's
 own idempotency check prevents a second fan-out, so nothing duplicates
 today. It would matter to any future re-run path.
+
+## 2026-09-22 — deploy ea6ef12 → ad64ba8, and DQA rule revisions authored
+
+**Deploy.** Duplicate-discovery scheduling (US-S24). Migration `ddup.0004`
+applied. Build ~50 min (slow pip mirror again — the image carries
+transformers/scikit-learn/numpy). healthz ok on attempt 1. Dump first:
+`/opt/nsrmis/backups/pre-us-s24-ddup-20260922-*.dump`, 131 tables verified.
+
+### "Household head not found" — root cause
+
+Reported as still broken on prod after being fixed on dev. It was never a
+code defect: **the rule lives in the database and deploys do not carry
+`DqaRule` rows.**
+
+- dev `AC-HOH-EXISTS` **v2** (active): `is_head == true` OR
+  `relationship_to_head == "01"`, approved 19 Sep.
+- prod `AC-HOH-EXISTS` **v1** (active): `relationship_to_head == "01"` only,
+  seeded 1 June, never revised.
+
+Every connector normalises the head to `is_head: True` and blanks the
+relationship code, so on prod the rule matched nothing. **All 82
+quality_failed records were blocked on this single rule.**
+
+Third instance of the same gap — configuration living only in a database
+with nothing to carry it between environments, after the questionnaire
+instrument and the DQA seeds. Each time it surfaces as "we fixed that,
+why is it still broken". Worth a promotion step for rule versions.
+
+### Rule revisions authored (NOT approved)
+
+`revise()` from `scripts/seed_dqa_intra_household_rules.py`, run against
+the prod container. Dry-run first, and it authored exactly what the dry
+run predicted:
+
+```
+AC-HOH-EXISTS        v1 active -> v2 DRAFT + submitted
+AC-HOH-AGE           v1 active -> v2 DRAFT + submitted
+AC-HOH-AGE-CHILD-LED v1 draft  -> updated + submitted
+(7 other rules: "matches — nothing to do")
+```
+
+**Nothing is live.** v1 remains active for all three; the queue is
+unchanged (284 promoted / 11 rejected / 82 quality_failed, same blocking
+failures). Approval is the Ministry's and must not be self-approved —
+the seeder itself refuses the seed author as approver.
+
+Clearing the 82 takes three steps: author (done), approve in
+Admin > Workflow > DQA rules, then re-run the gates via
+`POST /api/v1/dih/stage-records/{id}/process/`. Correcting a rule does
+not re-evaluate records already in `quality_failed`.
+
+### Mistake to avoid repeating
+
+The intended dry run **wrote to production.** The script was piped to
+`docker compose exec -T web python -`, which makes `__name__ ==
+"__main__"`; with no `--revise` in `sys.argv` it fell through to `seed()`
+and created `AC-MEMBER-DETAIL-REQUIRED` v1 as a draft at 19:29:58.
+
+Impact: one draft row. Draft rules do not evaluate, no active rule was
+touched, nothing else changed. Still an unintended write.
+
+**Never pipe a script with an `if __name__ == "__main__"` block into
+`python -`.** Strip the block and call the function explicitly, which is
+how the real run was done.
+
+### Two observations, not acted on
+
+- `AC-ORPHAN-FLAG` and `AC-SPOUSE-PAIR` moved pending_approval → rejected
+  at 19:25 on 22 Sep. The audit chain attributes both to
+  `johnsonmwebaze` via the console — a human decision, not a side effect.
+- **`AC-MEMBER-AGE-MAX` has two ACTIVE versions simultaneously** (v1 and
+  v2). Pre-existing, unrelated to this work, but two active versions of
+  one rule means which one evaluates depends on query order. Worth
+  closing.
