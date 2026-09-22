@@ -511,3 +511,30 @@ describe("coded answers", () => {
     expect(screen.getByText(/unknown code/)).toBeTruthy();
   });
 });
+
+
+describe("sections start collapsed", () => {
+  it("opens on the contents, not on two sections chosen for the operator", () => {
+    // Household composition and Members used to be expanded on mount, so
+    // the review opened mid-record and everything else was below the
+    // fold. It now opens on the list of what the record holds.
+    render(React.createElement(HouseholdReview, {
+      payload: PAYLOADS[SHAPES[0]],
+    }));
+    for (const button of screen.getAllByRole("button")) {
+      expect(
+        button.getAttribute("aria-expanded"),
+        `"${button.textContent.slice(0, 40)}" is expanded on mount`,
+      ).toBe("false");
+    }
+  });
+
+  it("still opens when asked", () => {
+    render(React.createElement(HouseholdReview, {
+      payload: PAYLOADS[SHAPES[0]],
+    }));
+    const [first] = screen.getAllByRole("button");
+    fireEvent.click(first);
+    expect(first.getAttribute("aria-expanded")).toBe("true");
+  });
+});

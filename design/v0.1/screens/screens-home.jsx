@@ -82,7 +82,7 @@ const HOME_QUEUE_LIVE_MAP = {
     // not just pending_promotion (which is a narrow auto-promote
     // hand-off window). Endpoint accepts comma-separated values
     // (apps/ingestion_hub/api.py:161 splits on `,`).
-    url: "/api/v1/dih/stage-records/?state=provisional,idv_pending,pending_promotion,quality_failed&page_size=4",
+    url: "/api/v1/dih/stage-records/?queue=review&page_size=4",
     projector: _stageItem,
     target: "dih",
     geographic: true,

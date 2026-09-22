@@ -269,6 +269,29 @@ class StageRecordState(models.TextChoices):
     QUARANTINED = "quarantined"
 
 
+# A stage record is finished with when it has been promoted, rejected or
+# quarantined. Everything else is still somebody's work.
+#
+# This is the one definition of the DIH working queue. It was previously
+# written out three times in the design layer and all three disagreed:
+# the sidebar badge counted only `pending_promotion`, the review screen
+# listed five states, and the home card listed four (it omitted
+# `ddup_review`). So the badge read 0 while the screen it pointed at
+# held twelve records.
+#
+# Derived by exclusion rather than listed, so a state added later joins
+# the queue instead of quietly becoming invisible to every counter.
+TERMINAL_STAGE_STATES = frozenset({
+    StageRecordState.PROMOTED,
+    StageRecordState.REJECTED,
+    StageRecordState.QUARANTINED,
+})
+
+REVIEW_QUEUE_STATES = tuple(
+    s.value for s in StageRecordState if s not in TERMINAL_STAGE_STATES
+)
+
+
 class StageRecord(models.Model):
     """Tier 2 of the pipeline. Canonical NSR-shaped record with a
     provisional Registry ID. Editable until promotion.
