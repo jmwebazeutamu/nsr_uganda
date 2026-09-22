@@ -12,9 +12,14 @@ reading the keys real staged payloads of both shapes actually carry.
 """
 from django.db import migrations
 
-from apps.intake.canonical_fields import (
-    COPING_PREFIXES, COPING_ROW_ALIASES, QUESTION_ALIASES,
-)
+from apps.intake.canonical_fields import QUESTION_ALIASES
+
+# Frozen here rather than imported: a migration is a historical record
+# and must keep running after the app code it was written against moves
+# on. COPING_ROW_ALIASES was removed from canonical_fields in 0011, when
+# the repeat-block columns became declarations of their own.
+COPING_PREFIXES = ("l01", "l02")
+COPING_ROW_ALIASES = ["strategy_type", "frequency"]
 
 
 def seed(apps, schema_editor):

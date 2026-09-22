@@ -124,7 +124,7 @@ HOUSING = {
     "g12_share_toilet": ["toilet_shared", "share_toilet"],
     "g13_share_toilet_households": ["households_sharing_toilet", "share_toilet_households"],
     "g14_waste_disposal": ["waste_disposal"],
-    "g15_assets_owned": ["assets_owned", "asset_type"],
+    "g15_assets_owned": ["assets_owned"],
     "g16_livelihood_source": ["main_livelihood", "livelihood_source"],
     # housing.asset_counts.<item> — one question per counted asset.
     "g15_count_radio": ["radio"],
@@ -145,7 +145,7 @@ AGRICULTURE = {
     "h2_livestock": ["livestock"],
     "h3_livestock_counts": ["livestock_counts"],
     "h4_ag_purpose": ["agricultural_purpose", "ag_purpose"],
-    "h5_crops_grown": ["crops_grown", "crop_name"],
+    "h5_crops_grown": ["crops_grown"],
     "h6_land_ownership": ["land_ownership"],
     "h7_land_hectares": ["land_hectares"],
     "h8_title_deed": ["land_title"],
@@ -217,22 +217,13 @@ FOOD_GROUPS = {
 # canonical_field is not unique.
 SHOCKS = {
     "k01_shock_affected": ["shock_affected"],
-    "k02_livelihood_affected": ["livelihood_affected", "category"],
-    "k03_crops_shock_type": ["shock_type"],
-    "k03_livestock_shock_type": ["shock_type"],
-    "k03_labour_employment_shock_type": ["shock_type"],
-    "k03_other_shock_type": ["shock_type"],
-    "k04_crops_shock_severity": ["severity"],
-    "k04_livestock_shock_severity": ["severity"],
-    "k04_labour_employment_shock_severity": ["severity"],
-    "k04_other_shock_severity": ["severity"],
+    "k02_livelihood_affected": ["livelihood_affected"],
 }
 
 # Every L question is one coping strategy on the same frequency scale.
 # Kobo keys each by question name; the wizard emits rows of
 # {strategy_type, frequency}.
 COPING_PREFIXES = ("l01", "l02")
-COPING_ROW_ALIASES = ["strategy_type", "frequency"]
 
 QUESTION_ALIASES: dict[str, list[str]] = {
     **IDENTIFICATION, **SURVEY_STATUS, **ROSTER, **HEALTH, **EDUCATION,
@@ -241,6 +232,35 @@ QUESTION_ALIASES: dict[str, list[str]] = {
 
 # The primary canonical name for each question: the first alias listed.
 QUESTION_TO_CANONICAL = {q: a[0] for q, a in QUESTION_ALIASES.items()}
+
+
+# --- Repeat-block columns ------------------------------------------------
+# A repeat block flattens many questions into a few columns. The payload
+# carries the COLUMN name — shock_type, severity, strategy_type — and the
+# question identity moves into the row.
+#
+# These cannot be aliases of a question, because every question in the
+# block would claim them and the first one would win: the shock_type
+# column then reads "Main shock affecting crops" on the livestock row,
+# and strategy_type reads "Engage in casual labor" for all eighteen
+# coping strategies. A column that names one of the things it holds is
+# worse than one that names none.
+#
+# So each column is declared once, with the name of the column and the
+# list its values decode through.
+REPEAT_COLUMNS = {
+    "shock_type": ("Shock type", "shock_type"),
+    "severity": ("Severity of loss", "severity"),
+    "category": ("Livelihood affected", "shock_livelihood"),
+    "strategy_type": ("Coping strategy", None),
+    "frequency": ("How often", "coping_frequency"),
+    "asset_type": ("Asset", "asset_type"),
+    "crop_name": ("Crop", None),
+    "livestock_type": ("Livestock", None),
+    "count": ("Number", None),
+    "rank_order": ("Rank", None),
+    "event_date": ("Event date", None),
+}
 
 
 # --- Fields the instrument does not ask ---------------------------------
@@ -270,9 +290,5 @@ DERIVED_FIELDS = {
     "gps_lng": "Longitude",
     "gps_accuracy_m": "GPS accuracy (m)",
     # Repeat-row bookkeeping.
-    "count": "Count",
-    "rank_order": "Rank",
-    "event_date": "Event date",
     "asset_counts": "Asset counts",
-    "livestock_type": "Livestock type",
 }

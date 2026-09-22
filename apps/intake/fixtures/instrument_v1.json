@@ -2164,8 +2164,7 @@
    "order_in_section": 15,
    "canonical_field": "assets_owned",
    "payload_aliases": [
-    "assets_owned",
-    "asset_type"
+    "assets_owned"
    ]
   },
   {
@@ -2539,8 +2538,7 @@
    "order_in_section": 5,
    "canonical_field": "crops_grown",
    "payload_aliases": [
-    "crops_grown",
-    "crop_name"
+    "crops_grown"
    ]
   },
   {
@@ -3632,8 +3630,7 @@
    "order_in_section": 2,
    "canonical_field": "livelihood_affected",
    "payload_aliases": [
-    "livelihood_affected",
-    "category"
+    "livelihood_affected"
    ]
   },
   {
@@ -3653,10 +3650,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 3,
-   "canonical_field": "shock_type",
-   "payload_aliases": [
-    "shock_type"
-   ]
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -3675,10 +3670,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 4,
-   "canonical_field": "severity",
-   "payload_aliases": [
-    "severity"
-   ]
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -3697,10 +3690,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 5,
-   "canonical_field": "shock_type",
-   "payload_aliases": [
-    "shock_type"
-   ]
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -3719,10 +3710,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 6,
-   "canonical_field": "severity",
-   "payload_aliases": [
-    "severity"
-   ]
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -3741,10 +3730,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 7,
-   "canonical_field": "shock_type",
-   "payload_aliases": [
-    "shock_type"
-   ]
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -3763,10 +3750,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 8,
-   "canonical_field": "severity",
-   "payload_aliases": [
-    "severity"
-   ]
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -3785,10 +3770,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 9,
-   "canonical_field": "shock_type",
-   "payload_aliases": [
-    "shock_type"
-   ]
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -3807,10 +3790,8 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 10,
-   "canonical_field": "severity",
-   "payload_aliases": [
-    "severity"
-   ]
+   "canonical_field": "",
+   "payload_aliases": []
   },
   {
    "form_version": 1,
@@ -3831,9 +3812,7 @@
    "order_in_section": 1,
    "canonical_field": "l01a_casual_labor",
    "payload_aliases": [
-    "l01a_casual_labor",
-    "strategy_type",
-    "frequency"
+    "l01a_casual_labor"
    ]
   },
   {
@@ -3855,9 +3834,7 @@
    "order_in_section": 2,
    "canonical_field": "l01b_sell_assets",
    "payload_aliases": [
-    "l01b_sell_assets",
-    "strategy_type",
-    "frequency"
+    "l01b_sell_assets"
    ]
   },
   {
@@ -3879,9 +3856,7 @@
    "order_in_section": 3,
    "canonical_field": "l01c_borrow_money",
    "payload_aliases": [
-    "l01c_borrow_money",
-    "strategy_type",
-    "frequency"
+    "l01c_borrow_money"
    ]
   },
   {
@@ -3903,9 +3878,7 @@
    "order_in_section": 4,
    "canonical_field": "l01d_assistance_friends",
    "payload_aliases": [
-    "l01d_assistance_friends",
-    "strategy_type",
-    "frequency"
+    "l01d_assistance_friends"
    ]
   },
   {
@@ -3927,9 +3900,7 @@
    "order_in_section": 5,
    "canonical_field": "l01e_assistance_agencies",
    "payload_aliases": [
-    "l01e_assistance_agencies",
-    "strategy_type",
-    "frequency"
+    "l01e_assistance_agencies"
    ]
   },
   {
@@ -3951,9 +3922,7 @@
    "order_in_section": 6,
    "canonical_field": "l01f_remittances",
    "payload_aliases": [
-    "l01f_remittances",
-    "strategy_type",
-    "frequency"
+    "l01f_remittances"
    ]
   },
   {
@@ -3975,9 +3944,7 @@
    "order_in_section": 7,
    "canonical_field": "l01g_sand_gravel",
    "payload_aliases": [
-    "l01g_sand_gravel",
-    "strategy_type",
-    "frequency"
+    "l01g_sand_gravel"
    ]
   },
   {
@@ -3999,9 +3966,7 @@
    "order_in_section": 8,
    "canonical_field": "l01h_relocate",
    "payload_aliases": [
-    "l01h_relocate",
-    "strategy_type",
-    "frequency"
+    "l01h_relocate"
    ]
   },
   {
@@ -4023,9 +3988,7 @@
    "order_in_section": 9,
    "canonical_field": "l01i_begging",
    "payload_aliases": [
-    "l01i_begging",
-    "strategy_type",
-    "frequency"
+    "l01i_begging"
    ]
   },
   {
@@ -4047,9 +4010,7 @@
    "order_in_section": 10,
    "canonical_field": "l02a_less_preferred_food",
    "payload_aliases": [
-    "l02a_less_preferred_food",
-    "strategy_type",
-    "frequency"
+    "l02a_less_preferred_food"
    ]
   },
   {
@@ -4071,9 +4032,7 @@
    "order_in_section": 11,
    "canonical_field": "l02b_borrow_food_money",
    "payload_aliases": [
-    "l02b_borrow_food_money",
-    "strategy_type",
-    "frequency"
+    "l02b_borrow_food_money"
    ]
   },
   {
@@ -4095,9 +4054,7 @@
    "order_in_section": 12,
    "canonical_field": "l02c_reduce_portions",
    "payload_aliases": [
-    "l02c_reduce_portions",
-    "strategy_type",
-    "frequency"
+    "l02c_reduce_portions"
    ]
   },
   {
@@ -4119,9 +4076,7 @@
    "order_in_section": 13,
    "canonical_field": "l02d_reduce_meals",
    "payload_aliases": [
-    "l02d_reduce_meals",
-    "strategy_type",
-    "frequency"
+    "l02d_reduce_meals"
    ]
   },
   {
@@ -4143,9 +4098,7 @@
    "order_in_section": 14,
    "canonical_field": "l02e_restrict_adults",
    "payload_aliases": [
-    "l02e_restrict_adults",
-    "strategy_type",
-    "frequency"
+    "l02e_restrict_adults"
    ]
   },
   {
@@ -4167,9 +4120,7 @@
    "order_in_section": 15,
    "canonical_field": "l02f_day_without_eating",
    "payload_aliases": [
-    "l02f_day_without_eating",
-    "strategy_type",
-    "frequency"
+    "l02f_day_without_eating"
    ]
   },
   {
@@ -4191,9 +4142,7 @@
    "order_in_section": 16,
    "canonical_field": "l02g_wild_food",
    "payload_aliases": [
-    "l02g_wild_food",
-    "strategy_type",
-    "frequency"
+    "l02g_wild_food"
    ]
   },
   {
@@ -4215,9 +4164,7 @@
    "order_in_section": 17,
    "canonical_field": "l02h_merge_households",
    "payload_aliases": [
-    "l02h_merge_households",
-    "strategy_type",
-    "frequency"
+    "l02h_merge_households"
    ]
   },
   {
@@ -4239,9 +4186,7 @@
    "order_in_section": 18,
    "canonical_field": "l02i_begging",
    "payload_aliases": [
-    "l02i_begging",
-    "strategy_type",
-    "frequency"
+    "l02i_begging"
    ]
   },
   {

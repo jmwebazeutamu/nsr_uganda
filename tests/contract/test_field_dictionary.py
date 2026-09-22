@@ -257,6 +257,85 @@ def active_age_rules(db):
 
 
 @pytest.mark.django_db
+class TestRepeatBlockColumns:
+    """A repeat block flattens many questions into a few columns.
+
+    Every question in the block would otherwise claim the column name as
+    an alias and the first one would win — so the shock_type column read
+    "Main shock affecting crops" on the livestock row, and all eighteen
+    coping strategies shared the label "Engage in casual labor". A column
+    that names one of the things it holds is worse than one that names
+    none.
+    """
+
+    def test_columns_are_named_for_the_column_not_the_first_question(self):
+        fields = build_field_dictionary().as_dict()["fields"]
+        expected = {
+            "shock_type": "Shock type",
+            "severity": "Severity of loss",
+            "strategy_type": "Coping strategy",
+            "frequency": "How often",
+            "category": "Livelihood affected",
+            "asset_type": "Asset",
+        }
+        for name, label in expected.items():
+            assert fields[name]["label"] == label, (
+                f"the {name} column reads {fields[name]['label']!r} — it has "
+                f"inherited a question's label instead of naming the column"
+            )
+            assert fields[name]["source"] == "repeat-column"
+
+    def test_columns_still_decode_through_their_list(self):
+        """Naming the column must not cost the decoding."""
+        fields = build_field_dictionary().as_dict()["fields"]
+        assert fields["shock_type"]["choice_list"] == "shock_type"
+        assert fields["severity"]["choice_list"] == "severity"
+        assert fields["frequency"]["choice_list"] == "coping_frequency"
+        assert fields["asset_type"]["choice_list"] == "asset_type"
+
+    def test_each_coping_question_keeps_its_own_name(self):
+        """Kobo keys each coping strategy by its question name, and all
+        eighteen were reported "not in questionnaire" when the column
+        aliases took over."""
+        fields = build_field_dictionary().as_dict()["fields"]
+        for name in [
+            "l01a_casual_labor", "l01b_sell_assets", "l01c_borrow_money",
+            "l01d_assistance_friends", "l01e_assistance_agencies",
+            "l01f_remittances", "l01g_sand_gravel", "l01h_relocate",
+            "l01i_begging", "l02a_less_preferred_food",
+            "l02b_borrow_food_money", "l02c_reduce_portions",
+            "l02d_reduce_meals", "l02e_restrict_adults",
+            "l02f_day_without_eating", "l02g_wild_food",
+            "l02h_merge_households", "l02i_begging",
+        ]:
+            assert name in fields, f"{name} reports as not in the questionnaire"
+            assert fields[name]["source"] == "instrument"
+            assert fields[name]["question_name"] == name
+        # And they are eighteen DIFFERENT strategies, not one repeated.
+        labels = {
+            fields[n]["label"] for n in fields
+            if n.startswith(("l01", "l02"))
+        }
+        assert len(labels) == 18, (
+            f"only {len(labels)} distinct coping labels — the questions are "
+            f"sharing a label again"
+        )
+
+    def test_a_label_collision_keeps_the_question_code(self):
+        """L01.i and L02.i are both "Begging" once the code is stripped —
+        one a livelihood response, one a food response. Two identical
+        rows on a review screen is worse than a visible code."""
+        fields = build_field_dictionary().as_dict()["fields"]
+        assert fields["l01i_begging"]["label"] != fields["l02i_begging"]["label"]
+        assert fields["l01i_begging"]["label"].startswith("L01")
+        assert fields["l02i_begging"]["label"].startswith("L02")
+
+    def test_a_label_that_does_not_collide_is_still_stripped(self):
+        fields = build_field_dictionary().as_dict()["fields"]
+        assert fields["l01a_casual_labor"]["label"] == "Engage in casual labor"
+
+
+@pytest.mark.django_db
 class TestThresholds:
     def test_thresholds_are_read_from_the_active_dqa_rules(self, active_age_rules):
         dictionary = build_field_dictionary().as_dict()
@@ -307,6 +386,38 @@ class TestFieldDictionaryEndpoint:
         assert body["fields"]["wall_material"]["choice_list"] == "wall_material"
         assert body["thresholds"]["head_min_age"] == 12
         assert "elderly_min_age" in body["missing_thresholds"]
+
+    def test_it_serves_an_etag_and_honours_a_conditional_get(
+        self, client, django_user_model,
+    ):
+        """Without this the client caches the dictionary for the life of
+        the tab, so a corrected mapping never reaches an open console."""
+        user = django_user_model.objects.create_user(username="etag", password="pw")
+        client.force_login(user)
+        first = client.get(reverse("field-dictionary"))
+        assert first.status_code == 200
+        etag = first["ETag"]
+        assert etag
+
+        again = client.get(reverse("field-dictionary"), HTTP_IF_NONE_MATCH=etag)
+        assert again.status_code == 304
+
+    def test_the_etag_changes_when_a_label_changes(self, client, django_user_model):
+        user = django_user_model.objects.create_user(username="etag2", password="pw")
+        client.force_login(user)
+        before = client.get(reverse("field-dictionary"))["ETag"]
+
+        question = FormQuestion.objects.get(
+            name="g6_wall_material", section__form_version__is_active=True,
+        )
+        question.label = "G6. Main wall material (revised)"
+        question.save(update_fields=["label"])
+
+        after = client.get(reverse("field-dictionary"))["ETag"]
+        assert before != after, (
+            "the ETag did not move, so an open console would keep the old "
+            "label until the tab was reloaded"
+        )
 
     def test_an_unknown_form_version_is_404_not_a_silent_default(
         self, client, django_user_model,

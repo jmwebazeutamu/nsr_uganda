@@ -316,27 +316,35 @@ const HhRepeatTable = ({ table }) => (
    honestly looks like, and resolves as soon as the fetch lands. */
 
 let _dictionaryCache = null;
+let _dictionaryEtag = "";
 let _dictionaryPromise = null;
 
-const _fetchFieldDictionary = () => {
-  if (_dictionaryCache) return Promise.resolve(_dictionaryCache);
-  if (!_dictionaryPromise) {
+const _fetchFieldDictionary = (force = false) => {
+  if (!_dictionaryPromise || force) {
+    const headers = { Accept: "application/json" };
+    // Conditional GET. Without it the cache never expires for the life
+    // of the tab, so activating a new FormVersion or correcting a field
+    // mapping leaves every open console showing the old answer with
+    // nothing to suggest it is stale — which is exactly how a screen
+    // ends up reporting eighteen questions as "not in questionnaire"
+    // minutes after they were mapped.
+    if (_dictionaryEtag && !force) headers["If-None-Match"] = _dictionaryEtag;
     _dictionaryPromise = fetch("/api/v1/intake/field-dictionary/", {
-      headers: { Accept: "application/json" },
-      credentials: "same-origin",
+      headers, credentials: "same-origin",
     })
       .then((r) => {
+        if (r.status === 304 && _dictionaryCache) return _dictionaryCache;
         if (!r.ok) throw new Error(`field-dictionary HTTP ${r.status}`);
-        return r.json();
+        _dictionaryEtag = r.headers.get("ETag") || "";
+        return r.json().then((body) => { _dictionaryCache = body; return body; });
       })
-      .then((body) => { _dictionaryCache = body; return body; })
       .catch((err) => { _dictionaryPromise = null; throw err; });
   }
   return _dictionaryPromise;
 };
 
 window._nsrFieldDictionaryClear = () => {
-  _dictionaryCache = null; _dictionaryPromise = null;
+  _dictionaryCache = null; _dictionaryPromise = null; _dictionaryEtag = "";
 };
 
 const useFieldDictionary = () => {
@@ -345,11 +353,22 @@ const useFieldDictionary = () => {
   );
   React.useEffect(() => {
     let live = true;
-    if (_dictionaryCache) return undefined;
+    // Stale-while-revalidate: render what is cached immediately, then
+    // revalidate. A 304 costs nothing and a changed dictionary lands
+    // without the operator knowing to reload.
+    _dictionaryPromise = null;
     _fetchFieldDictionary()
       .then((d) => { if (live) setState({ dictionary: d, loading: false, error: null }); })
       .catch((e) => {
-        if (live) setState({ dictionary: null, loading: false, error: String(e.message || e) });
+        if (live) {
+          setState((prev) => ({
+            // Keep showing the cached dictionary if we have one: labels
+            // that are possibly stale beat no labels at all.
+            dictionary: prev.dictionary || _dictionaryCache,
+            loading: false,
+            error: String(e.message || e),
+          }));
+        }
       });
     return () => { live = false; };
   }, []);

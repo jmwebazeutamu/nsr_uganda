@@ -18,7 +18,7 @@ from dataclasses import dataclass, field as dc_field
 
 from apps.dqa.models import DqaRule, RuleStatus
 
-from .canonical_fields import DERIVED_FIELDS
+from .canonical_fields import DERIVED_FIELDS, REPEAT_COLUMNS
 from .models import FormQuestion, FormVersion
 
 # Age thresholds the household composition summary needs, and the rule
@@ -172,6 +172,32 @@ def build_field_dictionary(form_version: FormVersion | None = None) -> FieldDict
                             f"vs {entry.choice_list!r}"
                         ),
                     })
+
+    # Two questions in one section can strip to the same label: "L01.i
+    # Begging" and "L02.i Begging" are different strategies — one is a
+    # livelihood response, the other a food response — and both become
+    # "Begging". Two identical rows is worse than a code prefix, so where
+    # stripping collides the prefix goes back on.
+    by_label: dict[tuple[str, str], list[FieldEntry]] = {}
+    for entry in dictionary.fields.values():
+        if entry.source == "instrument":
+            by_label.setdefault((entry.section, entry.label), []).append(entry)
+    for entries in by_label.values():
+        distinct = {e.question_name for e in entries}
+        if len(distinct) > 1:
+            for entry in entries:
+                entry.label = entry.question_label
+
+    # Repeat-block columns, before the derived list and after the
+    # questions: declared names win over a question's label, because a
+    # column that inherits the first question of its block misnames every
+    # other row in it.
+    for name, (label, choice_list) in REPEAT_COLUMNS.items():
+        dictionary.fields[name] = FieldEntry(
+            label=label, question_label=label, choice_list=choice_list,
+            type="select_one" if choice_list else "",
+            source="repeat-column",
+        )
 
     # Derived and capture-channel fields: produced by the connector, never
     # asked of a respondent, so no FormQuestion owns them. Declared once,

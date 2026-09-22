@@ -1,3 +1,5 @@
+import hashlib
+import json
 from dataclasses import asdict
 
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
@@ -215,4 +217,20 @@ def field_dictionary(request):
                 {"detail": f"No form version {version}."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-    return Response(build_field_dictionary(form_version).as_dict())
+    body = build_field_dictionary(form_version).as_dict()
+
+    # ETag so an open console can revalidate cheaply. Without it the
+    # client either refetches the whole dictionary on every mount or
+    # caches it for the life of the tab; the second is what left a
+    # screen reporting mapped questions as "not in questionnaire".
+    etag = '"' + hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:32] + '"'
+    if request.headers.get("If-None-Match", "").strip() == etag:
+        not_modified = Response(status=status.HTTP_304_NOT_MODIFIED)
+        not_modified["ETag"] = etag
+        return not_modified
+
+    response = Response(body)
+    response["ETag"] = etag
+    return response
