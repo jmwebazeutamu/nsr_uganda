@@ -44,8 +44,8 @@ const _bundleCache = new Map();
 // different as_of or language is a different answer.
 const _listCache = new Map();
 
-const _listKey = (name, { asOf, lang } = {}) =>
-  `${lang || "en"}|${asOf || ""}|${name}`;
+const _listKey = (name, { asOf, lang, includeDeprecated } = {}) =>
+  `${lang || "en"}|${asOf || ""}|${includeDeprecated ? "dep" : "act"}|${name}`;
 
 const _rememberLists = (lists, opts) => {
   for (const [name, options] of Object.entries(lists || {})) {
@@ -69,17 +69,20 @@ const _csrf = () => {
   return m ? m[1] : "";
 };
 
-const _bundleUrl = (names, { asOf, lang } = {}) => {
+const _bundleUrl = (names, { asOf, lang, includeDeprecated } = {}) => {
   const params = new URLSearchParams();
   if (names && names.length) params.set("lists", names.slice().sort().join(","));
   if (asOf) params.set("as_of", asOf);
   if (lang) params.set("lang", lang);
+  // Review surfaces only. A capture <select> must never offer a retired
+  // code, so this is opt-in and the cache is keyed on it.
+  if (includeDeprecated) params.set("include_deprecated", "1");
   const qs = params.toString();
   return `/api/v1/reference-data/choice-list-bundle/${qs ? "?" + qs : ""}`;
 };
 
-const _fetchBundle = async (names, { asOf, lang } = {}) => {
-  const url = _bundleUrl(names, { asOf, lang });
+const _fetchBundle = async (names, opts = {}) => {
+  const url = _bundleUrl(names, opts);
   const cacheKey = url;
   const prev = _bundleCache.get(cacheKey);
   const headers = { "Accept": "application/json" };
@@ -99,7 +102,7 @@ const _fetchBundle = async (names, { asOf, lang } = {}) => {
   }
   const value = { etag, asOf: body.as_of, lang: body.lang, lists };
   _bundleCache.set(cacheKey, value);
-  _rememberLists(lists, { asOf, lang });
+  _rememberLists(lists, opts);
   return value;
 };
 
@@ -144,7 +147,7 @@ const useChoiceList = (namesArg, opts = {}) => {
     } catch (err) {
       setState((s) => ({ ...s, loading: false, error: String(err.message || err) }));
     }
-  }, [names.join(","), opts.asOf, opts.lang]);
+  }, [names.join(","), opts.asOf, opts.lang, opts.includeDeprecated]);
 
   _ucl_useEffect(() => { fetchNow(false); }, [fetchNow]);
 

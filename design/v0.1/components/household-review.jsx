@@ -117,19 +117,81 @@ const notEditableReason = (path) => {
 //: Prefixed for that reason, not for style.
 //: design/v0.1/no-duplicate-globals.test.js now fails on a new
 //: collision rather than leaving it to be found in a browser.
-const HhCodedCell = ({ listName, value }) => {
+const HhCodedCell = ({ listName, value, type = "" }) => {
+  // include_deprecated: this is a review surface. A household coded
+  // against a retired frame — and the ones captured before the UBOS 2024
+  // migration are — would otherwise render as a bare number, which is
+  // exactly the record an operator most needs to read. The retired label
+  // is shown and marked as retired rather than withheld.
   const [options] = (listName && typeof useChoiceList === "function")
-    ? useChoiceList(listName)
+    ? useChoiceList(listName, { includeDeprecated: true })
     : [[]];
   if (value === null || value === undefined || value === "") {
     return <span className="muted">—</span>;
   }
-  const hit = (options || []).find(o => String(o.code) === String(value));
-  if (!hit) {
-    return <span className="t-mono">{String(value)}</span>;
+  const decode = (code) => (options || []).find(o => String(o.code) === String(code));
+
+  // A select_multiple answer is a space-separated list of codes. Decoding
+  // the whole string as one code finds nothing, so the screen showed the
+  // raw "phone radio bed mattress" — every selection undecoded on the
+  // one field where the operator most wants to read the selections.
+  if (type === "select_multiple" && String(value).trim().includes(" ")) {
+    const codes = String(value).trim().split(/\s+/);
+    return (
+      <span>
+        {codes.map((code, i) => {
+          const one = decode(code);
+          return (
+            <span key={code + i}>
+              {i > 0 && ", "}
+              {one ? one.label : <span className="t-mono">{code}</span>}
+              <span className="t-cap t-mono"> ({code})</span>
+              {one && one.status && one.status !== "active" && (
+                <span className="t-cap muted" title="Coded against a retired frame.">
+                  {" "}<Icon name="clock" size={10}/>
+                </span>
+              )}
+            </span>
+          );
+        })}
+      </span>
+    );
   }
+
+  const hit = decode(value);
+  if (!hit) {
+    // No option carries this code in any frame, current or retired. The
+    // value is shown as stored and flagged, because a code that decodes
+    // to nothing is a data fault, not a display one.
+    return (
+      <span>
+        <span className="t-mono">{String(value)}</span>
+        <span className="t-cap muted" style={{ marginLeft: 6 }}
+              title={
+                `No option in "${listName}" carries the code ${value}, in the `
+                + "current frame or any retired one, so it cannot be shown as "
+                + "words. The stored value is what was captured."
+              }>
+          <Icon name="alert-triangle" size={11}/> unknown code
+        </span>
+      </span>
+    );
+  }
+  const retired = hit.status && hit.status !== "active";
   return (
-    <span>{hit.label} <span className="t-cap t-mono">({String(value)})</span></span>
+    <span>
+      {hit.label} <span className="t-cap t-mono">({String(value)})</span>
+      {retired && (
+        <span className="t-cap muted" style={{ marginLeft: 6 }}
+              title={
+                "This answer was coded against a retired code frame. The "
+                + "label is the one that applied when it was captured; the "
+                + "current frame uses different codes."
+              }>
+          <Icon name="clock" size={11}/> retired code
+        </span>
+      )}
+    </span>
   );
 };
 
@@ -141,7 +203,24 @@ const HhReviewRow = ({ row, draft, onEdit }) => {
     <div className="review-row" style={{
       background: dirty ? "var(--accent-update-bg)" : undefined,
     }}>
-      <div className="review-row-label" title={row.path}>{row.label}</div>
+      <div className="review-row-label"
+           title={row.title ? `${row.title}\n${row.path}` : row.path}>
+        {row.label}
+        {row.missing && (
+          <span className="t-cap muted" style={{ marginLeft: 6 }}
+                title={
+                  "No question in the active questionnaire produces this field, "
+                  + "so the name shown is the raw key the payload used and any "
+                  + "code it holds cannot be turned into words. Either the "
+                  + "connector is sending something the questionnaire does not "
+                  + "ask, or the question exists but nothing records that it "
+                  + "feeds this field. Both are fixed in Questionnaire "
+                  + "Authoring, not here."
+                }>
+            <Icon name="alert-triangle" size={11}/> not in questionnaire
+          </span>
+        )}
+      </div>
       <div className="review-row-value">
         {editable && onEdit ? (
           <input
@@ -150,7 +229,7 @@ const HhReviewRow = ({ row, draft, onEdit }) => {
             value={shown === null || shown === undefined ? "" : String(shown)}
             onChange={(e) => onEdit(row.path, e.target.value)}/>
         ) : row.choiceList ? (
-          <HhCodedCell listName={row.choiceList} value={shown}/>
+          <HhCodedCell listName={row.choiceList} value={shown} type={row.type}/>
         ) : (
           <span className={row.empty ? "muted" : ""}>
             {row.empty ? "—" : String(shown)}
@@ -192,7 +271,20 @@ const HhReviewSection = ({ title, children, count, defaultOpen = false, tone = "
 const HhRepeatTable = ({ table }) => (
   <table className="tbl" style={{ fontSize: 12.5 }}>
     <thead>
-      <tr>{table.columns.map(c => <th key={c.key}>{c.label}</th>)}</tr>
+      <tr>{table.columns.map(c => (
+        <th key={c.key} title={c.title || c.key}>
+          {c.label}
+          {c.missing && (
+            <span className="t-cap muted" style={{ marginLeft: 4 }}
+                  title={
+                    "No question in the active questionnaire produces this "
+                    + "column, so its codes cannot be turned into words."
+                  }>
+              <Icon name="alert-triangle" size={10}/>
+            </span>
+          )}
+        </th>
+      ))}</tr>
     </thead>
     <tbody>
       {table.rows.map((row, i) => (
@@ -200,7 +292,7 @@ const HhRepeatTable = ({ table }) => (
           {table.columns.map(c => (
             <td key={c.key}>
               {c.choiceList
-                ? <HhCodedCell listName={c.choiceList} value={row[c.key]}/>
+                ? <HhCodedCell listName={c.choiceList} value={row[c.key]} type={c.type}/>
                 : (row[c.key] === null || row[c.key] === undefined || row[c.key] === ""
                     ? <span className="muted">—</span> : String(row[c.key]))}
             </td>
@@ -212,15 +304,95 @@ const HhRepeatTable = ({ table }) => (
 );
 
 /* ───────────────────────────────────────────────────────────────
+   The field dictionary
+   ───────────────────────────────────────────────────────────────
+   Labels and choice lists come from the active instrument, not from
+   this file. One fetch per session, cached at module scope: the
+   dictionary changes when a new FormVersion is activated, which is an
+   administrative act, not something that happens mid-review.
+
+   While it is in flight the review still renders — every field reports
+   as unmapped, which is what "the registry has not answered yet"
+   honestly looks like, and resolves as soon as the fetch lands. */
+
+let _dictionaryCache = null;
+let _dictionaryEtag = "";
+let _dictionaryPromise = null;
+
+const _fetchFieldDictionary = (force = false) => {
+  if (!_dictionaryPromise || force) {
+    const headers = { Accept: "application/json" };
+    // Conditional GET. Without it the cache never expires for the life
+    // of the tab, so activating a new FormVersion or correcting a field
+    // mapping leaves every open console showing the old answer with
+    // nothing to suggest it is stale — which is exactly how a screen
+    // ends up reporting eighteen questions as "not in questionnaire"
+    // minutes after they were mapped.
+    if (_dictionaryEtag && !force) headers["If-None-Match"] = _dictionaryEtag;
+    _dictionaryPromise = fetch("/api/v1/intake/field-dictionary/", {
+      headers, credentials: "same-origin",
+    })
+      .then((r) => {
+        if (r.status === 304 && _dictionaryCache) return _dictionaryCache;
+        if (!r.ok) throw new Error(`field-dictionary HTTP ${r.status}`);
+        _dictionaryEtag = r.headers.get("ETag") || "";
+        return r.json().then((body) => { _dictionaryCache = body; return body; });
+      })
+      .catch((err) => { _dictionaryPromise = null; throw err; });
+  }
+  return _dictionaryPromise;
+};
+
+window._nsrFieldDictionaryClear = () => {
+  _dictionaryCache = null; _dictionaryPromise = null; _dictionaryEtag = "";
+};
+
+const useFieldDictionary = () => {
+  const [state, setState] = React.useState(
+    () => ({ dictionary: _dictionaryCache, loading: !_dictionaryCache, error: null }),
+  );
+  React.useEffect(() => {
+    let live = true;
+    // Stale-while-revalidate: render what is cached immediately, then
+    // revalidate. A 304 costs nothing and a changed dictionary lands
+    // without the operator knowing to reload.
+    _dictionaryPromise = null;
+    _fetchFieldDictionary()
+      .then((d) => { if (live) setState({ dictionary: d, loading: false, error: null }); })
+      .catch((e) => {
+        if (live) {
+          setState((prev) => ({
+            // Keep showing the cached dictionary if we have one: labels
+            // that are possibly stale beat no labels at all.
+            dictionary: prev.dictionary || _dictionaryCache,
+            loading: false,
+            error: String(e.message || e),
+          }));
+        }
+      });
+    return () => { live = false; };
+  }, []);
+  return state;
+};
+
+/* ───────────────────────────────────────────────────────────────
    The review
    ─────────────────────────────────────────────────────────────── */
 
 const HouseholdReview = ({
   payload, canEdit = false, draft = {}, onEdit, editBlockedReason = "",
+  dictionary: dictionaryProp = null,
 }) => {
+  // A caller that already holds the dictionary passes it in rather than
+  // making the screen fetch it again; the hook is the fallback.
+  const fetched = useFieldDictionary();
+  const dictionary = dictionaryProp || fetched.dictionary;
+  const dictLoading = dictionaryProp ? false : fetched.loading;
+  const dictError = dictionaryProp ? null : fetched.error;
   const model = useMemoHR(
-    () => (typeof buildReviewModel === "function" ? buildReviewModel(payload) : null),
-    [payload],
+    () => (typeof buildReviewModel === "function"
+      ? buildReviewModel(payload, dictionary) : null),
+    [payload, dictionary],
   );
   // An absent payload and an empty one are different: the first has
   // nothing to show, the second is a record that arrived carrying
@@ -233,8 +405,71 @@ const HouseholdReview = ({
   }
   const edit = canEdit ? onEdit : null;
 
+  // Count what the dictionary could not answer for THIS record, so the
+  // notice is about the record in front of the operator rather than the
+  // instrument in general.
+  const unmappedFields = React.useMemo(() => {
+    const names = new Set();
+    for (const section of (model.sections || [])) {
+      for (const row of (section.rows || [])) if (row.missing) names.add(row.key);
+    }
+    for (const table of (model.tables || [])) {
+      for (const col of ((table.table && table.table.columns) || [])) {
+        if (col.missing) names.add(col.key);
+      }
+    }
+    for (const m of (model.members || [])) {
+      for (const row of (m.identity || [])) if (row.missing) names.add(row.key);
+      for (const section of (m.detail || [])) {
+        for (const row of (section.rows || [])) if (row.missing) names.add(row.key);
+      }
+    }
+    return [...names].sort();
+  }, [model]);
+
+  const missingThresholds = Object.entries(
+    (dictionary && dictionary.missing_thresholds) || {},
+  );
+
   return (
     <div>
+      {dictError && (
+        <div className="card" style={{ padding: 12, borderLeft: "3px solid var(--accent-danger)" }}>
+          <div className="row gap-2" style={{ alignItems: "flex-start" }}>
+            <Icon name="alert-triangle" size={15} color="var(--accent-danger)"/>
+            <div className="t-bodysm" style={{ color: "var(--neutral-700)" }}>
+              <strong>Field dictionary unavailable.</strong> Field names below are
+              raw payload keys and coded answers are shown as their stored codes.
+              Nothing here is wrong, but it is unlabelled — do not read a code as
+              a value. ({dictError})
+            </div>
+          </div>
+        </div>
+      )}
+      {!dictError && !dictLoading && (unmappedFields.length > 0 || missingThresholds.length > 0) && (
+        <div className="card" style={{ padding: 12, borderLeft: "3px solid var(--accent-quality)" }}>
+          <div className="row gap-2" style={{ alignItems: "flex-start" }}>
+            <Icon name="info" size={15} color="var(--accent-quality)"/>
+            <div className="t-bodysm" style={{ color: "var(--neutral-700)" }}>
+              <strong>Not in the questionnaire.</strong>{" "}
+              {unmappedFields.length > 0 && (
+                <span>
+                  {unmappedFields.length} field
+                  {unmappedFields.length === 1 ? " on this record is" : "s on this record are"}
+                  {" "}not produced by any question in the active questionnaire
+                  {" "}({unmappedFields.slice(0, 6).join(", ")}
+                  {unmappedFields.length > 6 ? `, +${unmappedFields.length - 6} more` : ""}),
+                  {" "}so they show the raw key the payload used and their codes
+                  {" "}are not turned into words.{" "}
+                </span>
+              )}
+              {missingThresholds.map(([key, why]) => (
+                <span key={key}><em>{key}</em>: {why} </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       {!canEdit && editBlockedReason && (
         <div className="card" style={{ padding: 12, borderLeft: "3px solid var(--accent-quality)" }}>
           <div className="row gap-2" style={{ alignItems: "flex-start" }}>

@@ -145,7 +145,8 @@ class ChoiceListViewSet(viewsets.ReadOnlyModelViewSet):
 # §6). An ETag (sha256 of the JSON bytes) lets clients short-circuit
 # unchanged-payload responses to 304.
 
-def _build_bundle(as_of: date, lang: str, names: list[str] | None = None) -> dict:
+def _build_bundle(as_of: date, lang: str, names: list[str] | None = None,
+                  include_deprecated: bool = False) -> dict:
     """Compute the bundle deterministically — sorted by list_name —
     so the ETag is stable across calls when nothing has changed.
 
@@ -182,7 +183,16 @@ def _build_bundle(as_of: date, lang: str, names: list[str] | None = None) -> dic
         # Build options: primary language overlays, falling back to en.
         rows_by_code: dict[str, dict] = {}
         for opt in cl.options.all():
-            if opt.status != ChoiceOption.Status.ACTIVE:
+            # Capture surfaces must only ever offer codes that are still
+            # in force, so ACTIVE-only is the default and stays the
+            # default. Review surfaces are the exception: a record coded
+            # against a retired frame still has to be readable, and
+            # dropping the option leaves the operator looking at a bare
+            # number. `include_deprecated` is how they ask, and the
+            # option carries its status so the screen can mark it.
+            if opt.status != ChoiceOption.Status.ACTIVE and not (
+                include_deprecated and opt.status == ChoiceOption.Status.DEPRECATED
+            ):
                 continue
             # Always seed with en, then let lang override.
             existing = rows_by_code.get(opt.code, {})
@@ -190,6 +200,7 @@ def _build_bundle(as_of: date, lang: str, names: list[str] | None = None) -> dic
                 existing["en_label"] = opt.label
                 existing["sort_order"] = opt.sort_order
                 existing["parent_code"] = opt.parent_code
+                existing["status"] = opt.status
             if opt.language == lang and lang != "en":
                 existing["lang_label"] = opt.label
             rows_by_code[opt.code] = existing
@@ -201,6 +212,7 @@ def _build_bundle(as_of: date, lang: str, names: list[str] | None = None) -> dic
                 "label": label,
                 "sort_order": row.get("sort_order", 0),
                 "parent_code": row.get("parent_code", ""),
+                "status": row.get("status", ChoiceOption.Status.ACTIVE),
             })
         options.sort(key=lambda o: (o["sort_order"], o["code"]))
         lists.append({
@@ -282,7 +294,15 @@ class ChoiceListBundleView(APIView):
             if names_param else None
         )
 
-        bundle = _build_bundle(as_of, lang, names=names)
+        # Review surfaces pass include_deprecated=1 so a record coded
+        # against a retired frame still reads as words. Capture surfaces
+        # never do — they must offer only codes still in force.
+        include_deprecated = str(
+            request.query_params.get("include_deprecated") or "",
+        ).lower() in ("1", "true", "yes")
+        bundle = _build_bundle(
+            as_of, lang, names=names, include_deprecated=include_deprecated,
+        )
         etag = _bundle_etag(bundle)
 
         if_none_match = request.META.get("HTTP_IF_NONE_MATCH")
