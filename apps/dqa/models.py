@@ -229,6 +229,25 @@ class DqaRule(models.Model):
         verbose_name_plural = "DQA rules"
         constraints = [
             models.UniqueConstraint(fields=["rule_id", "version"], name="dqarule_id_version_unique"),
+            # One ACTIVE version per rule, enforced by the database.
+            #
+            # `services.approve` retires the version it supersedes, and
+            # both evaluators defensively dedup by rule_id keeping the
+            # highest version. None of that is a guarantee: AC-MEMBER-AGE-MAX
+            # was approved on production before the retire-on-approve fix
+            # existed and sat with v1 and v2 both ACTIVE for four months.
+            # Anything that writes status outside `approve` — a seed
+            # script, the admin, a shell — can do it again.
+            #
+            # Which version wins is currently decided by an ORDER BY in two
+            # separate places. A rule is a policy the registry is judged
+            # against; "whichever the queryset yields" is not an acceptable
+            # answer to which policy applied.
+            models.UniqueConstraint(
+                fields=["rule_id"],
+                condition=models.Q(status="active"),
+                name="dqarule_one_active_version_per_rule",
+            ),
         ]
         indexes = [
             models.Index(fields=["status", "rule_id"]),

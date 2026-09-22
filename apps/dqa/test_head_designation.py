@@ -352,9 +352,21 @@ def test_the_retirement_is_in_the_audit_chain():
 
 
 @pytest.mark.django_db
-def test_the_engine_evaluates_one_version_per_rule_even_if_two_are_active():
-    """The guard for data already in the bad state."""
-    from apps.dqa.engine import evaluate_all as dqa_evaluate_all
+def test_two_active_versions_can_no_longer_exist():
+    """This used to assert the engine coped with the bad state. It now
+    asserts the bad state is unreachable.
+
+    AC-MEMBER-AGE-MAX sat on production with v1 and v2 both ACTIVE for
+    four months. The engine's ORDER BY meant the newest won, so nothing
+    looked wrong — but which policy a household had been judged against
+    was decided by a queryset, not by a decision anyone recorded.
+
+    `dqarule_one_active_version_per_rule` makes it impossible to store,
+    so the engine's dedup is now belt-and-braces rather than the only
+    thing standing between the registry and an ambiguous rule.
+    """
+    from django.db import IntegrityError, transaction
+
     from apps.dqa.models import Severity
 
     common = dict(
@@ -366,11 +378,31 @@ def test_the_engine_evaluates_one_version_per_rule_even_if_two_are_active():
         applicability_filter={"entity": "member"},
     )
     DqaRule.objects.create(version=1, **common)
-    DqaRule.objects.create(version=2, **common)
+    with pytest.raises(IntegrityError), transaction.atomic():
+        DqaRule.objects.create(version=2, **common)
+
+
+@pytest.mark.django_db
+def test_the_engine_still_evaluates_one_version_per_rule():
+    """The engine's own dedup, exercised through the state that IS
+    reachable: one active version with retired ones behind it."""
+    from apps.dqa.engine import evaluate_all as dqa_evaluate_all
+    from apps.dqa.models import Severity
+
+    common = dict(
+        rule_id="AC-TEST-SUPERSEDED",
+        description="x", severity=Severity.FLAG,
+        expression={"op": "not_null", "args": ["$.surname"]},
+        error_message_template="missing surname",
+        author="seed", approved_by="qa-lead",
+        applicability_filter={"entity": "member"},
+    )
+    DqaRule.objects.create(version=1, status=RuleStatus.RETIRED, **common)
+    DqaRule.objects.create(version=2, status=RuleStatus.ACTIVE, **common)
 
     results = dqa_evaluate_all(
         {"surname": ""}, record_type="member", record_id="M1",
     )
-    fired = [e for e in results if e.rule.rule_id == "AC-TEST-DOUBLE-ACTIVE"]
+    fired = [e for e in results if e.rule.rule_id == "AC-TEST-SUPERSEDED"]
     assert len(fired) == 1, f"rule evaluated {len(fired)} times"
-    assert fired[0].rule.version == 2, "the newest version is the one that applies"
+    assert fired[0].rule.version == 2, "the retired version must not evaluate"
