@@ -981,3 +981,51 @@ how the real run was done.
   v2). Pre-existing, unrelated to this work, but two active versions of
   one rule means which one evaluates depends on query order. Worth
   closing.
+
+## 2026-09-22 — head-of-household rules approved, gates re-run
+
+**Approved** on the explicit instruction of jmwebaze@gmail.com, applied
+by the agent:
+
+```
+AC-HOH-EXISTS        v2 -> active   (v1 auto-retired)
+AC-HOH-AGE           v2 -> active   (v1 auto-retired)
+AC-HOH-AGE-CHILD-LED v1 -> active
+```
+
+`approve()` takes `approver` and `actor` separately, so the chain records
+`approved_by=jmwebaze@gmail.com` (the deciding authority) with
+`actor=claude-agent` (what executed it), and the approval note says so.
+The audit trail should not imply a human clicked approve when an agent
+applied it under instruction.
+
+`AC-HOH-EXISTS` v2 is the `op=or` predicate — accepts the canonical
+`is_head` flag or `relationship_to_head == "01"`.
+
+**Gates re-run** with `process_stage_record(..., allow_fast_track=False)`.
+Fast-track deliberately disabled: re-running gates should return records
+to the review queue, not silently promote 82 households into the
+registry on the back of a rule change.
+
+92 records, not 82 — ten more had staged in the interval (the
+`process-pending-kobo-landings` beat task runs every 5 minutes).
+
+```
+before:  quality_failed 92
+after:   idv_pending 69 | ddup_review 8 | pending_promotion 5 | quality_failed 10
+```
+
+`AC-HOH-EXISTS` now blocks nothing.
+
+**The 10 that remain are real.** All ten fail the same pair,
+`AC-HOH-AGE + AC-MEMBER-AGE-MAX`, and every one has a head aged **10** —
+below the 12-year minimum. The rule is doing its job: before v2 it
+matched nobody and so never fired, and these records passed that gate
+without ever being checked. Either genuine child-headed households below
+the threshold or a capture error; either way it is a human judgement,
+which is what `quality_failed` is for.
+
+**Queue now:** 284 promoted, 11 rejected, 69 idv_pending, 8 ddup_review,
+5 pending_promotion, 10 quality_failed. The 69 need NIRA verification and
+the 8 need duplicate review — both were previously masked behind the
+broken head rule, so this is work that was always there, not new work.
