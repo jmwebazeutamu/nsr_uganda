@@ -76,6 +76,52 @@ const Icon = ({ name, size = 16, color = "currentColor", style }) => {
   );
 };
 
+/* The account menu makes the signed-in identity visible and keeps profile,
+   password, and sign-out actions together rather than scattering them over
+   several unlabeled header icons. */
+const AccountMenu = ({ name, initials }) => {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+
+  useEffect(() => {
+    const closeWhenOutside = (event) => {
+      if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", closeWhenOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeWhenOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
+
+  return (
+    <div className="account-menu" ref={rootRef}>
+      <button type="button" className="account-menu-trigger"
+              aria-haspopup="menu" aria-expanded={open}
+              onClick={() => setOpen(!open)}>
+        <span className="account-menu-name">{name}</span>
+        <span className="avatar" aria-hidden="true">{initials}</span>
+        <Icon name="chevronDown" size={15}/>
+      </button>
+      {open && (
+        <div className="account-menu-panel" role="menu" aria-label="Account menu">
+          <a className="account-menu-item" role="menuitem" href="/profile/">View/Edit Profile</a>
+          <a className="account-menu-item" role="menuitem" href="/profile/password/">Change Password</a>
+          <div className="account-menu-divider" role="separator"/>
+          <button type="button" className="account-menu-item account-menu-logout"
+                  role="menuitem" onClick={() => window.nsrSignOut()}>
+            Logout
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 /* ============================================================
    Chip — covers all Section-8 statuses
    ============================================================ */

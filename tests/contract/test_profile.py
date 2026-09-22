@@ -58,16 +58,34 @@ class TestProfile:
         response = client.get("/console/app.jsx")
         assert response.status_code == 200
         body = b"".join(response.streaming_content)
-        assert b"My profile" in body
-        assert b"nsrSignOut" in body
+        assert b"AccountMenu" in body
+        menu_response = client.get("/console/components.jsx")
+        menu_body = b"".join(menu_response.streaming_content)
+        assert menu_response.status_code == 200
+        assert b"View/Edit Profile" in menu_body
+        assert b"Change Password" in menu_body
+        assert b"Logout" in menu_body
+        assert b"nsrSignOut" in menu_body
 
     def test_admin_console_has_profile_and_sign_out_controls(self, client, administrator):
         client.force_login(administrator)
         response = client.get("/admin-console/v0.1/screens/app-admin.jsx")
         assert response.status_code == 200
         body = b"".join(response.streaming_content)
-        assert b"My profile" in body
-        assert b"nsrSignOut" in body
+        assert b"AccountMenu" in body
+
+    def test_operator_can_change_their_own_password(self, client, operator):
+        client.force_login(operator)
+        response = client.post("/profile/password/", {
+            "old_password": "pw",
+            "new_password1": "a-longer-safe-password-123",
+            "new_password2": "a-longer-safe-password-123",
+        })
+        assert response.status_code == 302
+        assert response["Location"] == "/profile/?password_updated=1"
+
+        operator.refresh_from_db()
+        assert operator.check_password("a-longer-safe-password-123")
 
 
 class TestMastheadReturnsHome:

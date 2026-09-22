@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Icon, Chip, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, DataExplorerConsoleScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, ProgrammesScreen, ProgrammeDetailScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, MemberDetailScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, CatalogueScreen, DatasetDetailScreen, VariableDetailScreen, AggregateBuilderScreen, HandoffConfirmScreen, ChangeRequestScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts, ErrorBoundary, useWideView, _wideRequestedScreen, WideViewButtons */
+/* global React, ReactDOM, Icon, Chip, AccountMenu, HomeScreen, KitScreen, CaptureScreen, ReceiptScreen, DIHScreen, DedupScreen, UPDScreen, DRSScreen, DataExplorerConsoleScreen, GRMScreen, PartnerDRSScreen, PartnersScreen, PartnerRegistrationScreen, PartnerDetailScreen, ProgrammeRegistrationScreen, ProgrammesScreen, ProgrammeDetailScreen, BeneficiariesScreen, ReportsScreen, AdminScreen, RegistryScreen, HouseholdScreen, MemberDetailScreen, DsasScreen, DsaDetailScreen, DsaCreateWizard, DsaQuickFind, MyDsaScreen, MyProgrammesScreen, CatalogueScreen, DatasetDetailScreen, VariableDetailScreen, AggregateBuilderScreen, HandoffConfirmScreen, ChangeRequestScreen, ROLE_CONTENT, TweaksPanel, useTweaks, TweakSection, TweakSelect, TweakToggle, TweakRadio, useNavCounts, ErrorBoundary, useWideView, _wideRequestedScreen, WideViewButtons */
 // NSR MIS — App shell + router
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
@@ -419,20 +419,7 @@ function App() {
           <span className="role-chip" title={me ? `Authenticated as ${me.username}` : "Loading session…"}>
             <span className="muted">Role</span> <strong>{identityRoleLabel}</strong>
           </span>
-          {role !== "partner-analyst" && (
-            <button className="icon-btn" title="Find a DSA"
-                    onClick={() => setDsaFindOpen(true)}>
-              <Icon name="file" size={18}/>
-            </button>
-          )}
-          <button className="icon-btn" title="Notifications"><Icon name="bell" size={18}/><span className="dot"/></button>
-          <button className="icon-btn" title="My profile" onClick={() => window.nsrProfile()}>
-            <Icon name="settings" size={18}/>
-          </button>
-          <button className="avatar" title={`Open profile for ${identityName}${identityOrg ? " · " + identityOrg : ""}${me?.username ? " (" + me.username + ")" : ""}`} onClick={() => window.nsrProfile()}>{identityInitials}</button>
-          <button className="icon-btn" title="Sign out" aria-label="Sign out" onClick={() => window.nsrSignOut()}>
-            <Icon name="x" size={18}/>
-          </button>
+          <AccountMenu name={identityName} initials={identityInitials}/>
         </div>
       </header>
 

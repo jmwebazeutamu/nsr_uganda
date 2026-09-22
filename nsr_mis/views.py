@@ -122,6 +122,15 @@ def profile(request):
     })
 
 
+class ProfilePasswordChangeView(auth_views.PasswordChangeView):
+    """Self-service password change that preserves the active session."""
+
+    template_name = "registration/password_change_form.html"
+
+    def get_success_url(self):
+        return f"{reverse('profile')}?password_updated=1"
+
+
 @login_required
 def console(request, path: str = "nsr-mis-console.html"):
     """Serve the operator console.

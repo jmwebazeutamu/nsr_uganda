@@ -29,6 +29,9 @@
   {% if updated %}
     <p class="notice" role="status">{% trans "Your profile has been updated." %}</p>
   {% endif %}
+  {% if request.GET.password_updated == "1" %}
+    <p class="notice" role="status">{% trans "Your password has been changed." %}</p>
+  {% endif %}
 
   <form class="rise d4" method="post" action="{% url 'profile' %}">
     {% csrf_token %}
@@ -45,6 +48,7 @@
     {% endfor %}
     <div class="actions">
       <button class="btn gold" type="submit">{% trans "Save profile" %}</button>
+      <a class="quiet" href="{% url 'profile-password-change' %}">{% trans "Change password" %}</a>
       <a class="quiet" href="/home/">{% trans "Return to home" %}</a>
     </div>
   </form>
