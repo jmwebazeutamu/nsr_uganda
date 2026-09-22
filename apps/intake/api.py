@@ -11,6 +11,7 @@ from apps.security.audit_views import AuditReadMixin
 
 from .cspro import CsproParseError, parse_dictionary
 from .cspro_diff import diff_dictionaries
+from .field_dictionary import build_field_dictionary
 from .models import Channel, FormVersion, Submission, SubmissionResult
 from .services import IntakeError, submit_intake
 
@@ -185,3 +186,33 @@ def cspro_diff(request):
 
 
 cspro_diff.parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+
+@extend_schema(
+    tags=["intake"],
+    summary="Field dictionary for the active instrument",
+    description=(
+        "Label and choice list for every canonical payload field, read "
+        "from the active FormVersion, plus the age thresholds the "
+        "household composition summary needs. Screens render coded "
+        "values through this rather than carrying their own field maps, "
+        "so the instrument and the console cannot disagree about what a "
+        "field is called. Fields the registry does not define are absent "
+        "rather than guessed at, and thresholds it cannot supply are "
+        "returned as null with the reason in `missing_thresholds`."
+    ),
+    responses={200: OpenApiResponse(description="Field dictionary")},
+)
+@api_view(["GET"])
+@permission_classes([permissions.IsAuthenticated])
+def field_dictionary(request):
+    version = request.query_params.get("form_version")
+    form_version = None
+    if version:
+        form_version = FormVersion.objects.filter(version=version).first()
+        if form_version is None:
+            return Response(
+                {"detail": f"No form version {version}."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+    return Response(build_field_dictionary(form_version).as_dict())

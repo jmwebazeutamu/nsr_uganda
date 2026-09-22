@@ -20,7 +20,7 @@ const PAYLOADS = JSON.parse(fs.readFileSync(
   path.join(HERE, "..", "data", "fixtures", "canonical-payloads.json"), "utf8"));
 
 let buildReviewModel, reviewCoverage, HouseholdReview, isEditablePath,
-    notEditableReason, composition, humaniseKey;
+    notEditableReason, composition, humaniseKey, resolveField;
 
 beforeAll(async () => {
   const React = await import("react").then(m => m.default || m);
@@ -32,7 +32,7 @@ beforeAll(async () => {
   await import("./household-review-model.jsx");
   await import("./household-review.jsx");
   ({ buildReviewModel, reviewCoverage, HouseholdReview, isEditablePath,
-     notEditableReason, composition, humaniseKey } = globalThis);
+     notEditableReason, composition, humaniseKey, resolveField } = globalThis);
 });
 
 afterEach(() => cleanup());
@@ -108,8 +108,17 @@ describe("coverage", () => {
    ═══════════════════════════════════════════════════════════════════ */
 
 describe("household composition", () => {
-  const flags = (members) =>
-    Object.fromEntries(composition(members).map(f => [f.label, f.value]));
+  // What /api/v1/intake/field-dictionary/ serves, read from the active
+  // DQA rules' parameters. These were literals inside composition() until
+  // the registry-lookup change; the panel now draws the same boundaries
+  // the engine enforces. elderly_min_age is deliberately absent from the
+  // registry — see the "missing thresholds" block below.
+  const THRESHOLDS = {
+    head_min_age: 12, child_max_age: 17, orphan_max_age: 18,
+    elderly_min_age: 60,
+  };
+  const flags = (members, thresholds = THRESHOLDS) =>
+    Object.fromEntries(composition(members, thresholds).map(f => [f.label, f.value]));
 
   it("counts the roster, not the reported size", () => {
     expect(flags([{ line_number: 1 }, { line_number: 2 }])["Household size"]).toBe(2);
@@ -268,5 +277,148 @@ describe("labels", () => {
 
   it("uses the known label where there is one", () => {
     expect(humaniseKey("roof_material")).toBe("Roof material");
+  });
+});
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   The field vocabulary comes from the registry
+   ═══════════════════════════════════════════════════════════════════
+   This module used to carry a 39-entry label map and a 27-entry
+   field-to-choice-list map — a second vocabulary for fields the
+   instrument already defines. The registry codes a question by its
+   place on the form (g6_wall_material) and the payload names the fact
+   (wall_material); nothing kept the two in step, which is the seventh
+   time this project has found two vocabularies for one concept drifting
+   apart.
+
+   These assert on the drift directly: a label must come from the served
+   dictionary, and a field the dictionary does not define must be VISIBLY
+   unmapped rather than quietly title-cased into something plausible. */
+
+describe("field vocabulary", () => {
+  // Shaped exactly like /api/v1/intake/field-dictionary/.
+  const DICT = {
+    form_version: 1,
+    fields: {
+      wall_material: {
+        label: "Main wall material", question_label: "G6. Main wall material",
+        choice_list: "wall_material", question_name: "g6_wall_material",
+        section: "G", type: "select_one", source: "instrument",
+      },
+      land_title: {
+        label: "Title deed with household member name?",
+        question_label: "H8. Title deed with household member name?",
+        choice_list: "title_deed", question_name: "h8_title_deed",
+        section: "H", type: "select_one", source: "instrument",
+      },
+      gps_lat: {
+        label: "Latitude", question_label: "Latitude", choice_list: null,
+        question_name: "", section: "", type: "", source: "capture-metadata",
+      },
+    },
+    thresholds: { head_min_age: 12, child_max_age: 17, orphan_max_age: 18,
+                  elderly_min_age: null },
+    missing_thresholds: { elderly_min_age: "Define AC-ELDERLY-HEAD.min_age." },
+    conflicts: [],
+  };
+
+  it("takes the label from the dictionary, not from this file", () => {
+    const f = resolveField("wall_material", DICT);
+    expect(f.label).toBe("Main wall material");
+    expect(f.choiceList).toBe("wall_material");
+    expect(f.missing).toBe(false);
+  });
+
+  it("resolves fields no prefix-stripping heuristic could reach", () => {
+    // h8_title_deed -> land_title. Stripping "h8_" gives "title_deed",
+    // which is not the payload key; the mapping has to be stated, and
+    // this is the test that says so.
+    expect(resolveField("land_title", DICT).label)
+      .toBe("Title deed with household member name?");
+  });
+
+  it("marks a field the registry does not define as unmapped", () => {
+    const f = resolveField("some_new_question", DICT);
+    expect(f.missing).toBe(true);
+    expect(f.choiceList).toBeNull();
+  });
+
+  it("says where a label came from, so 'not asked' is visible", () => {
+    expect(resolveField("gps_lat", DICT).source).toBe("capture-metadata");
+    expect(resolveField("wall_material", DICT).source).toBe("instrument");
+  });
+
+  it("reports everything as unmapped when no dictionary has loaded", () => {
+    // The honest rendering of "the registry has not answered yet".
+    expect(resolveField("wall_material", null).missing).toBe(true);
+    expect(resolveField("wall_material", null).choiceList).toBeNull();
+  });
+
+  it("carries the dictionary's label and choice list onto the rows", () => {
+    const model = buildReviewModel(
+      { members: [], housing: { dwelling: { wall_material: "3" } } }, DICT,
+    );
+    const rows = model.sections.flatMap(s => s.rows || []);
+    const row = rows.find(r => r.key === "wall_material");
+    expect(row).toBeTruthy();
+    expect(row.label).toBe("Main wall material");
+    expect(row.choiceList).toBe("wall_material");
+    expect(row.missing).toBe(false);
+  });
+
+  it("flags an unmapped field on the row rather than inventing a label", () => {
+    const model = buildReviewModel(
+      { members: [], housing: { dwelling: { newly_added_question: "7" } } }, DICT,
+    );
+    const rows = model.sections.flatMap(s => s.rows || []);
+    const row = rows.find(r => r.key === "newly_added_question");
+    expect(row).toBeTruthy();
+    expect(row.missing).toBe(true);
+    // Its code is NOT decoded — decoding it would need a choice list
+    // nobody has declared.
+    expect(row.choiceList).toBeNull();
+  });
+
+  it("still shows every field when the dictionary is missing entirely", () => {
+    // Degraded, never blank: an operator with no dictionary must still
+    // see the record, just unlabelled.
+    const { missing } = reviewCoverage(PAYLOADS[SHAPES[0]]);
+    expect(missing).toHaveLength(0);
+  });
+});
+
+
+describe("missing thresholds", () => {
+  const flags = (members, thresholds) =>
+    Object.fromEntries(composition(members, thresholds).map(f => [f.label, f.value]));
+
+  it("omits the elderly band rather than assuming 60", () => {
+    // 60 was a literal with nothing behind it. Until a rule defines the
+    // boundary the panel must decline to draw it.
+    const f = flags([{ is_head: true, age_years: 71 }], {
+      head_min_age: 12, child_max_age: 17, orphan_max_age: 18,
+      elderly_min_age: null,
+    });
+    expect(f["Elderly-headed"]).toBe("not configured");
+    expect(f["Dependency ratio"]).toBe("not configured");
+  });
+
+  it("names the parameter that would close the gap", () => {
+    const rows = composition([{ is_head: true, age_years: 71 }], {
+      orphan_max_age: 18, elderly_min_age: null,
+    });
+    const elderly = rows.find(r => r.label === "Elderly-headed");
+    expect(elderly.detail).toContain("AC-ELDERLY-HEAD");
+  });
+
+  it("labels the count rows with the boundary actually in force", () => {
+    // The row used to say "Members under 18" whatever the rule said.
+    const rows = composition([{ is_head: true, age_years: 40 }], {
+      head_min_age: 12, child_max_age: 17, orphan_max_age: 21,
+      elderly_min_age: 65,
+    });
+    expect(rows.some(r => r.label === "Members under 21")).toBe(true);
+    expect(rows.some(r => r.label === "Members 65 and over")).toBe(true);
   });
 });

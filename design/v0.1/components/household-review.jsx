@@ -141,7 +141,21 @@ const HhReviewRow = ({ row, draft, onEdit }) => {
     <div className="review-row" style={{
       background: dirty ? "var(--accent-update-bg)" : undefined,
     }}>
-      <div className="review-row-label" title={row.path}>{row.label}</div>
+      <div className="review-row-label"
+           title={row.title ? `${row.title}\n${row.path}` : row.path}>
+        {row.label}
+        {row.missing && (
+          <span className="t-cap muted" style={{ marginLeft: 6 }}
+                title={
+                  "No question in the active instrument maps to this field, so "
+                  + "its name here is the raw payload key and any code it holds "
+                  + "cannot be decoded. This is a schema gap to close in the "
+                  + "Questionnaire Authoring data dictionary, not a display fault."
+                }>
+            <Icon name="alert-triangle" size={11}/> unmapped
+          </span>
+        )}
+      </div>
       <div className="review-row-value">
         {editable && onEdit ? (
           <input
@@ -192,7 +206,20 @@ const HhReviewSection = ({ title, children, count, defaultOpen = false, tone = "
 const HhRepeatTable = ({ table }) => (
   <table className="tbl" style={{ fontSize: 12.5 }}>
     <thead>
-      <tr>{table.columns.map(c => <th key={c.key}>{c.label}</th>)}</tr>
+      <tr>{table.columns.map(c => (
+        <th key={c.key} title={c.title || c.key}>
+          {c.label}
+          {c.missing && (
+            <span className="t-cap muted" style={{ marginLeft: 4 }}
+                  title={
+                    "No question in the active instrument maps to this "
+                    + "column, so its codes cannot be decoded."
+                  }>
+              <Icon name="alert-triangle" size={10}/>
+            </span>
+          )}
+        </th>
+      ))}</tr>
     </thead>
     <tbody>
       {table.rows.map((row, i) => (
@@ -212,15 +239,70 @@ const HhRepeatTable = ({ table }) => (
 );
 
 /* ───────────────────────────────────────────────────────────────
+   The field dictionary
+   ───────────────────────────────────────────────────────────────
+   Labels and choice lists come from the active instrument, not from
+   this file. One fetch per session, cached at module scope: the
+   dictionary changes when a new FormVersion is activated, which is an
+   administrative act, not something that happens mid-review.
+
+   While it is in flight the review still renders — every field reports
+   as unmapped, which is what "the registry has not answered yet"
+   honestly looks like, and resolves as soon as the fetch lands. */
+
+let _dictionaryCache = null;
+let _dictionaryPromise = null;
+
+const _fetchFieldDictionary = () => {
+  if (_dictionaryCache) return Promise.resolve(_dictionaryCache);
+  if (!_dictionaryPromise) {
+    _dictionaryPromise = fetch("/api/v1/intake/field-dictionary/", {
+      headers: { Accept: "application/json" },
+      credentials: "same-origin",
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error(`field-dictionary HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((body) => { _dictionaryCache = body; return body; })
+      .catch((err) => { _dictionaryPromise = null; throw err; });
+  }
+  return _dictionaryPromise;
+};
+
+window._nsrFieldDictionaryClear = () => {
+  _dictionaryCache = null; _dictionaryPromise = null;
+};
+
+const useFieldDictionary = () => {
+  const [state, setState] = React.useState(
+    () => ({ dictionary: _dictionaryCache, loading: !_dictionaryCache, error: null }),
+  );
+  React.useEffect(() => {
+    let live = true;
+    if (_dictionaryCache) return undefined;
+    _fetchFieldDictionary()
+      .then((d) => { if (live) setState({ dictionary: d, loading: false, error: null }); })
+      .catch((e) => {
+        if (live) setState({ dictionary: null, loading: false, error: String(e.message || e) });
+      });
+    return () => { live = false; };
+  }, []);
+  return state;
+};
+
+/* ───────────────────────────────────────────────────────────────
    The review
    ─────────────────────────────────────────────────────────────── */
 
 const HouseholdReview = ({
   payload, canEdit = false, draft = {}, onEdit, editBlockedReason = "",
 }) => {
+  const { dictionary, loading: dictLoading, error: dictError } = useFieldDictionary();
   const model = useMemoHR(
-    () => (typeof buildReviewModel === "function" ? buildReviewModel(payload) : null),
-    [payload],
+    () => (typeof buildReviewModel === "function"
+      ? buildReviewModel(payload, dictionary) : null),
+    [payload, dictionary],
   );
   // An absent payload and an empty one are different: the first has
   // nothing to show, the second is a record that arrived carrying
@@ -233,8 +315,70 @@ const HouseholdReview = ({
   }
   const edit = canEdit ? onEdit : null;
 
+  // Count what the dictionary could not answer for THIS record, so the
+  // notice is about the record in front of the operator rather than the
+  // instrument in general.
+  const unmappedFields = React.useMemo(() => {
+    const names = new Set();
+    for (const section of (model.sections || [])) {
+      for (const row of (section.rows || [])) if (row.missing) names.add(row.key);
+    }
+    for (const table of (model.tables || [])) {
+      for (const col of ((table.table && table.table.columns) || [])) {
+        if (col.missing) names.add(col.key);
+      }
+    }
+    for (const m of (model.members || [])) {
+      for (const row of (m.identity || [])) if (row.missing) names.add(row.key);
+      for (const section of (m.detail || [])) {
+        for (const row of (section.rows || [])) if (row.missing) names.add(row.key);
+      }
+    }
+    return [...names].sort();
+  }, [model]);
+
+  const missingThresholds = Object.entries(
+    (dictionary && dictionary.missing_thresholds) || {},
+  );
+
   return (
     <div>
+      {dictError && (
+        <div className="card" style={{ padding: 12, borderLeft: "3px solid var(--accent-danger)" }}>
+          <div className="row gap-2" style={{ alignItems: "flex-start" }}>
+            <Icon name="alert-triangle" size={15} color="var(--accent-danger)"/>
+            <div className="t-bodysm" style={{ color: "var(--neutral-700)" }}>
+              <strong>Field dictionary unavailable.</strong> Field names below are
+              raw payload keys and coded answers are shown as their stored codes.
+              Nothing here is wrong, but it is unlabelled — do not read a code as
+              a value. ({dictError})
+            </div>
+          </div>
+        </div>
+      )}
+      {!dictError && !dictLoading && (unmappedFields.length > 0 || missingThresholds.length > 0) && (
+        <div className="card" style={{ padding: 12, borderLeft: "3px solid var(--accent-quality)" }}>
+          <div className="row gap-2" style={{ alignItems: "flex-start" }}>
+            <Icon name="info" size={15} color="var(--accent-quality)"/>
+            <div className="t-bodysm" style={{ color: "var(--neutral-700)" }}>
+              <strong>Schema gaps.</strong>{" "}
+              {unmappedFields.length > 0 && (
+                <span>
+                  {unmappedFields.length} field
+                  {unmappedFields.length === 1 ? " on this record is" : "s on this record are"}
+                  {" "}not defined by the active instrument
+                  {" "}({unmappedFields.slice(0, 6).join(", ")}
+                  {unmappedFields.length > 6 ? `, +${unmappedFields.length - 6} more` : ""}),
+                  {" "}so they show their raw key and their codes are not decoded.{" "}
+                </span>
+              )}
+              {missingThresholds.map(([key, why]) => (
+                <span key={key}><em>{key}</em>: {why} </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       {!canEdit && editBlockedReason && (
         <div className="card" style={{ padding: 12, borderLeft: "3px solid var(--accent-quality)" }}>
           <div className="row gap-2" style={{ alignItems: "flex-start" }}>

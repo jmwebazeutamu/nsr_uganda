@@ -75,6 +75,21 @@ def _exec_legacy() -> dict:
     return ns
 
 
+def canonical_field_for(name: str) -> str:
+    """The canonical payload field `name` populates, or "" if unmapped.
+
+    Mirrors migration 0008 so the importer and the migration agree. The
+    mapping itself lives in apps/intake/canonical_fields.py, stated once.
+    """
+    from apps.intake.canonical_fields import (  # noqa: PLC0415
+        COPING_PREFIXES, QUESTION_TO_CANONICAL,
+    )
+    canonical = QUESTION_TO_CANONICAL.get(name, "")
+    if not canonical and name.startswith(COPING_PREFIXES):
+        return "strategy_type"
+    return canonical
+
+
 def _question_type(legacy_type: str) -> tuple[str, str]:
     """Translate the legacy `type` cell into (QuestionType, choice_list_name).
     The legacy column packs the choice-list name into select_one/multiple
@@ -243,6 +258,16 @@ def main(*, dry_run: bool = False) -> dict:
             # dropped on import which left calculate rows with an empty
             # cell on export and Kobo rejected the form.
             calculation=entry.get("calculation", "") or "",
+            # The canonical payload field this question populates.
+            #
+            # Set on import, not only by migration 0008: that migration
+            # seeds whatever questions already exist, and in a fresh
+            # environment it runs BEFORE this script. Without this line a
+            # new deployment migrates cleanly, imports the instrument,
+            # and then serves an empty field dictionary — every field on
+            # every review screen flagged unmapped, with nothing
+            # obviously broken to explain it.
+            canonical_field=canonical_field_for(name),
             order_in_section=current_order_in_section,
         )
         counts["questions"] += 1

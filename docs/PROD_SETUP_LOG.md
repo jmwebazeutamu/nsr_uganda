@@ -720,3 +720,66 @@ and no manual intervention was needed.
 Root cause of the isolation is provider-side and not established from here.
 Both open backlog items are untouched: no automated backup (deferred), and
 `web` still runs 3 gunicorn workers (question never answered).
+
+## 2026-09-21/22 — deploy 8a160b7 → 98f45ed (US-S23/S24)
+
+Console defects, home charts, CSPro review, household detailed review.
+
+**Pre-deploy backup.** `pg_dump -Fc` → `/opt/nsrmis/backups/pre-us-s24-20260921-233403Z.dump`
+(9.5M, exit 0). Verified with `pg_restore -l`: 131 tables with data, including every
+table the four new migrations touch. Prod still has no automated backup (Phase 8
+deferred by the user), so this manual dump is the only rollback point for the data.
+
+**Blocker hit, then cleared.** The first two `deploy.sh` runs failed at `docker build`
+with an i/o timeout pulling base images. Diagnosis: `auth.docker.io` 200 in 0.79s,
+`github.com` 200, `pypi.org` 200, but `production.cloudfront.docker.com` (Docker Hub's
+blob CDN) timed out. Six pre-pull attempts failed; neither `python:3.12-slim` nor
+`node:22-slim` was cached locally. Roughly 20 minutes later the same CDN completed a
+TLS handshake in 2.2s and both pulls succeeded first try. Transient CDN reachability,
+not a code or config fault — the box has prior form for this (a similar build failure
+on 2026-09-17). **No network or Docker config was changed.** If it recurs, retry before
+investigating; a registry mirror would fix it permanently but the container-registry
+pipeline was deliberately rejected, so that is the user's call.
+
+Failed builds never stopped the running containers, so the site served `8a160b7`
+throughout both failures.
+
+**Commands run on prod**
+
+```
+ssh nsr-prod 'cd /opt/nsrmis && ./deploy.sh'     # as jmwebaze, NOT root —
+                                                 # github-nsr is an SSH alias in
+                                                 # jmwebaze's ~/.ssh/config, and
+                                                 # jmwebaze is in the docker group.
+                                                 # sudo ./deploy.sh fails on git fetch.
+docker pull python:3.12-slim
+docker pull node:22-slim
+pg_dump -Fc  (see backup path above)
+```
+
+**Result.** `deploy complete: 8a160b7 -> 98f45ed`, build 4m38s, healthz ok on
+attempt 1, all 8 services up, 35G free.
+
+**Verification (post-deploy, on the box)**
+
+- Migrations applied: `reference_data` 0018, 0019, 0020 and `ingestion_hub` 0007 all `[X]`.
+- `https://nsr-sris.mglsd.go.ug/` `/home/` `/console/` `/healthz` → 200.
+- The React #185 crash fix is in the shipped bundle:
+  `/app/static/console/js/v0.1-components-household-review.js` contains
+  `HhReviewSection`, `HhReviewRow`, `HhCodedCell`, `HhRepeatTable` and declares no
+  bare `ReviewSection` — so it can no longer collide with the one
+  `app-change-request.jsx` owns.
+
+**Two verification traps worth remembering.**
+
+1. `docker compose exec` from `/opt/nsrmis` without `-f compose.production.yml`
+   picks up the unrelated `docker-compose.yml` and reports *"service web is not
+   running"* while the site is perfectly healthy. Always use the `dc()` wrapper
+   deploy.sh defines: `docker compose -f compose.production.yml --env-file .env`.
+2. Fetching a console asset unauthenticated returns the **sign-in page** with
+   HTTP 200, not the asset. A grep for component names against that response finds
+   nothing and looks exactly like a failed deploy. Verify console assets inside the
+   image, not over HTTP — and note the build flattens paths, so
+   `design/v0.1/components/household-review.jsx` ships as
+   `/app/static/console/js/v0.1-components-household-review.js`. `find -name
+   '*.jsx'` will not find it.

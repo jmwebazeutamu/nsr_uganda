@@ -239,6 +239,28 @@ class FormQuestion(models.Model):
     # it on every recompute). Kobo rejects calculate rows without a
     # non-empty calculation — see US-S21-006.
     calculation = models.CharField(max_length=512, blank=True)
+    # The canonical payload leaf this question populates.
+    #
+    # The instrument and the canonical payload have always used two
+    # different vocabularies for the same concept — the instrument codes
+    # a question by its position on the form (`g6_wall_material`,
+    # `h8_title_deed`), the payload names the fact (`wall_material`,
+    # `land_title`). Nothing recorded the correspondence, so the review
+    # screen carried its own copy of it as a literal map, which is the
+    # drift this field exists to stop.
+    #
+    # Prefix-stripping does not recover the mapping: `g4_rooms_sleeping`
+    # is `sleeping_rooms` and `h8_title_deed` is `land_title`. It has to
+    # be stated, so it is stated here, once, next to the question whose
+    # meaning it carries.
+    #
+    # Blank means "this question has no canonical payload field yet" —
+    # reported as a missing schema dependency rather than guessed at.
+    # Not unique: in a repeat block several questions legitimately feed
+    # one canonical column (the K03 shock-type questions all populate
+    # `shock_type`).
+    canonical_field = models.CharField(max_length=64, blank=True, default="")
+
     order_in_section = models.PositiveIntegerField(default=0)
 
     created_at = models.DateTimeField(auto_now_add=True)
