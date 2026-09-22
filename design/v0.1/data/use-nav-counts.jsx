@@ -6,7 +6,11 @@
 // requests). Each badge mirrors what the corresponding workbench
 // screen counts as its working queue:
 //
-//   DIH review      → stage_records WHERE state = pending_promotion
+//   DIH review      → stage_records ?queue=review — the server's own
+//                     definition of "still somebody's work". This badge
+//                     used to count state=pending_promotion alone and
+//                     read 0 while the screen it points at held twelve
+//                     records in idv_pending and quality_failed.
 //   Updates         → change_requests WHERE status = pending_approval
 //   Duplicates      → match_pairs WHERE status = pending
 //   Grievances      → grievances WHERE status NOT IN (closed, resolved)
@@ -73,7 +77,7 @@ const _FETCHERS = [
   {
     id: "dih",
     fetch: () =>
-      _getJson("/api/v1/dih/stage-records/?state=pending_promotion&page_size=1")
+      _getJson("/api/v1/dih/stage-records/?queue=review&page_size=1")
         .then(_countOf),
   },
   {

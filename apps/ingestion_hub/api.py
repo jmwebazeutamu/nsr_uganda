@@ -16,6 +16,7 @@ from .models import (
     ConnectorRun,
     SourceSystem,
     StageRecord,
+    REVIEW_QUEUE_STATES,
     StageRecordState,
 )
 from .permissions import IsDihTrigger
@@ -536,6 +537,14 @@ class StageRecordViewSet(
         # feedback memory.
         qs = super().get_queryset()
         params = self.request.query_params
+        # ?queue=review — the server's own definition of "still somebody's
+        # work", so a counter and the screen it points at cannot disagree.
+        # Three callers used to spell the state list out and all three
+        # spelled it differently; the sidebar badge read 0 while the queue
+        # held twelve records.
+        queue = (params.get("queue") or "").strip().lower()
+        if queue == "review":
+            return self._scope_sub_region(qs.filter(state__in=REVIEW_QUEUE_STATES))
         state = params.get("state")
         if state:
             # Comma-separated supported so the DIH tab can express
@@ -543,7 +552,10 @@ class StageRecordViewSet(
             states = [s.strip() for s in state.split(",") if s.strip()]
             if states:
                 qs = qs.filter(state__in=states)
-        sr = params.get("sub_region_code")
+        return self._scope_sub_region(qs)
+
+    def _scope_sub_region(self, qs):
+        sr = self.request.query_params.get("sub_region_code")
         if sr:
             from apps.data_management.models import Household
             hh_ids = list(

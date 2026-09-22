@@ -1,7 +1,7 @@
 /* global React, Icon, Chip, IdvChip, idvOutcome, HouseholdReview, KPI, PageHeader, AuditDrawer, ActionBar, ReasonModal, Modal, Toast, useNavCounts, useWideView, WideViewButtons, WideShell, WideDetailHost */
 // NSR MIS — 11.3 NSR Unit DIH review queue
 // US-S11-013: live-data wiring. The screen tries to fetch from
-// /api/v1/dih/stage-records/?state=pending_promotion on mount; if
+// /api/v1/dih/stage-records/?queue=review on mount; if
 // that succeeds it renders the real backend rows and the Promote /
 // Reject actions POST back to the API. If the fetch fails (file://
 // harness, unauthenticated, backend down) the screen falls back to
@@ -539,7 +539,7 @@ const DIHScreen = () => {
     // record in one round-trip so the queue isn't silently capped at
     // 50 (US-S11-035). Larger queues should land via the report
     // dashboard, not this triage surface.
-    fetch("/api/v1/dih/stage-records/?state=provisional,pending_promotion,quality_failed,ddup_review,idv_pending&page_size=500", {
+    fetch("/api/v1/dih/stage-records/?queue=review&page_size=500", {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
     })

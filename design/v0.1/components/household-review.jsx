@@ -248,6 +248,10 @@ const HhReviewRow = ({ row, draft, onEdit }) => {
   );
 };
 
+// Every section starts collapsed. The review opens on a list of what the
+// record contains and how much of it, so an operator chooses where to
+// look rather than scrolling past two sections that were opened for
+// them.
 const HhReviewSection = ({ title, children, count, defaultOpen = false, tone = "data" }) => {
   const [open, setOpen] = useStateHR(defaultOpen);
   return (
@@ -486,7 +490,7 @@ const HouseholdReview = ({
           from the roster immediately below — so the conclusion and its
           evidence are read together. */}
       <HhReviewSection title="Household composition" tone="programme"
-        count={`${model.members.length} members`} defaultOpen>
+        count={`${model.members.length} members`}>
         <div className="t-cap" style={{ marginBottom: 10 }}>
           Derived from the roster, not asked. Check these against the members below.
         </div>
@@ -506,7 +510,7 @@ const HouseholdReview = ({
       </HhReviewSection>
 
       <HhReviewSection title="Members" tone="identity"
-        count={`${model.members.length}`} defaultOpen>
+        count={`${model.members.length}`}>
         {model.members.map((m) => (
           <div key={m.index} style={{
             marginBottom: 14, paddingBottom: 14,
