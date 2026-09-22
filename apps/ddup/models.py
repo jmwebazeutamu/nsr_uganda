@@ -205,3 +205,56 @@ class MergeDecision(models.Model):
 
     def __str__(self) -> str:
         return f"{self.action} on pair {self.match_pair_id} by {self.decided_by}"
+
+
+class DiscoveryRunStatus(models.TextChoices):
+    RUNNING = "running", "Running"
+    SUCCEEDED = "succeeded", "Succeeded"
+    FAILED = "failed", "Failed"
+
+
+class DdupDiscoveryRun(models.Model):
+    """One execution of duplicate discovery.
+
+    Two jobs in one row. It is the watermark — `scanned_from` is the
+    previous successful run's start, so the next run only compares
+    members touched since — and it is the record of what that run did,
+    which is the only way to see that discovery is running at all.
+
+    Discovery had never been scheduled: the three discover_* services
+    existed, nothing called them, and the sixteen pairs in the registry
+    came from a one-off shell run months earlier. Nothing said so.
+
+    Full sweeps stay possible (`scanned_from` null) but are an explicit
+    act: at national scale a full tier-3 pass is ~2×10^10 comparisons,
+    which is a weekend, not a nightly job.
+    """
+
+    id = ULIDField(primary_key=True)
+    started_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(
+        max_length=16, choices=DiscoveryRunStatus.choices,
+        default=DiscoveryRunStatus.RUNNING,
+    )
+    # Null means a full sweep.
+    scanned_from = models.DateTimeField(null=True, blank=True)
+    members_considered = models.PositiveIntegerField(default=0)
+    tier1_created = models.PositiveIntegerField(default=0)
+    tier2_created = models.PositiveIntegerField(default=0)
+    tier3_created = models.PositiveIntegerField(default=0)
+    comparisons = models.PositiveBigIntegerField(default=0)
+    note = models.TextField(blank=True)
+    actor = models.CharField(max_length=64, default="system")
+
+    class Meta:
+        verbose_name = "DDUP discovery run"
+        indexes = [models.Index(fields=["status", "-started_at"])]
+
+    @property
+    def pairs_created(self) -> int:
+        return self.tier1_created + self.tier2_created + self.tier3_created
+
+    def __str__(self) -> str:
+        scope = "full sweep" if self.scanned_from is None else f"since {self.scanned_from:%Y-%m-%d %H:%M}"
+        return f"DdupDiscoveryRun {self.started_at:%Y-%m-%d %H:%M} ({scope}) [{self.status}]"

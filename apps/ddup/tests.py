@@ -64,7 +64,14 @@ def household(db, geo):
 def active_model(db):
     v = DdupModelVersion.objects.create(
         version=1, description="tier1 NIN deterministic",
-        config={"tier1": {"member": "nin", "household": "head_nin+village"}},
+        config={
+            "tier1": {"member": "nin", "household": "head_nin+village"},
+            # Auto-merge is OFF unless the approved model version enables
+            # it (it soft-deletes a Member unattended). The tests in
+            # TestAutoMergeHighConfidence are about what happens once it
+            # is on, so this fixture turns it on deliberately.
+            "tier3": {"auto_merge_enabled": True},
+        },
         author="archer",
     )
     activate_model_version(v, approver="bob")
@@ -1286,7 +1293,7 @@ class TestProbabilisticDiscovery:
         )
         permissive = DdupModelVersion.objects.create(
             version=2, author="archer",
-            config={"tier3": {"threshold": 0.5}},
+            config={"tier3": {"threshold": 0.5, "auto_merge_enabled": True}},
         )
         activate_model_version(permissive, approver="bob")
         h1, h2 = two_households_same_village
@@ -1361,7 +1368,11 @@ class TestAutoMergeHighConfidence:
         permissive = DdupModelVersion.objects.create(
             version=3, author="archer",
             config={"tier3": {"threshold": 0.5,
-                              "auto_merge_threshold": 0.95}},
+                              "auto_merge_threshold": 0.95,
+                              # The point of this test is that the pair
+                              # survives a real sweep, so the sweep has
+                              # to actually run.
+                              "auto_merge_enabled": True}},
         )
         activate_model_version(permissive, approver="bob")
         h1 = Household.objects.create(
@@ -1418,7 +1429,10 @@ class TestAutoMergeHighConfidence:
         v = DdupModelVersion.objects.create(
             version=4, author="archer",
             config={"tier3": {"threshold": 0.5,
-                              "auto_merge_threshold": 0.6}},
+                              "auto_merge_threshold": 0.6,
+                              # This test is about the sweep honouring a
+                              # permissive threshold, so the sweep runs.
+                              "auto_merge_enabled": True}},
         )
         activate_model_version(v, approver="bob")
         h1 = Household.objects.create(
