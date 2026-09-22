@@ -419,7 +419,9 @@ function App() {
           <span className="role-chip" title={me ? `Authenticated as ${me.username}` : "Loading session…"}>
             <span className="muted">Role</span> <strong>{identityRoleLabel}</strong>
           </span>
-          <AccountMenu name={identityName} initials={identityInitials}/>
+          <AccountMenu
+            name={identityName} initials={identityInitials}
+            onFindDsa={role === "partner-analyst" ? null : () => setDsaFindOpen(true)}/>
         </div>
       </header>
 

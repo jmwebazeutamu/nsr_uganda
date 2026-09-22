@@ -78,8 +78,16 @@ const Icon = ({ name, size = 16, color = "currentColor", style }) => {
 
 /* The account menu makes the signed-in identity visible and keeps profile,
    password, and sign-out actions together rather than scattering them over
-   several unlabeled header icons. */
-const AccountMenu = ({ name, initials }) => {
+   several unlabeled header icons.
+
+   `onFindDsa` is optional. Collapsing the header icons into this menu
+   removed the only caller of the DSA quick-find, leaving the panel
+   mounted in the operator shell with nothing able to open it. It comes
+   back as a menu item rather than a header icon, and only where it
+   applies: the admin shell has no DSA finder, and a partner-analyst has
+   no business searching every agreement, so the caller decides by
+   passing the handler or not. */
+const AccountMenu = ({ name, initials, onFindDsa }) => {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
 
@@ -109,6 +117,15 @@ const AccountMenu = ({ name, initials }) => {
       </button>
       {open && (
         <div className="account-menu-panel" role="menu" aria-label="Account menu">
+          {typeof onFindDsa === "function" && (
+            <>
+              <button type="button" className="account-menu-item" role="menuitem"
+                      onClick={() => { setOpen(false); onFindDsa(); }}>
+                Find a DSA
+              </button>
+              <div className="account-menu-divider" role="separator"/>
+            </>
+          )}
           <a className="account-menu-item" role="menuitem" href="/profile/">View/Edit Profile</a>
           <a className="account-menu-item" role="menuitem" href="/profile/password/">Change Password</a>
           <div className="account-menu-divider" role="separator"/>
@@ -640,7 +657,7 @@ const initials = (name) => name.split(/\s+/).map(s => s[0]).slice(0,2).join('').
    Export to global scope so other scripts can use
    ============================================================ */
 Object.assign(window, {
-  Icon, Chip, KPI, Sparkline,
+  Icon, Chip, KPI, Sparkline, AccountMenu,
   Modal, ReasonModal,
   ActionBar, Field, GeoTreePicker, AuditDrawer, Toast, PageHeader,
   FieldLabelContext, useFieldLabel,
