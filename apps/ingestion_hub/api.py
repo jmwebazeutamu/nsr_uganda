@@ -6,7 +6,7 @@ from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 
-from apps.security.abac import HouseholdIdScopedQuerysetMixin
+from apps.security.abac import HouseholdIdScopedQuerysetMixin, scope_q_for_field
 from apps.security.actor import actor_from_request
 from apps.security.audit import emit as emit_audit
 from apps.security.audit_views import AuditReadMixin
@@ -80,6 +80,73 @@ class ConnectorRunSerializer(serializers.ModelSerializer):
 
 
 class StageRecordSerializer(serializers.ModelSerializer):
+    ddup_candidates = serializers.SerializerMethodField()
+
+    def get_ddup_candidates(self, obj):
+        """Attach read-only registry detail to persisted DDUP evidence.
+
+        ``StageRecord.ddup_candidates`` deliberately stores only the match
+        result (member id, score and reason).  A member's current identity
+        and household details remain owned by data_management's canonical
+        ``Member`` contract.  Enriching the read response here lets a DIH
+        reviewer adjudicate a candidate without copying those fields into the
+        DDUP result or adding another persisted representation.
+
+        A candidate that is no longer readable under the requester's ABAC
+        scope is omitted rather than exposing its registry identifier.
+        """
+        stored_candidates = obj.ddup_candidates or []
+        candidate_ids = [
+            candidate.get("member_id")
+            for candidate in stored_candidates
+            if isinstance(candidate, dict) and candidate.get("member_id")
+        ]
+        if not candidate_ids:
+            return stored_candidates
+
+        # Import here to avoid coupling the two API modules at import time.
+        # The serializer is the canonical Questionnaire/Data Dictionary
+        # surface for Member fields and labels; do not reproduce its fields
+        # in DIH.
+        from apps.data_management.api import MemberSerializer
+        from apps.data_management.models import Member
+
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        members = (
+            Member.objects
+            .filter(id__in=candidate_ids, is_deleted=False)
+            .filter(scope_q_for_field(user, "household__sub_region_code"))
+            .select_related(
+                "household__sub_region",
+                "household__district",
+                "household__parish",
+                "household__village",
+                "health",
+                "disability",
+                "education",
+                "employment",
+            )
+        )
+        member_data = {
+            str(member["id"]): member
+            for member in MemberSerializer(
+                members, many=True, context=self.context,
+            ).data
+        }
+
+        enriched = []
+        for candidate in stored_candidates:
+            if not isinstance(candidate, dict):
+                continue
+            member = member_data.get(str(candidate.get("member_id", "")))
+            if member is None:
+                continue
+            item = dict(candidate)
+            item["member"] = member
+            enriched.append(item)
+        return enriched
+
     class Meta:
         model = StageRecord
         fields = (

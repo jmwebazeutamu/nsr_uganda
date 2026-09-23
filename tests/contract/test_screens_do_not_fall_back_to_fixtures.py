@@ -65,13 +65,52 @@ def test_fixture_is_not_an_or_fallback(rel, fixtures):
 
 
 def test_dih_clears_the_queue_when_the_live_queue_is_empty():
+    """The rows shown must be exactly what the server returned.
+
+    This used to look for a literal `setRows([])` near the live-empty
+    branch, which only held while the fetch had an explicit empty case.
+    The queues were later consolidated into one refresh that assigns the
+    server's rows directly — `setRows(reviewRows)` — so an empty response
+    empties the table by construction, and the old assertion failed on a
+    refactor that made the guarantee stronger rather than weaker.
+
+    So assert the property instead: the live branch assigns what came
+    back, and nothing between the fetch and the assignment substitutes a
+    fixture for it.
+    """
     body = _body("screens-dih.jsx")
-    # The branch that SETS live-empty, not the chip that renders it.
-    idx = body.index('setDataSource("live-empty")')
-    empty = body[max(0, idx - 300):idx]
-    assert "setRows([])" in empty, (
-        "DIH keeps fabricated rows when the live queue returns empty, so a "
-        "cleared queue looks like a backlog of invented households."
+    # Located by the state it sets, not by the spelling of the call: the
+    # live branch now decides between "live" and "live-empty" in a
+    # ternary, and an assertion that only matched one spelling is what
+    # made a good refactor look like a regression.
+    match = re.search(r'setDataSource\([^;]*"live-empty"', body)
+    assert match, "DIH no longer distinguishes an empty live queue."
+    branch = body[max(0, match.start() - 900):match.start()]
+    assert re.search(r"setRows\((?:\[\]|reviewRows)\)", branch), (
+        "DIH no longer shows exactly the rows the server returned, so a "
+        "cleared queue can look like a backlog of invented households."
+    )
+    assert "MOCK_DIH_ROWS" not in branch, (
+        "the live branch reaches for the fixture."
+    )
+
+
+def test_dih_clears_the_queue_when_the_fetch_fails():
+    """An outage must empty the table, not just badge it.
+
+    Leaving the last good queue on screen behind an "offline" chip means
+    a failing API still looks like a working queue — an operator acting
+    on rows the server can no longer confirm.
+    """
+    body = _body("screens-dih.jsx")
+    match = re.search(r'setDataSource\([^;]*"offline"', body)
+    assert match, "DIH no longer records an outage."
+    branch = body[max(0, match.start() - 700):match.start()]
+    assert re.search(r"setRows\(\[\]\)", branch), (
+        "a failed DIH fetch leaves the previous rows on screen."
+    )
+    assert re.search(r"setSelectedRow\(null\)", branch), (
+        "a failed DIH fetch leaves a record open in the detail panel."
     )
 
 

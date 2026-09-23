@@ -253,6 +253,27 @@ const _stageToRow = (stage) => {
   };
 };
 
+// Candidate member data is supplied by the canonical registry Member
+// serializer as `ddup_candidates[].member`. These helpers only format that
+// contract for display; they never infer an identity from match evidence.
+const _candidateDisplayName = (candidate) => {
+  const member = candidate?.member || {};
+  const name = [member.first_name, member.other_name, member.surname]
+    .filter(Boolean)
+    .join(" ");
+  return name || candidate?.member_id || "—";
+};
+
+const _candidateLocation = (candidate) => {
+  const member = candidate?.member || {};
+  return [
+    member.household_village_name,
+    member.household_parish_name,
+    member.household_district_name,
+    member.household_sub_region_name,
+  ].filter(Boolean).join(" · ");
+};
+
 
 // MOCK_DIH_ROWS removed — it was fabricated records that nothing rendered.
 // See docs/console_mock_data_audit.md.
@@ -393,6 +414,10 @@ const DIHScreen = () => {
   const [rejectedRows, setRejectedRows] = useStateDIH([]);
   const [dataSource, setDataSource] = useStateDIH("loading"); // 'loading' | 'live' | 'live-empty' | 'offline'
   const [selectedRow, setSelectedRow] = useStateDIH(null);
+  // DDUP match evidence belongs to the selected staged row.  Keep only the
+  // selected canonical member ID in UI state; the candidate detail itself
+  // always comes from the stage-record API's canonical Member projection.
+  const [selectedCandidateId, setSelectedCandidateId] = useStateDIH(null);
   const [auditOpen, setAuditOpen] = useStateDIH(false);
   const [modal, setModal] = useStateDIH(null); // 'promote' | 'merge' | 'hold' | 'reject' | 'archive'
   const [toast, setToast] = useStateDIH("");
@@ -453,6 +478,51 @@ const DIHScreen = () => {
     return `HTTP ${status}`;
   };
 
+  // A StageRecord's queue membership is determined on the server by its
+  // canonical state. Keep all three tab snapshots in sync after a mutation;
+  // replacing only the row in `rows` leaves a rejected record visible in the
+  // review queue until the operator reloads the entire browser.
+  const refreshDihQueues = (preserveSelection = true) => {
+    const fetchRows = (url) => fetch(url, {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    }).then(response => response.ok ? response.json() : Promise.reject(response.status));
+
+    return Promise.all([
+      fetchRows("/api/v1/dih/stage-records/?queue=review&page_size=500"),
+      fetchRows("/api/v1/dih/stage-records/?state=quarantined&page_size=500"),
+      fetchRows("/api/v1/dih/stage-records/?state=rejected&page_size=500"),
+    ])
+      .then(([review, archive, rejected]) => {
+        const reviewRows = (review.results || review).map(_stageToRow);
+        setRows(reviewRows);
+        setArchiveRows((archive.results || archive).map(_stageToRow));
+        setRejectedRows((rejected.results || rejected).map(_stageToRow));
+        setSelectedRow(previous => {
+          if (wide.isWide) return null;
+          if (preserveSelection && reviewRows.some(row => row.id === previous)) {
+            return previous;
+          }
+          return reviewRows[0]?.id || null;
+        });
+        setDataSource(reviewRows.length ? "live" : "live-empty");
+      })
+.catch(() => {
+        // Clear the rows, not just the chip.
+        //
+        // Leaving the last good queue on screen behind an "offline"
+        // badge means a failing API still looks like a working queue,
+        // which is what this screen was rewritten to stop. An operator
+        // acting on rows the server can no longer confirm is worse than
+        // one who can see there is nothing to act on.
+        setRows([]);
+        setArchiveRows([]);
+        setRejectedRows([]);
+        setSelectedRow(null);
+        setDataSource("offline");
+      });
+  };
+
   const _runBulk = ({ endpoint, reason, kind, setOpen }) => {
     // Compute the actionable rows again at submit-time so we don't
     // race a partial state update from another action. The server
@@ -501,16 +571,15 @@ const DIHScreen = () => {
           setToast(`${kind} failed: ${_serverError(body, text, status)}`);
           return;
         }
-        // Drop succeeded rows from the visible queue (they've left
-        // the actionable states). Skipped rows stay so the operator
-        // can see what was left behind.
+        // The canonical state may move a row between any DIH tab.
+        // Clear local selection immediately, then fetch every tab from
+        // the server rather than approximating the transition in memory.
         const okIds = new Set(
           (body.results || [])
             .filter(r => r.ok)
             .map(r => r.stage_id),
         );
         if (okIds.size > 0) {
-          setRows(rows.filter(r => !okIds.has(r.id)));
           setSelection(prev => {
             const next = new Set(prev);
             for (const id of okIds) next.delete(id);
@@ -528,6 +597,7 @@ const DIHScreen = () => {
           + (firstReason ? ` — first skipped: ${firstReason}` : "")
           + " · audit chain updated.",
         );
+        refreshDihQueues();
       })
       .catch(err => {
         setBulkSubmitting(false);
@@ -540,72 +610,10 @@ const DIHScreen = () => {
     setFilterDqa(""); setFilterIdv(""); setQuickFilter(null);
   };
 
-  // Fetch live data once on mount. Same-origin so the Django session
-  // cookie flows automatically; cross-origin / file:// previews fall
-  // through to the mock data with no console noise.
-  // Includes quality_failed in the queue so operators can archive them.
+  // Initial load uses the same canonical refresh path as an operator action.
+  // This keeps the three tab snapshots subject to one queue contract.
   useEffectDIH(() => {
-    let cancelled = false;
-    // page_size=500 = DRF MAX_PAGE_SIZE — pulls every actionable
-    // record in one round-trip so the queue isn't silently capped at
-    // 50 (US-S11-035). Larger queues should land via the report
-    // dashboard, not this triage surface.
-    fetch("/api/v1/dih/stage-records/?queue=review&page_size=500", {
-      credentials: "same-origin",
-      headers: { Accept: "application/json" },
-    })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(data => {
-        if (cancelled) return;
-        const apiRows = (data.results || data).map(_stageToRow);
-        if (apiRows.length === 0) {
-          // An empty queue is a real, and good, answer. It used to keep
-          // the fabricated rows on screen "so the screen doesn't look
-          // empty during the demo" — which meant a cleared queue looked
-          // like a backlog of invented households.
-          setRows([]);
-          setSelectedRow(null);
-          setDataSource("live-empty");
-          return;
-        }
-        setRows(apiRows);
-        setSelectedRow(wide.isWide ? null : apiRows[0].id);
-        setDataSource("live");
-      })
-      .catch(() => {
-        if (cancelled) return;
-        // Show the outage. Previously this silently left the fabricated
-        // rows on screen, so a failing API looked like a working queue.
-        setRows([]);
-        setSelectedRow(null);
-        setDataSource("offline");
-      });
-    // Archive tab: quarantined records.
-    fetch("/api/v1/dih/stage-records/?state=quarantined&page_size=500", {
-      credentials: "same-origin",
-      headers: { Accept: "application/json" },
-    })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(data => {
-        if (cancelled) return;
-        setArchiveRows((data.results || data).map(_stageToRow));
-      })
-      .catch(() => { /* archive stays empty */ });
-
-    // Rejected tab. A single terminal state, not a queue — the queue
-    // definition lives on the server (?queue=review) precisely so that
-    // no caller spells a multi-state list out again.
-    fetch("/api/v1/dih/stage-records/?state=rejected&page_size=500", {
-      credentials: "same-origin",
-      headers: { Accept: "application/json" },
-    })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(data => {
-        if (cancelled) return;
-        setRejectedRows((data.results || data).map(_stageToRow));
-      })
-      .catch(() => { /* rejected stays empty */ });
-    return () => { cancelled = true; };
+    refreshDihQueues(false);
   }, []);
 
   // Filtered view of rows for the table. The chip and each dropdown
@@ -661,6 +669,16 @@ const DIHScreen = () => {
     () => visibleRows.find(r => r.id === selectedRow) || rows.find(r => r.id === selectedRow),
     [visibleRows, rows, selectedRow],
   );
+  const selectedCandidate = useMemoDIH(() => {
+    const candidates = current?._ddupCandidates || [];
+    return candidates.find(c => c.member_id === selectedCandidateId) || candidates[0] || null;
+  }, [current, selectedCandidateId]);
+  useEffectDIH(() => {
+    const candidates = current?._ddupCandidates || [];
+    if (!candidates.some(c => c.member_id === selectedCandidateId)) {
+      setSelectedCandidateId(candidates[0]?.member_id || null);
+    }
+  }, [current, selectedCandidateId]);
   const exportVisibleRows = () => {
     dihDownloadCsv("dih-review-queue.csv", [
       ["stage_id", "head", "household_members", "region", "parish", "source", "channel", "dqa_blocking", "dqa_warnings", "dqa_info", "idv", "ddup_score", "age", "sla", "state"],
@@ -791,13 +809,10 @@ const DIHScreen = () => {
         throw new Error(detail.detail || `HTTP ${r.status}`);
       })
       .then(_stage => {
-        // Drop the acted row out of the queue and select the next one.
-        const remaining = rows.filter(r => r.id !== id);
-        setRows(remaining);
-        setSelectedRow(remaining[0]?.id || null);
         const verb = kind === "promote" ? "Promoted" : "Rejected";
         setToast(`${verb} stage ${id.slice(0, 12)}… — written to audit chain.`);
         setModal(null);
+        refreshDihQueues();
       })
       .catch(err => {
         setToast(`${kind} failed: ${err.message}`);
@@ -1157,8 +1172,6 @@ const DIHScreen = () => {
               )).then(results => {
                 const updated = results.filter(r => r.row).map(r => r.row);
                 const failures = results.filter(r => r.error).map(r => r.error);
-                const updatedById = Object.fromEntries(updated.map(r => [r.id, r]));
-                setRows(rows.map(r => updatedById[r.id] || r));
                 setSelection(new Set());
                 if (failures.length === 0) {
                   setToast(`Re-ran gates on ${updated.length} of ${ids.length}.`);
@@ -1172,6 +1185,7 @@ const DIHScreen = () => {
                     + (reasons.length > 2 ? ` (+${reasons.length - 2} other reasons)` : ""),
                   );
                 }
+                refreshDihQueues();
               });
             }}>
             <Icon name="play" size={14}/> Re-run gates ({selection.size})
@@ -1524,37 +1538,81 @@ const DIHScreen = () => {
                 </div>
               );
             }
-            const top = cands[0];
-            const topScore = (top.score || 0).toFixed(2);
+            const candidate = selectedCandidate || cands[0];
+            const candidateScore = Number(candidate.score || 0).toFixed(2);
+            const member = candidate.member || {};
+            const candidateIndex = Math.max(
+              0, cands.findIndex(c => c.member_id === candidate.member_id),
+            );
+            const candidateLocation = _candidateLocation(candidate);
             return (
               <div className="card" style={{borderTop:'3px solid var(--accent-danger)'}}>
                 <div className="card-header" style={{padding:'14px 20px'}}>
                   <div>
                     <div className="t-cap" style={{color:'var(--accent-danger)'}}>
-                      <Icon name="duplicate" size={11}/> DDUP CANDIDATE{cands.length > 1 ? `S (${cands.length})` : ""} · TOP {topScore}
+                      <Icon name="duplicate" size={11}/> DDUP CANDIDATE{cands.length > 1 ? `S (${cands.length})` : ""} · {candidateIndex + 1} OF {cands.length}
                     </div>
-                    <h3 className="t-h3" style={{margin:'2px 0 0', fontFamily:'monospace', fontSize:13}}>{top.member_id || "—"}</h3>
-                    <div className="t-cap">{top.reason || ""}</div>
+                    <h3 className="t-h3" style={{margin:'2px 0 0'}}>{_candidateDisplayName(candidate)}</h3>
+                    <div className="t-cap">{candidate.reason || ""}</div>
                   </div>
-                  <Chip tone="danger">{topScore}</Chip>
+                  <Chip tone="danger">{candidateScore}</Chip>
                 </div>
                 <div style={{padding:16}}>
-                  {cands.length === 1 && (
-                    <div className="t-bodysm muted">One candidate above the discovery threshold.</div>
-                  )}
                   {cands.length > 1 && (
-                    <table className="tbl" style={{fontSize:12}}>
-                      <thead><tr><th>Member ID</th><th>Score</th><th>Reason</th></tr></thead>
-                      <tbody>
-                        {cands.map((c, i) => (
-                          <tr key={i}>
-                            <td className="t-mono">{c.member_id}</td>
-                            <td>{(c.score || 0).toFixed(2)}</td>
-                            <td>{c.reason}</td>
-                          </tr>
+                    <div className="row gap-2" style={{marginBottom:14}}>
+                      <button className="btn btn-sm" type="button"
+                        onClick={() => setSelectedCandidateId(cands[(candidateIndex - 1 + cands.length) % cands.length].member_id)}>
+                        Previous
+                      </button>
+                      <select
+                        aria-label="DDUP candidate"
+                        value={candidate.member_id || ""}
+                        onChange={(event) => setSelectedCandidateId(event.target.value)}
+                        style={{flex:1, minWidth:0, padding:'6px 8px', border:'1px solid var(--neutral-300)', borderRadius:4}}
+                      >
+                        {cands.map((item, index) => (
+                          <option key={item.member_id} value={item.member_id}>
+                            {index + 1}. {_candidateDisplayName(item)} · {Number(item.score || 0).toFixed(2)}
+                          </option>
                         ))}
-                      </tbody>
-                    </table>
+                      </select>
+                      <button className="btn btn-sm" type="button"
+                        onClick={() => setSelectedCandidateId(cands[(candidateIndex + 1) % cands.length].member_id)}>
+                        Next
+                      </button>
+                    </div>
+                  )}
+                  {candidate.member ? (
+                    <div style={{display:'grid', gap:10}}>
+                      <div className="row gap-2" style={{alignItems:'baseline'}}>
+                        <span className="t-cap muted" style={{minWidth:108}}>Registry ID</span>
+                        <span className="t-mono t-bodysm">{member.household || "—"}</span>
+                      </div>
+                      <div className="row gap-2" style={{alignItems:'baseline'}}>
+                        <span className="t-cap muted" style={{minWidth:108}}>Member ID</span>
+                        <span className="t-mono t-bodysm">{member.id || candidate.member_id}</span>
+                      </div>
+                      <div className="row gap-2" style={{alignItems:'baseline'}}>
+                        <span className="t-cap muted" style={{minWidth:108}}>Household role</span>
+                        <span className="t-bodysm">{member.relationship_to_head_label || member.relationship_to_head || "—"}</span>
+                      </div>
+                      <div className="row gap-2" style={{alignItems:'baseline'}}>
+                        <span className="t-cap muted" style={{minWidth:108}}>NIN</span>
+                        <span className="t-bodysm">{[member.nin_status_label, member.nin_last4 && `••••${member.nin_last4}`].filter(Boolean).join(' · ') || "—"}</span>
+                      </div>
+                      <div className="row gap-2" style={{alignItems:'baseline'}}>
+                        <span className="t-cap muted" style={{minWidth:108}}>Contact</span>
+                        <span className="t-bodysm">{[member.telephone_1, member.telephone_2].filter(Boolean).join(' · ') || "—"}</span>
+                      </div>
+                      <div className="row gap-2" style={{alignItems:'baseline'}}>
+                        <span className="t-cap muted" style={{minWidth:108}}>Location</span>
+                        <span className="t-bodysm">{candidateLocation || "—"}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="t-bodysm muted">
+                      Candidate registry detail is unavailable for this review scope.
+                    </div>
                   )}
                 </div>
               </div>
@@ -1689,19 +1747,20 @@ const DIHScreen = () => {
                       </div>
                     );
                   }
+                  const candidate = selectedCandidate || cands[0];
+                  const member = candidate.member || {};
                   return (
                     <div>
-                      <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>DDUP CANDIDATES</div>
-                      {cands.slice(0, 3).map((c, i) => (
-                        <div key={i} className="row gap-2"
-                          style={{padding:'8px 10px', background:'var(--accent-danger-bg)', borderRadius:4, border:'1px solid rgba(169,50,38,0.15)', marginBottom:6}}>
-                          <Chip size="sm" tone="danger">{(c.score || 0).toFixed(2)}</Chip>
-                          <div className="flex-1">
-                            <div className="t-bodysm" style={{fontWeight:500, fontFamily:'monospace', fontSize:12}}>{c.member_id}</div>
-                            <div className="t-cap">{c.reason}</div>
-                          </div>
+                      <div className="t-cap" style={{fontWeight:600, color:'var(--neutral-700)', marginBottom:6}}>SELECTED DDUP CANDIDATE</div>
+                      <div className="row gap-2"
+                        style={{padding:'8px 10px', background:'var(--accent-danger-bg)', borderRadius:4, border:'1px solid rgba(169,50,38,0.15)', marginBottom:6}}>
+                        <Chip size="sm" tone="danger">{Number(candidate.score || 0).toFixed(2)}</Chip>
+                        <div className="flex-1">
+                          <div className="t-bodysm" style={{fontWeight:500}}>{_candidateDisplayName(candidate)}</div>
+                          <div className="t-cap">Registry ID <span className="t-mono">{member.household || "—"}</span> · Member ID <span className="t-mono">{candidate.member_id}</span></div>
+                          <div className="t-cap">{candidate.reason}</div>
                         </div>
-                      ))}
+                      </div>
                       <div className="t-bodysm muted">Manual merge review before promote.</div>
                     </div>
                   );
@@ -1790,9 +1849,8 @@ const DIHScreen = () => {
                 })
                   .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(d.detail || "process failed")))
                   .then(stage => {
-                    const row = _stageToRow(stage);
-                    setRows(rows.map(r => r.id === stage.id ? row : r));
                     setToast(`Gates run — state is now ${(stage.state || "pending").replace(/_/g, " ")}.`);
+                    refreshDihQueues();
                   })
                   .catch(err => setToast(`Run gates failed: ${err}`));
               }}>
@@ -1892,13 +1950,12 @@ const DIHScreen = () => {
           })
             .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(d.detail || "edit failed")))
             .then(stage => {
-              // Replace the row in place with the server's view.
-              setRows(rows.map(r => r.id === stage.id ? _stageToRow(stage) : r));
               setToast(`Saved ${Object.keys(editDraft).length} field(s) — DQA re-run, audit emitted.`);
               setEditDraft({});
               setEditMode(false);
               setEditSaving(false);
               setShowEditModal(false);
+              refreshDihQueues();
             })
             .catch(err => {
               setEditError(String(err));
@@ -1931,10 +1988,9 @@ const DIHScreen = () => {
           })
             .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(d.detail || "archive failed")))
             .then(stage => {
-              setRows(rows.filter(r => r.id !== current.id));
-              setArchiveRows([...archiveRows, _stageToRow(stage)]);
               setToast(`Archived stage ${current.id.slice(0, 12)}… — moved to Archive tab.`);
               setModal(null);
+              refreshDihQueues();
             })
             .catch(err => {
               setToast(`Archive failed: ${err}`);
@@ -1949,15 +2005,12 @@ const DIHScreen = () => {
           idvOutcome={current.idv}
           onClose={() => setModal(null)}
           onResolved={(stage) => {
-            // Replace the row with the server-truth state so the
-            // chip + filter counts reflect the new routing.
-            const updated = _stageToRow(stage);
-            setRows(rows.map(r => r.id === stage.id ? updated : r));
             const verb = stage.state === "rejected"
               ? "Rejected"
               : `Moved to ${stage.state.replace(/_/g, " ")}`;
             setToast(`${verb} — IDV resolution written to audit chain.`);
             setModal(null);
+            refreshDihQueues();
           }}
           onError={(err) => {
             setToast(`Resolve IDV failed: ${err}`);
@@ -1970,15 +2023,15 @@ const DIHScreen = () => {
           stageId={current.id}
           headName={current.head}
           candidates={current._ddupCandidates || []}
+          selectedCandidateId={selectedCandidate?.member_id}
           onClose={() => setModal(null)}
           onResolved={(stage) => {
-            const updated = _stageToRow(stage);
-            setRows(rows.map(r => r.id === stage.id ? updated : r));
             const verb = stage.state === "rejected"
               ? "Rejected as duplicate"
               : `Moved to ${stage.state.replace(/_/g, " ")}`;
             setToast(`${verb} — DDUP resolution written to audit chain.`);
             setModal(null);
+            refreshDihQueues();
           }}
           onError={(err) => {
             setToast(`Resolve DDUP failed: ${err}`);
@@ -2019,13 +2072,13 @@ const DIHScreen = () => {
                   setToast(`Save failed: ${_serverError(body, text, status)}`);
                   return;
                 }
-                setRows(rows.map(r => (r.id === body.id ? _stageToRow(body) : r)));
                 const n = Object.keys(reviewDraft).length;
                 setReviewDraft({});
                 setToast(
                   `Saved ${n} correction${n === 1 ? "" : "s"} — DQA re-run, `
                   + "audit emitted. You cannot also promote this record.",
                 );
+                refreshDihQueues();
               })
               .catch(err => {
                 setReviewSaving(false);
@@ -2281,10 +2334,10 @@ const _RESOLVE_DDUP_REASONS_NOT_DUP = [
   "Other (specify in note)",
 ];
 
-const ResolveDdupModal = ({ stageId, headName, candidates, onClose, onResolved, onError }) => {
+const ResolveDdupModal = ({ stageId, headName, candidates, selectedCandidateId, onClose, onResolved, onError }) => {
   const [decision, setDecision] = useStateDIH("duplicate");
   const [survivingId, setSurvivingId] = useStateDIH(
-    (candidates[0] && candidates[0].member_id) || "",
+    selectedCandidateId || (candidates[0] && candidates[0].member_id) || "",
   );
   const [reason, setReason] = useStateDIH("");
   const [note, setNote] = useStateDIH("");
@@ -2417,7 +2470,7 @@ const ResolveDdupModal = ({ stageId, headName, candidates, onClose, onResolved, 
             >
               {candidates.map(c => (
                 <option key={c.member_id} value={c.member_id}>
-                  {c.member_id} · score {Number(c.score || 0).toFixed(2)} · {c.reason}
+                  {_candidateDisplayName(c)} · {c.member_id} · score {Number(c.score || 0).toFixed(2)} · {c.reason}
                 </option>
               ))}
             </select>
