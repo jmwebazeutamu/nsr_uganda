@@ -1029,3 +1029,70 @@ which is what `quality_failed` is for.
 5 pending_promotion, 10 quality_failed. The 69 need NIRA verification and
 the 8 need duplicate review — both were previously masked behind the
 broken head rule, so this is work that was always there, not new work.
+
+## 2026-09-23 — deploy e3f177f → 3841eeb, and disk reclaimed
+
+User management in the console (US-S25) plus the parallel-session DIH
+candidate detail. Code-only, no migrations. Dump first:
+`pre-us-s25-usermgmt-*.dump` (10M, 132 tables verified).
+
+**Verified on prod, read-only by choice**
+
+```
+GET user-accounts              -> 200, 11 accounts
+scope levels served            -> 8 (national..partner, from ScopeLevel)
+roles served                   -> 22
+superusers marked unmanageable -> True
+action on a superuser          -> 400, refused
+non-admin (opm-analyst)        -> 403
+```
+
+No test account was created. Account creation writes into the immutable
+audit chain and a test row cannot be removed afterwards; the refusals and
+the read surface prove the gate without leaving one. Exercising the
+create path against production is a decision for the Ministry to take
+knowingly.
+
+**Disk: 18G → 32G free**
+
+The problem was build cache, not old images. `deploy.sh` already keeps
+images to the last three (running + two rollback targets, zero dangling)
+and prunes cache `until=168h` — but seven builds in one day are all
+inside that window, so the filter never fired.
+
+```
+docker builder prune -f --filter "until=6h"    ->  9.5GB
+docker builder prune -f --filter "until=90m"   ->  6.1GB
+```
+
+The current build's cache was kept. **37GB is still reclaimable** and was
+left deliberately: a full prune trades space for every future build, and
+that is the Ministry's call. Worth noting the cache earns little as it
+stands — torch (196MB) is re-downloaded on every build regardless.
+
+Backups untouched: 97M across 10 dumps, trivial next to the images.
+
+**Finding, not acted on: 8 of 11 accounts are superusers.**
+
+```
+admin              joined 2026-05-14  last login 2026-06-23
+dev                joined 2026-05-17  last login 2026-05-17
+regression-smoke   joined 2026-05-19  last login 2026-09-17
+regression-smoke2  joined 2026-05-19  never
+seed-smoke         joined 2026-05-19  never
+detail-smoke       joined 2026-05-19  never
+johnsonmwebaze     joined 2026-05-20  last login 2026-09-23
+nusaf-debug        joined 2026-05-22  never
+```
+
+Five are test or debug leftovers from May and four have never signed in.
+All predate this session; none were created by this work.
+
+Each holds full Django admin access and bypasses every guard in the
+user-management feature — including the one that stops an admin editing
+their own roles. Nothing was changed: removing accounts is destructive,
+and by the design agreed for this feature an account should be
+deactivated rather than deleted so the audit chain stays readable.
+Deactivating the four that have never signed in is the low-risk start,
+and has to be done in the Django admin, because superusers are precisely
+what the console refuses to manage.
