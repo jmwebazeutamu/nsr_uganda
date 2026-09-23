@@ -42,6 +42,13 @@ const SCOPE_LEVELS = [
 const GEO = {
   region: [{ code: "R-NORTHERN", name: "Northern" }, { code: "R-CENTRAL", name: "Central" }],
   district: [{ code: "102", name: "Kampala" }, { code: "UG-MOR", name: "Moroto" }],
+  // Two parishes really are both called Acanga — 839 parish names are
+  // shared by at least two parishes.
+  parish: [
+    { code: "207.1.05.01", name: "Acanga", parent_code: "207.1.05" },
+    { code: "311.2.07.04", name: "Acanga", parent_code: "311.2.07" },
+    { code: "207.1.05.02", name: "Acan Oryema", parent_code: "207.1.05" },
+  ],
 };
 
 const ROLES = [
@@ -316,5 +323,64 @@ describe("edit", () => {
       email: "grace.akello@example.test", reason: "corrected address",
     });
     expect(posted[0].body.username).toBeUndefined();
+  });
+});
+
+
+describe("places read as names", () => {
+  const openCreate = async () => {
+    await show();
+    fireEvent.click(screen.getByRole("button", { name: /New account/ }));
+  };
+
+  const pickParish = async () => {
+    await openCreate();
+    fireEvent.change(screen.getByRole("combobox", { name: "Initial scope level" }),
+                     { target: { value: "parish" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Acan Oryema/ })).toBeTruthy());
+  };
+
+  it("names the selection instead of reciting its code", async () => {
+    // The screen showed "1 selected: 207.1.05.01", which tells an
+    // administrator nothing about where they just granted access.
+    await pickParish();
+    fireEvent.click(screen.getByRole("button", { name: /Acan Oryema/ }));
+    const summary = screen.getByText(/1 selected/).parentElement;
+    expect(summary.textContent).toMatch(/Acan Oryema/);
+  });
+
+  it("keeps the code beside the name, because names are not unique", async () => {
+    await pickParish();
+    fireEvent.click(screen.getByRole("button", { name: /Acan Oryema/ }));
+    const summary = screen.getByText(/1 selected/).parentElement;
+    expect(summary.textContent).toMatch(/207\.1\.05\.02/);
+  });
+
+  it("distinguishes two places that share a name", async () => {
+    // Both are called Acanga. Side by side with nothing else, choosing
+    // between them is a coin toss.
+    await pickParish();
+    const acangas = screen.getAllByRole("button", { name: /Acanga/ });
+    expect(acangas).toHaveLength(2);
+    expect(acangas[0].textContent).toMatch(/207\.1\.05/);
+    expect(acangas[1].textContent).toMatch(/311\.2\.07/);
+  });
+
+  it("does not clutter a name that is already unique", async () => {
+    await pickParish();
+    const unique = screen.getByRole("button", { name: /Acan Oryema/ });
+    expect(unique.textContent.trim()).toBe("Acan Oryema");
+  });
+
+  it("still posts the code, not the name", async () => {
+    await pickParish();
+    fireEvent.change(screen.getAllByRole("textbox")[0], { target: { value: "parish.chief" } });
+    fireEvent.change(screen.getByPlaceholderText(/Why this change/), {
+      target: { value: "new parish chief" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Acan Oryema/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(posted.length).toBe(2));
+    expect(posted[1].body.scope_codes).toEqual(["207.1.05.02"]);
   });
 });

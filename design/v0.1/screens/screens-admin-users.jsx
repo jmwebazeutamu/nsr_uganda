@@ -517,6 +517,7 @@ const UmScopePicker = ({ roles, selected, scope, setScope, levels }) => {
         if (cancelled) return;
         const rows = (d.results || d || []).map(r => ({
           code: r.code, name: r.name || r.code,
+          parent_code: r.parent_code || "",
         }));
         setUnits(rows);
       })
@@ -537,6 +538,20 @@ const UmScopePicker = ({ roles, selected, scope, setScope, levels }) => {
     !filter.trim()
     || u.name.toLowerCase().includes(filter.trim().toLowerCase())
     || u.code.toLowerCase().includes(filter.trim().toLowerCase()));
+
+  // 839 parish names are used more than once — "Kayunga" is four
+  // different parishes. Where a name repeats in what is on screen, the
+  // parent code rides along, because "Kayunga" and "Kayunga" side by
+  // side is a coin toss.
+  const nameCounts = visible.reduce((acc, u) => {
+    acc[u.name] = (acc[u.name] || 0) + 1;
+    return acc;
+  }, {});
+  const isAmbiguous = (u) => nameCounts[u.name] > 1;
+
+  // code -> name, so the summary can name what was chosen instead of
+  // reciting 207.1.05.01 back at the operator.
+  const nameOf = units.reduce((acc, u) => { acc[u.code] = u.name; return acc; }, {});
 
   return (
     <div style={{ marginTop: 14 }}>
@@ -588,13 +603,31 @@ const UmScopePicker = ({ roles, selected, scope, setScope, levels }) => {
                           background: chosen.includes(unit.code) ? "var(--accent-data-bg)" : "var(--neutral-0)",
                         }}>
                   {unit.name}
+                  {isAmbiguous(unit) && unit.parent_code && (
+                    <span className="t-cap muted" style={{ marginLeft: 5 }}>
+                      {unit.parent_code}
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
           </div>
           {chosen.length > 0 && (
             <p className="t-bodysm" style={{ marginTop: 6 }}>
-              {chosen.length} selected: <span className="t-mono">{chosen.join(", ")}</span>
+              {chosen.length} selected:{" "}
+              {chosen.map((code, i) => (
+                <span key={code}>
+                  {i > 0 && ", "}
+                  <strong>{nameOf[code] || code}</strong>
+                  {/* The code stays, quietly. Names are not unique —
+                      839 parishes share one with at least one other —
+                      so a grant recorded by name alone could not be
+                      checked against what was actually granted. */}
+                  <span className="t-cap t-mono muted" style={{ marginLeft: 4 }}>
+                    {code}
+                  </span>
+                </span>
+              ))}
             </p>
           )}
         </div>
