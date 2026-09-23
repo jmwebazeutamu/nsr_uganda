@@ -32,16 +32,13 @@ refuse instead of falling open.
 
 **Not** derived from ``ScopeLevel``. The first version of this module
 was, and county vanished from the ladder on production the moment it
-deployed, because committed ``ScopeLevel`` has no ``COUNTY`` member —
-it lists national, region, sub_region, district, sub_county, parish,
-village, partner. The fail-closed branch caught it (a county request
-was refused rather than answered nationally) but the rung was still
-gone. ``ScopeLevel`` mirrors the frame for ABAC and adds national and
-partner; the frame itself belongs to ``GeographicUnit``.
-
-That gap is also a live ABAC limitation in its own right: with no
-``ScopeLevel.COUNTY``, an ``OperatorScope`` cannot grant a county-level
-scope to an operator at all.
+deployed, because ``ScopeLevel`` had no ``COUNTY`` member at the time.
+The fail-closed branch caught it — a county request was refused rather
+than answered nationally — but the rung was still gone.
+``ScopeLevel.COUNTY`` has since landed, which makes the two agree
+again; the derivation stays pointed at ``GeographicUnit`` because that
+is where the frame lives, and agreeing today is not the same as being
+the source.
 """
 
 from __future__ import annotations
@@ -56,12 +53,9 @@ NATIONAL = "national"
 # The ladder, coarse to fine, straight off GeographicUnit.Level.
 #
 # Derived from the UBOS frame and NOT from ScopeLevel, which is an ABAC
-# concept that mirrors the frame and adds national + partner. The two
-# are supposed to agree and at the time of writing they do not:
-# ScopeLevel has no COUNTY, so an OperatorScope cannot grant a
-# county-level scope at all. Deriving from ScopeLevel silently dropped
-# county out of this ladder — see the note in the module docstring
-# about what a missing rung costs.
+# concept that mirrors the frame and adds national + partner. Deriving
+# from the mirror once dropped county out of this ladder entirely — see
+# the module docstring for what a missing rung costs.
 LADDER: tuple[str, ...] = (
     NATIONAL,
     *(level.value for level in GeographicUnit.Level),
