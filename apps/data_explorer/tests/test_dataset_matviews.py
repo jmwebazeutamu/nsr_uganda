@@ -39,27 +39,29 @@ UNBUILT_MATVIEWS = {
 }
 
 
-def _declared_matviews() -> set[str]:
-    return set(
-        Dataset.objects.exclude(source_matview="")
-        .values_list("source_matview", flat=True),
-    )
+def _declared_matviews(catalogue) -> set[str]:
+    declared = {d.source_matview for d in catalogue}
+    # The `catalogue` fixture guarantees this, but state it here too:
+    # every assertion below is a set difference, and a set difference
+    # against nothing is always empty.
+    assert declared, "no datasets declared — the assertions below are vacuous"
+    return declared
 
 
-def test_every_declared_dataset_names_a_known_matview():
+def test_every_declared_dataset_names_a_known_matview(catalogue):
     """A dataset may not point at a matview nothing else knows about."""
-    unknown = _declared_matviews() - set(EXPLORER_MATVIEWS)
+    unknown = _declared_matviews(catalogue) - set(EXPLORER_MATVIEWS)
     assert not unknown, f"Dataset.source_matview not in EXPLORER_MATVIEWS: {unknown}"
 
 
-def test_every_declared_dataset_has_a_model():
-    missing = _declared_matviews() - set(MATVIEW_MODELS)
+def test_every_declared_dataset_has_a_model(catalogue):
+    missing = _declared_matviews(catalogue) - set(MATVIEW_MODELS)
     assert not missing, f"No matview_models entry for: {missing}"
 
 
-def test_built_datasets_resolve_to_a_populated_matview():
+def test_built_datasets_resolve_to_a_populated_matview(catalogue):
     """Anything not on the unbuilt list must be queryable right now."""
-    should_exist = _declared_matviews() - UNBUILT_MATVIEWS
+    should_exist = _declared_matviews(catalogue) - UNBUILT_MATVIEWS
     existing = _existing_matviews(EXPLORER_MATVIEWS)
 
     missing = should_exist - existing
@@ -82,16 +84,18 @@ def test_unbuilt_list_does_not_name_a_matview_that_exists():
     assert not stale, f"Built, but still listed as unbuilt: {stale}"
 
 
-def test_declared_variables_match_the_matview_columns():
+def test_declared_variables_match_the_matview_columns(catalogue):
     """The dataset's variables are the matview's columns, not a parallel
     vocabulary — a Variable naming a column the matview does not project
     returns an error at query time, not at declaration time."""
     from django.db import connection
 
     existing = _existing_matviews(EXPLORER_MATVIEWS)
-    for dataset in Dataset.objects.exclude(source_matview=""):
+    checked = 0
+    for dataset in catalogue:
         if dataset.source_matview not in existing:
             continue
+        checked += 1
         with connection.cursor() as cur:
             cur.execute(
                 "SELECT attname FROM pg_attribute "
@@ -100,7 +104,9 @@ def test_declared_variables_match_the_matview_columns():
             )
             columns = {r[0] for r in cur.fetchall()}
         declared = set(dataset.variables.values_list("code", flat=True))
+        assert declared, f"{dataset.code} declares no variables"
         assert declared <= columns, (
             f"{dataset.code}: variables not projected by "
             f"{dataset.source_matview}: {declared - columns}"
         )
+    assert checked >= 3, f"expected the 3 built datasets, checked {checked}"

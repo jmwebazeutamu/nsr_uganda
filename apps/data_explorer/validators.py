@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .geography import ALIASES, LEVEL_RANK, scopable_levels
 from .matview_models import MATVIEW_MODELS
 from .models import PrivacyClass, Variable, VariableStatus
 
@@ -30,28 +31,15 @@ ERR_VARIABLE_INACTIVE       = "variable_inactive"
 ERR_VARIABLE_WRONG_DATASET  = "variable_wrong_dataset"
 ERR_SENSITIVE_BLOCKED       = "sensitive_class_blocked"
 ERR_GEOGRAPHIC_FLOOR        = "geographic_floor_violation"
+ERR_LEVEL_NOT_AVAILABLE     = "geographic_level_not_available"
 ERR_BAD_PAYLOAD             = "bad_payload"
 
 
-# Geographic level rank — coarser → smaller integer. Used to compare
-# the requested level against the dataset's floor.
-_GEO_LEVELS = {
-    "national": 0,
-    "region": 1,
-    "sub_region": 2,
-    "district": 3,
-    "county": 4,
-    "sub_county": 5,
-    "parish": 6,
-    "village": 7,
-}
-
-_GEO_ALIASES = {
-    "country": "national",
-    "subregion": "sub_region",
-    "sub-county": "sub_county",
-    "subcounty": "sub_county",
-}
+# The geographic ladder has ONE definition — see .geography, which
+# derives it from ScopeLevel. These names are kept as module-local
+# aliases so the rest of this file reads unchanged.
+_GEO_LEVELS = LEVEL_RANK
+_GEO_ALIASES = ALIASES
 
 
 @dataclass
@@ -190,6 +178,27 @@ def validate(payload: dict) -> ValidatedQuery:
                     "floor": floor,
                     "requested": level,
                     "handoff": "/api/v1/data-requests/draft",
+                },
+            )
+
+        # Above the floor, but does the matview actually carry that
+        # level? It used to be nobody's job to ask: query_builder
+        # mapped three of the seven levels and returned every row
+        # unfiltered for the rest, so a county-scoped request received
+        # the national aggregate. Refuse instead.
+        available = scopable_levels(matview_model)
+        if level not in available:
+            raise ValidationError(
+                ERR_LEVEL_NOT_AVAILABLE,
+                detail=(
+                    f"dataset {dataset.code} cannot be scoped by {level}; "
+                    f"it is aggregated without a {level} column"
+                ),
+                extras={
+                    "requested": level,
+                    "available": sorted(
+                        available, key=lambda name: LEVEL_RANK[name],
+                    ),
                 },
             )
 
