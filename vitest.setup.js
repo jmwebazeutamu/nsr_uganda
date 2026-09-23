@@ -9,6 +9,15 @@ import React from "react";
 
 globalThis.React = React;
 
+// The UBOS geographic ladder is a shared design module — the browser
+// harness loads v0.1/data/geo-levels.jsx before any consumer, the same
+// way it loads components.jsx. Loading it here keeps the consumer
+// sources identical between browser and test: they reference
+// GEO_LEVELS / GEO_LEVEL_CODES / GEO_LEVEL_LABEL by bare identifier.
+// It used to be declared twice, with two different shapes, and the
+// admin console loaded both.
+await import("./design/v0.1/data/geo-levels.jsx");
+
 globalThis.Icon = ({ name, size, color, style, ...rest }) =>
   React.createElement("i", { "data-icon": name, style, ...rest });
 

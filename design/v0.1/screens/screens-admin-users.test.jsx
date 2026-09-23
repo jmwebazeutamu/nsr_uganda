@@ -33,15 +33,21 @@ const SCOPE_LEVELS = [
   { value: "region", label: "Region", takes_codes: true, geographic: true },
   { value: "sub_region", label: "Sub Region", takes_codes: true, geographic: true },
   { value: "district", label: "District", takes_codes: true, geographic: true },
+  { value: "county", label: "County", takes_codes: true, geographic: true },
   { value: "sub_county", label: "Sub County", takes_codes: true, geographic: true },
   { value: "parish", label: "Parish", takes_codes: true, geographic: true },
   { value: "village", label: "Village", takes_codes: true, geographic: true },
   { value: "partner", label: "Partner", takes_codes: true, geographic: false },
 ];
 
+// The mock ignores parent_code and answers by level — enough to drive
+// the cascade without modelling the whole frame.
 const GEO = {
   region: [{ code: "R-NORTHERN", name: "Northern" }, { code: "R-CENTRAL", name: "Central" }],
+  sub_region: [{ code: "SR-KAMPALA-CENTRAL", name: "Kampala Central" },
+               { code: "SR-KARAMOJA-NORTHERN", name: "Karamoja Northern" }],
   district: [{ code: "102", name: "Kampala" }, { code: "UG-MOR", name: "Moroto" }],
+  county: [{ code: "102.2", name: "Nakawa" }, { code: "102.1", name: "Central Division" }],
   // Two parishes really are both called Acanga — 839 parish names are
   // shared by at least two parishes.
   parish: [
@@ -205,6 +211,36 @@ describe("what it does", () => {
 });
 
 
+// The scope picker is a cascade: choose a level, then walk the parent
+// selects down to it, then tick the units. These drive it.
+const chooseLevel = async (level) => {
+  fireEvent.change(screen.getByRole("combobox", { name: "Initial scope level" }),
+                   { target: { value: level } });
+  await waitFor(() => expect(
+    screen.queryByRole("combobox", { name: "Initial scope level" }).value,
+  ).toBe(level));
+};
+
+// Pick the first option in each parent select above `level`, so the
+// leaf list for `level` renders.
+const drillTo = async (level) => {
+  await chooseLevel(level);
+  const parents = GEO_LEVEL_CODES.slice(0, GEO_LEVEL_CODES.indexOf(level));
+  for (const parentLevel of parents) {
+    const name = parentLevel.replace("_", " ").toUpperCase();
+    let select;
+    await waitFor(() => {
+      select = screen.getByRole("combobox", { name });
+      expect(select.querySelectorAll("option").length).toBeGreaterThan(1);
+    });
+    const first = [...select.querySelectorAll("option")].find(o => o.value);
+    fireEvent.change(select, { target: { value: first.value } });
+  }
+  await waitFor(() => expect(
+    document.body.textContent,
+  ).not.toMatch(/Choose the parent geography above first/));
+};
+
 describe("scope at creation", () => {
   const openCreate = async () => {
     await show();
@@ -222,24 +258,36 @@ describe("scope at creation", () => {
     expect(screen.getByRole("button", { name: /Use parish/ })).toBeTruthy();
   });
 
-  it("offers every level the server serves, including region and village", async () => {
+  it("offers every level the server serves, including region, county and village", async () => {
     await openCreate();
     const select = screen.getByRole("combobox", { name: "Initial scope level" });
     const values = [...select.querySelectorAll("option")].map(o => o.value);
-    // The first cut dropped these three.
+    // The first cut dropped region, sub_region and village. county is
+    // the rung that went missing again later, in the Data Explorer's
+    // own copy of the ladder — there is only one copy now.
     expect(values).toContain("region");
     expect(values).toContain("sub_region");
+    expect(values).toContain("county");
     expect(values).toContain("village");
+  });
+
+  it("walks down the hierarchy instead of asking for a code", async () => {
+    await openCreate();
+    await chooseLevel("district");
+    // district sits under region and sub-region, so both are offered
+    // as parents before any district can be ticked.
+    expect(screen.getByRole("combobox", { name: "REGION" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "SUB REGION" })).toBeTruthy();
+    expect(document.body.textContent).toMatch(/Choose the parent geography above first/);
   });
 
   it("lists real places to pick, rather than asking for codes", async () => {
     // District codes are "102" (Kampala) and "UG-MOR" (Moroto); nobody
     // recalls those, and the wrong one grants the wrong district.
     await openCreate();
-    fireEvent.change(screen.getByRole("combobox", { name: "Initial scope level" }),
-                     { target: { value: "district" } });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Kampala" })).toBeTruthy());
-    expect(screen.getByRole("button", { name: "Moroto" })).toBeTruthy();
+    await drillTo("district");
+    expect(screen.getByRole("checkbox", { name: /Kampala/ })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: /Moroto/ })).toBeTruthy();
   });
 
   it("grants the code behind the place, through the Operator scopes endpoint", async () => {
@@ -248,10 +296,8 @@ describe("scope at creation", () => {
     fireEvent.change(screen.getByPlaceholderText(/Why this change/), {
       target: { value: "new starter" },
     });
-    fireEvent.change(screen.getByRole("combobox", { name: "Initial scope level" }),
-                     { target: { value: "district" } });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Kampala" })).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Kampala" }));
+    await drillTo("district");
+    fireEvent.click(screen.getByRole("checkbox", { name: /Kampala/ }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
 
     await waitFor(() => expect(posted.length).toBe(2));
@@ -261,24 +307,37 @@ describe("scope at creation", () => {
     expect(posted[1].body.scope_codes).toEqual(["102"]);
   });
 
+  it("grants a county, the rung the ladder kept losing", async () => {
+    await openCreate();
+    fireEvent.change(screen.getAllByRole("textbox")[0], { target: { value: "county.person" } });
+    fireEvent.change(screen.getByPlaceholderText(/Why this change/), {
+      target: { value: "county officer" },
+    });
+    await drillTo("county");
+    fireEvent.click(screen.getByRole("checkbox", { name: /Nakawa/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(posted.length).toBe(2));
+    expect(posted[1].body.scope_level).toBe("county");
+    expect(posted[1].body.scope_codes).toEqual(["102.2"]);
+  });
+
   it("holds the confirm until a level that needs codes has one", async () => {
     await openCreate();
     fireEvent.change(screen.getByPlaceholderText(/Why this change/), {
       target: { value: "new starter" },
     });
-    fireEvent.change(screen.getByRole("combobox", { name: "Initial scope level" }),
-                     { target: { value: "district" } });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Kampala" })).toBeTruthy());
+    await drillTo("district");
     expect(screen.getByRole("button", { name: "Confirm" }).disabled).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Kampala" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Kampala/ }));
     expect(screen.getByRole("button", { name: "Confirm" }).disabled).toBe(false);
   });
 
   it("national takes no codes and shows no place list", async () => {
     await openCreate();
-    fireEvent.change(screen.getByRole("combobox", { name: "Initial scope level" }),
-                     { target: { value: "national" } });
-    expect(screen.queryByLabelText("Search places")).toBeNull();
+    await chooseLevel("national");
+    expect(screen.queryByRole("combobox", { name: "REGION" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /Kampala/ })).toBeNull();
   });
 
   it("creates without a scope when none is chosen", async () => {
@@ -334,6 +393,18 @@ describe("edit", () => {
 
 
 describe("places read as names", () => {
+  /* The picker used to be one flat searchable list, so every entry had
+     to disambiguate itself — "Acanga · Ogom" — because nothing else
+     said where it sat. The cascade answers that structurally: the
+     parent is chosen by name, level by level, before any leaf is
+     offered. These assert the intent that survived the redesign — an
+     administrator picks a place by its name, and the code is what gets
+     posted.
+
+     The API mock answers by level and ignores parent_code, so every
+     unit at a level is offered here; in production the parent narrows
+     it further, which only makes the guarantee stronger. */
+
   const openCreate = async () => {
     await show();
     fireEvent.click(screen.getByRole("button", { name: /New account/ }));
@@ -341,47 +412,54 @@ describe("places read as names", () => {
 
   const pickParish = async () => {
     await openCreate();
-    fireEvent.change(screen.getByRole("combobox", { name: "Initial scope level" }),
-                     { target: { value: "parish" } });
-    await waitFor(() => expect(screen.getByRole("button", { name: /Acan Oryema/ })).toBeTruthy());
+    await drillTo("parish");
   };
+
+  it("names each parent level, rather than asking for its code", async () => {
+    // Each select loads only once its own parent is chosen, so walk
+    // the whole way down before reading the sub-county's options.
+    await pickParish();
+    const subCounty = screen.getByRole("combobox", { name: "SUB COUNTY" });
+    const labels = [...subCounty.querySelectorAll("option")]
+      .map(o => o.textContent).join("|");
+    expect(labels).toMatch(/Ogom/);
+    expect(labels).toMatch(/Lamwo/);
+    // The sub-county codes are 207.1.05 and 311.2.07. Neither is a
+    // thing anybody recognises, so neither is what is shown.
+    expect(labels).not.toMatch(/207\.1\.05/);
+  });
 
   it("names the selection instead of reciting its code", async () => {
     // The screen showed "1 selected: 207.1.05.01", which tells an
     // administrator nothing about where they just granted access.
     await pickParish();
-    fireEvent.click(screen.getByRole("button", { name: /Acan Oryema/ }));
-    const summary = screen.getByText(/1 selected/).parentElement;
-    expect(summary.textContent).toMatch(/Acan Oryema/);
+    const leaf = screen.getByRole("checkbox", { name: /Acan Oryema/ });
+    // Name first, code second — not a code on its own.
+    expect(leaf.closest("label").textContent.trim()).toMatch(/^Acan Oryema/);
   });
 
-  it("says where it sits, rather than showing a code", async () => {
-    // An administrator knows the sub-county. They do not know
-    // 207.1.05.02, and a line they cannot read is a line they cannot
-    // check before confirming.
+  it("tells two places of the same name apart", async () => {
+    // Both are called Acanga; 839 parish names are shared by at least
+    // two parishes. Side by side with nothing else, choosing between
+    // them is a coin toss.
     await pickParish();
-    fireEvent.click(screen.getByRole("button", { name: /Acan Oryema/ }));
-    const summary = screen.getByText(/1 selected/).parentElement;
-    expect(summary.textContent).toMatch(/Ogom/);
-    expect(summary.textContent).not.toMatch(/207\.1\.05\.02/);
-  });
-
-  it("distinguishes two places that share a name, by place", async () => {
-    // Both are called Acanga. Side by side with nothing else, choosing
-    // between them is a coin toss.
-    await pickParish();
-    const acangas = screen.getAllByRole("button", { name: /Acanga/ });
+    const acangas = screen.getAllByRole("checkbox", { name: /Acanga/ });
     expect(acangas).toHaveLength(2);
-    expect(acangas[0].textContent).toMatch(/Ogom/);
-    expect(acangas[1].textContent).toMatch(/Lamwo/);
-    // Not by code.
-    expect(acangas[0].textContent).not.toMatch(/207\.1\.05/);
+    const texts = acangas.map(a => a.closest("label").textContent);
+    expect(new Set(texts).size).toBe(2);
+    expect(texts.join("|")).toMatch(/207\.1\.05\.01/);
+    expect(texts.join("|")).toMatch(/311\.2\.07\.04/);
   });
 
-  it("does not clutter a name that is already unique", async () => {
+  it("leads with the name and keeps the code secondary", async () => {
     await pickParish();
-    const unique = screen.getByRole("button", { name: /Acan Oryema/ });
-    expect(unique.textContent.trim()).toBe("Acan Oryema");
+    const leaf = screen.getByRole("checkbox", { name: /Acan Oryema/ });
+    const label = leaf.closest("label");
+    expect(label.textContent.trim().startsWith("Acan Oryema")).toBe(true);
+    // The code is present but wears the muted/monospace treatment.
+    const code = label.querySelector(".t-mono");
+    expect(code).toBeTruthy();
+    expect(code.textContent).toMatch(/207\.1\.05\.02/);
   });
 
   it("still posts the code, not the name", async () => {
@@ -390,7 +468,7 @@ describe("places read as names", () => {
     fireEvent.change(screen.getByPlaceholderText(/Why this change/), {
       target: { value: "new parish chief" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /Acan Oryema/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Acan Oryema/ }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(posted.length).toBe(2));
     expect(posted[1].body.scope_codes).toEqual(["207.1.05.02"]);

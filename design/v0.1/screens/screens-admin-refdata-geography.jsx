@@ -10,11 +10,10 @@
 
 const { useState: useStateGEO, useMemo: useMemoGEO } = React;
 
-const GEO_LEVELS = ["region","sub_region","district","county","sub_county","parish","village"];
-const GEO_LEVEL_LABEL = {
-  region: "Region", sub_region: "Sub-region", district: "District",
-  county: "County", sub_county: "Sub-county", parish: "Parish", village: "Village",
-};
+// GEO_LEVELS / GEO_LEVEL_LABEL come from v0.1/data/geo-levels.jsx —
+// this file used to declare its own, as strings, while
+// components/scope-edit-modal.jsx declared the same names as objects.
+// One global scope, so the last file loaded won.
 const GEO_STATUS_TONE = { active: "data", superseded: "quality", retired: "neutral" };
 
 // Sample slice — anchored on Karamoja sub-region
@@ -65,9 +64,9 @@ const AdminGeographyScreen = () => {
   if (!showRetired) filtered = filtered.filter(r => r.status === "active");
 
   const drillTo = (row) => {
-    const nextLevelIdx = GEO_LEVELS.indexOf(currentLevel) + 1;
-    if (nextLevelIdx >= GEO_LEVELS.length) return;
-    const nextLevel = GEO_LEVELS[nextLevelIdx];
+    const nextLevelIdx = GEO_LEVEL_CODES.indexOf(currentLevel) + 1;
+    if (nextLevelIdx >= GEO_LEVEL_CODES.length) return;
+    const nextLevel = GEO_LEVEL_CODES[nextLevelIdx];
     setQ("");
     setPath([...path, { level: nextLevel, code: row.code, name: row.name }]);
   };

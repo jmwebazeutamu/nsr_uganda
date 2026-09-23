@@ -34,13 +34,14 @@
   <script type="text/babel" src="v0.1/components/household-review-model.jsx"></script>
   <script type="text/babel" src="v0.1/components/household-review.jsx"></script>
   <script type="text/babel" src="v0.1/components/home-charts.jsx"></script>
-  <script type="text/babel" src="v0.1/components/scope-edit-modal.jsx"></script>
-
   <!-- Data layer — API client + useChoiceList hook (US-S23-012). MUST load
        before screens that consume them. -->
   <script type="text/babel" src="v0.1/data/api-client.jsx"></script>
   <script type="text/babel" src="v0.1/data/use-choice-list.jsx"></script>
+  <script type="text/babel" src="v0.1/data/geo-levels.jsx"></script>
   <script type="text/babel" src="v0.1/data/use-nav-counts.jsx"></script>
+  <!-- Scope editor consumes the canonical GEO_LEVELS projection above. -->
+  <script type="text/babel" src="v0.1/components/scope-edit-modal.jsx"></script>
 
   <!-- Screen modules -->
   <script type="text/babel" src="v0.1/screens/screens-home.jsx"></script>

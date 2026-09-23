@@ -46,9 +46,10 @@ const UM_SCOPE_API = "/api/v1/security/operator-scopes/bulk-grant/";
 const UM_GEO_API = "/api/v1/reference-data/geographic-units/";
 // The partners router owns "partners/" at the bare /api/v1/ prefix.
 const UM_PARTNER_API = "/api/v1/partners/";
-const UM_GEO_HIERARCHY = [
-  "region", "sub_region", "district", "county", "sub_county", "parish", "village",
-];
+// The ladder comes from v0.1/data/geo-levels.jsx. This file used to
+// carry its own copy — the tenth in the codebase — and a copy is how
+// county went missing from the Data Explorer's ladder.
+const UM_GEO_HIERARCHY = GEO_LEVEL_CODES;
 
 const _umCsrf = () => {
   const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);

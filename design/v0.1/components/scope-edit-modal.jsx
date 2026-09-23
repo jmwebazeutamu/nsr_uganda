@@ -31,19 +31,10 @@ const { useState: useSEM, useEffect: useESEM, useMemo: useMSEM } = React;
 // UBOS administrative levels (same order as `_GEO_CHAIN` in
 // screens-drs-querybuilder.jsx). The picker defaults to sub_region —
 // the level most DSAs scope at — but operators can pick any level.
-const GEO_LEVELS = [
-  { value: "region",     label: "Region" },
-  { value: "sub_region", label: "Sub-region" },
-  { value: "district",   label: "District" },
-  { value: "county",     label: "County" },
-  { value: "sub_county", label: "Sub-county" },
-  { value: "parish",     label: "Parish" },
-  { value: "village",    label: "Village" },
-];
-
-const GEO_LEVEL_LABEL = Object.fromEntries(
-  GEO_LEVELS.map(l => [l.value, l.label]),
-);
+// GEO_LEVELS / GEO_LEVEL_LABEL come from v0.1/data/geo-levels.jsx.
+// Declaring them here collided with
+// screens-admin-refdata-geography.jsx, which declared the same two
+// names with a different shape.
 
 // Default API seam. Tests pass a stub via the `apiClient` prop so the
 // network never actually fires. In the browser harness it falls back
