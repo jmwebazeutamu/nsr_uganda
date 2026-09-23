@@ -8,11 +8,13 @@ in ``apps.data_explorer`` (the Celery beat task and ``query_builder``)
 import these helpers rather than issuing ``REFRESH`` / ``pg_matviews``
 SQL themselves, so the no-raw-SQL boundary stays intact.
 
-Why this matters: a freshly-migrated Postgres matview is ``WITH NO
-DATA`` and raises ``OperationalError`` on *any* SELECT until its first
-``REFRESH``. Without a refresh path the aggregate endpoint 500s in
-production. :func:`refresh_explorer_matviews` is the path; the beat task
-(``data_explorer.refresh_matviews``) calls it on a schedule.
+Why this matters: a Postgres matview created ``WITH NO DATA`` raises
+``OperationalError`` on *any* SELECT until its first ``REFRESH``.
+Without a refresh path the aggregate endpoint 500s in production.
+:func:`refresh_explorer_matviews` is the path; the beat task
+(``data_explorer.refresh_matviews``) calls it on a schedule, and
+migration 0011 populates the whole family at ``migrate`` time so the
+window between deploy and the first beat run is not a 503.
 """
 
 from __future__ import annotations
@@ -22,12 +24,13 @@ from collections.abc import Iterable
 from django.db import connection
 
 # The full intended Data Explorer matview set (ADR-0023 D2). Mirrors the
-# unmanaged models in apps.data_explorer.matview_models. NOTE: only the
-# two household-grain matviews currently have Postgres DDL in migration
-# 0010; the other six exist as models + SQLite shadow tables but their
-# Postgres CREATE MATERIALIZED VIEW is unbuilt backlog scope. The refresh
-# below is existence-aware so it covers whatever subset actually exists —
-# the remaining six auto-join once their DDL lands.
+# unmanaged models in apps.data_explorer.matview_models. NOTE: only three
+# have Postgres DDL today — the two household-grain matviews from
+# migration 0010 and household_shocks from 0011; the other five exist as
+# models + SQLite shadow tables but their Postgres CREATE MATERIALIZED
+# VIEW is unbuilt backlog scope. The refresh below is existence-aware so
+# it covers whatever subset actually exists — the remaining five
+# auto-join once their DDL lands.
 EXPLORER_MATVIEWS: tuple[str, ...] = (
     "mv_explorer_household_by_subcounty_demographics",
     "mv_explorer_household_by_subcounty_pmt",

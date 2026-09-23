@@ -77,14 +77,25 @@ def dataset(privacy_classes, refresh_cadences):
 
 @pytest.fixture
 def variable_internal(dataset, privacy_classes):
+    """An Internal projection variable on the PMT dataset.
+
+    ``source_field`` must be a column the dataset's matview actually
+    projects. It used to be ``dwelling_type``, which
+    ``mv_explorer_household_by_subcounty_pmt`` does not carry — the
+    aggregate happy path raised FieldError, and the contract tests never
+    noticed because the matview was unpopulated in the test database and
+    they took their "503 is acceptable" branch every time. Once
+    migration 0011 made ``migrate`` leave every matview readable, the
+    request reached execution and the fiction surfaced.
+    """
     from apps.data_explorer.models import Variable, VariableStatus
 
     return Variable.objects.create(
         dataset=dataset,
-        code="household.dwelling_type",
-        label="Dwelling type",
-        source_model="data_management.Dwelling",
-        source_field="dwelling_type",
+        code="household.pmt_band",
+        label="PMT band",
+        source_model="pmt.PMTResult",
+        source_field="pmt_band",
         data_type="select",
         privacy_class=privacy_classes["internal"],
         status=VariableStatus.ACTIVE,
