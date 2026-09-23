@@ -181,3 +181,96 @@ def test_sub_region_code_holds_the_code_not_the_row_id(geography):
     codes = {code for (code, _t, _s) in _shock_rows()}
     assert codes == {SUB_REGION_CODE}
     assert str(geography["sr"].pk) not in codes
+
+
+# ---------------------------------------------------------------------------
+# Geographic columns carry codes — migration 0012
+# ---------------------------------------------------------------------------
+
+# matview → {column: the GeographicUnit level that column names}.
+# `query_builder._apply_geographic_scope` maps a request's level onto
+# exactly these column names and filters `<column>__in=<codes the caller
+# sent>`, so anything but a code there silently returns no rows.
+GEO_COLUMNS = {
+    "mv_explorer_household_by_subcounty_demographics": {
+        "sub_region_code": "sub_region",
+        "district_code": "district",
+        "sub_county_code": "sub_county",
+    },
+    "mv_explorer_household_by_subcounty_pmt": {
+        "sub_region_code": "sub_region",
+        "district_code": "district",
+        "sub_county_code": "sub_county",
+    },
+    SHOCKS_MATVIEW: {
+        "sub_region_code": "sub_region",
+    },
+}
+
+
+def test_geographic_columns_hold_codes_not_row_ids(geography):
+    """Every geographic column of every built matview resolves to a
+    GeographicUnit code at the level its name claims.
+
+    The 0010 pair shipped projecting `h.sub_region_id::text` and friends
+    into these columns — primary keys, in columns called `*_code`. A
+    scoped aggregate matched nothing and returned an empty result rather
+    than an error, so nothing ever complained. This asserts the values
+    are codes by resolving each one against the geography table.
+    """
+    from apps.data_explorer.matview_models import MATVIEW_MODELS
+
+    household = _household(geography)
+    Shock.objects.create(
+        household=household, shock_type="drought", severity="3",
+    )
+    refresh_explorer_matviews()
+
+    checked = 0
+    for matview, columns in GEO_COLUMNS.items():
+        model = MATVIEW_MODELS[matview]
+        rows = list(model.objects.all())
+        assert rows, f"{matview} produced no rows for the seeded household"
+        for row in rows:
+            for column, level in columns.items():
+                value = getattr(row, column)
+                assert value, f"{matview}.{column} is empty"
+                assert GeographicUnit.objects.filter(
+                    level=level, code=value,
+                ).exists(), (
+                    f"{matview}.{column} = {value!r} is not a {level} code. "
+                    "A GeographicUnit primary key here makes every scoped "
+                    "query return nothing."
+                )
+                checked += 1
+    assert checked == 7, f"expected 7 column checks, made {checked}"
+
+
+def test_a_scoped_query_finds_the_household(geography):
+    """The end the bug was at: filter the matview the way
+    ``_apply_geographic_scope`` does, with the codes a caller supplies.
+    """
+    from apps.data_explorer.matview_models import HouseholdBySubcountyPmt
+    from apps.data_explorer.query_builder import _apply_geographic_scope
+
+    _household(geography)
+    refresh_explorer_matviews(names=["mv_explorer_household_by_subcounty_pmt"])
+
+    for level, code in [
+        ("sub_region", SUB_REGION_CODE),
+        ("district", geography["d"].code),
+        ("sub_county", geography["sc"].code),
+    ]:
+        qs = _apply_geographic_scope(
+            HouseholdBySubcountyPmt.objects.all(),
+            {"level": level, "codes": [code]},
+        )
+        assert qs.exists(), f"scoping to {level}={code} returned no rows"
+
+    # And the row id it used to hold finds nothing, which is exactly how
+    # the defect stayed invisible.
+    qs = _apply_geographic_scope(
+        HouseholdBySubcountyPmt.objects.all(),
+        {"level": "district", "codes": [str(geography["d"].pk)]},
+    )
+    assert not qs.exists()
