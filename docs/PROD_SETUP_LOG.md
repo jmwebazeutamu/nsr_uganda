@@ -1631,3 +1631,125 @@ Suites: **2720 Python passed / 29 skipped; 855 JS passed / 5 skipped.**
 - Five Data Explorer matviews remain unbuilt, named in `UNBUILT_MATVIEWS`.
 - 17 pending duplicate pairs; the Kato pair first.
 - The tier-3 weights DRAFT is still not authored.
+
+---
+
+## 2026-09-23 — deploy 8b97b39 → f94c618 (geography denormalised onto Household)
+
+`sub_region_code` has mirrored `sub_region.code` since ADR-0005, as the
+partition key. Every other rung was reached through a join, and that
+cost more than a join:
+
+- **ABAC** matched `district__code`, `county__code`, `sub_county__code`,
+  `parish__code`, `village__code` — one join per level on the hot path
+  of every scoped list query in the registry.
+- **The Data Explorer matviews** joined `reference_data_geographicunit`
+  for the same codes, which made them *depend* on that table's `code`
+  column, so Postgres refused to alter it. Migrations 0012 and 0013 had
+  to declare an explicit dependency on `reference_data.0017` just to
+  make a from-scratch build work.
+
+Household now carries `region_code`, `district_code`, `county_code`,
+`sub_county_code`, `parish_code` and `village_code` beside
+`sub_region_code`.
+
+**Pre-deploy backup.**
+`/opt/nsrmis/backups/pre-geo-denorm-*.dump`, 132 tables with data.
+
+**Migrations.** `0014_household_geography_codes` (six columns, seven
+indexes, chunked backfill) and `0015_matviews_off_household_denorm`.
+Build 4m, healthz first attempt, 20G free.
+
+### Verification on the box
+
+```
+ hh  | no_region | no_district | no_county | no_subcounty | no_parish | no_village
+ 354 |         0 |           0 |         0 |            0 |         0 |          0
+
+drift            0
+county drift     0
+subcounty drift  0
+
+ABAC columns: region_code sub_region_code district_code county_code
+              sub_county_code parish_code village_code
+joins left  : []
+
+    region      R-CENTRAL    -> 63 households
+    district    102          -> 16 households
+    county      102.2        ->  7 households
+    sub_county  102.2.01     ->  7 households
+lockstep    : 0 drifted
+```
+
+`pg_depend` for the matviews now lists only `data_management_household`,
+`data_management_member` and `data_management_shock`, and
+
+```
+ALTER TABLE reference_data_geographicunit ALTER COLUMN code TYPE varchar(64);
+-> ALTER succeeded — coupling gone
+```
+
+Four joins per household row also leave the matview refresh.
+
+### The mirror is maintained, not merely initialised
+
+`Household.sync_geography_codes()` runs on every save and rewrites a
+mirror whose FK has moved. The predecessor wrote `sub_region_code` only
+when it was blank, so a household moved between districts kept the old
+code. Harmless while nothing read it; **not** harmless now that ABAC
+matches on it — a stale mirror hides a household from the operator who
+should see it and shows it to one who should not.
+
+It stays cheap: a row whose FKs have not moved and whose mirrors are
+filled issues no extra query (`from_db` snapshots the loaded FK ids and
+`sync` compares against that). A test pins the re-save at one query.
+
+### Deliberate behaviour change
+
+`test_explicit_partition_key_not_overwritten` asserted that an
+explicitly-passed `sub_region_code` survived `save()` untouched, so a
+backfill could write the column through the ORM. That escape hatch now
+lets a caller place a household outside its own geographic scope, and
+nothing uses it — 0014's backfill writes in SQL. The test asserts the
+mirror is corrected instead.
+
+### Two mistakes on the way
+
+- `from_db` first snapshotted with `getattr`. On a deferred queryset
+  that goes through `DeferredAttribute`, which issues a query, which
+  calls `from_db` — RecursionError, surfacing in **eighteen**
+  deduplication tests because those are what use `.only()`. It reads
+  `__dict__` now, and an unloaded level is left alone rather than
+  guessed at. Two regression tests cover it.
+- `atomic = False` on 0014: adding seven indexed columns and
+  backfilling them in one transaction fails with *"cannot CREATE INDEX
+  … because it has pending trigger events"*. The backfill is
+  idempotent, so a partial run re-runs.
+
+### At national scale
+
+The seven indexes are instant on 354 rows. At 12M households `AddField`
+with `db_index=True` holds ACCESS EXCLUSIVE for the whole build, so
+they would have to go in `CONCURRENTLY`. **Doing this now, while the
+table is small, was the cheap moment.**
+
+Suites: **2732 Python passed / 29 skipped; 857 JS passed / 5 skipped.**
+Migrations reverse cleanly (checked on dev).
+
+### Not mine, still failing
+
+`tests/integration/test_drs_workflow_e2e.py::
+test_drs_submit_rejects_out_of_scope_sub_region` fails on an
+uncommitted change in `apps/data_requests/services.py` — the refusal
+message became "outside DSA **geographic** scope" and the integration
+test still expects "outside DSA scope". Left for whoever is mid-edit.
+
+### Open
+
+- The Data Explorer's new geographic Variables (region, sub_region,
+  county) are INACTIVE pending dual approval before they can be
+  projected as aggregate dimensions. Scoping does not go through
+  Variable, so county scoping is live.
+- Five Data Explorer matviews remain unbuilt, named in `UNBUILT_MATVIEWS`.
+- 17 pending duplicate pairs; the Kato pair first.
+- The tier-3 weights DRAFT is still not authored.
