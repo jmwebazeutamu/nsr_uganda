@@ -49,6 +49,12 @@ const GEO = {
     { code: "311.2.07.04", name: "Acanga", parent_code: "311.2.07" },
     { code: "207.1.05.02", name: "Acan Oryema", parent_code: "207.1.05" },
   ],
+  // The level above, so a repeated parish name can be told apart by its
+  // sub-county rather than by a code nobody recognises.
+  sub_county: [
+    { code: "207.1.05", name: "Ogom" },
+    { code: "311.2.07", name: "Lamwo" },
+  ],
 };
 
 const ROLES = [
@@ -349,21 +355,27 @@ describe("places read as names", () => {
     expect(summary.textContent).toMatch(/Acan Oryema/);
   });
 
-  it("keeps the code beside the name, because names are not unique", async () => {
+  it("says where it sits, rather than showing a code", async () => {
+    // An administrator knows the sub-county. They do not know
+    // 207.1.05.02, and a line they cannot read is a line they cannot
+    // check before confirming.
     await pickParish();
     fireEvent.click(screen.getByRole("button", { name: /Acan Oryema/ }));
     const summary = screen.getByText(/1 selected/).parentElement;
-    expect(summary.textContent).toMatch(/207\.1\.05\.02/);
+    expect(summary.textContent).toMatch(/Ogom/);
+    expect(summary.textContent).not.toMatch(/207\.1\.05\.02/);
   });
 
-  it("distinguishes two places that share a name", async () => {
+  it("distinguishes two places that share a name, by place", async () => {
     // Both are called Acanga. Side by side with nothing else, choosing
     // between them is a coin toss.
     await pickParish();
     const acangas = screen.getAllByRole("button", { name: /Acanga/ });
     expect(acangas).toHaveLength(2);
-    expect(acangas[0].textContent).toMatch(/207\.1\.05/);
-    expect(acangas[1].textContent).toMatch(/311\.2\.07/);
+    expect(acangas[0].textContent).toMatch(/Ogom/);
+    expect(acangas[1].textContent).toMatch(/Lamwo/);
+    // Not by code.
+    expect(acangas[0].textContent).not.toMatch(/207\.1\.05/);
   });
 
   it("does not clutter a name that is already unique", async () => {

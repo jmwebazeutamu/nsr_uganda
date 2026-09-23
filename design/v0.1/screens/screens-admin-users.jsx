@@ -500,13 +500,22 @@ const UmRolePicker = ({ roles, selected, toggle }) => (
    endpoint; this is a shortcut into it, not a second implementation. */
 const UmScopePicker = ({ roles, selected, scope, setScope, levels }) => {
   const [units, setUnits] = useStateUM([]);
+  // code -> name for the level above, so a repeated name can be told
+  // apart by where it sits rather than by a code nobody recognises.
+  const [parentNames, setParentNames] = useStateUM({});
   const [loading, setLoading] = useStateUM(false);
   const [filter, setFilter] = useStateUM("");
   const suggested = (roles.find(r => r.code === selected[0]) || {}).default_scope || "";
   const level = (levels || []).find(l => l.value === scope.level);
 
+  // The ladder comes from the served levels, in their ScopeLevel order,
+  // so the parent of a level is simply the geographic one before it.
+  // Nothing here restates the hierarchy.
+  const ladder = (levels || []).filter(l => l.geographic).map(l => l.value);
+  const parentLevel = ladder[ladder.indexOf(scope.level) - 1] || "";
+
   useEffectUM(() => {
-    if (!level || !level.takes_codes) { setUnits([]); return undefined; }
+    if (!level || !level.takes_codes) { setUnits([]); setParentNames({}); return undefined; }
     let cancelled = false;
     setLoading(true);
     const url = level.geographic
@@ -523,6 +532,24 @@ const UmScopePicker = ({ roles, selected, scope, setScope, levels }) => {
       })
       .catch(() => { if (!cancelled) setUnits([]); })
       .finally(() => { if (!cancelled) setLoading(false); });
+
+    // Names for the level above. Only used to separate repeated names,
+    // so if this call comes back short the chip falls back to showing
+    // nothing extra rather than a code — a partial answer, never a
+    // misleading one.
+    if (parentLevel) {
+      _umGet(`${UM_GEO_API}?level=${parentLevel}&page_size=3000`)
+        .then((d) => {
+          if (cancelled) return;
+          setParentNames((d.results || d || []).reduce((acc, r) => {
+            acc[r.code] = r.name || "";
+            return acc;
+          }, {}));
+        })
+        .catch(() => { if (!cancelled) setParentNames({}); });
+    } else {
+      setParentNames({});
+    }
     return () => { cancelled = true; };
   }, [scope.level]);
 
@@ -552,6 +579,10 @@ const UmScopePicker = ({ roles, selected, scope, setScope, levels }) => {
   // code -> name, so the summary can name what was chosen instead of
   // reciting 207.1.05.01 back at the operator.
   const nameOf = units.reduce((acc, u) => { acc[u.code] = u.name; return acc; }, {});
+  const parentOf = units.reduce((acc, u) => {
+    acc[u.code] = parentNames[u.parent_code] || "";
+    return acc;
+  }, {});
 
   return (
     <div style={{ marginTop: 14 }}>
@@ -603,9 +634,9 @@ const UmScopePicker = ({ roles, selected, scope, setScope, levels }) => {
                           background: chosen.includes(unit.code) ? "var(--accent-data-bg)" : "var(--neutral-0)",
                         }}>
                   {unit.name}
-                  {isAmbiguous(unit) && unit.parent_code && (
+                  {isAmbiguous(unit) && parentNames[unit.parent_code] && (
                     <span className="t-cap muted" style={{ marginLeft: 5 }}>
-                      {unit.parent_code}
+                      · {parentNames[unit.parent_code]}
                     </span>
                   )}
                 </button>
@@ -619,13 +650,13 @@ const UmScopePicker = ({ roles, selected, scope, setScope, levels }) => {
                 <span key={code}>
                   {i > 0 && ", "}
                   <strong>{nameOf[code] || code}</strong>
-                  {/* The code stays, quietly. Names are not unique —
-                      839 parishes share one with at least one other —
-                      so a grant recorded by name alone could not be
-                      checked against what was actually granted. */}
-                  <span className="t-cap t-mono muted" style={{ marginLeft: 4 }}>
-                    {code}
-                  </span>
+                  {/* Where it sits, not its code. Names are not unique —
+                      839 parish names are shared — so the place above it
+                      is what makes the line checkable by someone who
+                      knows the district but not the numbering. */}
+                  {parentOf[code] && (
+                    <span className="muted"> · {parentOf[code]}</span>
+                  )}
                 </span>
               ))}
             </p>
