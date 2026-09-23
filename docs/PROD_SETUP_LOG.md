@@ -1399,3 +1399,104 @@ It fills the first time a household with section K detail is promoted.
 - 17 pending duplicate pairs; the Kato pair is still the one to look at
   first.
 - The tier-3 weights DRAFT is still not authored.
+
+---
+
+## 2026-09-23 — deploy 007347c → 4ba1f06 (the 0010 matviews hold codes)
+
+Follow-on to the finding logged above. Both matviews built by migration
+0010 projected `h.sub_region_id::text`, `h.district_id::text` and
+`h.sub_county_id::text` into columns named `sub_region_code`,
+`district_code` and `sub_county_code`. On the live database that read:
+
+```
+ sub_region_code | district_code | sub_county_code | household_count
+ 13532           | 9             | 474             | 3
+```
+
+`query_builder._apply_geographic_scope` maps a request's level onto
+exactly those three columns and filters `<column>__in=codes` with the
+codes the caller sent — `101.1.01`, not `474`. **Every
+geographically-scoped aggregate against these two datasets returned an
+empty result**: not an error, not a warning, an empty result that reads
+as "no households there". Only an unscoped national query ever returned
+rows.
+
+**Pre-deploy backup.**
+`/opt/nsrmis/backups/pre-matview-geo-codes-20260923-155618Z.dump`
+(10.7M, exit 0), 132 tables with data.
+
+**Deploy.** Build 4m14s, healthz ok on attempt 1, all 8 services up,
+26G free. Migration `data_management.0012_matview_geography_codes`.
+
+### How
+
+Postgres has no `CREATE OR REPLACE MATERIALIZED VIEW` and the column
+expressions change, so each matview is dropped and rebuilt, then
+populated in the migration — leaving them `WITH NO DATA` until the
+01:00 beat run would be a 503 window. `pg_depend` was checked first:
+nothing else in the database depends on either, so the drop took
+nothing with it.
+
+`sub_region_code` comes from `Household.sub_region_code`, the
+denormalised ADR-0005 partition column that ABAC matches and that
+migration 0011 already used. District and sub-county have no denorm on
+Household, so they join through the FK. Verified on production before
+writing the change: 354 households, **zero** rows where the denorm
+differs from `sub_region.code`, and no nulls in any of the three FKs.
+
+The three columns are now `COALESCE`'d to `''`. The old definitions
+selected a bare `*_id::text`, which could be NULL in a column the
+unmanaged model declares non-null.
+
+### The trap this surfaced
+
+A matview that reads `reference_data_geographicunit.code` depends on
+that column, and Postgres then refuses to alter it:
+
+```
+cannot alter type of a column used by a view or rule
+DETAIL: rule _RETURN on materialized view
+        mv_explorer_household_by_subcounty_demographics
+        depends on column "code"
+```
+
+`reference_data.0017_alter_geographicunit_code` widens `code` to
+varchar(48). It is long applied here, so the deploy was unaffected —
+but on a database built **from scratch** (the test database, and the DR
+site) the migration graph is free to interleave the two apps and the
+build dies partway through. That is how it was found: every Postgres
+test errored at setup. Fixed with an explicit dependency on
+reference_data 0017. Both suites then pass from a fresh database:
+**2692 Postgres / 2694 SQLite passed, 29 skipped**.
+
+The dependency fixes ordering, not the coupling. Any future migration
+altering `geographicunit.code` must drop these matviews first.
+
+### Verification on the box
+
+```
+row: SR-KAMPALA-CENTRAL 102 102.2.01 7
+  scope sub_region=SR-KAMPALA-CENTRAL: 7 rows, 16 households
+  scope district=102:                  7 rows, 16 households
+  scope sub_county=102.2.01:           1 rows,  7 households
+  bogus row-id scope (district=9):     0 rows
+```
+
+Before this deploy every one of those returned 0. All 354 households
+sit on `active` geography, so nothing is stranded on a retired frame.
+
+Migration reverses cleanly — checked on dev, the reverse restores the
+0010 definitions verbatim and the columns go back to row ids.
+
+### Open
+
+- **Denormalise `district_code` and `sub_county_code` onto Household**,
+  the way ADR-0005 already denormalises `sub_region_code`. That removes
+  the join, removes the coupling to `geographicunit.code`, and makes all
+  three levels available as flat columns to ABAC as well as the
+  matviews. It is a Household schema change plus a backfill (354 rows
+  now, 12M at national load), so it was not smuggled into this fix.
+- Five Data Explorer matviews remain unbuilt, named in `UNBUILT_MATVIEWS`.
+- 17 pending duplicate pairs; the Kato pair first.
+- The tier-3 weights DRAFT is still not authored.
