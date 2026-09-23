@@ -1096,3 +1096,107 @@ deactivated rather than deleted so the audit chain stays readable.
 Deactivating the four that have never signed in is the low-risk start,
 and has to be done in the Django admin, because superusers are precisely
 what the console refuses to manage.
+
+## 2026-09-23 — dormant superuser accounts removed
+
+Five test accounts removed from production on the instruction of
+jmwebaze@gmail.com. All five held **full superuser and Django admin
+access**, which put them outside every guard in the user-management
+feature shipped the same day — including the one that stops an
+administrator editing their own roles.
+
+```
+accounts   11 -> 6
+superusers  8 -> 3
+is_staff    7 -> 3
+```
+
+| Removed | Created | last_login |
+|---|---|---|
+| `regression-smoke2` | 2026-05-19 | never |
+| `seed-smoke` | 2026-05-19 | never |
+| `detail-smoke` | 2026-05-19 | never |
+| `nusaf-debug` | 2026-05-22 | never |
+| `regression-smoke` | 2026-05-19 | 2026-09-17 (scripted — see below) |
+
+### Procedure
+
+Dump first, in two stages because the fifth account was decided
+separately:
+
+```
+pre-dormant-superuser-removal-20260923-021032Z.dump   (132 tables verified)
+pre-regression-smoke-removal-20260923-021607Z.dump    (132 tables verified)
+```
+
+For each account: **deactivate, audit, then delete.** `is_active`,
+`is_superuser` and `is_staff` were cleared and saved before the row was
+removed, so the account was already inert if the delete failed for a
+reason nothing anticipated. The `delete` audit event was emitted **before**
+the row went, so the record of the removal outlives the thing it
+describes.
+
+The first four ran under a guard that refused any account with a
+non-null `last_login`, so a typo could not reach a live account. That
+guard was deliberately lifted for `regression-smoke` and replaced with an
+assertion pinning the exact account (superuser, `last_login` on
+2026-09-17); the reason recorded in the chain says why the login did not
+count.
+
+### Why `regression-smoke`'s login did not count
+
+Its only `last_login` was 2026-09-17 20:20:11Z. Two things ruled out a
+person:
+
+- **It happened on production, not on dev.** The accounts arrived by a
+  dev→prod restore, so the timestamp could have ridden in with the copy —
+  but the dev dump cut-off was `20260917T020653Z`, roughly eighteen hours
+  earlier.
+- **Three accounts authenticated within three seconds.** At 20:20:11–14,
+  `johnsonmwebaze`, `regression-smoke` and `demo-chief` each performed an
+  identical `list_read` + `read` on households, all from `127.0.0.1` with
+  **no user agent**. A browser always sends one, and nobody signs into
+  three accounts in three seconds. It was a scripted ABAC scope check run
+  on the box itself.
+
+For contrast, the same account's console traffic that evening came from
+`173.79.164.106` with a real session. The script had borrowed that
+identity too, as one of the ones it tested.
+
+The script itself was not found — nothing in `scripts/` or the docs
+authenticates as multiple users, so it was likely an ad-hoc shell session
+during that day's migration work.
+
+### What survived, deliberately
+
+`AuditEvent.actor_id` is a plain string, not a foreign key, so the old
+entries still name the removed accounts:
+
+```
+2026-05-19  regression-smoke2  read       household
+2026-05-19  detail-smoke       read       partner
+2026-05-19  detail-smoke       list_read  dsa
+2026-05-19  regression-smoke   read       household
+2026-09-17  regression-smoke   list_read + read  household
+```
+
+They no longer resolve to a live account, which is the correct outcome:
+the trail still records who read what and when, and it is provable
+without the account existing. **`verify-chain` after the removals:
+`ok: True`, 98,790 rows, zero breaks.**
+
+### Still open
+
+Two superusers remain besides the project owner's own account, and
+neither is clear-cut:
+
+- **`dev`** — last login 2026-05-17. Named like a development account and
+  four months cold, but not a smoke-test account, so it may belong to
+  someone.
+- **`admin`** — last login 2026-06-23. A generic name that may be a shared
+  break-glass account; removing it without knowing who holds it could
+  strand somebody.
+
+Both hold full Django admin access, which matters more now that the
+console deliberately refuses to manage superusers: they sit outside every
+control the new feature adds.
