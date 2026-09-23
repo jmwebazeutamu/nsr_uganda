@@ -19,7 +19,28 @@ from datetime import UTC, datetime
 
 from django.db.models import Count
 
+from apps.security.models import ScopeLevel
+
+from .geography import LEVEL_COLUMN, normalise_level
 from .suppressor import Suppressor
+
+
+class UnscopableLevel(Exception):
+    """The request names a geographic level this matview cannot filter by.
+
+    Raised rather than ignored: the predecessor of this exception was a
+    `return qs` that handed back the national aggregate for a county
+    query. The validator refuses these up front, so reaching here means
+    a dataset's declared floor and its matview's columns disagree.
+    """
+
+    def __init__(self, level: str, matview: str):
+        super().__init__(
+            f"matview {matview} has no column for geographic level "
+            f"{level!r}; refusing rather than returning unfiltered rows",
+        )
+        self.level = level
+        self.matview = matview
 
 
 class StaleMatviewError(Exception):
@@ -59,30 +80,28 @@ def _hash(value) -> str:
 
 
 def _apply_geographic_scope(qs, scope: dict):
+    """Filter the matview to the requested geography.
+
+    Fails **closed**. This used to map three of the seven levels and
+    return the queryset untouched for the rest, so a county- or
+    region-scoped request silently received the national aggregate —
+    see apps/data_explorer/geography.py for what that looked like on
+    production. A level we cannot filter by is a bug, not a
+    pass-through, and the validator refuses it before we get here; this
+    is the second line of the same defence.
+    """
     if not scope:
         return qs
-    level = (scope.get("level") or "").lower()
-    level = {
-        "country": "national",
-        "subregion": "sub_region",
-        "sub-county": "sub_county",
-        "subcounty": "sub_county",
-    }.get(level, level)
+    level = normalise_level(scope.get("level"))
     codes = list(scope.get("codes") or [])
     if not (level and codes):
         return qs
-    field_map = {
-        "sub_region": "sub_region_code",
-        "district": "district_code",
-        "sub_county": "sub_county_code",
-    }
-    column = field_map.get(level)
-    if column is None:
-        # Level was validated upstream — anything we don't have a
-        # column for is a coarser-than-floor pass-through.
+    if level == ScopeLevel.NATIONAL:
+        # The only level with no column: it means "do not filter".
         return qs
-    if not hasattr(qs.model, column):
-        return qs
+    column = LEVEL_COLUMN.get(level)
+    if column is None or not hasattr(qs.model, column):
+        raise UnscopableLevel(level, qs.model._meta.db_table)
     return qs.filter(**{f"{column}__in": codes})
 
 

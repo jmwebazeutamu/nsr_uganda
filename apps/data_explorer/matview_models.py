@@ -30,7 +30,12 @@ class _MatviewBase(models.Model):
     # back to a deterministic synthetic key.
     id = models.CharField(primary_key=True, max_length=64)
     refreshed_at = models.DateTimeField()
-    sub_region_code = models.CharField(max_length=32, db_index=True)
+    # The two coarsest rungs of the UBOS ladder, on every matview. A
+    # dataset that cannot be filtered at a level it claims to serve
+    # returns the wrong answer rather than an error — see
+    # apps/data_explorer/geography.py.
+    region_code = models.CharField(max_length=48, blank=True, db_index=True)
+    sub_region_code = models.CharField(max_length=48, db_index=True)
 
     class Meta:
         abstract = True
@@ -41,8 +46,9 @@ class _MatviewBase(models.Model):
 
 
 class HouseholdBySubcountyDemographics(_MatviewBase):
-    district_code = models.CharField(max_length=32)
-    sub_county_code = models.CharField(max_length=32, db_index=True)
+    district_code = models.CharField(max_length=48)
+    county_code = models.CharField(max_length=48, blank=True)
+    sub_county_code = models.CharField(max_length=48, db_index=True)
     head_sex_code = models.CharField(max_length=8, blank=True)
     head_age_band = models.CharField(max_length=16, blank=True)
     household_count = models.PositiveIntegerField(default=0)
@@ -54,8 +60,9 @@ class HouseholdBySubcountyDemographics(_MatviewBase):
 
 
 class HouseholdBySubcountyPmt(_MatviewBase):
-    district_code = models.CharField(max_length=32)
-    sub_county_code = models.CharField(max_length=32, db_index=True)
+    district_code = models.CharField(max_length=48)
+    county_code = models.CharField(max_length=48, blank=True)
+    sub_county_code = models.CharField(max_length=48, db_index=True)
     pmt_band = models.CharField(max_length=24, blank=True)
     household_count = models.PositiveIntegerField(default=0)
 
@@ -65,8 +72,9 @@ class HouseholdBySubcountyPmt(_MatviewBase):
 
 
 class MemberBySubcountyEducation(_MatviewBase):
-    district_code = models.CharField(max_length=32)
-    sub_county_code = models.CharField(max_length=32, db_index=True)
+    district_code = models.CharField(max_length=48)
+    county_code = models.CharField(max_length=48, blank=True)
+    sub_county_code = models.CharField(max_length=48, db_index=True)
     sex_code = models.CharField(max_length=8, blank=True)
     age_band = models.CharField(max_length=16, blank=True)
     attendance_status = models.CharField(max_length=32, blank=True)
@@ -78,8 +86,9 @@ class MemberBySubcountyEducation(_MatviewBase):
 
 
 class MemberBySubcountyEmployment(_MatviewBase):
-    district_code = models.CharField(max_length=32)
-    sub_county_code = models.CharField(max_length=32, db_index=True)
+    district_code = models.CharField(max_length=48)
+    county_code = models.CharField(max_length=48, blank=True)
+    sub_county_code = models.CharField(max_length=48, db_index=True)
     sex_code = models.CharField(max_length=8, blank=True)
     age_band = models.CharField(max_length=16, blank=True)
     employment_status = models.CharField(max_length=32, blank=True)
@@ -101,8 +110,9 @@ class HouseholdShocksSubregion(_MatviewBase):
 
 
 class ReferralsSubcounty(_MatviewBase):
-    district_code = models.CharField(max_length=32)
-    sub_county_code = models.CharField(max_length=32, db_index=True)
+    district_code = models.CharField(max_length=48)
+    county_code = models.CharField(max_length=48, blank=True)
+    sub_county_code = models.CharField(max_length=48, db_index=True)
     programme_code = models.CharField(max_length=32, blank=True)
     referral_status = models.CharField(max_length=24, blank=True)
     referral_count = models.PositiveIntegerField(default=0)
@@ -113,8 +123,9 @@ class ReferralsSubcounty(_MatviewBase):
 
 
 class GrievancesSubcounty(_MatviewBase):
-    district_code = models.CharField(max_length=32)
-    sub_county_code = models.CharField(max_length=32, db_index=True)
+    district_code = models.CharField(max_length=48)
+    county_code = models.CharField(max_length=48, blank=True)
+    sub_county_code = models.CharField(max_length=48, db_index=True)
     category = models.CharField(max_length=32, blank=True)
     status = models.CharField(max_length=24, blank=True)
     grievance_count = models.PositiveIntegerField(default=0)

@@ -181,9 +181,19 @@ def _var(code: str, label: str, data_type: str) -> dict:
 
 # Live aggregate-variable defaults keyed by explorer dataset code.
 # These point at the matview columns, not the questionnaire fields.
+#
+# The geographic variables must cover every rung from region down to the
+# dataset's `geographic_floor`. household_core and household_pmt
+# declared only district and sub-county, skipping region, sub-region and
+# **county** — a level the UBOS frame, Household and ScopeLevel all
+# carry. Only the three datasets whose matviews are built are filled in
+# below; the other five declare theirs when their DDL lands.
 DATASET_VARIABLE_DEFAULTS: dict[str, list[dict]] = {
     "household_core": [
+        _var("region_code", "Region", "geo"),
+        _var("sub_region_code", "Sub-region", "geo"),
         _var("district_code", "District", "geo"),
+        _var("county_code", "County", "geo"),
         _var("sub_county_code", "Sub-county", "geo"),
         _var("head_sex_code", "Head sex", "select"),
         _var("head_age_band", "Head age band", "select"),
@@ -191,7 +201,10 @@ DATASET_VARIABLE_DEFAULTS: dict[str, list[dict]] = {
         _var("member_count", "Member count", "number"),
     ],
     "household_pmt": [
+        _var("region_code", "Region", "geo"),
+        _var("sub_region_code", "Sub-region", "geo"),
         _var("district_code", "District", "geo"),
+        _var("county_code", "County", "geo"),
         _var("sub_county_code", "Sub-county", "geo"),
         _var("pmt_band", "PMT band", "select"),
         _var("household_count", "Household count", "number"),
@@ -213,6 +226,7 @@ DATASET_VARIABLE_DEFAULTS: dict[str, list[dict]] = {
         _var("member_count", "Member count", "number"),
     ],
     "household_shocks": [
+        _var("region_code", "Region", "geo"),
         _var("sub_region_code", "Sub-region", "geo"),
         _var("shock_type", "Shock type", "select"),
         _var("severity", "Severity", "select"),
