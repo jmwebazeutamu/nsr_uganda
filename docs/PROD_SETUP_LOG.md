@@ -1500,3 +1500,134 @@ Migration reverses cleanly — checked on dev, the reverse restores the
 - Five Data Explorer matviews remain unbuilt, named in `UNBUILT_MATVIEWS`.
 - 17 pending duplicate pairs; the Kato pair first.
 - The tier-3 weights DRAFT is still not authored.
+
+---
+
+## 2026-09-23 — deploy a506fcf → 8b97b39 (county, and one ladder)
+
+### Confirmed: the canonical path
+
+Region → Sub-region → District → **County** → Sub-county → Parish →
+Village. `Household` carries every rung as an FK, `GeographicUnit.Level`
+declares every one. County was missing from the Data Explorer, and its
+absence did not error — it over-answered:
+
+```
+county   102.2          -> 322 rows, 354 households   (all of Uganda)
+region   R-CENTRAL      -> 322 rows, 354 households
+county   TOTAL-NONSENSE -> 322 rows, 354 households
+```
+
+County sits above the sub-county floor, so the validator accepted it;
+`query_builder.field_map` listed only sub_region/district/sub_county,
+found no column, and fell through to an unfiltered queryset. A national
+answer wearing a county label, with k-anonymity suppression computed
+against the national population — and a nonsense code returned it too.
+
+### After (verified on the box)
+
+```
+ladder      : national > region > sub_region > district > county > sub_county > parish > village
+ScopeLevel  : national region sub_region district county sub_county parish village partner
+pmt scopable: county district national region sub_county sub_region
+row         : R-CENTRAL SR-KAMPALA-CENTRAL 102 102.2 102.2.01  (7 households)
+national    : 354 households
+    region      R-CENTRAL            ->  63 households
+    sub_region  SR-KAMPALA-CENTRAL   ->  16 households
+    district    102                  ->  16 households
+    county      102.2                ->   7 households
+    sub_county  102.2.01             ->   7 households
+    county      TOTAL-NONSENSE       ->   0 households
+```
+
+Every level above sub_region used to return 354.
+
+### Geographic API returns active units by default
+
+```
+{}                     -> 13966 {'active': 13966}
+{'status': 'all'}      -> 13971 {'active': 13966, 'retired': 5}
+{'status': 'retired'}  ->     5 {'retired': 5}
+```
+
+Operational consumers — scope pickers, capture, DSA scope — can no
+longer be handed a retired UBOS unit. Historical callers opt in with
+`?status=all`. DSA scope edits additionally reject any non-active unit
+id at the service layer.
+
+### The ladder had five copies. Now it has two, and they are tested against each other
+
+`apps/data_explorer/geography.py` (backend, derived from
+`GeographicUnit.Level`) and `design/v0.1/data/geo-levels.jsx` (console).
+`tests/contract/test_geo_levels_one_ladder.py` parses the JSX and
+compares it to the Python — asserting on both originals rather than on
+a mirror — and fails if a second top-level `const GEO_LEVELS` reappears
+anywhere in the design layer. Verified by deleting county from the JSX:
+three of its four tests fail.
+
+Replaced: `validators._GEO_LEVELS` (hand-numbered ranks),
+`validators._GEO_ALIASES`, `query_builder`'s inline copy of those
+aliases, `query_builder.field_map` (three of seven rungs),
+`screens-admin-users.jsx`'s `UM_GEO_HIERARCHY`, and the two colliding
+`GEO_LEVELS` declarations in the design layer.
+
+### Both ends now fail closed
+
+The validator refuses a level the dataset's matview cannot filter by
+(422 `geographic_level_not_available`, listing what it can serve).
+`_apply_geographic_scope` raises `UnscopableLevel` if one reaches it.
+`national` still passes through unfiltered — that is what national
+means.
+
+### A mistake worth recording
+
+The first cut of `geography.py` derived the ladder from `ScopeLevel`.
+Committed `ScopeLevel` had no `COUNTY` member — the addition was sitting
+uncommitted in a parallel session's working tree — so it passed every
+test locally and deployed **without county**:
+
+```
+LADDER: national region sub_region district sub_county parish village
+```
+
+The suite was green against a tree state that does not exist in git.
+The fail-closed branch contained it — production refused the county
+request instead of answering it nationally — but the rung was gone
+until the follow-up. The ladder now derives from `GeographicUnit.Level`,
+the frame itself, not from a mirror of it.
+
+Lesson, and the new habit: **verify in a clean checkout, not in a shared
+working tree.** A clean `git worktree` also needs the gitignored local
+files (`.env`, `.ci-test.env`, built `static/console/js/`) or 37 tests
+fail for reasons that have nothing to do with the change.
+
+### Also fixed while reviewing
+
+`no-duplicate-globals` went red on the admin console: `GEO_LEVELS` and
+`GEO_LEVEL_LABEL` were declared in both
+`screens-admin-refdata-geography.jsx` (array of strings) and
+`components/scope-edit-modal.jsx` (array of objects). The console loads
+JSX as classic scripts sharing one global scope, so the last file
+loaded won and the other silently read a shape it was not written for.
+The admin console is the first page to load both.
+
+Two guard tests were green and worthless: the post_migrate catalogue
+loader fails on a fresh test database (PrivacyClass FK, logged not
+raised), so `Dataset.objects` was empty and every set difference was a
+difference against nothing. A `catalogue` fixture loads it explicitly.
+
+Suites: **2720 Python passed / 29 skipped; 855 JS passed / 5 skipped.**
+
+### Open
+
+- Denormalise `district_code`, `county_code` and `sub_county_code` onto
+  Household the way `sub_region_code` already is. Removes the matview
+  join, removes the coupling to `geographic_unit.code`, and gives ABAC
+  flat columns at every level. Schema change plus a backfill.
+- The new geographic Variables (region, sub_region, county) land
+  INACTIVE and need dual approval before they can be projected as
+  aggregate dimensions. Scoping does not go through Variable, so county
+  scoping is already live.
+- Five Data Explorer matviews remain unbuilt, named in `UNBUILT_MATVIEWS`.
+- 17 pending duplicate pairs; the Kato pair first.
+- The tier-3 weights DRAFT is still not authored.
