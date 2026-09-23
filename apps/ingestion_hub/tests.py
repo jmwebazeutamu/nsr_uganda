@@ -2560,6 +2560,38 @@ class TestResolveDdup:
                 actor="reviewer", reason="short",
             )
 
+    def test_stage_read_enriches_candidate_from_canonical_member_contract(
+        self, connector, geo_codes, dqa_blocking_name_rule,
+        django_user_model,
+    ):
+        stage, survivor = self._ddup_review_stage(connector, geo_codes)
+        survivor.telephone_1 = "0700000000"
+        survivor.save(update_fields=["telephone_1"])
+
+        user = django_user_model.objects.create_user(
+            username="ddup-reader", password="p", is_superuser=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+        response = client.get(f"/api/v1/dih/stage-records/{stage.id}/")
+
+        assert response.status_code == 200, response.content
+        candidate = response.json()["ddup_candidates"][0]
+        assert candidate["member_id"] == survivor.id
+        assert candidate["member"]["id"] == survivor.id
+        assert candidate["member"]["household"] == survivor.household_id
+        assert candidate["member"]["surname"] == "Survivor"
+        assert candidate["member"]["telephone_1"] == "0700000000"
+
+        # Detail is a read-time projection only; persisted DDUP evidence
+        # remains the minimal matching contract used by resolution services.
+        stage.refresh_from_db()
+        assert stage.ddup_candidates == [{
+            "member_id": survivor.id,
+            "score": stage.ddup_candidates[0]["score"],
+            "reason": stage.ddup_candidates[0]["reason"],
+        }]
+
 
 # --- US-S11-044 — intra-household blocks surface in the summary -------------
 
