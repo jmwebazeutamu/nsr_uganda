@@ -1108,25 +1108,61 @@ class TestSimilarityPrimitives:
         assert jaro_winkler("X", "") == 0.0
         assert jaro_winkler("", "Y") == 0.0
 
-    def test_year_proximity_same_year(self):
+    def test_the_same_date_is_a_full_match(self):
         from datetime import date
 
-        from apps.ddup.similarity import year_proximity
-        assert year_proximity(date(1980, 1, 1), date(1980, 12, 31)) == 1.0
+        from apps.ddup.similarity import birth_date_proximity
+        assert birth_date_proximity(date(1980, 1, 1), date(1980, 1, 1)) == 1.0
 
-    def test_year_proximity_one_year_apart(self):
+    def test_the_same_year_is_no_longer_a_full_match(self):
+        """The defect this replaced. `year_proximity` compared only the
+        year, so two people born eleven months apart scored a perfect
+        date match — and with village fixed at 1.0 by blocking, that put
+        0.30 of the weight within reach of anyone sharing a village and
+        a birth year."""
         from datetime import date
 
-        from apps.ddup.similarity import year_proximity
-        # max_years=2 -> 1 year apart = 0.5
-        assert year_proximity(date(1980, 1, 1), date(1981, 1, 1)) == 0.5
+        from apps.ddup.similarity import birth_date_proximity
+        assert birth_date_proximity(date(1980, 1, 1), date(1980, 12, 31)) == 0.4
 
-    def test_year_proximity_missing_dob_yields_zero(self):
+    def test_a_transcription_slip_still_scores_well(self):
+        """A swapped day and month is a data-entry error, not a different
+        person: 5 June and 6 May are 30 days apart."""
         from datetime import date
 
-        from apps.ddup.similarity import year_proximity
-        assert year_proximity(None, date(1980, 1, 1)) == 0.0
-        assert year_proximity(date(1980, 1, 1), None) == 0.0
+        from apps.ddup.similarity import birth_date_proximity
+        assert birth_date_proximity(date(1993, 6, 5), date(1993, 5, 6)) == 0.75
+
+    def test_the_pair_that_prompted_this_now_scores_low(self):
+        """Rebecca Akello (1993-06-05) and Rebecca Okello (1993-09-28):
+        two people, one household, different NINs. They scored 0.967 on
+        the first production run, above the auto-merge threshold."""
+        from datetime import date
+
+        from apps.ddup.similarity import birth_date_proximity
+        assert birth_date_proximity(date(1993, 6, 5), date(1993, 9, 28)) == 0.4
+
+    def test_one_year_apart(self):
+        from datetime import date
+
+        from apps.ddup.similarity import birth_date_proximity
+        assert birth_date_proximity(date(1980, 1, 1), date(1981, 1, 1)) == 0.2
+
+    def test_two_years_apart_is_no_match(self):
+        from datetime import date
+
+        from apps.ddup.similarity import birth_date_proximity
+        assert birth_date_proximity(date(1980, 1, 1), date(1982, 6, 1)) == 0.0
+
+    def test_missing_dob_yields_zero(self):
+        """Two records that both lack a date of birth are not thereby
+        the same person."""
+        from datetime import date
+
+        from apps.ddup.similarity import birth_date_proximity
+        assert birth_date_proximity(None, date(1980, 1, 1)) == 0.0
+        assert birth_date_proximity(date(1980, 1, 1), None) == 0.0
+        assert birth_date_proximity(None, None) == 0.0
 
     def test_exact_treats_empty_as_missing(self):
         from apps.ddup.similarity import exact

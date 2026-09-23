@@ -87,17 +87,46 @@ def jaro_winkler(a: str, b: str, *, prefix_scale: float = 0.1) -> float:
     return j + common_prefix * prefix_scale * (1.0 - j)
 
 
-def year_proximity(d1: date | None, d2: date | None, *, max_years: int = 2) -> float:
-    """Birth-year similarity. 1.0 same year, linearly down to 0 at
-    >= max_years apart. None on either side yields 0.0 — the dedup
-    workbench should NOT collapse identities just because both are
-    missing a DOB."""
+def birth_date_proximity(d1: date | None, d2: date | None, *, max_years: int = 2) -> float:
+    """Birth-date similarity, on the whole date rather than the year.
+
+    This replaced `year_proximity`, which compared only `d.year` while
+    being used as the `date_of_birth` feature. Two different people born
+    in the same calendar year therefore scored a *perfect* date match —
+    and because tier 3 blocks by village, `village` is 1.0 for every pair
+    it ever compares, so 0.30 of the weight was free for anyone sharing a
+    village and a birth year.
+
+    That was not theoretical. Rebecca Akello (1993-06-05) and Rebecca
+    Okello (1993-09-28) — two people in one household, different NINs,
+    different phones — scored 0.967 on the first production run, above
+    the 0.95 auto-merge threshold. Had auto-merge been on they would have
+    been collapsed into one registry identity overnight.
+
+    The bands:
+
+      same date                 1.0   the same person, or the same record
+      within 31 days            0.75  a transcription slip: a swapped
+                                      day and month, or a wrong digit
+      same year, further apart  0.4   same cohort, and little else
+      one year apart            0.2
+      >= max_years apart        0.0
+
+    A missing date on either side is 0.0, not a match: the workbench must
+    not collapse two identities because neither has a date of birth.
+    """
     if d1 is None or d2 is None:
         return 0.0
-    diff = abs(d1.year - d2.year)
-    if diff >= max_years:
+    if d1 == d2:
+        return 1.0
+    if abs((d1 - d2).days) <= 31:
+        return 0.75
+    year_gap = abs(d1.year - d2.year)
+    if year_gap == 0:
+        return 0.4
+    if year_gap >= max_years:
         return 0.0
-    return 1.0 - diff / max_years
+    return 0.2
 
 
 def exact(a, b) -> float:

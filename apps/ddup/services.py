@@ -335,7 +335,7 @@ def discover_probabilistic_pairs(*, actor: str = "system") -> list[MatchPair]:
         composite_score,
         exact,
         jaro_winkler,
-        year_proximity,
+        birth_date_proximity,
     )
 
     model = get_active_model_version()
@@ -376,7 +376,7 @@ def discover_probabilistic_pairs(*, actor: str = "system") -> list[MatchPair]:
                     "first_name": jaro_winkler(
                         a.first_name or "", b.first_name or "",
                     ),
-                    "date_of_birth": year_proximity(
+                    "date_of_birth": birth_date_proximity(
                         a.date_of_birth, b.date_of_birth,
                     ),
                     "sex": exact(a.sex, b.sex),
@@ -852,7 +852,7 @@ def discover_incremental_tier3(
     from decimal import Decimal
 
     from .similarity import (
-        composite_score, exact, jaro_winkler, year_proximity,
+        birth_date_proximity, composite_score, exact, jaro_winkler,
     )
 
     model = get_active_model_version()
@@ -896,7 +896,7 @@ def discover_incremental_tier3(
                 scores = {
                     "surname": jaro_winkler(a.surname or "", b.surname or ""),
                     "first_name": jaro_winkler(a.first_name or "", b.first_name or ""),
-                    "date_of_birth": year_proximity(a.date_of_birth, b.date_of_birth),
+                    "date_of_birth": birth_date_proximity(a.date_of_birth, b.date_of_birth),
                     "sex": exact(a.sex, b.sex),
                     "village": exact(
                         getattr(a.household, "village_id", None),
