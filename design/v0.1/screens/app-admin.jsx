@@ -10,7 +10,8 @@
    ChatbotAssistantScreen,
    ConsentPurposesScreen, ConsentStatementsScreen,
    ConsentCoverageScreen, DpoWithdrawalQueueScreen,
-   ErrorBoundary, Icon, AccountMenu, AdminUsersScreen */
+   ErrorBoundary, Icon, AccountMenu, AdminUsersScreen,
+   DsasScreen, DsaDetailScreen, DsaCreateWizard */
 // NSR MIS — Admin shell
 // =====================================================
 // Wraps the two new PMT screens (Dashboard, Configuration) plus
@@ -42,6 +43,12 @@ const initialFromHost =
   (typeof window !== "undefined" && window.__defaultScreen) || ADMIN_DEFAULT_SCREEN;
 
 const NAV_GROUPS = [
+  {
+    label: "Data governance",
+    items: [
+      { id: "admin-dsas", label: "DSA Module", icon: "file" },
+    ],
+  },
   {
     label: "Queue",
     items: [
@@ -107,6 +114,19 @@ const NAV_GROUPS = [
   // the group would be five dead ends. The routes stay: they are what a
   // list row will navigate to once the lists are wired to open them.
 ];
+
+const AdminDsasScreen = () => {
+  const [view, setView] = useStateAdmin({ name: "list", dsaId: null });
+  if (view.name === "detail") return <DsaDetailScreen dsaId={view.dsaId}
+    onBack={() => setView({ name: "list", dsaId: null })}
+    onNavigate={(target, params = {}) => target === "dsa-detail" && params.dsaId
+      && setView({ name: "detail", dsaId: params.dsaId })}/>;
+  if (view.name === "new") return <DsaCreateWizard
+    onBack={() => setView({ name: "list", dsaId: null })}
+    onCreated={(dsa) => setView({ name: "detail", dsaId: dsa.id })}/>;
+  return <DsasScreen onOpen={(dsaId) => setView({ name: "detail", dsaId })}
+    onNew={() => setView({ name: "new", dsaId: null })}/>;
+};
 
 const AdminApp = () => {
   const [screen, setScreen] = useStateAdmin(initialFromHost);
@@ -249,6 +269,7 @@ const AdminApp = () => {
             <PmtConfigurationScreen onBack={() => setScreen("admin-pmt-dashboard")}/>
           )}
           {screen === "admin-users"                && <AdminUsersScreen onNavigate={setScreen}/>}
+          {screen === "admin-dsas"                 && <AdminDsasScreen/>}
           {screen === "admin-approvals"            && <AdminApprovalsScreen onNavigate={setScreen}/>}
           {screen === "admin-refdata-choicelists"  && <AdminChoiceListsScreen/>}
           {screen === "admin-refdata-geo"          && <AdminGeographyScreen/>}

@@ -56,6 +56,12 @@ describe("_scopeLevelLabel", () => {
   it("falls back to the raw value when unknown", () => {
     expect(_scopeLevelLabel("mystery")).toBe("mystery");
   });
+  it("includes county in the canonical UBOS hierarchy", () => {
+    expect(_GEO_LEVELS_ORDER).toEqual([
+      "region", "sub_region", "district", "county", "sub_county", "parish", "village",
+    ]);
+    expect(_SCOPE_LEVEL_OPTIONS.map(o => o.value)).toContain("county");
+  });
 });
 
 

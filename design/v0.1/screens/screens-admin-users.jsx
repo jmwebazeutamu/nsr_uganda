@@ -46,6 +46,9 @@ const UM_SCOPE_API = "/api/v1/security/operator-scopes/bulk-grant/";
 const UM_GEO_API = "/api/v1/reference-data/geographic-units/";
 // The partners router owns "partners/" at the bare /api/v1/ prefix.
 const UM_PARTNER_API = "/api/v1/partners/";
+const UM_GEO_HIERARCHY = [
+  "region", "sub_region", "district", "county", "sub_county", "parish", "village",
+];
 
 const _umCsrf = () => {
   const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
@@ -274,7 +277,13 @@ const AdminUsersScreen = ({ onNavigate }) => {
       </div>
 
       {dialog && (
-        <UmDialog dialog={dialog} roles={roles} scopeLevels={scopeLevels}
+        <div role="dialog" aria-modal="true"
+             aria-label={dialog.kind === "create" ? "New account" : "User management action"}
+             onClick={() => !busy && closeDialog()}
+             style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(15, 23, 42, .45)",
+                      display: "grid", placeItems: "center", padding: 24 }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: "min(720px, 100%)", maxHeight: "calc(100vh - 48px)", overflowY: "auto" }}>
+            <UmDialog dialog={dialog} roles={roles} scopeLevels={scopeLevels}
                   reason={reason} setReason={setReason}
                   busy={busy} onClose={closeDialog}
                   onCreate={({ scope, ...payload }) => act(() =>
@@ -320,6 +329,8 @@ const AdminUsersScreen = ({ onNavigate }) => {
                           setError(null);
                         }
                       }))}/>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -498,6 +509,67 @@ const UmRolePicker = ({ roles, selected, toggle }) => (
    The level defaults from the first chosen role's default_scope, which
    the catalogue already carries. Grants go to the Operator scopes
    endpoint; this is a shortcut into it, not a second implementation. */
+const UmGeographicScopeCascade = ({ level, codes, setCodes }) => {
+  const targetIndex = UM_GEO_HIERARCHY.indexOf(level);
+  const [parents, setParents] = useStateUM([]);
+  const [options, setOptions] = useStateUM({});
+  const [loading, setLoading] = useStateUM("");
+
+  const load = (unitLevel, parentCode = "") => {
+    setLoading(unitLevel);
+    const query = new URLSearchParams({
+      level: unitLevel, parent_code: parentCode, status: "active", page_size: "500",
+    });
+    _umGet(`${UM_GEO_API}?${query}`)
+      .then(d => setOptions(prev => ({ ...prev, [unitLevel]: (d.results || d || []) })))
+      .catch(() => setOptions(prev => ({ ...prev, [unitLevel]: [] })))
+      .finally(() => setLoading(""));
+  };
+
+  useEffectUM(() => {
+    setParents([]); setOptions({}); setCodes([]);
+    if (targetIndex >= 0) load("region");
+  }, [level]);
+
+  const chooseParent = (index, code) => {
+    const next = [...parents.slice(0, index), code];
+    setParents(next); setCodes([]);
+    const child = UM_GEO_HIERARCHY[index + 1];
+    if (child && index + 1 <= targetIndex) load(child, code);
+  };
+  const leaves = options[level] || [];
+  const toggle = code => setCodes(codes.includes(code)
+    ? codes.filter(c => c !== code) : [...codes, code]);
+
+  return <div style={{ marginTop: 10 }}>
+    {UM_GEO_HIERARCHY.slice(0, targetIndex).map((parentLevel, index) => {
+      const rows = options[parentLevel] || [];
+      const enabled = index === 0 || !!parents[index - 1];
+      return <label key={parentLevel} style={{ display: "block", marginBottom: 8 }}>
+        <span className="t-cap">{parentLevel.replace("_", " ").toUpperCase()}</span>
+        <select className="field-input" style={{ width: "100%", marginTop: 4 }}
+                disabled={!enabled || loading === parentLevel}
+                value={parents[index] || ""}
+                onChange={e => chooseParent(index, e.target.value)}>
+          <option value="">— pick a {parentLevel.replace("_", " ")} —</option>
+          {rows.map(unit => <option key={unit.code} value={unit.code}>{unit.name}</option>)}
+        </select>
+      </label>;
+    })}
+    <div className="t-cap" style={{ marginBottom: 5 }}>{level.replace("_", " ").toUpperCase()}</div>
+    {targetIndex > 0 && parents.length < targetIndex ? <div className="t-cap muted">Choose the parent geography above first.</div> : (
+      <div style={{ maxHeight: 180, overflowY: "auto", border: "1px solid var(--neutral-200)", borderRadius: 6, padding: 8 }}>
+        {loading === level && <div className="t-cap">Loading…</div>}
+        {!loading && leaves.map(unit => <label key={unit.code} className="row gap-2" style={{ padding: "4px 0" }}>
+          <input type="checkbox" checked={codes.includes(unit.code)} onChange={() => toggle(unit.code)}/>
+          <span>{unit.name} <span className="t-mono muted">({unit.code})</span></span>
+        </label>)}
+        {!loading && leaves.length === 0 && <div className="t-cap muted">No active units under this parent.</div>}
+      </div>
+    )}
+  </div>;
+};
+
 const UmScopePicker = ({ roles, selected, scope, setScope, levels }) => {
   const [units, setUnits] = useStateUM([]);
   // code -> name for the level above, so a repeated name can be told
@@ -516,6 +588,7 @@ const UmScopePicker = ({ roles, selected, scope, setScope, levels }) => {
 
   useEffectUM(() => {
     if (!level || !level.takes_codes) { setUnits([]); setParentNames({}); return undefined; }
+    if (level.geographic) { setUnits([]); setParentNames({}); return undefined; }
     let cancelled = false;
     setLoading(true);
     const url = level.geographic
@@ -606,7 +679,13 @@ const UmScopePicker = ({ roles, selected, scope, setScope, levels }) => {
         )}
       </div>
 
-      {level && level.takes_codes && (
+      {level && level.geographic && (
+        <UmGeographicScopeCascade
+          level={scope.level} codes={chosen}
+          setCodes={(codes) => setScope({ ...scope, codes: codes.join(", ") })}/>
+      )}
+
+      {level && level.takes_codes && !level.geographic && (
         <div style={{ marginTop: 10 }}>
           <input className="field-input" style={{ width: "100%" }}
                  aria-label="Search places"

@@ -107,6 +107,20 @@ def _apply_changes(
 
     if _M2M_SCOPE_FIELD in changes:
         ids = changes[_M2M_SCOPE_FIELD] or []
+        from apps.reference_data.models import GeographicUnit
+
+        requested_ids = {str(value) for value in ids}
+        active_ids = {
+            str(value) for value in GeographicUnit.objects.filter(
+                id__in=ids, status=GeographicUnit.Status.ACTIVE,
+            ).values_list("id", flat=True)
+        }
+        invalid_ids = sorted(requested_ids - active_ids)
+        if invalid_ids:
+            raise ScopeEditError(
+                "Geographic scope must contain active UBOS units only; "
+                f"invalid id(s): {', '.join(invalid_ids)}.",
+            )
         dsa.geographic_scope.set(ids)
 
 

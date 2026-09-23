@@ -19,6 +19,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Count, Sum
 from drf_spectacular.utils import (
     OpenApiParameter,
@@ -45,6 +46,7 @@ from .models import (
     PartnerUsageDaily,
     Programme,
 )
+from apps.reference_data.models import GeographicUnit
 from .services import scope as scope_service
 from .services import signature as signature_service
 from .services.activity import for_partner as activity_for_partner
@@ -510,6 +512,15 @@ class DsaSerializer(serializers.ModelSerializer):
     partner_name = serializers.CharField(source="partner.name", read_only=True)
     partner_tone = serializers.CharField(source="partner.tone", read_only=True)
 
+    def validate_geographic_scope(self, units):
+        """New DSAs can only be scoped to currently usable UBOS units."""
+        inactive = [unit.code for unit in units if unit.status != GeographicUnit.Status.ACTIVE]
+        if inactive:
+            raise serializers.ValidationError(
+                "Geographic scope contains inactive unit(s): " + ", ".join(inactive),
+            )
+        return units
+
     class Meta:
         model = DataSharingAgreement
         fields = (
@@ -560,35 +571,57 @@ class DsaViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
     )
     serializer_class = DsaSerializer
     permission_classes = [permissions.IsAuthenticated, _PartnersWriteFlagPermission]
-    # PUT disabled (PATCH only); DELETE wired through destroy() with a
-    # status guard — drafts only (US-S11-039). Signed/active DSAs use
-    # the renew + close lifecycle path so audit + signature chains
-    # don't orphan.
+    # PUT disabled (PATCH only); DELETE is restricted to unsigned DSAs.
+    # Signed/active DSAs use the renew + close lifecycle path so audit +
+    # signature chains don't orphan.
     http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def destroy(self, request, *args, **kwargs):
         dsa = self.get_object()
-        if dsa.status != "draft":
-            return Response(
-                {"detail": (
-                    f"Cannot hard-delete {dsa.reference} — status is "
-                    f"'{dsa.status}'. Only draft DSAs may be deleted; use "
-                    "renew / edit-scope / suspend on signed agreements."
-                )},
-                status=status.HTTP_400_BAD_REQUEST,
+        # Lock both the agreement and its signature rows. This prevents a
+        # signer completing a step between the unsigned check and deletion.
+        with transaction.atomic():
+            dsa = DataSharingAgreement.objects.select_for_update().select_related(
+                "partner",
+            ).get(pk=dsa.pk)
+            signatures = list(
+                DsaSignature.objects.select_for_update().filter(dsa=dsa),
             )
-        actor = (getattr(request.user, "username", "") or "").strip() or "admin"
-        emit_audit(
-            "partners.dsa.deleted", "dsa", str(dsa.id),
-            actor=actor,
-            reason=request.data.get("reason", "") if hasattr(request, "data") else "",
-            field_changes={
-                "reference": dsa.reference,
-                "partner_code": dsa.partner.code if dsa.partner_id else "",
-                "version": dsa.version,
-            },
-        )
-        dsa.delete()
+            is_unsigned_pending = (
+                dsa.status == "pending_signature"
+                and not any(signature.status == "signed" for signature in signatures)
+            )
+            if dsa.status != "draft" and not is_unsigned_pending:
+                return Response(
+                    {"detail": (
+                        f"Cannot discard {dsa.reference} — status is "
+                        f"'{dsa.status}'. Only drafts or pending agreements "
+                        "with no completed signatures may be discarded."
+                    )},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # A pending partner signature may have an external envelope.
+            # Revoke it before cascading the local signature rows, so the
+            # signer cannot complete an agreement that was discarded here.
+            provider = signature_service.get_provider()
+            for signature in signatures:
+                if signature.method == "docusign" and signature.docusign_envelope_id:
+                    provider.cancel_envelope(signature)
+
+            actor = (getattr(request.user, "username", "") or "").strip() or "admin"
+            emit_audit(
+                "partners.dsa.deleted", "dsa", str(dsa.id),
+                actor=actor,
+                reason=request.data.get("reason", "") if hasattr(request, "data") else "",
+                field_changes={
+                    "reference": dsa.reference,
+                    "partner_code": dsa.partner.code if dsa.partner_id else "",
+                    "version": dsa.version,
+                    "status": dsa.status,
+                },
+            )
+            dsa.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def get_queryset(self):
@@ -677,6 +710,110 @@ class DsaViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
                 {"detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        dsa.refresh_from_db()
+        return Response(self.get_serializer(dsa).data)
+
+    def _signature_for_action(self, dsa, signature_id):
+        try:
+            return dsa.signatures.get(pk=signature_id)
+        except DsaSignature.DoesNotExist:
+            return None
+
+    @staticmethod
+    def _request_is_nominated_signer(request, signature):
+        return (
+            (getattr(request.user, "email", "") or "").strip().lower()
+            == (signature.signer_email or "").strip().lower()
+        )
+
+    @extend_schema(tags=["partners"], summary="Sign the current in-console DSA step")
+    @action(detail=True, methods=["post"], url_path=r"sign/(?P<signature_id>[^/.]+)")
+    def sign_signature(self, request, pk=None, signature_id=None):
+        dsa = self.get_object()
+        signature = self._signature_for_action(dsa, signature_id)
+        if signature is None:
+            return Response({"detail": "Signature not found on this DSA."}, status=status.HTTP_404_NOT_FOUND)
+        if not self._request_is_nominated_signer(request, signature):
+            return Response(
+                {"detail": "Only the nominated signer can sign this step."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        try:
+            signature_service.record_signature(
+                signature, actor=str(request.user.username or request.user.id),
+            )
+        except signature_service.SignatureError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        dsa.refresh_from_db()
+        return Response(self.get_serializer(dsa).data)
+
+    @extend_schema(tags=["partners"], summary="Decline the current in-console DSA step")
+    @action(detail=True, methods=["post"], url_path=r"decline/(?P<signature_id>[^/.]+)")
+    def decline_signature(self, request, pk=None, signature_id=None):
+        dsa = self.get_object()
+        signature = self._signature_for_action(dsa, signature_id)
+        if signature is None:
+            return Response({"detail": "Signature not found on this DSA."}, status=status.HTTP_404_NOT_FOUND)
+        if not self._request_is_nominated_signer(request, signature):
+            return Response(
+                {"detail": "Only the nominated signer can decline this step."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        reason = (request.data.get("reason") or "").strip()
+        if not reason:
+            return Response({"detail": "A reason is required to decline sign-off."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            signature_service.decline_signature(
+                signature, actor=str(request.user.username or request.user.id), reason=reason,
+            )
+        except signature_service.SignatureError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        dsa.refresh_from_db()
+        return Response(self.get_serializer(dsa).data)
+
+    @extend_schema(
+        tags=["partners"],
+        summary="Send a DSA signing code by email",
+        request=None,
+    )
+    @action(
+        detail=True, methods=["post"],
+        url_path=r"sign/(?P<signature_id>[^/.]+)/send-email-code",
+    )
+    def send_signing_code(self, request, pk=None, signature_id=None):
+        dsa = self.get_object()
+        signature = self._signature_for_action(dsa, signature_id)
+        if signature is None:
+            return Response({"detail": "Signature not found on this DSA."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            signature_service.send_email_code(
+                signature, actor=str(request.user.username or request.user.id),
+            )
+        except signature_service.SignatureError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"detail": "A signing code was sent to the nominated email address."})
+
+    @extend_schema(
+        tags=["partners"],
+        summary="Verify an emailed DSA signing code and sign the current step",
+    )
+    @action(
+        detail=True, methods=["post"],
+        url_path=r"sign/(?P<signature_id>[^/.]+)/verify-email-code",
+    )
+    def verify_signing_code(self, request, pk=None, signature_id=None):
+        dsa = self.get_object()
+        signature = self._signature_for_action(dsa, signature_id)
+        if signature is None:
+            return Response({"detail": "Signature not found on this DSA."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            signature_service.verify_email_code(
+                signature,
+                code=request.data.get("code", ""),
+                actor=str(request.user.username or request.user.id),
+            )
+        except signature_service.SignatureError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         dsa.refresh_from_db()
         return Response(self.get_serializer(dsa).data)
 

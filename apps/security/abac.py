@@ -37,6 +37,7 @@ _LEVEL_FIELD: dict[str, str] = {
     ScopeLevel.REGION: "region__code",
     ScopeLevel.SUB_REGION: _SUB_REGION_DENORM,
     ScopeLevel.DISTRICT: "district__code",
+    ScopeLevel.COUNTY: "county__code",
     ScopeLevel.SUB_COUNTY: "sub_county__code",
     ScopeLevel.PARISH: "parish__code",
     ScopeLevel.VILLAGE: "village__code",

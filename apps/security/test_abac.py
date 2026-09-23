@@ -85,6 +85,22 @@ class TestSubRegionScope:
         ids = {row["id"] for row in r.data["results"]}
         assert ids == {households_in_each["SR-BUGANDA"].id}
 
+
+class TestCountyScope:
+    def test_county_scope_sees_only_households_in_that_county(
+        self, db, django_user_model, two_sub_regions, households_in_each,
+    ):
+        u = django_user_model.objects.create_user(username="county-officer", password="p")
+        county_code = two_sub_regions["SR-BUGANDA"]["c"].code
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.COUNTY, scope_code=county_code,
+        )
+        r = _client_for(u).get("/api/v1/data-management/households/")
+        assert r.status_code == 200
+        assert {row["id"] for row in r.data["results"]} == {
+            households_in_each["SR-BUGANDA"].id,
+        }
+
     def test_user_with_two_scopes_sees_both(
         self, db, django_user_model, two_sub_regions, households_in_each,
     ):

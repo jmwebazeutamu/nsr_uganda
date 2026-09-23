@@ -74,8 +74,14 @@ class GeographicUnitViewSet(viewsets.ReadOnlyModelViewSet):
         if level:
             qs = qs.filter(level=level)
         status_v = params.get("status")
-        if status_v:
+        if status_v and status_v != "all":
             qs = qs.filter(status=status_v)
+        elif status_v != "all":
+            # Operational consumers (scope pickers, capture and DSA scope)
+            # must never receive a retired or superseded UBOS unit by
+            # default. Historical/admin callers opt in explicitly with
+            # ?status=all.
+            qs = qs.filter(status=GeographicUnit.Status.ACTIVE)
         parent = params.get("parent")
         if parent:
             qs = qs.filter(parent_id=parent)

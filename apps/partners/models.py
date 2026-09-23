@@ -521,6 +521,12 @@ class DsaSignature(models.Model):
     docusign_envelope_id = models.CharField(max_length=64, blank=True)
     evidence_doc_ref = models.CharField(max_length=128, blank=True)
 
+    # Fallback when a DocuSign integration is not available. The one-time
+    # code is never stored in plaintext; a successful verification clears it.
+    email_code_hash = models.CharField(max_length=128, blank=True)
+    email_code_expires_at = models.DateTimeField(null=True, blank=True)
+    email_code_sent_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

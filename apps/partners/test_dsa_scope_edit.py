@@ -139,6 +139,16 @@ class TestEditScopeDraft:
         )
         assert list(result.geographic_scope.all()) == [gu_b]
 
+    def test_rejects_retired_geographic_units(self, partner, gu_a):
+        gu_a.status = "retired"
+        gu_a.save(update_fields=["status"])
+
+        with pytest.raises(scope_service.ScopeEditError, match="active UBOS units"):
+            scope_service.edit_scope(
+                _make_dsa(partner), actor="op-1",
+                geographic_scope_ids=[gu_a.id],
+            )
+
     def test_ignores_unknown_keys(self, partner):
         dsa = _make_dsa(partner)
         result = scope_service.edit_scope(

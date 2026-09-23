@@ -126,6 +126,7 @@ class ScopeLevel(models.TextChoices):
     REGION = "region"
     SUB_REGION = "sub_region"
     DISTRICT = "district"
+    COUNTY = "county"
     SUB_COUNTY = "sub_county"
     PARISH = "parish"
     VILLAGE = "village"

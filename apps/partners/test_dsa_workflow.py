@@ -11,6 +11,7 @@ from apps.partners.models import (
     Partner,
 )
 from apps.partners.services import signature as signature_service
+from apps.reference_data.models import GeographicUnit
 from apps.reference_data.services import clear_resolver_cache
 from apps.security.models import AuditEvent
 
@@ -161,6 +162,22 @@ class TestSignProgression:
             entity_id=draft_dsa.id,
         ).count() == 1
 
+    def test_email_code_signs_the_current_step(self, draft_dsa, monkeypatch):
+        self._submitted(draft_dsa)
+        monkeypatch.setattr(signature_service.secrets, "randbelow", lambda _: 123456)
+        first = draft_dsa.signatures.get(sequence_order=1)
+        signature_service.send_email_code(first, actor="operator")
+        signature_service.verify_email_code(first, code="123456", actor="partner")
+        first.refresh_from_db()
+        assert first.status == "signed"
+        assert not first.email_code_hash
+
+    def test_email_code_refuses_a_later_step(self, draft_dsa):
+        self._submitted(draft_dsa)
+        later = draft_dsa.signatures.get(sequence_order=2)
+        with pytest.raises(signature_service.SignatureError, match="earlier sign-off"):
+            signature_service.send_email_code(later, actor="operator")
+
 
 @pytest.mark.django_db
 class TestDecline:
@@ -289,6 +306,63 @@ class TestDsaApiEndpoints:
         assert r.status_code == 200
         assert r.data["status_label"] == "Draft"
         assert r.data["sensitive_data_handling_label"] == "None"
+
+    def test_nominated_console_user_can_sign_current_step(self, api, draft_dsa):
+        c, user = api
+        signature_service.submit_for_signoff(
+            draft_dsa, actor="tester",
+            partner_signer_email="partner@example.test",
+            nsr_unit_lead_email="lead@example.test",
+            dpo_email="dpo@example.test",
+        )
+        user.email = "partner@example.test"
+        user.save(update_fields=["email"])
+        signature = draft_dsa.signatures.get(sequence_order=1)
+        response = c.post(f"{URL_DSAS}{draft_dsa.id}/sign/{signature.id}/", {}, format="json")
+        assert response.status_code == 200, response.data
+        signature.refresh_from_db()
+        assert signature.status == "signed"
+
+    def test_discard_allows_unsigned_pending_dsa(self, api, draft_dsa):
+        c, _ = api
+        signature_service.submit_for_signoff(
+            draft_dsa, actor="tester",
+            partner_signer_email="partner@example.test",
+            nsr_unit_lead_email="lead@example.test",
+            dpo_email="dpo@example.test",
+        )
+        response = c.delete(f"{URL_DSAS}{draft_dsa.id}/")
+        assert response.status_code == 204
+        assert not DataSharingAgreement.objects.filter(pk=draft_dsa.id).exists()
+
+    def test_discard_rejects_pending_dsa_after_a_signature(self, api, draft_dsa):
+        c, _ = api
+        signature_service.submit_for_signoff(
+            draft_dsa, actor="tester",
+            partner_signer_email="partner@example.test",
+            nsr_unit_lead_email="lead@example.test",
+            dpo_email="dpo@example.test",
+        )
+        signature_service.record_signature(
+            draft_dsa.signatures.get(sequence_order=1), actor="partner@example.test",
+        )
+        response = c.delete(f"{URL_DSAS}{draft_dsa.id}/")
+        assert response.status_code == 400
+        assert "no completed signatures" in response.data["detail"]
+        assert DataSharingAgreement.objects.filter(pk=draft_dsa.id).exists()
+
+    def test_create_rejects_retired_geographic_scope(self, api, partner):
+        c, _ = api
+        retired = GeographicUnit.objects.create(
+            level="district", code="RETIRED-DISTRICT", name="Retired district",
+            effective_from="2020-01-01", status=GeographicUnit.Status.RETIRED,
+        )
+        response = c.post(URL_DSAS, {
+            "reference": "DSA-OPM-2026-GEO", "partner": str(partner.id),
+            "status": "draft", "geographic_scope": [str(retired.id)],
+        }, format="json")
+        assert response.status_code == 400
+        assert "inactive" in str(response.data["geographic_scope"])
 
 
 @pytest.mark.django_db

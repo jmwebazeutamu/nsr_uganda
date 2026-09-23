@@ -1201,7 +1201,7 @@ const TABS = [
 // modal walks 0..(targetIdx-1) to pick the parent of the target
 // level, then loads peers at targetIdx for the multi-select.
 const _GEO_LEVELS_ORDER = [
-  "region", "sub_region", "district", "sub_county", "parish", "village",
+  "region", "sub_region", "district", "county", "sub_county", "parish", "village",
 ];
 
 const _SCOPE_LEVEL_OPTIONS = [
@@ -1209,6 +1209,7 @@ const _SCOPE_LEVEL_OPTIONS = [
   { value: "region",     label: "Region" },
   { value: "sub_region", label: "Sub-region" },
   { value: "district",   label: "District" },
+  { value: "county",     label: "County" },
   { value: "sub_county", label: "Sub-county" },
   { value: "parish",     label: "Parish" },
   { value: "village",    label: "Village" },
@@ -1242,6 +1243,7 @@ const GeoCascadePicker = ({ targetLevel, value, onChange, disabled }) => {
     setLoadingLevel(level);
     const qs = new URLSearchParams({ level });
     qs.set("parent_code", parentCode || "");
+    qs.set("status", "active");
     qs.set("page_size", "500");
     fetch(`/api/v1/reference-data/geographic-units/?${qs.toString()}`, {
       credentials: "same-origin",

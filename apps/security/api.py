@@ -343,7 +343,10 @@ def _validate_scope_codes(scope_level: str, scope_codes: list[str]) -> list[str]
     from apps.reference_data.models import GeographicUnit
     known = set(
         GeographicUnit.objects
-        .filter(level=scope_level, code__in=scope_codes)
+        .filter(
+            level=scope_level, code__in=scope_codes,
+            status=GeographicUnit.Status.ACTIVE,
+        )
         .values_list("code", flat=True),
     )
     missing = [c for c in scope_codes if c not in known]

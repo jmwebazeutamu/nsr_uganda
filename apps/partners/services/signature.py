@@ -24,9 +24,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import timedelta
+import secrets
 from typing import TYPE_CHECKING
 
 from django.conf import settings
+from django.contrib.auth.hashers import check_password, make_password
 from django.db import transaction
 from django.utils import timezone
 
@@ -39,6 +42,60 @@ if TYPE_CHECKING:
 
 class SignatureError(Exception):
     """Raised when the signature workflow rejects a transition."""
+
+
+def _assert_current_pending(signature: DsaSignature) -> None:
+    """Only the first unsigned step can be acted on."""
+    if signature.status != "pending":
+        raise SignatureError(
+            f"Signature is not pending (got {signature.status!r})",
+        )
+    earlier_pending_or_signed = signature.dsa.signatures.filter(
+        sequence_order__lt=signature.sequence_order,
+    ).exclude(status="signed")
+    if earlier_pending_or_signed.exists():
+        raise SignatureError("This signature is waiting for an earlier sign-off.")
+
+
+@transaction.atomic
+def send_email_code(signature: DsaSignature, *, actor: str) -> None:
+    """Email a short-lived proof-of-control code to the current signer."""
+    _assert_current_pending(signature)
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    now = timezone.now()
+    signature.email_code_hash = make_password(code)
+    signature.email_code_sent_at = now
+    signature.email_code_expires_at = now + timedelta(minutes=15)
+    signature.save(update_fields=[
+        "email_code_hash", "email_code_sent_at", "email_code_expires_at", "updated_at",
+    ])
+    send_notification(
+        to=signature.signer_email,
+        subject=f"[NSR MIS] Your DSA signing code for {signature.dsa.reference}",
+        body=(
+            f"Use this code to sign DSA {signature.dsa.reference} v{signature.dsa.version}:\n\n"
+            f"{code}\n\nThis code expires in 15 minutes. Do not share it."
+        ),
+        entity_type="dsa_signature", entity_id=str(signature.id),
+        audit_actor=actor, audit_action="dsa.signing_code.sent",
+        audit_reason=f"email-code requested for step {signature.sequence_order}",
+    )
+
+
+@transaction.atomic
+def verify_email_code(signature: DsaSignature, *, code: str, actor: str) -> DsaSignature:
+    """Verify the email proof and record the signature exactly once."""
+    _assert_current_pending(signature)
+    if not signature.email_code_hash or not signature.email_code_expires_at:
+        raise SignatureError("Request a signing code first.")
+    if signature.email_code_expires_at <= timezone.now():
+        raise SignatureError("This signing code has expired. Request a new one.")
+    if not check_password(code.strip(), signature.email_code_hash):
+        raise SignatureError("The signing code is invalid.")
+    signature.email_code_hash = ""
+    signature.email_code_expires_at = None
+    signature.save(update_fields=["email_code_hash", "email_code_expires_at", "updated_at"])
+    return record_signature(signature, actor=actor)
 
 
 @dataclass(slots=True)
@@ -230,10 +287,7 @@ def record_signature(
     """
     from apps.partners.models import DsaSignature
 
-    if signature.status != "pending":
-        raise SignatureError(
-            f"Signature is not pending (got {signature.status!r})",
-        )
+    _assert_current_pending(signature)
 
     signature.status = "signed"
     signature.signed_at = timezone.now()

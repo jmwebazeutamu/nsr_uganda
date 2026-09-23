@@ -11,6 +11,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
 let _dsaDaysToExpiry;
+let _canDiscardUnsignedDsa;
+let _geographicScopeUnitLabel;
 let buildCreateDsaPayload;
 let DSA_STATUSES;
 
@@ -33,9 +35,39 @@ beforeAll(async () => {
   await import("./screens-dsas.jsx");
   ({
     _dsaDaysToExpiry,
+    _canDiscardUnsignedDsa,
+    _geographicScopeUnitLabel,
     buildCreateDsaPayload,
     DSA_STATUSES,
   } = globalThis);
+});
+
+
+describe("_geographicScopeUnitLabel", () => {
+  it("names a geographic unit and makes its administrative level visible", () => {
+    expect(_geographicScopeUnitLabel({
+      id: "01GULU", name: "Gulu", level: "district",
+    })).toBe("Gulu · district");
+  });
+});
+
+
+describe("_canDiscardUnsignedDsa", () => {
+  it("allows drafts and pending agreements with no completed signatures", () => {
+    expect(_canDiscardUnsignedDsa({ status: "draft" })).toBe(true);
+    expect(_canDiscardUnsignedDsa({
+      status: "pending_signature",
+      signatures: [{ status: "pending" }, { status: "pending" }],
+    })).toBe(true);
+  });
+
+  it("protects partly signed and lifecycle-managed agreements", () => {
+    expect(_canDiscardUnsignedDsa({
+      status: "pending_signature", signatures: [{ status: "signed" }],
+    })).toBe(false);
+    expect(_canDiscardUnsignedDsa({ status: "active", signatures: [] })).toBe(false);
+    expect(_canDiscardUnsignedDsa(null)).toBe(false);
+  });
 });
 
 
@@ -122,6 +154,17 @@ describe("buildCreateDsaPayload", () => {
     // Mutating the payload doesn't affect the source form.
     p.entities_scope.household = false;
     expect(baseForm.entities.household).toBe(true);
+  });
+
+  it("sends selected geographic-unit IDs as the DSA geographic scope", () => {
+    const p = buildCreateDsaPayload({
+      ...baseForm,
+      geographic_scope: [
+        { id: "01REGION", name: "Northern", level: "region" },
+        { id: "01DISTRICT", name: "Gulu", level: "district" },
+      ],
+    });
+    expect(p.geographic_scope).toEqual(["01REGION", "01DISTRICT"]);
   });
 
   it("missing dates fall through as null", () => {

@@ -96,6 +96,52 @@ const _countTruthy = (obj) => {
   return Object.values(obj).filter(Boolean).length;
 };
 
+// An unsigned sign-off chain can be withdrawn. Once any signer has
+// completed their step, the agreement is evidence-bearing and must remain
+// in the lifecycle for auditability.
+const _canDiscardUnsignedDsa = (dsa) => (
+  dsa?.status === "draft"
+  || (dsa?.status === "pending_signature"
+    && !(dsa.signatures || []).some(signature => signature.status === "signed"))
+);
+
+const _geographicScopeUnitLabel = (unit) => {
+  if (!unit) return "Unknown geographic unit";
+  const level = unit.level ? ` · ${unit.level.replace("_", " ")}` : "";
+  return `${unit.name || unit.code || unit.id}${level}`;
+};
+
+// DSA serialization intentionally keeps geographic_scope as stable primary
+// keys. Resolve those keys here so the pre-sign-off summary names the actual
+// places rather than making an operator infer them from a count.
+const DsaGeographicScopeSummary = ({ geographicScope }) => {
+  const ids = (geographicScope || []).map(unit =>
+    typeof unit === "object" ? unit.id : unit).filter(Boolean);
+  const [units, setUnits] = useSDsa([]);
+  const [loading, setLoading] = useSDsa(false);
+
+  useESDsa(() => {
+    if (!ids.length) { setUnits([]); return undefined; }
+    let cancelled = false;
+    setLoading(true);
+    Promise.all(ids.map(id => nsrApi.get(`/api/v1/reference-data/geographic-units/${id}/`)
+      .catch(() => ({ id, name: String(id) }))))
+      .then(rows => { if (!cancelled) setUnits(rows); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [ids.join(",")]);
+
+  if (!ids.length) {
+    return <div className="t-bodysm muted">National — no geographic units pinned.</div>;
+  }
+  return <div className="row gap-2" style={{flexWrap: "wrap"}}>
+    {loading && <span className="t-cap muted">Loading locations…</span>}
+    {!loading && units.map(unit => <Chip key={unit.id} size="sm" tone="data">
+      {_geographicScopeUnitLabel(unit)}
+    </Chip>)}
+  </div>;
+};
+
 
 // ════════════════════════════════════════════════════════════════
 // 1.  DSA list screen — the workspace landing
@@ -317,7 +363,7 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
   const [scopeOpen, setScopeOpen] = useSDsa(false);
   const [renewOpen, setRenewOpen] = useSDsa(false);
   const [submitOpen, setSubmitOpen] = useSDsa(false);
-  // US-S11-038 — non-scope Edit + draft-only Delete. Scope edits
+  // US-S11-038 — non-scope Edit + unsigned-DSA discard. Scope edits
   // route through ScopeEditModal (existing); this modal patches the
   // header-level fields the operator actually wants to fix during
   // draft (effective_to, monthly_row_budget, breach_sla_hours, etc).
@@ -325,6 +371,7 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
   const [deleteOpen, setDeleteOpen] = useSDsa(false);
   const [suspendOpen, setSuspendOpen] = useSDsa(false);
   const [signatureDecision, setSignatureDecision] = useSDsa(null);
+  const [emailCodeSignature, setEmailCodeSignature] = useSDsa(null);
   const [toast, setToast] = useSDsa("");
 
   if (!dsaId) {
@@ -357,6 +404,7 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
     .sort((a, b) => a.sequence_order - b.sequence_order);
   const currentPendingSignature = orderedSignatures.find(s => s.status === "pending");
   const sessionEmail = (meResp?.email || "").trim().toLowerCase();
+  const canDiscard = _canDiscardUnsignedDsa(d);
 
   return (
     <div className="page" style={{paddingBottom: 0}}>
@@ -400,13 +448,15 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
                       title="Edit dates, monthly budget, retention, breach SLA, classification">
                 <Icon name="edit" size={13}/> Edit details
               </button>
-              <button className="btn"
-                      style={{color:"var(--accent-danger)"}}
-                      onClick={() => setDeleteOpen(true)}
-                      title="Hard-delete the draft (DELETE /api/v1/dsas/{id}/)">
-                <Icon name="trash" size={13}/> Delete draft
-              </button>
             </>
+          )}
+          {canDiscard && (
+            <button className="btn"
+                    style={{color:"var(--accent-danger)"}}
+                    onClick={() => setDeleteOpen(true)}
+                    title="Discard an unsigned DSA and cancel any pending signing envelope">
+              <Icon name="trash" size={13}/> Discard DSA
+            </button>
           )}
         </>}
       />
@@ -437,6 +487,11 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
                   .filter(([, v]) => v)
                   .map(([k]) => <Chip key={k} size="sm" tone="programme">{k}</Chip>)}
                 {_countTruthy(d.field_scope) === 0 && <span className="t-bodysm muted">— none —</span>}
+              </div>
+
+              <div className="t-cap muted" style={{marginBottom: 6}}>GEOGRAPHIC SCOPE</div>
+              <div style={{marginBottom: 14}}>
+                <DsaGeographicScopeSummary geographicScope={d.geographic_scope}/>
               </div>
 
               <div style={{display: "grid", gridTemplateColumns: "180px 1fr", rowGap: 6, fontSize: 13}}>
@@ -508,15 +563,18 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
                               <> · waiting for an earlier sign-off</>
                             )}
                             {s.status === "pending" && currentPendingSignature?.id === s.id && s.method === "docusign" && (
-                              <> · awaiting DocuSign completion</>
+                              <> · awaiting DocuSign completion or email-code sign-off</>
                             )}
                           </div>
                         </div>
-                        {s.status === "pending"
-                          && currentPendingSignature?.id === s.id
-                          && s.method === "in_console"
-                          && sessionEmail === (s.signer_email || "").trim().toLowerCase() && (
+                        {s.status === "pending" && currentPendingSignature?.id === s.id && (
                           <div className="row gap-2">
+                            <button className="btn btn-primary btn-sm"
+                                    onClick={() => setEmailCodeSignature(s)}>
+                              <Icon name="mail" size={13}/> Sign by email code
+                            </button>
+                            {s.method === "in_console"
+                              && sessionEmail === (s.signer_email || "").trim().toLowerCase() && <>
                             <button className="btn btn-primary btn-sm"
                                     onClick={() => setSignatureDecision({ signature: s, mode: "sign" })}>
                               <Icon name="check" size={13}/> Sign
@@ -526,6 +584,7 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
                                     onClick={() => setSignatureDecision({ signature: s, mode: "decline" })}>
                               Decline
                             </button>
+                            </>}
                           </div>
                         )}
                         <Chip size="sm" tone={s.status === "signed" ? "eligibility" : "neutral"}>
@@ -652,16 +711,16 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
         onError={(msg) => setToast(`Edit failed: ${msg}`)}
       />
 
-      <DsaDeleteDraftConfirm
+      <DsaDiscardUnsignedConfirm
         open={deleteOpen}
         dsa={d}
         onClose={() => setDeleteOpen(false)}
         onDeleted={() => {
           setDeleteOpen(false);
-          setToast(`Deleted draft ${d.reference}.`);
+          setToast(`Discarded ${d.reference}.`);
           if (onBack) onBack();
         }}
-        onError={(msg) => setToast(`Delete failed: ${msg}`)}
+        onError={(msg) => setToast(`Discard failed: ${msg}`)}
       />
 
       <DsaRenewModal
@@ -702,6 +761,18 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
           dsaMeta.refresh();
         }}
         onError={(msg) => setToast(`Signature action failed: ${msg}`)}
+      />
+
+      <DsaEmailCodeSignModal
+        open={!!emailCodeSignature}
+        dsa={d}
+        signature={emailCodeSignature}
+        onClose={() => setEmailCodeSignature(null)}
+        onCompleted={(result) => {
+          setEmailCodeSignature(null);
+          setToast(`Signature recorded for ${result.reference}.`);
+          dsaMeta.refresh();
+        }}
       />
 
       {toast && <Toast message={toast} onDone={() => setToast("")}/>}
@@ -824,15 +895,16 @@ const DsaEditDetailsModal = ({ open, dsa, onClose, onSaved, onError }) => {
 
 
 // ════════════════════════════════════════════════════════════════
-// 2c. Delete-draft confirm — DELETE /api/v1/dsas/{id}/ (US-S11-038)
+// 2c. Discard unsigned DSA — DELETE /api/v1/dsas/{id}/ (US-S11-038)
 // ════════════════════════════════════════════════════════════════
 
-const DsaDeleteDraftConfirm = ({ open, dsa, onClose, onDeleted, onError }) => {
+const DsaDiscardUnsignedConfirm = ({ open, dsa, onClose, onDeleted, onError }) => {
   const [reason, setReason] = useSDsa("");
   const [submitting, setSubmitting] = useSDsa(false);
   React.useEffect(() => { if (open) setReason(""); }, [open]);
   if (!open || !dsa) return null;
-  const isDraft = dsa.status === "draft";
+  const canDiscard = _canDiscardUnsignedDsa(dsa);
+  const isPending = dsa.status === "pending_signature";
 
   const fire = async () => {
     setSubmitting(true);
@@ -850,19 +922,20 @@ const DsaDeleteDraftConfirm = ({ open, dsa, onClose, onDeleted, onError }) => {
 
   return (
     <Modal open={true} onClose={() => !submitting && onClose()}
-           title={`Delete draft ${dsa.reference}?`} size="sm">
-      {!isDraft && (
+           title={`Discard ${dsa.reference}?`} size="sm">
+      {!canDiscard && (
         <div className="callout" style={{
           background:"var(--accent-danger-bg)", color:"var(--accent-danger)",
           padding:"10px 12px", borderRadius:4, marginBottom:12, fontSize:13,
         }}>
-          <strong>DSA is not in draft.</strong> Hard-delete is disabled —
-          use Edit scope (v+1 clone), Renew, or wait for natural expiry.
+          <strong>This DSA has a completed signature or is active.</strong>
+          It cannot be discarded; use the normal lifecycle actions instead.
         </div>
       )}
       <p className="t-bodysm" style={{margin:"4px 0 12px"}}>
-        Hard-deletes the draft DSA. No signatures or programmes can be
-        attached to a draft, so the cascade is clean.
+        {isPending
+          ? "Cancels the outstanding signing envelope and permanently discards this unsigned DSA."
+          : "Permanently discards this draft DSA."}
       </p>
       <Field label="Reason (audit only)">
         <textarea value={reason} onChange={e => setReason(e.target.value)}
@@ -874,9 +947,9 @@ const DsaDeleteDraftConfirm = ({ open, dsa, onClose, onDeleted, onError }) => {
         <button
           className="btn"
           style={{background:"var(--accent-danger)", color:"white", borderColor:"var(--accent-danger)"}}
-          onClick={fire} disabled={!isDraft || submitting || !reason.trim()}
+          onClick={fire} disabled={!canDiscard || submitting || !reason.trim()}
         >
-          {submitting ? "Deleting…" : "Delete draft"}
+          {submitting ? "Discarding…" : "Discard DSA"}
         </button>
       </div>
     </Modal>
@@ -1171,6 +1244,70 @@ const DsaSignatureDecisionModal = ({
 };
 
 
+// Email-code fallback for each sequential DSA sign-off step. It is useful
+// before DocuSign is provisioned, while still proving control of the
+// nominated signer email rather than letting a console operator sign for it.
+const DsaEmailCodeSignModal = ({ open, dsa, signature, onClose, onCompleted }) => {
+  const [sent, setSent] = useSDsa(false);
+  const [code, setCode] = useSDsa("");
+  const [busy, setBusy] = useSDsa(false);
+  const [error, setError] = useSDsa("");
+
+  useESDsa(() => {
+    if (open) { setSent(false); setCode(""); setBusy(false); setError(""); }
+  }, [open]);
+
+  if (!dsa || !signature) return null;
+  const url = `/api/v1/dsas/${dsa.id}/sign/${signature.id}`;
+  const sendCode = async () => {
+    setBusy(true); setError("");
+    try {
+      await nsrApi.post(`${url}/send-email-code/`, {});
+      setSent(true);
+    } catch (e) {
+      setError(String(e.body?.detail || e.message || e));
+    } finally { setBusy(false); }
+  };
+  const verify = async () => {
+    if (!code.trim()) return;
+    setBusy(true); setError("");
+    try {
+      const result = await nsrApi.post(`${url}/verify-email-code/`, { code: code.trim() });
+      onCompleted && onCompleted(result);
+    } catch (e) {
+      setError(String(e.body?.detail || e.message || e));
+    } finally { setBusy(false); }
+  };
+
+  return <Modal open={open} onClose={() => !busy && onClose()} width={520}
+                title="Sign with email code"
+                footer={<>
+                  <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
+                  {!sent ? <button className="btn btn-primary" disabled={busy} onClick={sendCode}>
+                    {busy ? "Sending…" : "Send code"}
+                  </button> : <button className="btn btn-primary" disabled={busy || !code.trim()} onClick={verify}>
+                    {busy ? "Verifying…" : "Verify and sign"}
+                  </button>}
+                </>}>
+    <div className="col gap-3">
+      <p style={{margin: 0}}>
+        Request a one-time code for <strong>{signature.signer_role_label || signature.signer_role}</strong>.
+        It is sent only to the nominated signer email and expires after 15 minutes.
+      </p>
+      {sent && <Field label="Six-digit signing code" required>
+        <input className="field-input" inputMode="numeric" autoComplete="one-time-code"
+               maxLength="6" value={code} onChange={e => setCode(e.target.value.replace(/\D/g, ""))}
+               placeholder="000000" autoFocus/>
+      </Field>}
+      {sent && <button type="button" className="btn btn-ghost" disabled={busy} onClick={sendCode}>
+        Send a new code
+      </button>}
+      {error && <div className="tint-danger" style={{padding: 10, borderRadius: 6}}>{error}</div>}
+    </div>
+  </Modal>;
+};
+
+
 // ════════════════════════════════════════════════════════════════
 // 5.  DSA create wizard — POST /api/v1/dsas/
 // ════════════════════════════════════════════════════════════════
@@ -1187,6 +1324,8 @@ const buildCreateDsaPayload = (form) => ({
     ? Number(form.monthly_row_budget) : null,
   entities_scope: { ...(form.entities || {}) },
   field_scope: { ...(form.fields || {}) },
+  geographic_scope: (form.geographic_scope || []).map(unit =>
+    typeof unit === "object" ? unit.id : unit),
   sensitive_data_handling: form.sensitive_data_handling || "none",
   retention_days: form.retention_days ? Number(form.retention_days) : 180,
   classification: form.classification || "",
@@ -1194,6 +1333,95 @@ const buildCreateDsaPayload = (form) => ({
   breach_sla_hours: form.breach_sla_hours
     ? Number(form.breach_sla_hours) : 72,
 });
+
+// Drill through the served UBOS hierarchy rather than exposing a flat,
+// truncated list. The selected database IDs are the DSA M2M values.
+const _DSA_GEO_HIERARCHY = [
+  "region", "sub_region", "district", "county", "sub_county", "parish", "village",
+];
+
+const DsaGeographicScopePicker = ({ selected, onAdd, onRemove }) => {
+  const [level, setLevel] = useSDsa("district");
+  const [parents, setParents] = useSDsa([]);
+  const [options, setOptions] = useSDsa({});
+  const [loading, setLoading] = useSDsa("");
+  const targetIndex = _DSA_GEO_HIERARCHY.indexOf(level);
+
+  const load = (unitLevel, parentCode = "") => {
+    setLoading(unitLevel);
+    const query = new URLSearchParams({
+      level: unitLevel, parent_code: parentCode, status: "active", page_size: "500",
+    });
+    nsrApi.get(`/api/v1/reference-data/geographic-units/?${query}`)
+      .then(data => setOptions(current => ({ ...current, [unitLevel]: data?.results || data || [] })))
+      .catch(() => setOptions(current => ({ ...current, [unitLevel]: [] })))
+      .finally(() => setLoading(""));
+  };
+
+  useESDsa(() => {
+    setParents([]);
+    setOptions({});
+    if (targetIndex >= 0) load("region");
+  }, [level]);
+
+  const chooseParent = (index, code) => {
+    setParents([...parents.slice(0, index), code]);
+    const childLevel = _DSA_GEO_HIERARCHY[index + 1];
+    if (childLevel && index + 1 <= targetIndex) load(childLevel, code);
+  };
+  const leaves = options[level] || [];
+  const selectedIds = selected.map(unit => unit.id);
+
+  return <div className="card" style={{gridColumn: "1 / -1"}}>
+    <div className="card-header">
+      <div>
+        <h3 className="t-h3" style={{margin: 0}}>Geographic scope</h3>
+        <span className="t-cap">Optional. Leave empty for the partner’s full national geography.</span>
+      </div>
+      <span className="t-cap">{selected.length} selected</span>
+    </div>
+    <div style={{padding: 16}}>
+      <Field label="Scope at administrative level">
+        <select className="field-input" value={level} onChange={e => setLevel(e.target.value)}>
+          {_DSA_GEO_HIERARCHY.map(item => <option key={item} value={item}>{item.replace("_", " ")}</option>)}
+        </select>
+      </Field>
+      <div className="grid grid-3" style={{gap: 10, marginTop: 10}}>
+        {_DSA_GEO_HIERARCHY.slice(0, targetIndex).map((parentLevel, index) => {
+          const rows = options[parentLevel] || [];
+          const enabled = index === 0 || !!parents[index - 1];
+          return <Field key={parentLevel} label={parentLevel.replace("_", " ")}>
+            <select className="field-input" disabled={!enabled || loading === parentLevel}
+                    value={parents[index] || ""} onChange={e => chooseParent(index, e.target.value)}>
+              <option value="">— Choose {parentLevel.replace("_", " ")} —</option>
+              {rows.map(unit => <option key={unit.id} value={unit.code}>{unit.name}</option>)}
+            </select>
+          </Field>;
+        })}
+      </div>
+      {targetIndex > 0 && parents.length < targetIndex ? (
+        <div className="t-bodysm muted" style={{marginTop: 10}}>Choose the parent geography above to load active {level.replace("_", " ")}s.</div>
+      ) : (
+        <div style={{maxHeight: 190, overflowY: "auto", marginTop: 10, border: "1px solid var(--neutral-200)", borderRadius: 6, padding: 8}}>
+          {loading === level && <div className="t-cap">Loading active units…</div>}
+          {!loading && leaves.map(unit => <label key={unit.id} className="row gap-2" style={{padding: "4px 0", cursor: "pointer"}}>
+            <input type="checkbox" checked={selectedIds.includes(unit.id)}
+                   onChange={() => selectedIds.includes(unit.id) ? onRemove(unit.id) : onAdd(unit)}/>
+            <span>{unit.name} <span className="t-mono muted">({unit.code})</span></span>
+          </label>)}
+          {!loading && leaves.length === 0 && <div className="t-cap muted">No active units under this parent.</div>}
+        </div>
+      )}
+      {selected.length > 0 && <div className="row gap-2" style={{flexWrap: "wrap", marginTop: 12}}>
+        {selected.map(unit => <Chip key={unit.id} size="sm" tone="data">
+          {unit.name} · {unit.level.replace("_", " ")}
+          <button type="button" aria-label={`Remove ${unit.name}`} onClick={() => onRemove(unit.id)}
+                  style={{marginLeft: 5, border: 0, background: "transparent", cursor: "pointer"}}>×</button>
+        </Chip>)}
+      </div>}
+    </div>
+  </div>;
+};
 
 const DsaCreateWizard = ({ onBack, onCreated, prefillPartnerId = null }) => {
   const [partnersResp] = useApi("/api/v1/partners/?page_size=200&status=active");
@@ -1211,6 +1439,7 @@ const DsaCreateWizard = ({ onBack, onCreated, prefillPartnerId = null }) => {
       Identifiers: true, PMT: false, Health: false, Education: false,
       Employment: false, Housing: false, FoodShocks: false, Roster: true,
     },
+    geographic_scope: [],
     sensitive_data_handling: "none",
     retention_days: "180",
     classification: "",
@@ -1223,6 +1452,13 @@ const DsaCreateWizard = ({ onBack, onCreated, prefillPartnerId = null }) => {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const toggle = (group, key) => setForm(f => ({
     ...f, [group]: { ...f[group], [key]: !f[group][key] },
+  }));
+  const addGeographicUnit = unit => setForm(f => (
+    f.geographic_scope.some(existing => existing.id === unit.id)
+      ? f : { ...f, geographic_scope: [...f.geographic_scope, unit] }
+  ));
+  const removeGeographicUnit = id => setForm(f => ({
+    ...f, geographic_scope: f.geographic_scope.filter(unit => unit.id !== id),
   }));
 
   const STEPS = [
@@ -1441,6 +1677,11 @@ const DsaCreateWizard = ({ onBack, onCreated, prefillPartnerId = null }) => {
               </Field>
             </div>
           </div>
+          <DsaGeographicScopePicker
+            selected={form.geographic_scope}
+            onAdd={addGeographicUnit}
+            onRemove={removeGeographicUnit}
+          />
         </div>
       )}
 
@@ -1460,6 +1701,10 @@ const DsaCreateWizard = ({ onBack, onCreated, prefillPartnerId = null }) => {
               <div>{Object.entries(form.entities).filter(([, v]) => v).map(([k]) => k).join(", ") || "—"}</div>
               <div className="muted">Field groups</div>
               <div>{Object.entries(form.fields).filter(([, v]) => v).map(([k]) => k).join(", ") || "—"}</div>
+              <div className="muted">Geographic scope</div>
+              <div>{form.geographic_scope.length
+                ? form.geographic_scope.map(unit => `${unit.name} (${unit.level.replace("_", " ")})`).join(", ")
+                : "National — no units pinned"}</div>
               <div className="muted">Monthly row budget</div>
               <div className="t-mono">{form.monthly_row_budget
                 ? Number(form.monthly_row_budget).toLocaleString()
@@ -1600,6 +1845,8 @@ Object.assign(window, {
   DsaSubmitForSignoffModal,
   DsaQuickFind,
   _dsaDaysToExpiry,
+  _canDiscardUnsignedDsa,
+  _geographicScopeUnitLabel,
   buildCreateDsaPayload,
   DSA_STATUSES,
 });

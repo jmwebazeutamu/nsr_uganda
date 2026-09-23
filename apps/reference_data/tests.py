@@ -241,6 +241,21 @@ class TestGeographicUnitSerializer:
         rows = {row["code"]: row for row in r.data["results"]}
         assert rows["SR-BUGANDA-SOUTH"]["parent_code"] == "R-CENTRAL"
 
+    def test_list_defaults_to_active_but_history_can_request_all(
+        self, django_user_model, _central_with_buganda_south,
+    ):
+        GeographicUnit.objects.create(
+            level="sub_region", code="SR-OLD", name="Old unit",
+            effective_from=date(2025, 1, 1), status="retired",
+        )
+        client = self._client(django_user_model)
+
+        active = client.get(self.URL + "?level=sub_region")
+        all_versions = client.get(self.URL + "?level=sub_region&status=all")
+
+        assert "SR-OLD" not in {row["code"] for row in active.data["results"]}
+        assert "SR-OLD" in {row["code"] for row in all_versions.data["results"]}
+
     # ------------------------------------------------------------------
     # parent_code drill — feeds the household-capture GeoTreePicker.
     # ------------------------------------------------------------------
