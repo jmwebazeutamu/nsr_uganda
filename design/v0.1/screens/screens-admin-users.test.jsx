@@ -27,6 +27,23 @@ const USERS = [
     roles: ["nsr_admin"], manageable: true },
 ];
 
+// As served by /user-accounts/roles/, which reads them off ScopeLevel.
+const SCOPE_LEVELS = [
+  { value: "national", label: "National", takes_codes: false, geographic: false },
+  { value: "region", label: "Region", takes_codes: true, geographic: true },
+  { value: "sub_region", label: "Sub Region", takes_codes: true, geographic: true },
+  { value: "district", label: "District", takes_codes: true, geographic: true },
+  { value: "sub_county", label: "Sub County", takes_codes: true, geographic: true },
+  { value: "parish", label: "Parish", takes_codes: true, geographic: true },
+  { value: "village", label: "Village", takes_codes: true, geographic: true },
+  { value: "partner", label: "Partner", takes_codes: true, geographic: false },
+];
+
+const GEO = {
+  region: [{ code: "R-NORTHERN", name: "Northern" }, { code: "R-CENTRAL", name: "Central" }],
+  district: [{ code: "102", name: "Kampala" }, { code: "UG-MOR", name: "Moroto" }],
+};
+
 const ROLES = [
   { code: "enumerator", label: "Enumerator", privileged: false, assignable: true,
     default_scope: "parish" },
@@ -62,7 +79,13 @@ beforeEach(() => {
       }
       return jsonOk({});
     }
-    if (u.includes("user-accounts/roles/")) return jsonOk({ roles: ROLES });
+    if (u.includes("user-accounts/roles/")) {
+      return jsonOk({ roles: ROLES, scope_levels: SCOPE_LEVELS });
+    }
+    if (u.includes("geographic-units")) {
+      const level = new URL(u, "http://x").searchParams.get("level");
+      return jsonOk({ results: (GEO[level] || []) });
+    }
     if (u.includes("users/me/")) return jsonOk({ username: "the-admin" });
     if (u.includes("user-accounts")) return jsonOk({ results: USERS });
     return jsonOk({});
@@ -186,37 +209,63 @@ describe("scope at creation", () => {
     expect(screen.getByRole("button", { name: /Use parish/ })).toBeTruthy();
   });
 
-  it("grants through the Operator scopes endpoint, not a second one", async () => {
+  it("offers every level the server serves, including region and village", async () => {
+    await openCreate();
+    const select = screen.getByRole("combobox", { name: "Initial scope level" });
+    const values = [...select.querySelectorAll("option")].map(o => o.value);
+    // The first cut dropped these three.
+    expect(values).toContain("region");
+    expect(values).toContain("sub_region");
+    expect(values).toContain("village");
+  });
+
+  it("lists real places to pick, rather than asking for codes", async () => {
+    // District codes are "102" (Kampala) and "UG-MOR" (Moroto); nobody
+    // recalls those, and the wrong one grants the wrong district.
+    await openCreate();
+    fireEvent.change(screen.getByRole("combobox", { name: "Initial scope level" }),
+                     { target: { value: "district" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Kampala" })).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Moroto" })).toBeTruthy();
+  });
+
+  it("grants the code behind the place, through the Operator scopes endpoint", async () => {
     await openCreate();
     fireEvent.change(screen.getAllByRole("textbox")[0], { target: { value: "new.person" } });
     fireEvent.change(screen.getByPlaceholderText(/Why this change/), {
       target: { value: "new starter" },
     });
-    // national takes no codes
     fireEvent.change(screen.getByRole("combobox", { name: "Initial scope level" }),
-                     { target: { value: "national" } });
+                     { target: { value: "district" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Kampala" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Kampala" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
 
     await waitFor(() => expect(posted.length).toBe(2));
     expect(posted[0].url).toMatch(/user-accounts\/create\/$/);
     expect(posted[1].url).toMatch(/operator-scopes\/bulk-grant\/$/);
-    expect(posted[1].body.scope_level).toBe("national");
-    expect(posted[1].body.scope_codes).toEqual([]);
+    expect(posted[1].body.scope_level).toBe("district");
+    expect(posted[1].body.scope_codes).toEqual(["102"]);
   });
 
-  it("holds the confirm until a level that needs codes has them", async () => {
+  it("holds the confirm until a level that needs codes has one", async () => {
     await openCreate();
     fireEvent.change(screen.getByPlaceholderText(/Why this change/), {
       target: { value: "new starter" },
     });
-    const levels = screen.getByRole("combobox", { name: "Initial scope level" });
-    fireEvent.change(levels, { target: { value: "district" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Initial scope level" }),
+                     { target: { value: "district" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Kampala" })).toBeTruthy());
     expect(screen.getByRole("button", { name: "Confirm" }).disabled).toBe(true);
-
-    fireEvent.change(screen.getByPlaceholderText(/Codes, comma separated/), {
-      target: { value: "304, 305" },
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Kampala" }));
     expect(screen.getByRole("button", { name: "Confirm" }).disabled).toBe(false);
+  });
+
+  it("national takes no codes and shows no place list", async () => {
+    await openCreate();
+    fireEvent.change(screen.getByRole("combobox", { name: "Initial scope level" }),
+                     { target: { value: "national" } });
+    expect(screen.queryByLabelText("Search places")).toBeNull();
   });
 
   it("creates without a scope when none is chosen", async () => {

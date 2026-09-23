@@ -39,16 +39,13 @@ const UM_API = "/api/v1/security/user-accounts/";
 // vocabularies in this system has.
 const UM_SCOPE_API = "/api/v1/security/operator-scopes/bulk-grant/";
 
-// From ScopeLevel. `national` is the wildcard and takes no codes — the
-// API rejects codes alongside it rather than ignoring them.
-const UM_SCOPE_LEVELS = [
-  { value: "", label: "No scope yet — grant later" },
-  { value: "national", label: "National (all records)", codes: false },
-  { value: "district", label: "District", codes: true },
-  { value: "sub_county", label: "Sub-county", codes: true },
-  { value: "parish", label: "Parish", codes: true },
-  { value: "partner", label: "Partner (non-geographic)", codes: true },
-];
+// Scope levels are NOT listed here. They come from the server, which
+// reads them off ScopeLevel — a hand-kept copy in this file is what left
+// region, sub_region and village unassignable, and a missing option
+// looks exactly like a level that does not exist.
+const UM_GEO_API = "/api/v1/reference-data/geographic-units/";
+// The partners router owns "partners/" at the bare /api/v1/ prefix.
+const UM_PARTNER_API = "/api/v1/partners/";
 
 const _umCsrf = () => {
   const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
@@ -111,6 +108,7 @@ const UmSecretOnce = ({ label, secret, onDone }) => (
 const AdminUsersScreen = ({ onNavigate }) => {
   const [rows, setRows] = useStateUM([]);
   const [roles, setRoles] = useStateUM([]);
+  const [scopeLevels, setScopeLevels] = useStateUM([]);
   const [query, setQuery] = useStateUM("");
   const [stateFilter, setStateFilter] = useStateUM("");
   const [loading, setLoading] = useStateUM(true);
@@ -134,7 +132,9 @@ const AdminUsersScreen = ({ onNavigate }) => {
 
   useEffectUM(() => { load(); }, [query, stateFilter]);
   useEffectUM(() => {
-    _umGet(`${UM_API}roles/`).then((d) => setRoles(d.roles || [])).catch(() => setRoles([]));
+    _umGet(`${UM_API}roles/`)
+      .then((d) => { setRoles(d.roles || []); setScopeLevels(d.scope_levels || []); })
+      .catch(() => { setRoles([]); setScopeLevels([]); });
     _umGet("/api/v1/security/users/me/").then(setMe).catch(() => setMe(null));
   }, []);
 
@@ -274,7 +274,8 @@ const AdminUsersScreen = ({ onNavigate }) => {
       </div>
 
       {dialog && (
-        <UmDialog dialog={dialog} roles={roles} reason={reason} setReason={setReason}
+        <UmDialog dialog={dialog} roles={roles} scopeLevels={scopeLevels}
+                  reason={reason} setReason={setReason}
                   busy={busy} onClose={closeDialog}
                   onCreate={({ scope, ...payload }) => act(() =>
                     _umPost(`${UM_API}create/`, { ...payload, reason })
@@ -324,7 +325,7 @@ const AdminUsersScreen = ({ onNavigate }) => {
   );
 };
 
-const UmDialog = ({ dialog, roles, reason, setReason, busy, onClose,
+const UmDialog = ({ dialog, roles, scopeLevels, reason, setReason, busy, onClose,
                     onCreate, onRoles, onActive, onReset, onEdit }) => {
   const u = dialog.user;
   const [form, setForm] = useStateUM(
@@ -337,8 +338,8 @@ const UmDialog = ({ dialog, roles, reason, setReason, busy, onClose,
   const [method, setMethod] = useStateUM("temporary");
   const [scope, setScope] = useStateUM({ level: "", codes: "" });
   const needsReason = reason.trim().length > 0;
-  const scopeLevel = UM_SCOPE_LEVELS.find(l => l.value === scope.level);
-  const scopeIncomplete = !!(scopeLevel && scopeLevel.codes && !scope.codes.trim());
+  const scopeLevel = (scopeLevels || []).find(l => l.value === scope.level);
+  const scopeIncomplete = !!(scopeLevel && scopeLevel.takes_codes && !scope.codes.trim());
 
   const toggle = (code) =>
     setSelected(selected.includes(code)
@@ -361,7 +362,8 @@ const UmDialog = ({ dialog, roles, reason, setReason, busy, onClose,
           </label>
         ))}
         <UmRolePicker roles={roles} selected={selected} toggle={toggle}/>
-        <UmScopePicker roles={roles} selected={selected} scope={scope} setScope={setScope}/>
+        <UmScopePicker roles={roles} selected={selected} scope={scope}
+                       setScope={setScope} levels={scopeLevels}/>
       </>)}
 
       {dialog.kind === "edit" && (<>
@@ -487,37 +489,117 @@ const UmRolePicker = ({ roles, selected, toggle }) => (
    no scope signs in successfully and finds an empty registry — which
    reads as a broken system rather than a missing grant.
 
+   Units are chosen from the reference data, not typed. District codes
+   are a mix of "102" (Kampala) and "UG-MOR" (Moroto), regions are
+   "R-NORTHERN"; expecting an administrator to recall those is how the
+   wrong district gets granted and nobody notices until an operator sees
+   records they should not.
+
    The level defaults from the first chosen role's default_scope, which
-   is already in the catalogue, so the common case is one click. Grants
-   go to the Operator scopes endpoint; this is a shortcut into it, not a
-   second implementation of it. */
-const UmScopePicker = ({ roles, selected, scope, setScope }) => {
+   the catalogue already carries. Grants go to the Operator scopes
+   endpoint; this is a shortcut into it, not a second implementation. */
+const UmScopePicker = ({ roles, selected, scope, setScope, levels }) => {
+  const [units, setUnits] = useStateUM([]);
+  const [loading, setLoading] = useStateUM(false);
+  const [filter, setFilter] = useStateUM("");
   const suggested = (roles.find(r => r.code === selected[0]) || {}).default_scope || "";
-  const level = UM_SCOPE_LEVELS.find(l => l.value === scope.level);
+  const level = (levels || []).find(l => l.value === scope.level);
+
+  useEffectUM(() => {
+    if (!level || !level.takes_codes) { setUnits([]); return undefined; }
+    let cancelled = false;
+    setLoading(true);
+    const url = level.geographic
+      ? `${UM_GEO_API}?level=${scope.level}&page_size=1000`
+      : `${UM_PARTNER_API}?page_size=500`;
+    _umGet(url)
+      .then((d) => {
+        if (cancelled) return;
+        const rows = (d.results || d || []).map(r => ({
+          code: r.code, name: r.name || r.code,
+        }));
+        setUnits(rows);
+      })
+      .catch(() => { if (!cancelled) setUnits([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [scope.level]);
+
+  const chosen = scope.codes.split(",").map(c => c.trim()).filter(Boolean);
+  const toggleCode = (code) => {
+    const next = chosen.includes(code)
+      ? chosen.filter(c => c !== code)
+      : [...chosen, code];
+    setScope({ ...scope, codes: next.join(", ") });
+  };
+
+  const visible = units.filter(u =>
+    !filter.trim()
+    || u.name.toLowerCase().includes(filter.trim().toLowerCase())
+    || u.code.toLowerCase().includes(filter.trim().toLowerCase()));
+
   return (
     <div style={{ marginTop: 14 }}>
       <span className="t-cap" style={{ fontWeight: 600 }}>INITIAL SCOPE</span>
       <div className="row gap-2" style={{ marginTop: 8, flexWrap: "wrap" }}>
         <select className="field-input" aria-label="Initial scope level"
                 value={scope.level}
-                onChange={(e) => setScope({ ...scope, level: e.target.value })}>
-          {UM_SCOPE_LEVELS.map(l => (
-            <option key={l.value} value={l.value}>{l.label}</option>
+                onChange={(e) => setScope({ level: e.target.value, codes: "" })}>
+          <option value="">No scope yet — grant later</option>
+          {(levels || []).map(l => (
+            <option key={l.value} value={l.value}>
+              {l.value === "national" ? "National (all records)" : l.label}
+            </option>
           ))}
         </select>
-        {level && level.codes && (
-          <input className="field-input" style={{ minWidth: 240 }}
-                 placeholder="Codes, comma separated (e.g. 304, 305)"
-                 value={scope.codes}
-                 onChange={(e) => setScope({ ...scope, codes: e.target.value })}/>
-        )}
         {suggested && scope.level !== suggested && (
           <button type="button" className="btn sm"
-                  onClick={() => setScope({ ...scope, level: suggested })}>
+                  onClick={() => setScope({ level: suggested, codes: "" })}>
             Use {suggested} (this role's default)
           </button>
         )}
       </div>
+
+      {level && level.takes_codes && (
+        <div style={{ marginTop: 10 }}>
+          <input className="field-input" style={{ width: "100%" }}
+                 aria-label="Search places"
+                 placeholder={level.geographic ? "Search by name or code" : "Search partners"}
+                 value={filter} onChange={(e) => setFilter(e.target.value)}/>
+          <div style={{
+            maxHeight: 180, overflowY: "auto", marginTop: 8,
+            border: "1px solid var(--neutral-200)", borderRadius: 6, padding: 8,
+          }}>
+            {loading && <div className="t-cap">Loading…</div>}
+            {!loading && visible.length === 0 && (
+              <div className="t-cap" style={{ color: "var(--neutral-500)" }}>
+                Nothing matches. Reference data for this level may not be
+                loaded — check Reference data &gt; Geography.
+              </div>
+            )}
+            <div className="row gap-2" style={{ flexWrap: "wrap" }}>
+              {!loading && visible.slice(0, 300).map(unit => (
+                <button key={unit.code} type="button"
+                        onClick={() => toggleCode(unit.code)}
+                        title={unit.code}
+                        style={{
+                          padding: "5px 9px", borderRadius: 14, fontSize: 12.5,
+                          border: `1px solid ${chosen.includes(unit.code) ? "var(--accent-data)" : "var(--neutral-300)"}`,
+                          background: chosen.includes(unit.code) ? "var(--accent-data-bg)" : "var(--neutral-0)",
+                        }}>
+                  {unit.name}
+                </button>
+              ))}
+            </div>
+          </div>
+          {chosen.length > 0 && (
+            <p className="t-bodysm" style={{ marginTop: 6 }}>
+              {chosen.length} selected: <span className="t-mono">{chosen.join(", ")}</span>
+            </p>
+          )}
+        </div>
+      )}
+
       <p className="t-bodysm" style={{ color: "var(--neutral-700)", marginTop: 6 }}>
         {scope.level
           ? "Granted through Operator scopes, with its own audit entry."

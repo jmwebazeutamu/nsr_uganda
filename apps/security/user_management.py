@@ -36,6 +36,7 @@ from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 
 from .audit import emit as emit_audit
+from .models import ScopeLevel
 from .roles import ROLES
 
 User = get_user_model()
@@ -69,6 +70,31 @@ def role_catalogue() -> list[dict]:
             "assignable": r.code in existing,
         }
         for r in ROLES
+    ]
+
+
+def scope_levels() -> list[dict]:
+    """The scope levels, from ScopeLevel itself.
+
+    The console used to carry its own copy of this list, taken from the
+    default-scope constants in roles.py — a different and smaller set —
+    so region, sub_region and village could not be granted at all. Nobody
+    noticed, because a missing option looks exactly like a level that
+    does not exist.
+
+    Serving it from the enum means adding a level to the model is enough;
+    there is no second list to remember. `national` is flagged because
+    the API rejects codes alongside it rather than ignoring them, and
+    `partner` because its codes are Partner.code, not geography.
+    """
+    return [
+        {
+            "value": level.value,
+            "label": level.label,
+            "takes_codes": level != ScopeLevel.NATIONAL,
+            "geographic": level not in (ScopeLevel.NATIONAL, ScopeLevel.PARTNER),
+        }
+        for level in ScopeLevel
     ]
 
 

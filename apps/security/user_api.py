@@ -96,13 +96,20 @@ class UserAdminViewSet(
     def _fail(self, exc) -> Response:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-    @extend_schema(tags=["security"], summary="The assignable role catalogue",
-                   responses={200: OpenApiResponse(description="Roles")})
+    @extend_schema(tags=["security"], summary="Role and scope-level catalogues",
+                   responses={200: OpenApiResponse(description="Catalogues")})
     @action(detail=False, methods=["get"], url_path="roles")
     def roles(self, request):
-        """Read-only. Roles are defined in code and synced into Groups
-        (ADR-0028); this endpoint never writes one."""
-        return Response({"roles": um.role_catalogue()})
+        """Read-only, and the single source for both lists the screen
+        needs: roles are defined in code and synced into Groups
+        (ADR-0028), scope levels come from ScopeLevel. Neither is written
+        here, and neither is duplicated in the console — a hand-kept copy
+        of the scope levels is exactly what left region, sub_region and
+        village unassignable."""
+        return Response({
+            "roles": um.role_catalogue(),
+            "scope_levels": um.scope_levels(),
+        })
 
     @extend_schema(tags=["security"], summary="Create an account")
     @action(detail=False, methods=["post"], url_path="create")

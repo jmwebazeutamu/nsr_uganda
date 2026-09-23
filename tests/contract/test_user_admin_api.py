@@ -138,3 +138,71 @@ class TestItDidNotShadowTheScopePicker:
         user = _user("scope-admin-only", "nsr_admin")
         client.force_login(user)
         assert client.get("/api/v1/security/users/?q=scope").status_code == 200
+
+
+@pytest.mark.django_db
+class TestScopeLevelsComeFromTheEnum:
+    """The console carried its own copy of the scope levels, taken from
+    the default-scope constants in roles.py — a different and smaller set
+    — so region, sub_region and village could not be granted at all.
+
+    Nobody noticed, because a missing option looks exactly like a level
+    that does not exist. These assert the served list IS ScopeLevel, so
+    adding a level to the model is enough and there is no second list to
+    remember.
+    """
+
+    def test_every_scope_level_is_served(self, client, admin):
+        from apps.security.models import ScopeLevel
+
+        client.force_login(admin)
+        served = client.get("/api/v1/security/user-accounts/roles/").json()
+        values = [lvl["value"] for lvl in served["scope_levels"]]
+        assert values == [lvl.value for lvl in ScopeLevel], (
+            "the served scope levels have drifted from ScopeLevel"
+        )
+
+    def test_the_levels_the_first_cut_dropped_are_present(self, client, admin):
+        client.force_login(admin)
+        served = client.get("/api/v1/security/user-accounts/roles/").json()
+        values = {lvl["value"] for lvl in served["scope_levels"]}
+        for missing_before in ("region", "sub_region", "village"):
+            assert missing_before in values
+
+    def test_national_is_marked_as_taking_no_codes(self, client, admin):
+        """The grant endpoint rejects codes alongside national rather than
+        ignoring them, so the screen has to know."""
+        client.force_login(admin)
+        served = client.get("/api/v1/security/user-accounts/roles/").json()
+        by_value = {lvl["value"]: lvl for lvl in served["scope_levels"]}
+        assert by_value["national"]["takes_codes"] is False
+        assert by_value["district"]["takes_codes"] is True
+
+    def test_partner_is_marked_non_geographic(self, client, admin):
+        """Its codes are Partner.code, so the picker must query partners
+        rather than the geographic hierarchy."""
+        client.force_login(admin)
+        served = client.get("/api/v1/security/user-accounts/roles/").json()
+        by_value = {lvl["value"]: lvl for lvl in served["scope_levels"]}
+        assert by_value["partner"]["geographic"] is False
+        assert by_value["district"]["geographic"] is True
+
+
+class TestTheConsoleKeepsNoCopy:
+    def test_the_screen_does_not_list_scope_levels_itself(self):
+        """A hand-kept list in the console is the defect, not the
+        symptom. This fails if one comes back."""
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parent.parent.parent
+        src = (repo / "design" / "v0.1" / "screens"
+               / "screens-admin-users.jsx").read_text()
+        code = "\n".join(
+            line for line in src.splitlines()
+            if not line.strip().startswith("//")
+        )
+        for level in ("sub_region", "sub_county", "village"):
+            assert f'value: "{level}"' not in code, (
+                f"the screen declares scope level {level!r} itself; it must "
+                f"read them from /user-accounts/roles/"
+            )
