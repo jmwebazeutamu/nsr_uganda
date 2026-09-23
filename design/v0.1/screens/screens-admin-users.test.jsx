@@ -28,7 +28,8 @@ const USERS = [
 ];
 
 const ROLES = [
-  { code: "enumerator", label: "Enumerator", privileged: false, assignable: true },
+  { code: "enumerator", label: "Enumerator", privileged: false, assignable: true,
+    default_scope: "parish" },
   { code: "dpo", label: "Data Protection Officer", privileged: true, assignable: true },
   { code: "ghost", label: "Unsynced Role", privileged: false, assignable: false },
 ];
@@ -164,5 +165,107 @@ describe("what it does", () => {
     // /security/users/ belongs to the Grant Scope picker and has a
     // different shape; reading it here would silently half-work.
     expect(calls.some(u => /\/security\/users\/(\?|$)/.test(u))).toBe(false);
+  });
+});
+
+
+describe("scope at creation", () => {
+  const openCreate = async () => {
+    await show();
+    fireEvent.click(screen.getByRole("button", { name: /New account/ }));
+  };
+
+  it("warns that an account with no scope will see nothing", async () => {
+    await openCreate();
+    expect(document.body.textContent).toMatch(/see no records at all/);
+  });
+
+  it("offers the scope level the chosen role defaults to", async () => {
+    await openCreate();
+    fireEvent.click(screen.getByRole("button", { name: /Enumerator/ }));
+    expect(screen.getByRole("button", { name: /Use parish/ })).toBeTruthy();
+  });
+
+  it("grants through the Operator scopes endpoint, not a second one", async () => {
+    await openCreate();
+    fireEvent.change(screen.getAllByRole("textbox")[0], { target: { value: "new.person" } });
+    fireEvent.change(screen.getByPlaceholderText(/Why this change/), {
+      target: { value: "new starter" },
+    });
+    // national takes no codes
+    fireEvent.change(screen.getByRole("combobox", { name: "Initial scope level" }),
+                     { target: { value: "national" } });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(posted.length).toBe(2));
+    expect(posted[0].url).toMatch(/user-accounts\/create\/$/);
+    expect(posted[1].url).toMatch(/operator-scopes\/bulk-grant\/$/);
+    expect(posted[1].body.scope_level).toBe("national");
+    expect(posted[1].body.scope_codes).toEqual([]);
+  });
+
+  it("holds the confirm until a level that needs codes has them", async () => {
+    await openCreate();
+    fireEvent.change(screen.getByPlaceholderText(/Why this change/), {
+      target: { value: "new starter" },
+    });
+    const levels = screen.getByRole("combobox", { name: "Initial scope level" });
+    fireEvent.change(levels, { target: { value: "district" } });
+    expect(screen.getByRole("button", { name: "Confirm" }).disabled).toBe(true);
+
+    fireEvent.change(screen.getByPlaceholderText(/Codes, comma separated/), {
+      target: { value: "304, 305" },
+    });
+    expect(screen.getByRole("button", { name: "Confirm" }).disabled).toBe(false);
+  });
+
+  it("creates without a scope when none is chosen", async () => {
+    await openCreate();
+    fireEvent.change(screen.getAllByRole("textbox")[0], { target: { value: "no.scope" } });
+    fireEvent.change(screen.getByPlaceholderText(/Why this change/), {
+      target: { value: "scope to follow" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(posted.length).toBe(1));
+    expect(posted[0].url).toMatch(/create\/$/);
+  });
+});
+
+describe("edit", () => {
+  const openEdit = async () => {
+    await show();
+    const row = screen.getByText("akello.g").closest("tr");
+    fireEvent.click([...row.querySelectorAll("button")].find(b => b.textContent === "Edit"));
+  };
+
+  it("pre-fills the current details", async () => {
+    await openEdit();
+    expect(screen.getByDisplayValue("Grace")).toBeTruthy();
+    expect(screen.getByDisplayValue("g@example.test")).toBeTruthy();
+  });
+
+  it("will not let the username be changed", async () => {
+    await openEdit();
+    const username = screen.getByDisplayValue("akello.g");
+    expect(username.disabled).toBe(true);
+    expect(document.body.textContent).toMatch(/audit chain records who did what by username/);
+  });
+
+  it("posts only the editable fields, with the reason", async () => {
+    await openEdit();
+    fireEvent.change(screen.getByDisplayValue("g@example.test"), {
+      target: { value: "grace.akello@example.test" },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Why this change/), {
+      target: { value: "corrected address" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(posted.length).toBe(1));
+    expect(posted[0].url).toMatch(/\/profile\/$/);
+    expect(posted[0].body).toEqual({
+      first_name: "Grace", last_name: "Akello",
+      email: "grace.akello@example.test", reason: "corrected address",
+    });
+    expect(posted[0].body.username).toBeUndefined();
   });
 });

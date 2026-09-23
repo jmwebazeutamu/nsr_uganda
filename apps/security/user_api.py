@@ -128,6 +128,23 @@ class UserAdminViewSet(
             status=status.HTTP_201_CREATED,
         )
 
+    @extend_schema(tags=["security"], summary="Edit contact details")
+    @action(detail=True, methods=["post"], url_path="profile")
+    def edit_profile(self, request, pk=None):
+        """Name and email only. The username is not editable — see
+        user_management.update_profile for why."""
+        try:
+            user = um.update_profile(
+                actor=request.user, user=self.get_object(),
+                first_name=request.data.get("first_name"),
+                last_name=request.data.get("last_name"),
+                email=request.data.get("email"),
+                reason=request.data.get("reason", ""),
+            )
+        except um.UserManagementError as exc:
+            return self._fail(exc)
+        return Response(ManagedUserSerializer(user).data)
+
     @extend_schema(tags=["security"], summary="Set a user's roles")
     @action(detail=True, methods=["post"], url_path="roles")
     def set_roles(self, request, pk=None):

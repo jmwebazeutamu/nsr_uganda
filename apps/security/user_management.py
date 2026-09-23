@@ -137,6 +137,45 @@ def create_user(
 
 
 @transaction.atomic
+def update_profile(
+    *, actor, user: User, first_name: str | None = None,
+    last_name: str | None = None, email: str | None = None, reason: str = "",
+) -> User:
+    """Correct the contact details on an account.
+
+    The username is deliberately not editable. The audit chain records
+    actors by username, so renaming an account would leave every entry it
+    already wrote pointing at a name that no longer exists. A person who
+    needs a different username needs a new account and the old one
+    deactivated, which keeps both halves of their history readable.
+    """
+    _guard(actor, user)
+    if not reason or not reason.strip():
+        raise UserManagementError("A reason is required for a profile change.")
+
+    before = {"first_name": user.first_name, "last_name": user.last_name,
+              "email": user.email}
+    if first_name is not None:
+        user.first_name = first_name.strip()
+    if last_name is not None:
+        user.last_name = last_name.strip()
+    if email is not None:
+        user.email = email.strip()
+    after = {"first_name": user.first_name, "last_name": user.last_name,
+             "email": user.email}
+    if before == after:
+        return user
+
+    user.save(update_fields=["first_name", "last_name", "email"])
+    emit_audit(
+        "update", "user", str(user.pk), actor=_actor_name(actor),
+        reason=f"profile updated: {reason.strip()}",
+        field_changes={"before": before, "after": after},
+    )
+    return user
+
+
+@transaction.atomic
 def set_roles(*, actor, user: User, roles: list[str], reason: str = "") -> User:
     """Replace a user's role membership. Membership only — see module docstring."""
     _guard(actor, user, changing_roles=True)

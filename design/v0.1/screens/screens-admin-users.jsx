@@ -33,6 +33,23 @@ const { useState: useStateUM, useEffect: useEffectUM, useMemo: useMemoUM } = Rea
 
 const UM_API = "/api/v1/security/user-accounts/";
 
+// Scope grants go to the endpoint that already owns them. A second
+// implementation here could disagree with Operator scopes about what a
+// grant means, and the two would drift the way every other pair of
+// vocabularies in this system has.
+const UM_SCOPE_API = "/api/v1/security/operator-scopes/bulk-grant/";
+
+// From ScopeLevel. `national` is the wildcard and takes no codes — the
+// API rejects codes alongside it rather than ignoring them.
+const UM_SCOPE_LEVELS = [
+  { value: "", label: "No scope yet — grant later" },
+  { value: "national", label: "National (all records)", codes: false },
+  { value: "district", label: "District", codes: true },
+  { value: "sub_county", label: "Sub-county", codes: true },
+  { value: "parish", label: "Parish", codes: true },
+  { value: "partner", label: "Partner (non-geographic)", codes: true },
+];
+
 const _umCsrf = () => {
   const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
   return m ? m[1] : "";
@@ -177,7 +194,8 @@ const AdminUsersScreen = ({ onNavigate }) => {
           <input className="field-input" placeholder="Search name, username or email"
                  value={query} onChange={(e) => setQuery(e.target.value)}
                  style={{ minWidth: 260 }}/>
-          <select className="field-input" value={stateFilter}
+          <select className="field-input" aria-label="Filter by account status"
+                  value={stateFilter}
                   onChange={(e) => setStateFilter(e.target.value)}>
             <option value="">All accounts</option>
             <option value="active">Active only</option>
@@ -228,6 +246,9 @@ const AdminUsersScreen = ({ onNavigate }) => {
                     </span>
                   ) : (
                     <div className="row gap-2">
+                      <button className="btn sm" onClick={() => { setDialog({ kind: "edit", user: u }); setReason(""); }}>
+                        Edit
+                      </button>
                       <button className="btn sm" onClick={() => { setDialog({ kind: "reset", user: u }); setReason(""); }}>
                         Reset password
                       </button>
@@ -255,14 +276,33 @@ const AdminUsersScreen = ({ onNavigate }) => {
       {dialog && (
         <UmDialog dialog={dialog} roles={roles} reason={reason} setReason={setReason}
                   busy={busy} onClose={closeDialog}
-                  onCreate={(payload) => act(() =>
+                  onCreate={({ scope, ...payload }) => act(() =>
                     _umPost(`${UM_API}create/`, { ...payload, reason })
-                      .then((d) => setSecret({
-                        label: `Account ${d.user.username} created — temporary password`,
-                        value: d.temporary_password,
-                      })))}
+                      .then(async (d) => {
+                        setSecret({
+                          label: `Account ${d.user.username} created — temporary password`,
+                          value: d.temporary_password,
+                        });
+                        // An account with no scope sees nothing: the
+                        // list queries intersect against active scopes,
+                        // so "created successfully" and "cannot see a
+                        // single record" is the default outcome without
+                        // this step.
+                        if (scope && scope.level) {
+                          await _umPost(UM_SCOPE_API, {
+                            user_id: d.user.id,
+                            scope_level: scope.level,
+                            scope_codes: scope.level === "national"
+                              ? []
+                              : scope.codes.split(",").map(c => c.trim()).filter(Boolean),
+                            note: reason,
+                          });
+                        }
+                      }))}
                   onRoles={(codes) => act(() =>
                     _umPost(`${UM_API}${dialog.user.id}/roles/`, { roles: codes, reason }))}
+                  onEdit={(payload) => act(() =>
+                    _umPost(`${UM_API}${dialog.user.id}/profile/`, { ...payload, reason }))}
                   onActive={() => act(() =>
                     _umPost(`${UM_API}${dialog.user.id}/set-active/`,
                             { active: !dialog.user.is_active, reason }))}
@@ -285,12 +325,20 @@ const AdminUsersScreen = ({ onNavigate }) => {
 };
 
 const UmDialog = ({ dialog, roles, reason, setReason, busy, onClose,
-                    onCreate, onRoles, onActive, onReset }) => {
-  const [form, setForm] = useStateUM({ username: "", first_name: "", last_name: "", email: "" });
+                    onCreate, onRoles, onActive, onReset, onEdit }) => {
+  const u = dialog.user;
+  const [form, setForm] = useStateUM(
+    dialog.kind === "edit"
+      ? { username: u.username, first_name: u.first_name || "",
+          last_name: u.last_name || "", email: u.email || "" }
+      : { username: "", first_name: "", last_name: "", email: "" },
+  );
   const [selected, setSelected] = useStateUM(dialog.roles || []);
   const [method, setMethod] = useStateUM("temporary");
+  const [scope, setScope] = useStateUM({ level: "", codes: "" });
   const needsReason = reason.trim().length > 0;
-  const u = dialog.user;
+  const scopeLevel = UM_SCOPE_LEVELS.find(l => l.value === scope.level);
+  const scopeIncomplete = !!(scopeLevel && scopeLevel.codes && !scope.codes.trim());
 
   const toggle = (code) =>
     setSelected(selected.includes(code)
@@ -313,6 +361,29 @@ const UmDialog = ({ dialog, roles, reason, setReason, busy, onClose,
           </label>
         ))}
         <UmRolePicker roles={roles} selected={selected} toggle={toggle}/>
+        <UmScopePicker roles={roles} selected={selected} scope={scope} setScope={setScope}/>
+      </>)}
+
+      {dialog.kind === "edit" && (<>
+        <strong>Edit {u.username}</strong>
+        <p className="t-bodysm" style={{ color: "var(--neutral-700)" }}>
+          Name and email only. The username cannot be changed: the audit
+          chain records who did what by username, so renaming an account
+          would leave every entry it has already written pointing at a
+          name that no longer exists.
+        </p>
+        <label style={{ display: "block", marginTop: 10 }}>
+          <span className="t-cap" style={{ fontWeight: 600 }}>USERNAME</span>
+          <input className="field-input" style={{ width: "100%", marginTop: 6 }}
+                 value={form.username} disabled readOnly/>
+        </label>
+        {["first_name", "last_name", "email"].map((f) => (
+          <label key={f} style={{ display: "block", marginTop: 10 }}>
+            <span className="t-cap" style={{ fontWeight: 600 }}>{f.replace("_", " ").toUpperCase()}</span>
+            <input className="field-input" style={{ width: "100%", marginTop: 6 }}
+                   value={form[f]} onChange={(e) => setForm({ ...form, [f]: e.target.value })}/>
+          </label>
+        ))}
       </>)}
 
       {dialog.kind === "roles" && (<>
@@ -361,10 +432,19 @@ const UmDialog = ({ dialog, roles, reason, setReason, busy, onClose,
                      placeholder="Why this change is being made"/>
 
       <div className="row gap-2" style={{ marginTop: 14 }}>
-        <button className="btn primary" disabled={busy || !needsReason}
-                title={needsReason ? "" : "A reason is required."}
+        <button className="btn primary"
+                disabled={busy || !needsReason || scopeIncomplete}
+                title={
+                  !needsReason ? "A reason is required."
+                  : scopeIncomplete ? "Enter at least one code for that scope level, or choose no scope."
+                  : ""
+                }
                 onClick={() => {
-                  if (dialog.kind === "create") onCreate({ ...form, roles: selected });
+                  if (dialog.kind === "create") onCreate({ ...form, roles: selected, scope });
+                  else if (dialog.kind === "edit") onEdit({
+                    first_name: form.first_name, last_name: form.last_name,
+                    email: form.email,
+                  });
                   else if (dialog.kind === "roles") onRoles(selected);
                   else if (dialog.kind === "active") onActive();
                   else onReset(method);
@@ -401,5 +481,50 @@ const UmRolePicker = ({ roles, selected, toggle }) => (
     </div>
   </div>
 );
+
+/* Scope at creation, because an account without one sees nothing.
+   List queries intersect against active scopes, so a new operator with
+   no scope signs in successfully and finds an empty registry — which
+   reads as a broken system rather than a missing grant.
+
+   The level defaults from the first chosen role's default_scope, which
+   is already in the catalogue, so the common case is one click. Grants
+   go to the Operator scopes endpoint; this is a shortcut into it, not a
+   second implementation of it. */
+const UmScopePicker = ({ roles, selected, scope, setScope }) => {
+  const suggested = (roles.find(r => r.code === selected[0]) || {}).default_scope || "";
+  const level = UM_SCOPE_LEVELS.find(l => l.value === scope.level);
+  return (
+    <div style={{ marginTop: 14 }}>
+      <span className="t-cap" style={{ fontWeight: 600 }}>INITIAL SCOPE</span>
+      <div className="row gap-2" style={{ marginTop: 8, flexWrap: "wrap" }}>
+        <select className="field-input" aria-label="Initial scope level"
+                value={scope.level}
+                onChange={(e) => setScope({ ...scope, level: e.target.value })}>
+          {UM_SCOPE_LEVELS.map(l => (
+            <option key={l.value} value={l.value}>{l.label}</option>
+          ))}
+        </select>
+        {level && level.codes && (
+          <input className="field-input" style={{ minWidth: 240 }}
+                 placeholder="Codes, comma separated (e.g. 304, 305)"
+                 value={scope.codes}
+                 onChange={(e) => setScope({ ...scope, codes: e.target.value })}/>
+        )}
+        {suggested && scope.level !== suggested && (
+          <button type="button" className="btn sm"
+                  onClick={() => setScope({ ...scope, level: suggested })}>
+            Use {suggested} (this role's default)
+          </button>
+        )}
+      </div>
+      <p className="t-bodysm" style={{ color: "var(--neutral-700)", marginTop: 6 }}>
+        {scope.level
+          ? "Granted through Operator scopes, with its own audit entry."
+          : "Without a scope this account will sign in and see no records at all. You can grant one later in Operator scopes."}
+      </p>
+    </div>
+  );
+};
 
 window.AdminUsersScreen = AdminUsersScreen;

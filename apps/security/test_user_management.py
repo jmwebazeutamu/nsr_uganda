@@ -163,3 +163,47 @@ class TestDeactivation:
         ]
         assert any("deactivated" in r for r in reasons)
         assert any("reactivated" in r for r in reasons)
+
+
+@pytest.mark.django_db
+class TestProfileEdit:
+    def test_it_corrects_name_and_email(self, admin, operator):
+        um.update_profile(actor=admin, user=operator, first_name="Grace",
+                          last_name="Akello", email="grace@example.test",
+                          reason="married name")
+        operator.refresh_from_db()
+        assert (operator.first_name, operator.last_name) == ("Grace", "Akello")
+        assert operator.email == "grace@example.test"
+
+    def test_the_username_is_not_editable(self, admin, operator):
+        """The audit chain records actors by username. Renaming an account
+        leaves every entry it has already written pointing at a name that
+        no longer exists."""
+        import inspect
+        assert "username" not in inspect.signature(um.update_profile).parameters
+
+    def test_a_reason_is_required(self, admin, operator):
+        with pytest.raises(um.UserManagementError, match="reason is required"):
+            um.update_profile(actor=admin, user=operator, first_name="X", reason="")
+
+    def test_a_superuser_is_refused(self, admin, root):
+        with pytest.raises(um.UserManagementError, match="Superuser"):
+            um.update_profile(actor=admin, user=root, first_name="X", reason="r")
+
+    def test_an_unchanged_edit_writes_no_audit_event(self, admin, operator):
+        before = AuditEvent.objects.filter(entity_id=str(operator.pk)).count()
+        um.update_profile(actor=admin, user=operator,
+                          first_name=operator.first_name,
+                          last_name=operator.last_name,
+                          email=operator.email, reason="no change")
+        assert AuditEvent.objects.filter(entity_id=str(operator.pk)).count() == before
+
+    def test_the_change_is_audited_with_before_and_after(self, admin, operator):
+        um.update_profile(actor=admin, user=operator, email="new@example.test",
+                          reason="corrected address")
+        event = AuditEvent.objects.filter(
+            entity_type="user", entity_id=str(operator.pk),
+        ).order_by("-occurred_at").first()
+        assert "profile updated" in event.reason
+        assert event.field_changes["after"]["email"] == "new@example.test"
+        assert event.field_changes["before"]["email"] == "op@example.test"
