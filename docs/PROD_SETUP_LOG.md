@@ -1303,3 +1303,99 @@ alone already takes the false match below the auto-merge line.
 
 - 17 pending pairs, up from 7; the Kato pair is the one to look at first.
 - The weights DRAFT is not yet authored — run the command when ready.
+
+---
+
+## 2026-09-23 — deploy 5352c65 → 007347c (household_shocks matview)
+
+The Data Explorer's `household_shocks` dataset has been declared since
+US-DATA-EXP-001 — an unmanaged model, a privacy-class seed, a row in the
+refresh list — but its `CREATE MATERIALIZED VIEW` never landed. The
+dataset resolved to a table that does not exist. Invisible while it
+would have been empty anyway; not invisible once section K shock detail
+starts arriving.
+
+**Pre-deploy backup.**
+`/opt/nsrmis/backups/pre-shocks-matview-20260923-153621Z.dump` (10.7M,
+exit 0), verified with the throwaway-container `pg_restore -l`: **132
+tables with data**.
+
+**Deploy.** `ssh nsr-prod 'cd /opt/nsrmis && ./deploy.sh'`. Build 5m09s,
+healthz ok on attempt 1, all 8 services up, 28G free.
+
+**Migration applied:** `data_management.0011_household_shocks_matview` `[X]`.
+
+### Two shape decisions, both pinned by tests
+
+- **`sub_region_code` holds the code.** The two matviews built in 0010
+  project `h.sub_region_id::text` into a column of that name — the
+  GeographicUnit primary key, `13545`, not `SR-WEST-NILE-NORTHERN`.
+  Everything that reads that column expects a code: ABAC
+  (`_SUB_REGION_DENORM`), `query_builder`'s filters, and the
+  `Household`/`Shock` denorm columns this is a projection of. A scoped
+  query against a row-id column matches nothing and returns an **empty
+  dataset rather than an error**. This matview stores the code and is
+  deliberately inconsistent with its two siblings; fixing those moves
+  live aggregates and is recorded as a finding, not done here.
+- **`household_count` counts DISTINCT households.** Section K asks
+  K03/K04 once per livelihood, so one household can file up to four
+  Shock rows.
+
+### The migration populates every matview, not just its own
+
+A matview created `WITH NO DATA` raises on any SELECT, which the
+aggregate endpoint turns into a 503. The 0010 pair have carried that
+hole since they were built and are readable only because beat has since
+run. Migration 0011 refreshes every unpopulated `mv_explorer_*`, so
+after `migrate` the whole family is readable. Idempotent — on an
+established database the others are already populated and are skipped.
+
+### What the 503 had been covering
+
+Closing it turned six sleeping tests into real ones:
+
+- `tests/unit/data_explorer/fixtures.py` declared an Internal variable
+  with `source_field="dwelling_type"` on the **PMT** matview, which does
+  not project that column — the aggregate happy path raised FieldError.
+  The contract tests accept "200 OR 503", and the matview was
+  unpopulated in the test database, so they took the 503 branch every
+  time and asserted nothing. Pointed at `pmt_band`, they now exercise
+  the 200 path.
+- `test_risk_probe` skipped on "query log is empty", which coincided
+  with the real precondition only while every aggregate 503'd before it
+  could log. It now skips on the matview holding no rows — the actual
+  unbuilt-corpus condition (US-DATA-EXP-002).
+- Nothing asserted that a declared dataset resolves to a matview that
+  exists. `apps/data_explorer/tests/test_dataset_matviews.py` adds that,
+  with the five genuinely unbuilt matviews named in a list a migration
+  has to delete from, and checks each dataset's declared variables are
+  columns the matview actually projects.
+
+Full suite green on both backends: **2690 passed, 29 skipped**.
+
+### Verification on the box
+
+```
+mv_explorer_household_by_subcounty_demographics | t
+mv_explorer_household_by_subcounty_pmt          | t
+mv_explorer_household_shocks_subregion          | t
+```
+
+`SELECT * FROM mv_explorer_household_shocks_subregion` → **0 rows**, and
+that is correct: prod holds 354 households and **0 Shock rows**. The
+dataset now reads empty instead of erroring, which was the whole point.
+It fills the first time a household with section K detail is promoted.
+
+`/healthz` 200. `/console/` 302 to login unauthenticated.
+
+### Open
+
+- The 0010 pair still put a row id in `sub_region_code`. Any ABAC-scoped
+  query against those two datasets matches nothing and returns empty —
+  silently. Worth fixing before anyone trusts an aggregate from them.
+- Five Data Explorer matviews remain unbuilt (member education, member
+  employment, referrals, grievances, health chronic). They are now named
+  in `UNBUILT_MATVIEWS` rather than silently broken.
+- 17 pending duplicate pairs; the Kato pair is still the one to look at
+  first.
+- The tier-3 weights DRAFT is still not authored.
