@@ -1200,3 +1200,106 @@ neither is clear-cut:
 Both hold full Django admin access, which matters more now that the
 console deliberately refuses to manage superusers: they sit outside every
 control the new feature adds.
+
+## 2026-09-23 — first duplicate-discovery run, and the scoring fix it prompted
+
+### The run
+
+Discovery fired at **01:00:00Z (04:00 EAT)**, the first since the
+scheduling landed. `CELERY_TIMEZONE` is `Africa/Kampala`, so the 04:00
+crontab is 01:00 UTC.
+
+```
+2026-09-23 01:00:00  succeeded  full sweep
+  members=1289  tier1=0  tier2=2  tier3=11  comparisons=2717  0.2s
+```
+
+MatchPair 16 -> 29. **Tier 2 and tier 3 produced pairs for the first
+time**: every pair in the registry until now was tier 1, from a one-off
+shell run months earlier.
+
+Auto-merge stayed off and nothing merged itself — `decisions
+attributable to auto-merge: 0`. The merges recorded that day were made
+by people, with human reasons.
+
+### What the run found
+
+Two pairs landed above the 0.95 auto-merge threshold.
+
+**1.000 — a probable genuine duplicate.** Lilian Kato, 1994-12-27, same
+village (Wasswa, Bundibugyo), in two different households, registered
+2026-05-15 and 2026-09-22. No NIN on either, so identity cannot be
+settled from the record; it needs someone who can check locally. Tier 1
+could never have found this.
+
+**0.967 — two different people.** Rebecca Akello (1993-06-05, NIN …01UG,
+0750008881) and Rebecca Okello (1993-09-28, NIN …06UG, 0750008886) — the
+same household, different NINs, different phones, different roles.
+
+Had auto-merge been enabled, the second pair would have been collapsed
+into one registry identity within the hour, soft-deleting a real
+person's record inside a 30-day reversal window nobody would have known
+to use. This is the evidence for the decision to ship it disabled.
+
+### Why it scored 0.967
+
+Two compounding faults:
+
+- `year_proximity` compared `d.year` alone while serving as the
+  `date_of_birth` feature, so two people born eleven months apart scored
+  a **perfect** date match.
+- `village` carries 0.15 while tier 3 blocks **by** village, so it is 1.0
+  for every pair the model ever compares.
+
+Together, 0.30 of the weight was free to anyone sharing a village and a
+birth year.
+
+### The fix — deploy 3841eeb -> 5352c65
+
+Code-only, no migrations. Dump first:
+`pre-tier3-scoring-20260923-*.dump` (132 tables verified).
+
+`birth_date_proximity` replaces `year_proximity`, scoring the whole
+date: same date 1.0; within 31 days 0.75 (a swapped day and month is a
+transcription slip, not a different person); same year but further apart
+0.4; a year apart 0.2; two or more 0.0. Missing dates stay 0.0.
+
+Verified in the running image:
+
+```
+same date 1.0 · day/month swapped 0.75 · the Rebecca pair 0.4 · a year apart 0.2
+year_proximity gone: replaced, not shadowed
+```
+
+Effect on the two real pairs:
+
+```
+Akello / Okello   0.967 -> 0.877   below auto-merge, still above review
+Kato   / Kato     1.000 -> 1.000   the true duplicate is untouched
+```
+
+The eleven existing tier-3 pairs keep their recorded scores: those are
+the audit record of what the model said at the time.
+
+### Not changed: the weights
+
+**The active model version carries no `tier3` section at all**, so the
+weights in force are the fallback defaults in `services.py` — which
+nobody has approved. A match model decides which two people the registry
+treats as one, so `manage.py propose_tier3_weights` authors the proposal
+as a DRAFT and stops; `--show` prints the comparison and writes nothing.
+
+```
+date_of_birth  0.15 -> 0.20    first_name  0.30 -> 0.35
+surname        0.30 -> 0.35    sex         0.10 -> 0.10
+village        0.15 ->  —      removed: blocking fixes it at 1.0
+```
+
+Activation is dual approval and the approver must not be the author.
+Until then the unapproved defaults remain in force — but the code fix
+alone already takes the false match below the auto-merge line.
+
+### Open
+
+- 17 pending pairs, up from 7; the Kato pair is the one to look at first.
+- The weights DRAFT is not yet authored — run the command when ready.
