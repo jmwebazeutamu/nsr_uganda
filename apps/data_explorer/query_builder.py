@@ -19,9 +19,7 @@ from datetime import UTC, datetime
 
 from django.db.models import Count
 
-from apps.security.models import ScopeLevel
-
-from .geography import LEVEL_COLUMN, normalise_level
+from .geography import LEVEL_COLUMN, NATIONAL, normalise_level
 from .suppressor import Suppressor
 
 
@@ -96,7 +94,7 @@ def _apply_geographic_scope(qs, scope: dict):
     codes = list(scope.get("codes") or [])
     if not (level and codes):
         return qs
-    if level == ScopeLevel.NATIONAL:
+    if level == NATIONAL:
         # The only level with no column: it means "do not filter".
         return qs
     column = LEVEL_COLUMN.get(level)

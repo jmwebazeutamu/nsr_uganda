@@ -24,20 +24,47 @@ Not an empty answer — a national answer, labelled as one county, with
 the k-anonymity suppression computed against the national population
 rather than the county's. A nonsense code returned it too.
 
-So the ladder is derived here, from ``ScopeLevel``, and the column name
-for a level is derived from the level (``county`` -> ``county_code``)
-rather than listed. A level that is missing from a matview is now a fact
-this module can state, and callers refuse instead of falling open.
+So the ladder is derived here, from ``GeographicUnit.Level`` — the UBOS
+frame itself — and the column name for a level is derived from the level
+(``county`` -> ``county_code``) rather than listed. A level that is
+missing from a matview is now a fact this module can state, and callers
+refuse instead of falling open.
+
+**Not** derived from ``ScopeLevel``. The first version of this module
+was, and county vanished from the ladder on production the moment it
+deployed, because committed ``ScopeLevel`` has no ``COUNTY`` member —
+it lists national, region, sub_region, district, sub_county, parish,
+village, partner. The fail-closed branch caught it (a county request
+was refused rather than answered nationally) but the rung was still
+gone. ``ScopeLevel`` mirrors the frame for ABAC and adds national and
+partner; the frame itself belongs to ``GeographicUnit``.
+
+That gap is also a live ABAC limitation in its own right: with no
+``ScopeLevel.COUNTY``, an ``OperatorScope`` cannot grant a county-level
+scope to an operator at all.
 """
 
 from __future__ import annotations
 
-from apps.security.models import ScopeLevel
+from apps.reference_data.models import GeographicUnit
 
-# The ladder, coarse to fine, straight off ScopeLevel's declaration
-# order. PARTNER is not geographic.
-LADDER: tuple[str, ...] = tuple(
-    level.value for level in ScopeLevel if level != ScopeLevel.PARTNER
+# NATIONAL is not a UBOS unit — there is no GeographicUnit row for "the
+# country". It is the synthetic root of the ladder and the one level
+# that means "do not filter".
+NATIONAL = "national"
+
+# The ladder, coarse to fine, straight off GeographicUnit.Level.
+#
+# Derived from the UBOS frame and NOT from ScopeLevel, which is an ABAC
+# concept that mirrors the frame and adds national + partner. The two
+# are supposed to agree and at the time of writing they do not:
+# ScopeLevel has no COUNTY, so an OperatorScope cannot grant a
+# county-level scope at all. Deriving from ScopeLevel silently dropped
+# county out of this ladder — see the note in the module docstring
+# about what a missing rung costs.
+LADDER: tuple[str, ...] = (
+    NATIONAL,
+    *(level.value for level in GeographicUnit.Level),
 )
 
 # Rank: coarser → smaller. national = 0 … village = 7.
@@ -47,16 +74,16 @@ LEVEL_RANK: dict[str, int] = {name: i for i, name in enumerate(LADDER)}
 # listed — a new level in ScopeLevel gets its column name for free, and
 # no copy of this can drift.
 LEVEL_COLUMN: dict[str, str] = {
-    name: f"{name}_code" for name in LADDER if name != ScopeLevel.NATIONAL
+    name: f"{name}_code" for name in LADDER if name != NATIONAL
 }
 
 # Spellings a caller may send. One copy.
 ALIASES: dict[str, str] = {
-    "country": ScopeLevel.NATIONAL.value,
-    "subregion": ScopeLevel.SUB_REGION.value,
-    "sub-county": ScopeLevel.SUB_COUNTY.value,
-    "subcounty": ScopeLevel.SUB_COUNTY.value,
-    "sub-region": ScopeLevel.SUB_REGION.value,
+    "country": NATIONAL,
+    "subregion": GeographicUnit.Level.SUB_REGION.value,
+    "sub-region": GeographicUnit.Level.SUB_REGION.value,
+    "subcounty": GeographicUnit.Level.SUB_COUNTY.value,
+    "sub-county": GeographicUnit.Level.SUB_COUNTY.value,
 }
 
 
@@ -76,7 +103,7 @@ def scopable_levels(matview_model) -> set[str]:
     ``national`` is always scopable — it means "do not filter". Every
     other level needs its column physically on the matview.
     """
-    levels = {ScopeLevel.NATIONAL.value}
+    levels = {NATIONAL}
     for level, column in LEVEL_COLUMN.items():
         if hasattr(matview_model, column):
             levels.add(level)
@@ -92,5 +119,5 @@ def levels_down_to(floor: str) -> set[str]:
     """
     limit = LEVEL_RANK.get(floor)
     if limit is None:
-        return {ScopeLevel.NATIONAL.value}
+        return {NATIONAL}
     return {name for name, rank in LEVEL_RANK.items() if rank <= limit}

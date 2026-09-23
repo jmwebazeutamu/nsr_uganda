@@ -45,9 +45,36 @@ def test_ladder_is_the_ubos_frame_under_national():
     assert LADDER == ("national", *UBOS_FRAME)
 
 
-def test_ladder_matches_the_geographic_unit_levels():
-    """ScopeLevel and GeographicUnit.Level describe the same hierarchy."""
+def test_ladder_is_derived_from_the_ubos_frame():
+    """The ladder's source is GeographicUnit.Level, the frame itself.
+
+    It used to be derived from ScopeLevel, which mirrors the frame for
+    ABAC — and committed ScopeLevel has no COUNTY, so county silently
+    dropped out of the ladder in production. Asserting against
+    GeographicUnit.Level here keeps the derivation honest; the
+    ScopeLevel gap is tracked separately below.
+    """
     assert set(UBOS_FRAME) == {lv.value for lv in GeographicUnit.Level}
+    assert set(UBOS_FRAME) <= set(LEVEL_RANK)
+
+
+def test_abac_can_express_every_level_the_explorer_serves():
+    """A level the Data Explorer can filter by, but ScopeLevel cannot
+    name, is a level no operator can be scoped to.
+
+    This is a real gap, not a style point: with no ScopeLevel.COUNTY an
+    OperatorScope cannot grant a county-level scope. Listed rather than
+    asserted-away so it stays visible; delete the entry when the member
+    lands.
+    """
+    from apps.security.models import ScopeLevel
+
+    known_gap = {"county"}
+    missing = set(UBOS_FRAME) - {lv.value for lv in ScopeLevel}
+    assert missing <= known_gap, (
+        f"ScopeLevel cannot express {sorted(missing - known_gap)}; "
+        "ABAC cannot scope an operator to those levels."
+    )
 
 
 def test_county_sits_between_district_and_sub_county():
