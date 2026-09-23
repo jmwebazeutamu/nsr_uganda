@@ -18,6 +18,8 @@ Fail-closed:
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from django.db.models import Q
 
 from .models import OperatorScope, ScopeLevel
@@ -28,20 +30,33 @@ from .models import OperatorScope, ScopeLevel
 # it to every level's column so one declaration covers all granularities.
 _SUB_REGION_DENORM = "sub_region_code"
 
-# ScopeLevel -> the Household column (relative to Household) that carries
-# that geographic unit's code. Household denormalises every UBOS level as
-# an FK, so a coarse scope (district) automatically contains its finer
-# units — no hierarchy walk needed. sub_region uses the denormalised
-# partition column; the rest go through the FK's `code`.
-_LEVEL_FIELD: dict[str, str] = {
-    ScopeLevel.REGION: "region__code",
-    ScopeLevel.SUB_REGION: _SUB_REGION_DENORM,
-    ScopeLevel.DISTRICT: "district__code",
-    ScopeLevel.COUNTY: "county__code",
-    ScopeLevel.SUB_COUNTY: "sub_county__code",
-    ScopeLevel.PARISH: "parish__code",
-    ScopeLevel.VILLAGE: "village__code",
-}
+@lru_cache(maxsize=1)
+def _level_field() -> dict[str, str]:
+    """ScopeLevel -> the Household column carrying that unit's code.
+
+    Read straight off ``Household.GEO_CODE_FIELDS`` rather than listed
+    here, so a rung that lands on Household cannot be missed in ABAC —
+    a level this map lacks is a level no operator can be scoped to, and
+    the last time the ladder was copied instead of derived, county went
+    missing and a county-scoped query returned the whole country.
+
+    Every level reads a denormalised column. These used to be FK
+    traversals — ``district__code``, ``county__code``, … — one join per
+    level on the hot path of every scoped list query in the registry,
+    and two ways of asking the same question that could disagree.
+    ``Household.sync_geography_codes()`` keeps the mirrors in lockstep
+    and a contract test asserts it for every row.
+
+    Imported inside the function: ``security`` loads before
+    ``data_management``, and lru_cache means one resolution per process.
+    """
+    from apps.data_management.models import Household
+
+    return {
+        ScopeLevel(level).value: column
+        for level, column in Household.GEO_CODE_FIELDS.items()
+        if ScopeLevel(level).value in ScopeLevel.values
+    }
 
 
 def _relation_prefix(field: str) -> str:
@@ -93,7 +108,7 @@ def scope_q_for_field(user, field: str = "sub_region_code") -> Q:
     for level, code in scopes:
         if level == ScopeLevel.NATIONAL:
             return ~Q(pk__in=[])
-        rel = _LEVEL_FIELD.get(level)
+        rel = _level_field().get(level)
         if rel and code:
             q |= Q(**{f"{prefix}{rel}": code})
     return q

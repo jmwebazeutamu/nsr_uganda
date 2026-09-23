@@ -50,16 +50,39 @@ class TestSubRegionCodeInvariant:
         m.refresh_from_db()
         assert m.sub_region_code == hh.sub_region_code
 
-    def test_explicit_partition_key_not_overwritten(self, geo):
-        # Allows the backfill migration to populate the column via the ORM
-        # without the save() override silently re-resolving from the FK.
+    def test_an_explicit_partition_key_that_contradicts_the_fk_is_corrected(self, geo):
+        """The mirror tracks the FK. It is not a free-text column.
+
+        This used to assert the opposite — an explicitly-passed
+        sub_region_code was left alone, so a backfill could write the
+        column through the ORM without save() re-resolving it. That
+        escape hatch is now unsafe and unused: ABAC matches operators
+        against these columns, so a household whose sub_region_code
+        disagrees with its sub_region is a household shown to the wrong
+        operator and hidden from the right one. Nothing in the
+        application sets one explicitly, and migration 0014's backfill
+        writes in SQL rather than through the ORM.
+        """
         hh = Household.objects.create(
             region=geo["r"], sub_region=geo["sr"], district=geo["d"],
             county=geo["c"], sub_county=geo["sc"], parish=geo["p"], village=geo["v"],
             urban_rural="2", sub_region_code="CUSTOM",
         )
         hh.refresh_from_db()
-        assert hh.sub_region_code == "CUSTOM"
+        assert hh.sub_region_code == geo["sr"].code
+
+    def test_every_level_is_mirrored_not_just_the_partition_key(self, geo):
+        """ADR-0005 denormalised one rung. All seven are mirrored now —
+        see tests/contract/test_household_geography_denorm.py."""
+        hh = Household.objects.create(
+            region=geo["r"], sub_region=geo["sr"], district=geo["d"],
+            county=geo["c"], sub_county=geo["sc"], parish=geo["p"], village=geo["v"],
+            urban_rural="2",
+        )
+        hh.refresh_from_db()
+        assert hh.district_code == geo["d"].code
+        assert hh.county_code == geo["c"].code
+        assert hh.sub_county_code == geo["sc"].code
 
 
 class TestHeadMemberInvariant:

@@ -109,10 +109,14 @@ class HouseholdsBySubRegion(APIView):
 
     def get(self, request):
         group_by = request.query_params.get("group_by", "sub_region")
+        # The CODE comes from Household's denormalised column — the
+        # same column ABAC filters on — so grouping and scoping cannot
+        # disagree. The NAME still joins: names are not denormalised,
+        # and should not be, because a unit can be renamed.
         groupings = {
-            "region": ("region__code", "region__name"),
+            "region": ("region_code", "region__name"),
             "sub_region": ("sub_region_code", "sub_region__name"),
-            "district": ("district__code", "district__name"),
+            "district": ("district_code", "district__name"),
         }
         code_field, name_field = groupings.get(group_by, groupings["sub_region"])
 
@@ -123,11 +127,11 @@ class HouseholdsBySubRegion(APIView):
         sub_region = (request.query_params.get("sub_region") or "").strip()
         district = (request.query_params.get("district") or "").strip()
         if region:
-            scoped = scoped.filter(region__code=region)
+            scoped = scoped.filter(region_code=region)
         if sub_region:
             scoped = scoped.filter(sub_region_code=sub_region)
         if district:
-            scoped = scoped.filter(district__code=district)
+            scoped = scoped.filter(district_code=district)
 
         rows = list(
             scoped.values(code_field, name_field)

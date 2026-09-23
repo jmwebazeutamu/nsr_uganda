@@ -113,10 +113,34 @@ class Household(models.Model):
     is_deleted = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True)
 
-    # Denormalised partition key per ADR-0005. Mirrors sub_region.code; auto-
-    # populated in save(). Indexed so it can serve admin filters today, then
-    # become the LIST partition key during the Sprint 2 cut-over.
+    # Denormalised geography codes — one per rung of the UBOS ladder,
+    # each mirroring its FK's `code`. sub_region_code came first as the
+    # ADR-0005 partition key; the rest followed because every consumer
+    # that wanted a code was reaching it through a join:
+    #
+    #   * ABAC matched `district__code` / `county__code` / … , a join per
+    #     level on the hot path of every scoped list query.
+    #   * The Data Explorer matviews joined
+    #     `reference_data_geographicunit` for the same three codes, which
+    #     made them depend on that table's `code` column — and Postgres
+    #     refuses to ALTER a column a matview depends on.
+    #
+    # Kept in lockstep by save() via sync_geography_codes(), which only
+    # touches the database when a mirror is empty or its FK has moved.
+    # tests assert the lockstep for every household.
+    #
+    # Indexed because ABAC filters on them directly now; an unindexed
+    # column would turn a join into a sequential scan. At national scale
+    # (12M households) these indexes must be built CONCURRENTLY — see
+    # migration 0014.
+    region_code = models.CharField(max_length=48, blank=True, db_index=True)
     sub_region_code = models.CharField(max_length=32, blank=True, db_index=True)
+    district_code = models.CharField(max_length=48, blank=True, db_index=True)
+    county_code = models.CharField(max_length=48, blank=True, db_index=True)
+    sub_county_code = models.CharField(max_length=48, blank=True, db_index=True)
+    parish_code = models.CharField(max_length=48, blank=True, db_index=True)
+    # Village is optional on the FK, so this is legitimately blank.
+    village_code = models.CharField(max_length=48, blank=True, db_index=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -136,11 +160,86 @@ class Household(models.Model):
     def __str__(self) -> str:
         return f"Household {self.id}"
 
+    # UBOS level -> the denormalised column mirroring that FK's code.
+    # Derived nowhere else: apps/data_explorer/geography.py owns the
+    # ladder's ORDER, this owns the Household column names.
+    GEO_CODE_FIELDS = {
+        "region": "region_code",
+        "sub_region": "sub_region_code",
+        "district": "district_code",
+        "county": "county_code",
+        "sub_county": "sub_county_code",
+        "parish": "parish_code",
+        "village": "village_code",
+    }
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+        # Remember which units this row pointed at when it was loaded,
+        # so save() can tell "unchanged" from "moved" without a query.
+        #
+        # Read out of __dict__, never getattr: on a deferred queryset
+        # (`.only(...)`) a getattr for an unloaded column goes through
+        # DeferredAttribute, which issues a fresh query, which calls
+        # from_db again — straight into RecursionError. A level that is
+        # not loaded is simply absent from the snapshot, and
+        # sync_geography_codes treats absent as "unknown", which makes
+        # it re-derive rather than assume.
+        loaded = instance.__dict__
+        instance._geo_fk_snapshot = {
+            level: loaded[f"{level}_id"]
+            for level in cls.GEO_CODE_FIELDS
+            if f"{level}_id" in loaded
+        }
+        return instance
+
+    def sync_geography_codes(self, *, force: bool = False):
+        """Mirror each geography FK's code onto its denormalised column.
+
+        Cheap by construction. A row loaded from the database whose FKs
+        have not moved and whose mirrors are already filled does no work
+        and issues no query; only an empty mirror or a reassigned FK
+        reads the GeographicUnit. At create time the caller has usually
+        just resolved the units, so the related objects are already
+        cached on the instance.
+
+        The predecessor only filled sub_region_code when it was blank,
+        which meant moving a household to another district left the
+        mirror pointing at the old one. That is not a stale label — ABAC
+        matches on these columns, so a stale mirror shows the household
+        to the wrong operator.
+        """
+        snapshot = getattr(self, "_geo_fk_snapshot", {})
+        loaded = self.__dict__
+        for level, column in self.GEO_CODE_FIELDS.items():
+            # Deferred columns are not ours to touch — we cannot know
+            # whether they moved, and loading them to find out would
+            # undo the caller's reason for deferring them.
+            if f"{level}_id" not in loaded or column not in loaded:
+                continue
+            fk_id = loaded[f"{level}_id"]
+            if not fk_id:
+                # An optional level (village) that is not set has no code.
+                if getattr(self, column, ""):
+                    setattr(self, column, "")
+                continue
+            if not force and getattr(self, column, "") and snapshot.get(level) == fk_id:
+                continue
+            unit = getattr(self, level)
+            setattr(self, column, unit.code if unit else "")
+
     def save(self, *args, **kwargs):
-        # Keep sub_region_code in lockstep with sub_region.code (ADR-0005).
-        if self.sub_region_id and not self.sub_region_code:
-            self.sub_region_code = self.sub_region.code
+        # Keep every geography mirror in lockstep with its FK (ADR-0005
+        # for sub_region_code; the rest carry the same guarantee).
+        self.sync_geography_codes()
         super().save(*args, **kwargs)
+        after = self.__dict__
+        self._geo_fk_snapshot = {
+            level: after[f"{level}_id"]
+            for level in self.GEO_CODE_FIELDS
+            if f"{level}_id" in after
+        }
 
     def clean(self):
         # US-FIX-001 — head-member invariant. If `head_member` is set
