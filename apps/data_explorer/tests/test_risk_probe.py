@@ -197,17 +197,31 @@ class TestRiskProbe:
         > 0 for the small-cell scenarios. We assert that AT LEAST one
         query in the run produced a suppressed cell — without that the
         probe is meaningless."""
+        from apps.data_explorer.matview_models import MATVIEW_MODELS
         from apps.data_explorer.models import AggregateQueryLog
+
+        # The precondition is that the matview HOLDS ROWS, not that the
+        # query log is empty. Those coincided only while the matview was
+        # unpopulated in the test database and every aggregate 503'd
+        # before it could log; migration 0011 made `migrate` leave the
+        # matviews readable, so the queries now run, log, and return
+        # zero rows — which is not the same thing as a probe that found
+        # no small cells. Skipping on the real precondition keeps the
+        # assertion live the moment the corpus lands.
+        matview = scenarios["target_cell"]["matview"]
+        model = MATVIEW_MODELS.get(matview)
+        if model is None or not model.objects.exists():
+            pytest.skip(
+                f"{matview} holds no rows — the probe corpus "
+                "(US-DATA-EXP-002 seed_data_explorer_test_corpus) is not "
+                "built, so no query can reach a small cell. The defence "
+                "is still asserted via the differencing test below.",
+            )
 
         self._run_all_queries(scenarios, probe_dataset, probe_actor)
 
         rows = AggregateQueryLog.objects.filter(actor=str(probe_actor.id))
-        if rows.count() == 0:
-            pytest.skip(
-                "AggregateQueryLog empty — the Coder's matview is not "
-                "wired in test mode. The defence is still asserted via "
-                "the differencing test below."
-            )
+        assert rows.exists(), "the probe ran but logged no queries"
         suppressed_runs = rows.filter(suppressed_cell_count__gt=0)
         assert suppressed_runs.exists(), (
             "Expected at least one query in the probe to hit small "
