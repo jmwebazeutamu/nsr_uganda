@@ -2029,3 +2029,88 @@ a clean worktree.
   overwriting each other; the two band vocabularies should converge.
 - 17 pending duplicate pairs; the Kato pair first.
 - The tier-3 weights DRAFT is still not authored.
+
+---
+
+## 2026-09-24 — deploy b7b3a9e → c804673, and the phantom-assignee remediation
+
+### Two fixes to the household picker
+
+**It called a path nobody serves.** `/api/v1/households/` — the
+registry viewset is under `/api/v1/data-management/`, and the URL
+already had a canonical home (`_HH_API_BASE` in screens-registry.jsx).
+Every search returned 404; no household could be attached to a
+grievance.
+
+Nothing could catch it from the JS side: a wrong URL is a runtime 404
+and the component tests stub fetch. `tests/contract/
+test_console_api_paths.py` now resolves every `/api/v1/` literal in the
+design layer against Django's URLconf, skipping prefixes cut short by
+`${`. Mutation-tested.
+
+**Then it could not find anything.** `q` matched the Registry ID, the
+head's name and the PARISH name only, so an operator typing the
+district they know got nothing. Now searches district / sub-county /
+parish / village names and the denormalised geography codes.
+
+Verified on the box:
+
+```
+'Byaruhanga_test'  -> 1 hit     'Maracha' (district) -> 3 hits
+'Ombia-Bura'       -> 3 hits    '01KRPPW6SA' (ID)    -> 1 hit
+'Nowhere-At-All'   -> 0 hits
+```
+
+### The phantom assignees — what they turned out to be
+
+Three grievances and six tasks pointed at names that were never
+accounts. Looking at them changed the fix: **all six tasks are CLOSED**
+and all three grievances come from one demo run on 18 May 2026.
+
+```
+01KRXS6M58…  resolved     "This is a test grievance, submitted by Johnson"
+01KRXTVG4X…  in_progress  "The use didnt not correct my data iam currently not registered"
+01KRY9MMEN…  closed       "Quia ullam omnis ut" · reporter "Et incididunt expedi"
+                          · household_id "Deserunt esse itaque"
+```
+
+`"Deserunt esse itaque"` is not a Registry ID and names no household —
+that grievance has pointed at nothing for four months. Task titles
+include "Ut et proident unde", "In sed cupiditate al" and "Test Test".
+
+Only **one** record is live work.
+
+**Decision (registry owner):** reassign the live grievance to
+`johnsonmwebaze`; leave the two test records' assignees alone and
+annotate them. Rewriting a closed record's assignee would put a real
+operator's name against a task titled "Test Test" — worse than the
+phantom, which implicates nobody. Who held a closed case is audit
+history, not a live pointer.
+
+`manage.py remediate_phantom_assignees --apply --actor jmwebaze`:
+
+```
+reassign 01KRXTVG4X… [in_progress] 'Twikirize J. · District M&E' -> 'johnsonmwebaze'
+annotate 01KRXS6M58… [resolved]  (assignee 'Adong Florence · CDO Tapac' kept)
+annotate 01KRY9MMEN… [closed]    (assignee 'Adong Florence · CDO Tapac' kept)
+Done: 1 reassigned, 2 annotated.
+```
+
+Re-runnable: a record already on a real user is left alone, an existing
+note is not duplicated. The two remaining phantom values are the
+deliberate ones.
+
+### Open
+
+- The two test grievances and their six tasks are still in production.
+  They are annotated, not deleted — deletion was offered and not taken.
+- **Assignment emails still do not leave the box.** `EMAIL_BACKEND`
+  falls back to console because `EMAIL_HOST_USER` / `EMAIL_HOST_PASSWORD`
+  are unset. The reassignment above wrote its notification to the web
+  container's log.
+- `opm-analyst` has no email address, so that account cannot be
+  alerted about anything.
+- `_pmtBandLabel` still exists twice in the console with different
+  behaviour; renamed apart, not converged.
+- 17 pending duplicate pairs; the Kato pair first.
+- The tier-3 weights DRAFT is still not authored.
