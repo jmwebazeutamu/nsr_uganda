@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 
 from apps.grievance.models import (
@@ -163,8 +165,13 @@ class TestEscalate:
         g.refresh_from_db()
         assert g.tier == Tier.L2_CDO
         assert g.status == GrievanceStatus.ESCALATED
-        # SLA window resets to 48h for L2.
-        assert (g.sla_deadline - g.opened_at).total_seconds() == 48 * 3600
+        # L2 gets its full 48h from the moment it RECEIVED the case,
+        # not from when the case was opened. Measured from opened_at
+        # this used to hand a breached L1 case a deadline already in
+        # the past.
+        assert g.tier_started_at is not None
+        assert (g.sla_deadline - g.tier_started_at).total_seconds() == 48 * 3600
+        assert g.sla_deadline > g.opened_at + timedelta(hours=48)
 
     def test_cannot_escalate_beyond_l4(self, db):
         g = open_grievance(
@@ -175,7 +182,7 @@ class TestEscalate:
 
     def test_escalate_requires_reason(self, db):
         g = open_grievance(category=Category.OTHER, description="x")
-        with pytest.raises(GrievanceError, match="non-empty reason"):
+        with pytest.raises(GrievanceError, match="requires a reason"):
             escalate(g, actor="op", reason="")
 
     def test_cannot_escalate_resolved(self, db):

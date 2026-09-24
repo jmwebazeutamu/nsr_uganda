@@ -92,3 +92,45 @@ def visible_grievances(user, queryset=None):
     # Q(pk__in=[]), so an unscoped operator sees only what they own.
     in_scope = scope_q_for_field(user, "sub_region_code")
     return qs.filter(in_scope | owned_q(user)).distinct()
+
+
+# What a grievance will accept next, from the state machine.
+#
+# The console offered "Assign to me" on a closed case and the server
+# refused it. Derived here from the same statuses the service guards
+# check, so the buttons and the guards cannot drift — the UPD API
+# already serves `allowed_actions` for the same reason.
+_ASSIGNABLE = ("open", "in_progress", "escalated")
+_ESCALATABLE = ("open", "in_progress", "escalated")
+_RESOLVABLE = ("open", "in_progress", "escalated")
+
+
+def allowed_actions(grievance) -> list[str]:
+    """The transitions this grievance will currently accept.
+
+    Status only. Whether the CALLER may perform them is a separate
+    question, answered by the role and scope checks on each action —
+    this says what the case is ready for, not who may do it.
+    """
+    status = grievance.status
+    actions = ["comment"]  # a note is allowed in every state, including closed
+    if status in _ASSIGNABLE:
+        actions.append("assign")
+    if status in _ESCALATABLE and grievance.tier != "l4_nsr_unit":
+        actions.append("escalate")
+    if status in _RESOLVABLE and not grievance.tasks.exclude(
+        status="closed",
+    ).exists():
+        actions.append("resolve")
+    if status == "resolved":
+        actions.append("close")
+    # No "reopen". The SAD does not mention re-opening a grievance at
+    # all — not permitted, not forbidden, absent. Turning a closed,
+    # audited case back into a live one raises questions the
+    # architecture has not answered: whether the SLA clock restarts,
+    # whether it needs approval, whether the reporter is told. Inventing
+    # answers here would put a lifecycle transition into the registry
+    # that nobody designed. Raised as an open item instead.
+    if grievance.category == "data_correction" and grievance.household_id:
+        actions.append("open_change_request")
+    return actions

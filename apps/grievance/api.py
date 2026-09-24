@@ -43,6 +43,20 @@ def _is_grm_officer(user) -> bool:
 
 
 class GrievanceSerializer(serializers.ModelSerializer):
+    # What the case will accept next. The console offered "Assign to
+    # me" on a closed grievance and the server refused it; the same
+    # pattern the UPD API already uses.
+    allowed_actions = serializers.SerializerMethodField()
+    # The SLA clock's start, so a timeline can say which window it is
+    # showing rather than implying it runs from the open date.
+    tier_started_at = serializers.DateTimeField(read_only=True)
+    sla_breach_flagged_at = serializers.DateTimeField(read_only=True)
+
+    def get_allowed_actions(self, obj) -> list:
+        from .visibility import allowed_actions
+
+        return allowed_actions(obj)
+
     class Meta:
         model = Grievance
         fields = (
@@ -54,12 +68,14 @@ class GrievanceSerializer(serializers.ModelSerializer):
             "resolved_at", "resolved_by", "resolution_narrative",
             "closed_at", "closed_by", "closing_narrative",
             "linked_change_request_id",
+            "tier_started_at", "sla_breach_flagged_at", "allowed_actions",
             "created_at", "updated_at",
         )
         read_only_fields = (
             "id", "status", "opened_at", "sla_deadline",
             "resolved_at", "resolved_by", "closed_at", "closed_by",
             "closing_narrative", "created_at", "updated_at",
+            "tier_started_at", "sla_breach_flagged_at", "allowed_actions",
         )
 
 
@@ -69,6 +85,12 @@ class _ActorReason(serializers.Serializer):
         required=False,
         help_text="Ignored - the acting user comes from the authenticated session.",
     )
+    # The canned claim, from apps/grievance/reasons.py, and the
+    # operator's own words. They used to arrive joined into one display
+    # string built in the console, so the server could not check either
+    # — "ab" resolved a case. `reason` remains for the system paths.
+    reason_code = serializers.CharField(required=False, allow_blank=True)
+    note = serializers.CharField(required=False, allow_blank=True)
     reason = serializers.CharField(required=False, allow_blank=True)
 
 
@@ -87,7 +109,9 @@ class _Resolve(serializers.Serializer):
         required=False,
         help_text="Ignored - the acting user comes from the authenticated session.",
     )
-    narrative = serializers.CharField()
+    narrative = serializers.CharField(required=False, allow_blank=True)
+    reason_code = serializers.CharField(required=False, allow_blank=True)
+    note = serializers.CharField(required=False, allow_blank=True)
     linked_change_request_id = serializers.CharField(required=False, allow_blank=True)
 
 
@@ -233,8 +257,12 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
         ser = _ActorReason(data=request.data)
         ser.is_valid(raise_exception=True)
         try:
-            g = escalate(self.get_object(), actor=actor_from_request(request),
-                         reason=ser.validated_data.get("reason", ""))
+            g = escalate(
+                self.get_object(), actor=actor_from_request(request),
+                reason_code=ser.validated_data.get("reason_code", ""),
+                note=ser.validated_data.get("note", ""),
+                reason=ser.validated_data.get("reason", ""),
+            )
         except GrievanceError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(self.get_serializer(g).data)
@@ -249,7 +277,9 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
             g = resolve(
                 self.get_object(),
                 actor=actor_from_request(request),
-                narrative=ser.validated_data["narrative"],
+                narrative=ser.validated_data.get("narrative", ""),
+                reason_code=ser.validated_data.get("reason_code", ""),
+                note=ser.validated_data.get("note", ""),
                 linked_change_request_id=ser.validated_data.get("linked_change_request_id", ""),
             )
         except GrievanceError as e:
@@ -268,10 +298,29 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
                 self.get_object(),
                 actor=actor_from_request(request),
                 narrative=ser.validated_data.get("narrative", ""),
+                reason_code=ser.validated_data.get("reason_code", ""),
+                note=ser.validated_data.get("note", ""),
             )
         except GrievanceError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(self.get_serializer(g).data)
+
+    @extend_schema(
+        tags=["grm"],
+        summary="The reasons a transition may give",
+        description=(
+            "The vocabulary the console offers for escalate / resolve / "
+            "and close. It lived in screens-grm.jsx as three "
+            "JavaScript arrays, so the server took whatever string "
+            "arrived; some of these reasons assert a checkable fact and "
+            "are now verified before the transition is allowed."
+        ),
+    )
+    @action(detail=False, methods=["get"], url_path="reasons")
+    def reasons(self, request):
+        from . import reasons as reason_catalogue
+
+        return Response(reason_catalogue.catalogue())
 
     @extend_schema(
         tags=["grm"],

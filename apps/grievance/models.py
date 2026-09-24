@@ -101,7 +101,22 @@ class Grievance(models.Model):
     assigned_to = models.CharField(max_length=64, blank=True)
 
     opened_at = models.DateTimeField(auto_now_add=True)
+
+    # When the CURRENT tier's clock started.
+    #
+    # The SLA window was always measured from opened_at, so escalating
+    # an already-breached L1 case produced an L2 deadline that was
+    # itself already in the past — a tier that never had its own 48
+    # hours. Each tier gets its window from the moment it receives the
+    # case; null means the case is still at the tier it was opened at,
+    # where opened_at is that moment.
+    tier_started_at = models.DateTimeField(null=True, blank=True)
     sla_deadline = models.DateTimeField(null=True, blank=True)
+
+    # Set by the SLA sweep when an L4 case breaches: there is no tier
+    # above it to escalate to, so it is flagged for the NSR unit
+    # instead of being escalated in a loop.
+    sla_breach_flagged_at = models.DateTimeField(null=True, blank=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
     closed_at = models.DateTimeField(null=True, blank=True)
     resolution_narrative = models.TextField(blank=True)

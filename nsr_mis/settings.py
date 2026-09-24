@@ -428,6 +428,12 @@ CELERY_TASK_SERIALIZER = "json"
 SLACK_WEBHOOK_URL = env("SLACK_WEBHOOK_URL", default="")
 DPO_EMAIL = env("DPO_EMAIL", default="")
 
+# How long a resolved grievance waits before "30-day grace expired
+# without dispute" becomes true. The reason was accepted two minutes
+# after resolve because nothing checked it; the period is policy, so it
+# lives here rather than in the check.
+GRM_CLOSE_GRACE_DAYS = env.int("GRM_CLOSE_GRACE_DAYS", default=30)
+
 # --- Email / SMTP ---------------------------------------------------------
 # If SMTP credentials are present, default to the SMTP backend. That
 # keeps deployed environments working even if EMAIL_BACKEND was omitted

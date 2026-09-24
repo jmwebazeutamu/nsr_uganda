@@ -21,7 +21,7 @@ from django.utils import timezone
 from apps.security.audit import emit as emit_audit
 from apps.security.notifications import send_notification
 
-from . import assignees
+from . import assignees, reasons
 
 from .models import (
     Category,
@@ -47,7 +47,17 @@ class GrievanceError(Exception):
 
 
 def _set_sla(grievance: Grievance) -> None:
-    grievance.sla_deadline = grievance.opened_at + SLA_BY_TIER[grievance.tier]
+    """Give the CURRENT tier its full window, from when it received the
+    case.
+
+    This measured from `opened_at` regardless of tier, so escalating a
+    case that had already blown its L1 deadline handed L2 a deadline in
+    the past — the receiving tier never got the 48 hours the matrix
+    promises it. On production, cases sat 2,900 hours "overdue" at a
+    tier they had only just reached.
+    """
+    started = grievance.tier_started_at or grievance.opened_at
+    grievance.sla_deadline = started + SLA_BY_TIER[grievance.tier]
 
 
 @transaction.atomic
@@ -95,6 +105,22 @@ def open_grievance(
         raise GrievanceError(
             "a grievance about a member must name that member's household",
         )
+
+    # "abc123" was stored as a reporter phone. The registry already has
+    # one normaliser — apps.ddup.phone.to_e164, which tier 2 matches on
+    # — so the grievance reporter's number is held to the same shape
+    # rather than a second rule with its own idea of a valid number.
+    reporter_phone = (reporter_phone or "").strip()
+    if reporter_phone:
+        from apps.ddup.phone import to_e164
+
+        normalised = to_e164(reporter_phone)
+        if normalised is None:
+            raise GrievanceError(
+                f"{reporter_phone!r} is not a Ugandan mobile number — "
+                "use 07XXXXXXXX or +2567XXXXXXXX",
+            )
+        reporter_phone = normalised
     g = Grievance.objects.create(
         category=category,
         sub_category=sub_category,
@@ -121,8 +147,19 @@ def open_grievance(
 
 @transaction.atomic
 def assign(grievance: Grievance, *, assigned_to: str, actor: str) -> Grievance:
-    if grievance.status not in (GrievanceStatus.OPEN, GrievanceStatus.IN_PROGRESS):
-        raise GrievanceError(f"cannot assign from {grievance.status}")
+    # ESCALATED is assignable — it is the state a case is IN while it
+    # waits for the receiving tier to pick it up. Refusing to assign it
+    # meant an escalated case could never be worked: the tier it was
+    # escalated to could not take it.
+    if grievance.status not in (
+        GrievanceStatus.OPEN,
+        GrievanceStatus.IN_PROGRESS,
+        GrievanceStatus.ESCALATED,
+    ):
+        raise GrievanceError(
+            f"cannot assign a {grievance.status} grievance — "
+            "reopen it first",
+        )
     # The assignee must be a real, active MIS user. The console used to
     # offer four invented names; an invented assignee is a grievance
     # nobody is working.
@@ -177,13 +214,105 @@ def notify_assignment(grievance: Grievance, *, user, actor: str) -> dict:
     )
 
 
+
+def _validated_narrative(action: str, *, reason_code: str, note: str) -> tuple:
+    """(Reason, narrative) for a transition, or raise.
+
+    The reason list used to live in the console, so the server accepted
+    whatever string arrived — "ab" resolved a case. The claim is now
+    checked against the catalogue, the operator's own note has to say
+    something, and a reason that asserts a fact about the world is
+    verified by the caller via `Reason.requires`.
+    """
+    reason = reasons.lookup(action, reason_code)
+    if reason is None:
+        allowed = ", ".join(r.code for r in reasons.BY_ACTION.get(action, ()))
+        raise GrievanceError(
+            f"unknown {action} reason {reason_code!r}. One of: {allowed}",
+        )
+    note = (note or "").strip()
+    if len(note) < reasons.MIN_NOTE_LENGTH:
+        raise GrievanceError(
+            f"a {action} note must be at least "
+            f"{reasons.MIN_NOTE_LENGTH} characters — say what happened",
+        )
+    return reason, reasons.narrative_for(reason, note)
+
+
+def _require_grace_elapsed(grievance: Grievance) -> None:
+    from django.conf import settings
+
+    days = int(getattr(settings, "GRM_CLOSE_GRACE_DAYS", 30))
+    if grievance.resolved_at is None:
+        raise GrievanceError("the case has no resolution date to count from")
+    elapsed = timezone.now() - grievance.resolved_at
+    if elapsed < timedelta(days=days):
+        remaining = timedelta(days=days) - elapsed
+        raise GrievanceError(
+            f"the {days}-day grace period has not expired — "
+            f"{remaining.days}d {remaining.seconds // 3600}h remaining. "
+            "Close it with a different reason if the reporter has "
+            "confirmed.",
+        )
+
+
+def _require_linked_cr_applied(grievance: Grievance) -> None:
+    from apps.update_workflow.models import ChangeRequest, ChangeStatus
+
+    if not grievance.linked_change_request_id:
+        raise GrievanceError(
+            "this reason claims a correction was committed, but no "
+            "change request is linked to the grievance",
+        )
+    cr = ChangeRequest.objects.filter(
+        id=grievance.linked_change_request_id,
+    ).first()
+    if cr is None:
+        raise GrievanceError(
+            f"linked change request {grievance.linked_change_request_id} "
+            "does not exist",
+        )
+    # COMMITTED is the only state in which the correction has actually
+    # reached the registry. A draft, a submission and a pending
+    # approval are all intentions.
+    if cr.status != ChangeStatus.COMMITTED:
+        raise GrievanceError(
+            f"the linked change request is {cr.status}, not committed — "
+            "a draft is not a correction",
+        )
+
+
+_REQUIREMENT_CHECKS = {
+    "grace_elapsed": _require_grace_elapsed,
+    "linked_cr_applied": _require_linked_cr_applied,
+}
+
+
+def _enforce(reason, grievance: Grievance) -> None:
+    check = _REQUIREMENT_CHECKS.get(reason.requires)
+    if check is not None:
+        check(grievance)
+
+
 @transaction.atomic
-def escalate(grievance: Grievance, *, actor: str, reason: str) -> Grievance:
-    """Bump the grievance one tier up. L4 cannot be escalated further."""
+def escalate(
+    grievance: Grievance, *, actor: str,
+    reason_code: str = "", note: str = "", reason: str = "",
+) -> Grievance:
+    """Bump the grievance one tier up. L4 cannot be escalated further.
+
+    `reason_code` + `note` are validated against the catalogue. `reason`
+    is the system path — the SLA sweep escalates with its own sentence
+    and no operator behind it.
+    """
     if grievance.status in (GrievanceStatus.RESOLVED, GrievanceStatus.CLOSED):
         raise GrievanceError(f"cannot escalate {grievance.status}")
+    if reason_code:
+        _, reason = _validated_narrative(
+            "escalate", reason_code=reason_code, note=note,
+        )
     if not reason:
-        raise GrievanceError("escalation requires a non-empty reason")
+        raise GrievanceError("escalation requires a reason")
     next_tier = {
         Tier.L1_PARISH_CHIEF: Tier.L2_CDO,
         Tier.L2_CDO: Tier.L3_DISTRICT,
@@ -196,8 +325,14 @@ def escalate(grievance: Grievance, *, actor: str, reason: str) -> Grievance:
     grievance.tier = next_tier
     grievance.status = GrievanceStatus.ESCALATED
     grievance.assigned_to = ""  # the receiving tier reassigns
+    # The receiving tier's window starts now, not when the case was
+    # first opened.
+    grievance.tier_started_at = timezone.now()
     _set_sla(grievance)
-    grievance.save(update_fields=["tier", "status", "assigned_to", "sla_deadline", "updated_at"])
+    grievance.save(update_fields=[
+        "tier", "status", "assigned_to", "tier_started_at",
+        "sla_deadline", "updated_at",
+    ])
     emit_audit("update", "grievance", grievance.id, actor=actor,
                reason=f"escalated: {reason}",
                field_changes={"from": prev_tier, "to": next_tier})
@@ -206,11 +341,21 @@ def escalate(grievance: Grievance, *, actor: str, reason: str) -> Grievance:
 
 @transaction.atomic
 def resolve(
-    grievance: Grievance, *, actor: str, narrative: str,
+    grievance: Grievance, *, actor: str, narrative: str = "",
+    reason_code: str = "", note: str = "",
     linked_change_request_id: str = "",
 ) -> Grievance:
     if grievance.status in (GrievanceStatus.RESOLVED, GrievanceStatus.CLOSED):
         raise GrievanceError(f"already {grievance.status}")
+    if linked_change_request_id:
+        # Link it before the requirement check, so "committed via
+        # linked UPD" can be satisfied by the CR named in this call.
+        grievance.linked_change_request_id = linked_change_request_id
+    if reason_code:
+        reason, narrative = _validated_narrative(
+            "resolve", reason_code=reason_code, note=note,
+        )
+        _enforce(reason, grievance)
     if not narrative:
         raise GrievanceError("resolution requires a narrative")
     # US-S21-003 — every task must be CLOSED before a grievance can
@@ -243,13 +388,21 @@ def resolve(
 
 
 @transaction.atomic
-def close(grievance: Grievance, *, actor: str, narrative: str = "") -> Grievance:
+def close(
+    grievance: Grievance, *, actor: str, narrative: str = "",
+    reason_code: str = "", note: str = "",
+) -> Grievance:
     """Move grievance from RESOLVED → CLOSED. `narrative` is the
     closing reason / note pair captured from the operator; persisted
     on Grievance.closing_narrative so the workbench can display the
     full case-closeout block."""
     if grievance.status != GrievanceStatus.RESOLVED:
         raise GrievanceError(f"can only close RESOLVED (got {grievance.status})")
+    if reason_code:
+        reason, narrative = _validated_narrative(
+            "close", reason_code=reason_code, note=note,
+        )
+        _enforce(reason, grievance)
     grievance.status = GrievanceStatus.CLOSED
     grievance.closed_at = timezone.now()
     grievance.closed_by = actor
