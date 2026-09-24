@@ -190,7 +190,10 @@ class TestRawLandingComparison:
         )
         assert tenure == {
             "canonical_path": "housing.tenure",
-            "choice_list": "dwelling_tenure",
+            # The CANONICAL list for the field. "2" is a legacy code and
+            # resolves through dwelling_tenure, but the trace names the
+            # field's list, not whichever frame owned the value.
+            "choice_list": "tenure",
             "stored_value": "2",
             "display_value": "Renting",
         }

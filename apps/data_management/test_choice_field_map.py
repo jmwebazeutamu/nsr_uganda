@@ -66,8 +66,13 @@ class TestMapShape:
             "members": [{"sex": "M"}, {"sex": "F"}],
         }
 
+        # The trace names the CANONICAL list. "2" is a legacy code and
+        # resolves through dwelling_tenure at label time
+        # (LEGACY_FRAME_FALLBACK), but the field's list is `tenure` —
+        # the trace says which field was read, not which frame happened
+        # to own the value.
         assert list(iter_payload_choice_values(payload)) == [
-            (("housing", "tenure"), "dwelling_tenure", "single", "2"),
+            (("housing", "tenure"), "tenure", "single", "2"),
             (("members", "0", "sex"), "sex", "single", "M"),
             (("members", "1", "sex"), "sex", "single", "F"),
         ]

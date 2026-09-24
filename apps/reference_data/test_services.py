@@ -50,7 +50,14 @@ class TestKnownCodes:
     def test_deprecated_historical_code_keeps_its_registry_label(self):
         # Deprecated values are not available to new captures, but existing
         # Kobo questionnaires must never degrade to a numeric code on read.
+        # Migration 0021 seeds the pre-UBOS codes as DEPRECATED so this
+        # holds on a database built from migrations, not only on one that
+        # carried them before the frame changed.
+        from apps.reference_data.services import resolve_options
+
         assert resolve_label("roof_material", "1") == "Iron sheets"
+        # And it stays out of the capture control.
+        assert "1" not in {o["code"] for o in resolve_options("roof_material")}
 
     def test_relationship_zero_padded_code(self):
         # XLSForm convention: codes are strings, often zero-padded.

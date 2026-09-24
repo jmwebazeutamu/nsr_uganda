@@ -47,10 +47,21 @@ class TestSeededChoiceLists:
         # + 5 programme_signoff_status codes (US-182, migration 0011:
         #   pending/signed/rejected/skipped/on_hold)
         # + 1 refrigerator on asset_type (US-117-FRIDGE,
-        #   migration 0012) = 717.
+        #   migration 0012) = 717
+        # + 52 pre-UBOS options seeded DEPRECATED so historical
+        #   responses still read (migration 0021) = 769.
         assert ChoiceOption.objects.filter(
             choice_list__version=1,
-        ).count() == 717
+        ).count() == 769
+
+    def test_the_legacy_options_are_deprecated_not_selectable(self):
+        """They exist so a 2023 response still reads as words. A capture
+        control must never offer them."""
+        legacy = ChoiceOption.objects.filter(
+            choice_list__version=1, status=ChoiceOption.Status.DEPRECATED,
+        )
+        assert legacy.count() == 52
+        assert not legacy.filter(status=ChoiceOption.Status.ACTIVE).exists()
 
     def test_partner_lists_seeded(self):
         names = set(

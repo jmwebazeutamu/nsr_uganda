@@ -167,10 +167,10 @@ EMPLOYMENT_FIELDS: dict[str, tuple[str, Kind]] = {
 
 PAYLOAD_FIELDS: dict[tuple[str, ...], tuple[str, Kind]] = {
     # Housing & Assets tab
-    # Legacy Kobo keys retain their original option-code domains. They are
-    # resolved through the canonical ChoiceLists that own those domains;
-    # do not substitute a later questionnaire field with a similar label.
-    ("housing", "tenure"): ("dwelling_tenure", "single"),
+    # Both code frames reach this field — see LEGACY_FRAME_FALLBACK.
+    # The canonical list is named here; the legacy one is tried when a
+    # code is not on it.
+    ("housing", "tenure"): ("tenure", "single"),
     ("housing", "dwelling_type"): ("dwelling_type", "single"),
     ("housing", "roof_material"): ("roof_material", "single"),
     ("housing", "wall_material"): ("wall_material", "single"),
@@ -280,6 +280,46 @@ def _iter_payload_choice_values(node, pattern, resolved_path, list_name, kind):
     )
 
 
+# Fields whose staged payloads carry BOTH code frames.
+#
+# The UBOS 2024 frame replaced the original Kobo one, and production
+# holds records from either side of that change — `housing.tenure`
+# alone spans "1,2,3" and "11..17". For roof/wall/floor/cooking/waste
+# the old codes are deprecated options on the SAME list, which
+# resolve_label already falls back to. For these five the old codes
+# live on a DIFFERENT list, so one name cannot decode both: pointing at
+# the UBOS list renders "2" as a bare code, pointing at the legacy list
+# renders "13" as a bare code, and neither fails.
+#
+# Canonical list first, the legacy list that owns the older domain
+# second. The two domains do not overlap, so order only decides which
+# label a shared code would get — there are none today.
+LEGACY_FRAME_FALLBACK = {
+    "tenure": "dwelling_tenure",
+    "lighting_energy": "lighting_source",
+    "drinking_water_source": "water_source",
+    "toilet_facility": "toilet_type",
+    "main_livelihood": "livelihood_source",
+}
+
+
+def resolve_with_legacy_frame(resolver, list_name, code, language, as_of):
+    """Resolve `code`, trying the legacy list when the canonical one
+    does not own it.
+
+    `resolve_label` returns the raw code when it cannot map — that is
+    the signal, and the only one available without changing its
+    contract.
+    """
+    label = resolver(list_name, code, language, as_of)
+    if label != str(code) or code in (None, ""):
+        return label
+    fallback = LEGACY_FRAME_FALLBACK.get(list_name)
+    if not fallback:
+        return label
+    return resolver(fallback, code, language, as_of)
+
+
 def apply_payload_labels(payload, resolver, *, as_of=None, language: str = "en"):
     """Walk `payload` (the canonical_payload JSON), producing a parallel
     tree of resolved labels for every path declared in PAYLOAD_FIELDS.
@@ -320,9 +360,14 @@ def _label_one_path(node, path, out, list_name, kind, resolver, as_of, language)
             return
         if kind == "multi":
             codes = raw.split() if isinstance(raw, str) else list(raw)
-            out[head] = [resolver(list_name, c, language, as_of) for c in codes]
+            out[head] = [
+                resolve_with_legacy_frame(resolver, list_name, c, language, as_of)
+                for c in codes
+            ]
         else:
-            out[head] = resolver(list_name, raw, language, as_of)
+            out[head] = resolve_with_legacy_frame(
+                resolver, list_name, raw, language, as_of,
+            )
         return
     next_node = node.get(head)
     if next_node is None:

@@ -16,6 +16,7 @@ import pytest
 
 from apps.data_management.models import Household, Member
 from apps.reference_data.models import GeographicUnit
+from apps.ddup.tests import model_config
 from apps.ddup.models import (
     DdupDiscoveryRun, DdupModelVersion, DiscoveryRunStatus, MatchPair,
     ModelStatus, PairStatus,
@@ -71,15 +72,14 @@ def active_model(db):
             "description": "test model",
             "author": "tests",
             "status": ModelStatus.ACTIVE,
-            "config": {"tier3": {
-                "weights": {
-                    "surname": 0.30, "first_name": 0.30,
-                    "date_of_birth": 0.15, "sex": 0.10, "village": 0.15,
-                },
-                "threshold": 0.85,
-                "auto_merge_threshold": 0.95,
-                # auto_merge_enabled deliberately absent — off by default.
-            }},
+            # The approved-model shape. apps/ddup/config.py refuses a
+            # model that does not declare its schema, tiers, fields,
+            # methods, weights and thresholds — the matcher no longer
+            # has defaults to fall back on. Built by
+            # apps.ddup.tests.model_config so there is one description
+            # of a valid model, not two.
+            # auto_merge_enabled deliberately absent — off by default.
+            "config": model_config(tier3={"auto_merge_threshold": 0.95}),
         },
     )
     if model.status != ModelStatus.ACTIVE:
@@ -111,7 +111,12 @@ class TestAutoMergeIsOff:
     def test_enabling_it_is_a_config_change_not_a_code_change(self):
         model = DdupModelVersion.objects.filter(status=ModelStatus.ACTIVE).first()
         config = dict(model.config or {})
-        config["tier3"] = {**(config.get("tier3") or {}), "auto_merge_enabled": True}
+        # Into tiers.tier3 — the approved location the validator and
+        # the matcher both read. A top-level "tier3" is the old shape
+        # and is now ignored.
+        tiers = dict(config.get("tiers") or {})
+        tiers["tier3"] = {**(tiers.get("tier3") or {}), "auto_merge_enabled": True}
+        config["tiers"] = tiers
         model.config = config
         model.save(update_fields=["config"])
 

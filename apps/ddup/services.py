@@ -139,12 +139,34 @@ SAFE_DEFAULT_THRESHOLD = 0.95
 
 
 
-# The fields the tier-3 matcher actually computes a score for. A
-# declared feature outside this set cannot be scored, so it is refused
-# rather than weighted zero.
-TIER3_SCORED_FIELDS = frozenset(
-    {"surname", "first_name", "date_of_birth", "sex", "village"},
-)
+
+# Tier-3 scoring primitives. Declared once: `discover_probabilistic_pairs`
+# (full sweep) and `discover_incremental_tier3` (what changed since the
+# watermark) are two entry points to one model, and a comparator table
+# per entry point is how the two start disagreeing about what a score
+# means.
+def _tier3_comparators() -> dict:
+    from .similarity import birth_date_proximity, exact, jaro_winkler
+
+    return {
+        "jaro_winkler": jaro_winkler,
+        "birth_date_proximity": birth_date_proximity,
+        "exact": exact,
+    }
+
+
+def _tier3_value(member, reference: str):
+    """Read a canonically-named field off a Member.
+
+    The config names fields as the registry does — "member.surname",
+    "household.village" — so the accessor, the recorded per-field
+    scores and the field dictionary all use one spelling.
+    """
+    if reference.startswith("member."):
+        return getattr(member, reference.removeprefix("member."))
+    if reference.startswith("household."):
+        return getattr(member.household, reference.removeprefix("household."))
+    return getattr(member, reference)
 
 
 def _tier3_policy(model: DdupModelVersion) -> dict:
@@ -169,27 +191,6 @@ def _tier3_policy(model: DdupModelVersion) -> dict:
     """
     tier = validate_ddup_configuration(model.config).tiers.get("tier3") or {}
     return tier if tier.get("enabled") else {}
-
-
-def _tier3_weights(tier: dict) -> dict[str, float]:
-    """Declared features -> the scorer's field keys.
-
-    The contract names fields canonically ("member.surname",
-    "household.village"); the scorer computes them under the short name.
-    A declared feature the scorer does not compute is a configuration
-    error, not a zero weight — silently scoring it as 0 would change
-    matching without anybody being told.
-    """
-    weights: dict[str, float] = {}
-    for feature in tier.get("features") or []:
-        key = str(feature["field"]).rsplit(".", 1)[-1]
-        if key not in TIER3_SCORED_FIELDS:
-            raise DdupApprovalError(
-                f"tier3 feature {feature['field']!r} is not a field the "
-                f"matcher computes ({sorted(TIER3_SCORED_FIELDS)})",
-            )
-        weights[key] = float(feature["weight"])
-    return weights
 
 
 @transaction.atomic
@@ -475,18 +476,8 @@ def discover_probabilistic_pairs(*, actor: str = "system") -> list[MatchPair]:
     threshold = tier["review_threshold"]
     block_field = tier["block_field"]
     features = tier["features"]
-    comparators = {
-        "jaro_winkler": jaro_winkler,
-        "birth_date_proximity": birth_date_proximity,
-        "exact": exact,
-    }
-
-    def value(member, reference):
-        if reference.startswith("member."):
-            return getattr(member, reference.removeprefix("member."))
-        if reference.startswith("household."):
-            return getattr(member.household, reference.removeprefix("household."))
-        return getattr(member, reference)
+    comparators = _tier3_comparators()
+    value = _tier3_value
 
     # Block by village to keep the comparison tractable.
     by_village: dict[str, list] = defaultdict(list)
@@ -993,8 +984,10 @@ def discover_incremental_tier3(
         # Tier 3 is not enabled in the approved model. Nothing to run —
         # and nothing to invent.
         return [], 0
-    weights = _tier3_weights(cfg)
     threshold = float(cfg["review_threshold"])
+    block_field = cfg["block_field"]
+    features = cfg["features"]
+    comparators = _tier3_comparators()
 
     members = (
         Member.objects
@@ -1006,7 +999,7 @@ def discover_incremental_tier3(
 
     by_village: dict[str, list] = defaultdict(list)
     for m in members:
-        by_village[getattr(m.household, "village_id", None)].append(m)
+        by_village[_tier3_value(m, block_field)].append(m)
 
     def is_new(m) -> bool:
         return since is None or (m.updated_at and m.updated_at >= since)
@@ -1027,17 +1020,15 @@ def discover_incremental_tier3(
                     continue
                 comparisons += 1
                 scores = {
-                    "surname": jaro_winkler(a.surname or "", b.surname or ""),
-                    "first_name": jaro_winkler(a.first_name or "", b.first_name or ""),
-                    "date_of_birth": birth_date_proximity(a.date_of_birth, b.date_of_birth),
-                    "sex": exact(a.sex, b.sex),
-                    "village": exact(
-                        getattr(a.household, "village_id", None),
-                        getattr(b.household, "village_id", None),
-                    ),
+                    feature["field"]: comparators[feature["comparator"]](
+                        _tier3_value(a, feature["field"]),
+                        _tier3_value(b, feature["field"]),
+                    )
+                    for feature in features
                 }
                 composite = composite_score(
-                    [(weights.get(k, 0.0), s) for k, s in scores.items()],
+                    [(feature["weight"], scores[feature["field"]])
+                     for feature in features],
                 )
                 if composite < threshold:
                     continue

@@ -10,7 +10,10 @@ from apps.security.abac import HouseholdIdScopedQuerysetMixin, scope_q_for_field
 from apps.security.actor import actor_from_request
 from apps.security.audit import emit as emit_audit
 from apps.security.audit_views import AuditReadMixin
-from apps.data_management.choice_field_map import iter_payload_choice_values
+from apps.data_management.choice_field_map import (
+    iter_payload_choice_values,
+    resolve_with_legacy_frame,
+)
 from apps.reference_data.services import resolve_label, resolve_labels
 
 from .models import (
@@ -702,11 +705,26 @@ class StageRecordViewSet(
                 "stage_record_id": str(stage.id),
                 "canonical_path": ".".join(path),
             }
-            label = (
-                resolve_labels(list_name, stored_value, as_of=as_of, context=context)
-                if kind == "multi"
-                else resolve_label(list_name, stored_value, as_of=as_of, context=context)
-            )
+            # Through the same fallback the household screen uses. A
+            # staged payload can carry either code frame, so resolving
+            # against the canonical list alone shows the reviewer a bare
+            # code for exactly the older records they are most likely to
+            # be checking.
+            def _resolve(value):
+                return resolve_with_legacy_frame(
+                    lambda name, code, language, when: resolve_label(
+                        name, code, language, when, context=context,
+                    ),
+                    list_name, value, "en", as_of,
+                )
+
+            if kind == "multi":
+                # XLSForm stores select-multiple as a whitespace-joined
+                # string; resolve_labels splits it the same way.
+                values = stored_value.split() if isinstance(stored_value, str) else (stored_value or [])
+                label = [_resolve(v) for v in values]
+            else:
+                label = _resolve(stored_value)
             choice_mappings.append({
                 "canonical_path": ".".join(path),
                 "choice_list": list_name,

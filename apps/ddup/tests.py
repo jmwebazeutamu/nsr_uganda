@@ -1347,8 +1347,11 @@ class TestProbabilisticDiscovery:
         assert pair.composite_score is not None
         assert float(pair.composite_score) >= 0.85
         # Per-field breakdown stored for reviewer transparency.
-        assert pair.per_field_scores["surname"] == 1.0
-        assert pair.per_field_scores["village"] == 1.0
+        # Keyed by the canonical field reference the model declares,
+        # the same spelling the field dictionary and the config use —
+        # not a short name the matcher invented.
+        assert pair.per_field_scores["member.surname"] == 1.0
+        assert pair.per_field_scores["household.village"] == 1.0
         # Both members in scope.
         assert {pair.record_a_id, pair.record_b_id} == {m1.id, m2.id}
 
