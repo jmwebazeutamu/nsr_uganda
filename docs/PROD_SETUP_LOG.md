@@ -1807,3 +1807,118 @@ what the screen did before. Worth a loader pass.
 Suites: **2734 Python passed / 29 skipped; 857 JS passed / 5 skipped.**
 The one Python failure is the uncommitted DRS message change noted in
 the previous entry, still outstanding.
+
+---
+
+## 2026-09-24 — deploy 3a0d43a → 7c83de0, and the padded-county-code merge
+
+### The 47 were not unnamed units. They were a second code frame.
+
+Uganda's county codes reach the registry two ways:
+
+- The **UBOS workbook** carries the county segment unpadded, and
+  `scripts/load_ubos_geography.py` composes codes verbatim — `320.2`.
+- The **Kobo form** sends `a3_county_municipality` zero-padded —
+  `320_02` — which the connector turns into `320.02`.
+
+Nothing reconciled them. A staged record naming `320.02` found no
+GeographicUnit, so `geo_backfill` fabricated one with `name = code` —
+its documented placeholder behaviour — and promotion attached the
+household to the fabrication.
+
+Sub-county and parish segments are two-digit padded in **both** frames,
+so `320.2.11.08` and `320.02.11.08` differ in exactly one place.
+
+**The consequence was not cosmetic.** One real county existed twice
+with households split between the halves:
+
+```
+ kobo_code | ubos_code |          name          | hh_kobo | hh_ubos
+ 414.01    | 414.1     | Kinkizi County         |       3 |       4
+ 428.01    | 428.1     | Bugangaizi East County |       4 |       1
+ 114.01    | 114.1     | Kabula County          |       1 |       1
+ 228.01    | 228.1     | Kween County           |       1 |       1
+ 301.02    | 301.2     | Adjumani West County   |       1 |       1
+```
+
+No county-scoped query ever saw all 7 Kinkizi households. 29
+households, 63 child units and one operator scope (`demo-chief`, parish
+`411.05.05.04`) sat on fabricated rows.
+
+The connector's own docstring is where it started: it claimed the
+loader writes `412.02`. It writes `412.2`.
+
+### Resolved, not rewritten
+
+Stripping the zero in the connector is the obvious fix and it is wrong.
+`412.02` is a real, named, ACTIVE county ("Nyakagyeme"); `412.2` is a
+*different* real county ("Rujumbura County"). Stripping would silently
+move households between them.
+
+`apps/reference_data/code_frames.resolve_geographic_unit` therefore
+looks for a row that **exists**, trying the given spelling first and the
+alternative only when the first finds nothing. Promotion and
+`geo_backfill` both use it. Mutation-tested: restore the old literal
+lookup and the regression test fails.
+
+### The repair
+
+`manage.py merge_padded_geo_codes` (dry run by default; `--apply` needs
+`--actor`). Dry run on prod first, then:
+
+```
+47 placeholder unit(s); 47 with an unambiguous UBOS twin, 0 without.
+merged:
+  units retired              47
+  households repointed       29
+  child units reparented     63
+  operator scopes rewritten  1
+```
+
+Pre-merge dump: `/opt/nsrmis/backups/pre-geo-merge-*.dump`, 132 tables.
+
+### Verification on the box
+
+```
+active placeholders left       0
+households on a retired unit   0
+denorm drift                   0
+
+ Adjumani West County       2
+ Bugangaizi East County     5
+ Kabula County              2
+ Kinkizi County             7     <- was 3 + 4
+ Kween County               2
+```
+
+76 AuditEvents written (47 `geo_unit.merged`, 29
+`household.geography_corrected` — one per household, not one per
+level). Audit chain re-verified: **ok True, 0 breaks, 100,664 rows**.
+The 23 forks it reports are all dated 2026-08-08/09 and long predate
+this work.
+
+Explorer matviews refreshed so the county aggregates reflect the merge
+without waiting for 01:00.
+
+Nothing was deleted — placeholders are RETIRED with
+`effective_to = yesterday`, still visible under `?status=all`.
+
+### Also fixed: main was red
+
+`tests/integration/test_drs_workflow_e2e` asserted `"outside DSA
+scope"` on a geography violation. Commit `ec47793` split that message
+so geography violations read `"outside DSA geographic scope"`, but the
+test was not updated. Updated to the committed phrasing.
+
+### Open
+
+- **`412.02` "Nyakagyeme" is a county-level row for what is really a
+  sub-county**, sitting under Rukungiri beside `412.1` Rubabo, `412.2`
+  Rujumbura and `412.3` Rukungiri Municipality. It is *named*, so the
+  merge never considered it. Probably from `scripts/seed_kigezi_geo.py`.
+  Worth checking before it acquires households.
+- The Data Explorer's new geographic Variables (region, sub_region,
+  county) are still INACTIVE pending dual approval.
+- Five Data Explorer matviews remain unbuilt.
+- 17 pending duplicate pairs; the Kato pair first.
+- The tier-3 weights DRAFT is still not authored.
