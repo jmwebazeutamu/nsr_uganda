@@ -12,7 +12,7 @@
  *
  * Both are search problems over lists the API already serves and
  * already scopes:
- *   /api/v1/households/?q=           ABAC-scoped to the operator
+ *   /api/v1/data-management/households/?q=   ABAC-scoped to the operator
  *   /api/v1/security/users/?q=       the real user catalogue
  *
  * So this component is a shape, not a data source — callers pass the
@@ -25,7 +25,7 @@ const { useState: _spState, useEffect: _spEffect, useRef: _spRef } = React;
 const _spDebounce = 250;
 
 const SearchPicker = ({
-  endpoint,            // "/api/v1/households/" — `q` is appended
+  endpoint,            // the list URL; `q` is appended
   value,               // the selected object, or null
   onChange,            // (obj|null) => void
   renderRow,           // (obj) => node, for the results list
@@ -157,9 +157,18 @@ const SearchPicker = ({
    differs, and both read from an endpoint that already exists — no
    parallel search, no hardcoded directory. */
 
+// The registry app is mounted under /api/v1/data-management/, not at
+// the bare /api/v1/ prefix. The first cut of this component guessed
+// the latter and every search returned 404 — the picker said "Search
+// failed: HTTP 404" and no household could be attached to a grievance.
+// tests/contract/test_console_api_paths.py now resolves every
+// /api/v1/ path in the design layer against Django's URLconf.
+const HOUSEHOLD_SEARCH_API = "/api/v1/data-management/households/";
+const USER_SEARCH_API = "/api/v1/security/users/";
+
 const HouseholdPicker = ({ value, onChange, disabled, label = "Household" }) => (
   <SearchPicker
-    endpoint="/api/v1/households/"
+    endpoint={HOUSEHOLD_SEARCH_API}
     value={value} onChange={onChange} disabled={disabled} label={label}
     placeholder="Search by Registry ID, head's name, or parish…"
     emptyHint="No household matches — check the spelling, or the record may be outside your area."
@@ -192,7 +201,7 @@ const UserPicker = ({ value, onChange, disabled }) => {
     let cancelled = false;
     setLoading(true);
     const qs = q ? `?q=${encodeURIComponent(q)}` : "";
-    fetch(`/api/v1/security/users/${qs}`, {
+    fetch(`${USER_SEARCH_API}${qs}`, {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
     })
@@ -253,6 +262,8 @@ const UserPicker = ({ value, onChange, disabled }) => {
   );
 };
 
+window.HOUSEHOLD_SEARCH_API = HOUSEHOLD_SEARCH_API;
+window.USER_SEARCH_API = USER_SEARCH_API;
 window.SearchPicker = SearchPicker;
 window.HouseholdPicker = HouseholdPicker;
 window.UserPicker = UserPicker;
