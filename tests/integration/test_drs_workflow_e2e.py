@@ -19,7 +19,7 @@ prove the wiring CHAIN holds, not any single seam.
 
 Plus the unhappy path: a partner POSTs a sub_region the DSA does
 not cover → submit returns 400 with the validator's exact
-"outside DSA scope" string and the row stays DRAFT.
+"outside DSA geographic scope" string and the row stays DRAFT.
 
 The SQLite-only audit chain is not asserted (postgres-only trigger),
 but the AuditEvent ROWS themselves are read directly — they are
@@ -399,12 +399,14 @@ def test_drs_submit_rejects_out_of_scope_sub_region(
 
     r = partner_api.post(f"{LIST_URL}{req_id}/submit/", {}, format="json")
     assert r.status_code == 400, r.data
-    # The validator's exact phrasing — services.py:_violation
-    # formats this as `<key>=<sorted-list> outside DSA scope ...`.
+    # The validator's exact phrasing. services.py splits the refusal in
+    # two: a geography violation says "outside DSA geographic scope",
+    # anything else says "outside DSA scope". sub_region_codes is
+    # geographic, so it gets the specific one.
     detail = r.data["detail"]
     assert "sub_region_codes" in detail
     assert "SR-DRS-OUT" in detail
-    assert "outside DSA scope" in detail
+    assert "outside DSA geographic scope" in detail
 
     # Row stays DRAFT; no submitted_at; no submit AuditEvent.
     persisted = DataRequest.objects.get(id=req_id)
