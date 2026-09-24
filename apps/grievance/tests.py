@@ -23,6 +23,71 @@ from apps.grievance.services import (
     transition_task,
 )
 
+# Assignment now requires the assignee to be a real, ACTIVE MIS user —
+# the console used to offer four invented names, and an invented
+# assignee is a grievance nobody is working. These tests were written
+# against free-text usernames, so the operators they name are created
+# for real here rather than the rule being relaxed for tests.
+# Only the names no test builds for itself. "parish-chief-1" and
+# "assignee-1" are created by the visibility fixtures with roles and
+# scopes attached, so creating them here too would collide on
+# auth_user.username.
+TEST_OPERATORS = (
+    "parish-chief-3", "cdo-1", "someone-else", "u", "u1", "u2",
+)
+
+
+@pytest.fixture(autouse=True)
+def _operators(db, django_user_model):
+    """Create only what is missing.
+
+    Several tests build their own operators (with roles, scopes, and
+    specific permissions) under the same usernames. Creating those here
+    as well would collide on auth_user.username, so this fills the gaps
+    and yields — tests that make their own are unaffected.
+    """
+    existing = set(
+        django_user_model.objects.filter(username__in=TEST_OPERATORS)
+        .values_list("username", flat=True),
+    )
+    django_user_model.objects.bulk_create([
+        django_user_model(
+            username=username, email=f"{username}@example.test",
+            is_active=True,
+        )
+        for username in TEST_OPERATORS if username not in existing
+    ])
+
+
+def make_household(prefix="GRM"):
+    """A minimal registered household, for tests that must NAME one.
+
+    A grievance's household_id is validated against the registry now —
+    a made-up ULID is refused, because a grievance pointing at nothing
+    only surfaces when somebody tries to open a correction from it.
+    """
+    from datetime import date
+
+    from apps.data_management.models import Household
+    from apps.reference_data.models import GeographicUnit
+
+    nodes = {}
+    for level, key, parent in [
+        ("region", "r", None), ("sub_region", "sr", "r"),
+        ("district", "d", "sr"), ("county", "c", "d"),
+        ("sub_county", "sc", "c"), ("parish", "p", "sc"),
+        ("village", "v", "p"),
+    ]:
+        nodes[key] = GeographicUnit.objects.create(
+            level=level, code=f"{prefix}-{key.upper()}", name=key.title(),
+            parent=nodes.get(parent), effective_from=date(2026, 1, 1),
+        )
+    return Household.objects.create(
+        region=nodes["r"], sub_region=nodes["sr"], district=nodes["d"],
+        county=nodes["c"], sub_county=nodes["sc"], parish=nodes["p"],
+        village=nodes["v"], urban_rural="2",
+    )
+
 
 class TestOpenGrievance:
     def test_open_default_l1(self, db):
@@ -42,11 +107,38 @@ class TestOpenGrievance:
             open_grievance(category="not_a_category", description="x")
 
     def test_open_records_household_pointer(self, db):
+        hh = make_household("GRM-PTR")
         g = open_grievance(
             category=Category.EXCLUSION_ERROR, description="Missed",
-            household_id="01HXY7K3B2N9PVQE4M6FZRWS18",
+            household_id=hh.id,
         )
-        assert g.household_id == "01HXY7K3B2N9PVQE4M6FZRWS18"
+        assert g.household_id == hh.id
+
+    def test_a_household_that_is_not_in_the_registry_is_refused(self, db):
+        """The console took the Registry ID as free text with a ULID for
+        a placeholder. Nobody types a ULID, and a typo produced a
+        grievance pointing at nothing."""
+        with pytest.raises(GrievanceError, match="not in the registry"):
+            open_grievance(
+                category=Category.EXCLUSION_ERROR, description="Missed",
+                household_id="01HXY7K3B2N9PVQE4M6FZRWS18",
+            )
+
+    def test_a_member_grievance_must_name_its_household(self, db):
+        with pytest.raises(GrievanceError, match="must name that member"):
+            open_grievance(
+                category=Category.DATA_CORRECTION, description="Wrong name",
+                member_id="01HXY7K3B2N9PVQE4M6FZRWS18",
+            )
+
+    def test_a_grievance_need_not_be_about_a_household(self, db):
+        """Operator conduct, a programme complaint — plenty of
+        grievances name no household at all."""
+        g = open_grievance(
+            category=Category.OPERATOR_CONDUCT,
+            description="Enumerator was rude",
+        )
+        assert g.household_id == ""
 
 
 class TestAssign:
@@ -128,8 +220,8 @@ class TestResolve:
                          actor="officer")
         t2 = create_task(g, title="B", description="", assigned_to="u2",
                          actor="officer")
-        transition_task(t1, new_status=TaskStatus.CLOSED, actor="u1")
-        transition_task(t2, new_status=TaskStatus.CLOSED, actor="u2")
+        transition_task(t1, new_status=TaskStatus.CLOSED, actor="u1", note="done")
+        transition_task(t2, new_status=TaskStatus.CLOSED, actor="u2", note="done")
         resolve(g, actor="officer", narrative="done")
         g.refresh_from_db()
         assert g.status == GrievanceStatus.RESOLVED
@@ -229,7 +321,7 @@ class TestGrievanceTask:
                         actor="o")
         t = transition_task(t, new_status=TaskStatus.IN_PROGRESS, actor="u")
         assert t.status == TaskStatus.IN_PROGRESS
-        t = transition_task(t, new_status=TaskStatus.CLOSED, actor="u")
+        t = transition_task(t, new_status=TaskStatus.CLOSED, actor="u", note="Visited, confirmed")
         assert t.status == TaskStatus.CLOSED
         assert t.closed_at is not None
         assert t.closed_by == "u"
@@ -238,7 +330,7 @@ class TestGrievanceTask:
         g = open_grievance(category=Category.OTHER, description="x")
         t = create_task(g, title="t", description="", assigned_to="u",
                         actor="o")
-        transition_task(t, new_status=TaskStatus.CLOSED, actor="u")
+        transition_task(t, new_status=TaskStatus.CLOSED, actor="u", note="Visited, confirmed")
         with pytest.raises(GrievanceError, match="not allowed"):
             transition_task(t, new_status=TaskStatus.OPEN, actor="u")
 
@@ -433,12 +525,50 @@ class TestGrievanceTaskApi:
                         assigned_to="someone-else", actor="officer")
         r = self._client(officer).post(
             f"/api/v1/grm/tasks/{t.id}/transition/",
-            data={"new_status": "closed"},
+            data={"new_status": "closed", "note": "Verified in person"},
             content_type="application/json",
         )
         assert r.status_code == 200
         t.refresh_from_db()
         assert t.status == "closed"
+
+    def test_closing_a_task_without_a_note_is_refused(self, _grievance, _users):
+        """A grievance cannot resolve until every task is closed, so a
+        task closed with no explanation is how a case reaches resolution
+        with nothing recorded about the work."""
+        officer, _ = _users
+        t = create_task(_grievance, title="t", description="",
+                        assigned_to="someone-else", actor="officer")
+        r = self._client(officer).post(
+            f"/api/v1/grm/tasks/{t.id}/transition/",
+            data={"new_status": "closed"},
+            content_type="application/json",
+        )
+        assert r.status_code == 400
+        assert "needs a note" in str(r.data)
+        t.refresh_from_db()
+        assert t.status == "open"
+
+    def test_the_closing_note_lands_on_the_grievance_thread(
+        self, _grievance, _users,
+    ):
+        """One timeline. The note is not filed on the task where nobody
+        reading the grievance would see it."""
+        from apps.grievance.models import CommentKind
+
+        officer, _ = _users
+        t = create_task(_grievance, title="t", description="",
+                        assigned_to="someone-else", actor="officer")
+        self._client(officer).post(
+            f"/api/v1/grm/tasks/{t.id}/transition/",
+            data={"new_status": "closed", "note": "Reporter confirmed"},
+            content_type="application/json",
+        )
+
+        comment = _grievance.comments.get(kind=CommentKind.TASK_CLOSED)
+        assert comment.body == "Reporter confirmed"
+        assert comment.task_id == t.id
+        assert comment.author == "officer"
 
     def test_assignee_lists_only_their_tasks(self, _grievance, _users):
         _, regular = _users
@@ -628,13 +758,39 @@ class TestApi:
         }, format="json")
         assert r.status_code == 201
         gid = r.data["id"]
-        # Assign
+        # Assign — to a real, active MIS user. "pc-3" used to work
+        # because the column took any string; it is now refused.
+        django_user_model.objects.create_user(
+            username="pc-3", password="p", email="pc3@example.test",
+        )
         r = c.post(f"/api/v1/grm/grievances/{gid}/assign/",
                    data={"actor": "supervisor-1", "assigned_to": "pc-3"},
                    format="json")
         assert r.status_code == 200
         assert r.data["status"] == GrievanceStatus.IN_PROGRESS
         assert Grievance.objects.get(pk=gid).assigned_to == "pc-3"
+
+    def test_assigning_to_an_unknown_user_is_refused(self, db, django_user_model):
+        """The four names the console used to offer were invented, and
+        an invented assignee is a grievance nobody is working."""
+        from rest_framework.test import APIClient
+        u = django_user_model.objects.create_user(
+            username="op2", password="p", is_superuser=True, is_staff=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=u)
+        r = c.post("/api/v1/grm/grievances/", data={
+            "category": Category.OTHER, "description": "x",
+        }, format="json")
+        gid = r.data["id"]
+
+        r = c.post(f"/api/v1/grm/grievances/{gid}/assign/",
+                   data={"actor": "supervisor-1",
+                         "assigned_to": "Adong Florence · CDO Tapac"},
+                   format="json")
+        assert r.status_code == 400
+        assert "not an active MIS user" in str(r.data)
+        assert Grievance.objects.get(pk=gid).assigned_to == ""
 
 
 class TestOverdueAction:
@@ -713,13 +869,14 @@ class TestAdminWorkbench:
         return c
 
     def test_changelist_renders(self, admin_client, db):
+        hh = make_household("GRM-ADM")
         open_grievance(
             category=Category.DATA_CORRECTION, description="x",
-            household_id="01HXY7K3B2N9PVQE4M6FZRWS18",
+            household_id=hh.id,
         )
         r = admin_client.get("/admin/grievance/grievance/")
         assert r.status_code == 200
-        assert b"01HXY7K3B2N9PVQE4M6FZRWS18" in r.content
+        assert hh.id.encode() in r.content
 
     def test_sla_badge_shows_overdue_when_past_deadline(self, db):
         from datetime import timedelta
@@ -817,3 +974,299 @@ class TestAdminWorkbench:
         g_open.refresh_from_db()
         assert g_resolved.status == GrievanceStatus.CLOSED
         assert g_open.status == GrievanceStatus.OPEN
+
+
+class TestAssignmentNotifies:
+    """Item 7 of the GRM audit: an assignee should learn they have been
+    assigned something without watching a queue.
+
+    The email is a courtesy and the assignment is the record, so
+    send_notification never raises — it audits its own outcome instead.
+    These assert the mail goes out, that a user with no address is
+    recorded rather than silently skipped, and that the work survives
+    either way.
+    """
+
+    def _officer(self, django_user_model, **over):
+        defaults = {"username": "grm-officer", "email": "officer@example.test"}
+        defaults.update(over)
+        return django_user_model.objects.create_user(password="p", **defaults)
+
+    def test_assignee_is_emailed(self, db, django_user_model, mailoutbox):
+        assignee = self._officer(
+            django_user_model, username="notify-me",
+            email="notify.me@example.test",
+        )
+        g = open_grievance(category=Category.OTHER, description="Check this")
+
+        assign(g, assigned_to=assignee.username, actor="supervisor-1")
+
+        assert len(mailoutbox) == 1
+        mail = mailoutbox[0]
+        assert mail.to == ["notify.me@example.test"]
+        assert g.id in mail.subject
+        assert "supervisor-1" in mail.body
+
+    def test_the_email_carries_what_the_assignee_needs(
+        self, db, django_user_model, mailoutbox,
+    ):
+        hh = make_household("GRM-NOTIF")
+        assignee = self._officer(
+            django_user_model, username="notify-body",
+            email="body@example.test",
+        )
+        g = open_grievance(
+            category=Category.DATA_CORRECTION, description="Surname is wrong",
+            household_id=hh.id,
+        )
+
+        assign(g, assigned_to=assignee.username, actor="supervisor-1")
+
+        body = mailoutbox[0].body
+        assert hh.id in body
+        assert "Surname is wrong" in body
+        # The SLA is the whole reason this is urgent.
+        assert "SLA due" in body
+
+    def test_the_notification_is_audited(self, db, django_user_model, mailoutbox):
+        from apps.security.models import AuditEvent
+
+        assignee = self._officer(
+            django_user_model, username="notify-audit",
+            email="audit@example.test",
+        )
+        g = open_grievance(category=Category.OTHER, description="x")
+
+        assign(g, assigned_to=assignee.username, actor="supervisor-1")
+
+        assert AuditEvent.objects.filter(
+            action="grm.assigned.notified", entity_id=g.id,
+        ).exists()
+
+    def test_an_assignee_with_no_address_is_recorded_not_skipped(
+        self, db, django_user_model, mailoutbox,
+    ):
+        """A gap in the user catalogue is a finding, not a silence."""
+        from apps.security.models import AuditEvent
+
+        assignee = self._officer(
+            django_user_model, username="no-address", email="",
+        )
+        g = open_grievance(category=Category.OTHER, description="x")
+
+        assign(g, assigned_to=assignee.username, actor="supervisor-1")
+
+        assert len(mailoutbox) == 0
+        assert AuditEvent.objects.filter(
+            action="notification.skipped", entity_id=g.id,
+        ).exists()
+        # The assignment itself still stands.
+        g.refresh_from_db()
+        assert g.assigned_to == "no-address"
+
+    def test_task_assignee_is_emailed(self, db, django_user_model, mailoutbox):
+        assignee = self._officer(
+            django_user_model, username="task-notify",
+            email="task@example.test",
+        )
+        g = open_grievance(category=Category.OTHER, description="x")
+
+        create_task(
+            g, title="Visit the reporter", description="Verify the NIN",
+            assigned_to=assignee.username, actor="officer",
+        )
+
+        assert len(mailoutbox) == 1
+        assert "Visit the reporter" in mailoutbox[0].subject
+        assert "Verify the NIN" in mailoutbox[0].body
+
+
+class TestOpenChangeRequestEndpoint:
+    """Item 5: a data-correction grievance should reach the Updates
+    Queue. The service has done this since US-S21 — nothing exposed it,
+    so the two screens had no path between them."""
+
+    @pytest.fixture
+    def _officer(self, db, django_user_model):
+        from django.contrib.auth.models import Group
+        user = django_user_model.objects.create_user(
+            username="crm-officer", password="p", is_staff=True,
+        )
+        user.groups.add(Group.objects.get(name="GRM Officer"))
+        return user
+
+    def _client(self, user):
+        from rest_framework.test import APIClient
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c
+
+    def test_opens_and_links_a_change_request(self, db, _officer):
+        hh = make_household("GRM-CR")
+        g = open_grievance(
+            category=Category.DATA_CORRECTION, description="Wrong surname",
+            household_id=hh.id,
+        )
+
+        r = self._client(_officer).post(
+            f"/api/v1/grm/grievances/{g.id}/open-change-request/",
+            data={"changes": {"surname": {"old": "Okot", "new": "Okello"}}},
+            format="json",
+        )
+
+        assert r.status_code == 200
+        assert r.data["linked_change_request_id"]
+        g.refresh_from_db()
+        assert g.linked_change_request_id == r.data["linked_change_request_id"]
+
+    def test_the_change_request_points_back_at_the_grievance(self, db, _officer):
+        from apps.update_workflow.models import ChangeRequest
+
+        hh = make_household("GRM-CR2")
+        g = open_grievance(
+            category=Category.DATA_CORRECTION, description="Wrong surname",
+            household_id=hh.id,
+        )
+        self._client(_officer).post(
+            f"/api/v1/grm/grievances/{g.id}/open-change-request/",
+            data={}, format="json",
+        )
+
+        g.refresh_from_db()
+        cr = ChangeRequest.objects.get(id=g.linked_change_request_id)
+        assert cr.entity_id == hh.id
+        assert cr.source_channel == "grm"
+        assert g.id in cr.requester_note
+
+    def test_only_a_data_correction_can_open_one(self, db, _officer):
+        g = open_grievance(
+            category=Category.OPERATOR_CONDUCT, description="Rude",
+        )
+        r = self._client(_officer).post(
+            f"/api/v1/grm/grievances/{g.id}/open-change-request/",
+            data={}, format="json",
+        )
+        assert r.status_code == 400
+        assert "DATA_CORRECTION" in str(r.data)
+
+    def test_a_grievance_with_no_household_cannot_open_one(self, db, _officer):
+        g = open_grievance(
+            category=Category.DATA_CORRECTION, description="Something wrong",
+        )
+        r = self._client(_officer).post(
+            f"/api/v1/grm/grievances/{g.id}/open-change-request/",
+            data={}, format="json",
+        )
+        assert r.status_code == 400
+        assert "household or member" in str(r.data)
+
+    def test_non_officers_are_refused(self, db, django_user_model):
+        hh = make_household("GRM-CR3")
+        g = open_grievance(
+            category=Category.DATA_CORRECTION, description="x",
+            household_id=hh.id,
+        )
+        outsider = django_user_model.objects.create_user(
+            username="not-an-officer", password="p",
+        )
+        r = self._client(outsider).post(
+            f"/api/v1/grm/grievances/{g.id}/open-change-request/",
+            data={}, format="json",
+        )
+        assert r.status_code == 403
+
+
+class TestGrievanceComments:
+    """A grievance is worked over days or weeks. Before this it carried
+    the intake narrative and, eventually, a resolution — and nothing in
+    between, so the resolution had to summarise from memory."""
+
+    @pytest.fixture
+    def _officer(self, db, django_user_model):
+        from django.contrib.auth.models import Group
+        user = django_user_model.objects.create_user(
+            username="thread-officer", password="p", is_staff=True,
+        )
+        user.groups.add(Group.objects.get(name="GRM Officer"))
+        return user
+
+    def _client(self, user):
+        from rest_framework.test import APIClient
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c
+
+    def test_a_comment_can_be_added_before_resolution(self, db, _officer):
+        g = open_grievance(category=Category.OTHER, description="x")
+
+        r = self._client(_officer).post(
+            f"/api/v1/grm/grievances/{g.id}/comments/",
+            data={"body": "Visited the parish; reporter was away."},
+            format="json",
+        )
+
+        assert r.status_code == 201
+        assert r.data["body"] == "Visited the parish; reporter was away."
+        assert r.data["author"] == "thread-officer"
+        assert r.data["kind"] == "note"
+
+    def test_the_thread_reads_oldest_first(self, db, _officer):
+        g = open_grievance(category=Category.OTHER, description="x")
+        client = self._client(_officer)
+        for body in ("first", "second", "third"):
+            client.post(f"/api/v1/grm/grievances/{g.id}/comments/",
+                        data={"body": body}, format="json")
+
+        r = client.get(f"/api/v1/grm/grievances/{g.id}/comments/")
+
+        assert [c["body"] for c in r.data] == ["first", "second", "third"]
+
+    def test_an_empty_comment_is_refused(self, db, _officer):
+        g = open_grievance(category=Category.OTHER, description="x")
+        r = self._client(_officer).post(
+            f"/api/v1/grm/grievances/{g.id}/comments/",
+            data={"body": "   "}, format="json",
+        )
+        assert r.status_code == 400
+
+    def test_a_comment_does_not_move_the_grievance(self, db, _officer):
+        """Commenting is not a transition. An OPEN grievance that
+        someone writes on is still OPEN — only assignment moves it."""
+        g = open_grievance(category=Category.OTHER, description="x")
+
+        self._client(_officer).post(
+            f"/api/v1/grm/grievances/{g.id}/comments/",
+            data={"body": "note"}, format="json",
+        )
+
+        g.refresh_from_db()
+        assert g.status == GrievanceStatus.OPEN
+
+    def test_a_closed_grievance_can_still_be_commented_on(self, db, _officer):
+        """A comment records what someone knew or did. Refusing it
+        because the case moved on loses the record rather than
+        protecting anything."""
+        g = open_grievance(category=Category.OTHER, description="x")
+        resolve(g, actor="officer", narrative="done")
+        close(g, actor="officer", narrative="grace expired")
+
+        r = self._client(_officer).post(
+            f"/api/v1/grm/grievances/{g.id}/comments/",
+            data={"body": "Reporter called back after closure."},
+            format="json",
+        )
+        assert r.status_code == 201
+
+    def test_every_comment_is_audited(self, db, _officer):
+        from apps.security.models import AuditEvent
+
+        g = open_grievance(category=Category.OTHER, description="x")
+        r = self._client(_officer).post(
+            f"/api/v1/grm/grievances/{g.id}/comments/",
+            data={"body": "note"}, format="json",
+        )
+
+        assert AuditEvent.objects.filter(
+            action="create", entity_type="grievance.comment",
+            entity_id=r.data["id"],
+        ).exists()

@@ -540,6 +540,23 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
             routing are stamped server-side from the SAD §4.5 matrix.
           </div>
 
+          {/* Say which household, by name. The grievance screen asks
+              "is this about a household?" and makes you search for one;
+              raised from here the answer is already yes, and showing it
+              is how the operator knows they will not be asked. */}
+          <div style={{
+            padding: "8px 10px", borderRadius: 6,
+            border: "1px solid var(--neutral-200)", background: "var(--neutral-50)",
+          }}>
+            <div className="t-cap" style={{fontWeight:600}}>ABOUT THIS HOUSEHOLD</div>
+            <div className="t-bodysm">{h.head}</div>
+            <div className="t-cap muted">
+              {[(h.geo || {}).village, (h.geo || {}).parish, (h.geo || {}).district]
+                .filter(v => v && v !== "—").join(" · ")}
+            </div>
+            <div className="t-mono muted" style={{fontSize:11}}>{h.rid}</div>
+          </div>
+
           <div className="row gap-3">
             <label style={{flex:1}}>
               <div className="t-cap">Category</div>

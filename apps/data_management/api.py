@@ -475,6 +475,12 @@ class HouseholdSerializer(serializers.ModelSerializer):
     # chain without N+1 lookups against /geographic-units/. Codes
     # stay on the FK fields (region, sub_region, ...) for callers
     # that join programmatically; names are flat strings for display.
+    # The head's name, for any surface that has to show WHICH household
+    # this is. The list endpoint already searches on the head's surname
+    # and first name, so a result set that can only show a ULID is
+    # searchable but unreadable — which is what made the grievance
+    # intake ask people to type a Registry ID from memory.
+    head_member_name = serializers.SerializerMethodField()
     region_name = serializers.CharField(source="region.name", read_only=True, default="")
     sub_region_name = serializers.CharField(source="sub_region.name", read_only=True, default="")
     district_name = serializers.CharField(source="district.name", read_only=True, default="")
@@ -505,6 +511,12 @@ class HouseholdSerializer(serializers.ModelSerializer):
     # detail tables. Returns null when no upstream StageRecord
     # exists (e.g., walk-in CAPI households whose payload wasn't
     # carried through the DIH pipeline).
+    def get_head_member_name(self, obj) -> str:
+        head = obj.head_member
+        if head is None:
+            return ""
+        return f"{head.surname} {head.first_name}".strip()
+
     source_payload = serializers.SerializerMethodField()
     # US-S22-005d — parallel labels tree, computed against the
     # ChoiceList catalogue active at the intake date. Audit blob in
@@ -514,7 +526,8 @@ class HouseholdSerializer(serializers.ModelSerializer):
     class Meta:
         model = Household
         fields = (
-            "id", "head_member", "region", "sub_region", "district",
+            "id", "head_member", "head_member_name",
+            "region", "sub_region", "district",
             "county", "sub_county", "parish", "village",
             "region_name", "sub_region_name", "district_name",
             "county_name", "sub_county_name", "parish_name", "village_name",
@@ -713,7 +726,14 @@ def _member_filters(qs, params):
 )
 class HouseholdViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyModelViewSet):
     audit_entity_type = "household"
-    queryset = Household.objects.all().order_by("-updated_at")
+    queryset = (
+        Household.objects
+        .select_related(
+            "head_member", "region", "sub_region", "district",
+            "county", "sub_county", "parish", "village",
+        )
+        .order_by("-updated_at")
+    )
     serializer_class = HouseholdSerializer
 
     def get_queryset(self):

@@ -6,13 +6,21 @@ from rest_framework.response import Response
 from apps.security.actor import actor_from_request
 from apps.security.audit_views import AuditReadMixin
 
-from .models import Grievance, GrievanceStatus, GrievanceTask, TaskStatus
+from .models import (
+    Grievance,
+    GrievanceComment,
+    GrievanceStatus,
+    GrievanceTask,
+    TaskStatus,
+)
 from .services import (
     GrievanceError,
+    add_comment,
     assign,
     close,
     create_task,
     escalate,
+    open_change_request_for_grievance,
     open_grievance,
     resolve,
     transition_task,
@@ -79,6 +87,30 @@ class _Resolve(serializers.Serializer):
     )
     narrative = serializers.CharField()
     linked_change_request_id = serializers.CharField(required=False, allow_blank=True)
+
+
+class GrievanceCommentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = GrievanceComment
+        fields = ("id", "grievance", "task", "kind", "body", "author",
+                  "created_at")
+        read_only_fields = fields
+
+
+class _CommentCreate(serializers.Serializer):
+    body = serializers.CharField()
+
+
+class _OpenChangeRequest(serializers.Serializer):
+    """Open a UPD ChangeRequest from a DATA_CORRECTION grievance.
+
+    `changes` is the UPD field-change map: {field: {old, new}}. It may
+    be empty — the reviewer often knows a correction is needed before
+    knowing exactly what it should say, and the Updates Queue is where
+    that gets filled in.
+    """
+    changes = serializers.JSONField(required=False)
+    auto_submit = serializers.BooleanField(required=False, default=False)
 
 
 class _Close(serializers.Serializer):
@@ -250,6 +282,76 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
 
     @extend_schema(
         tags=["grm"],
+        summary="The grievance's running comment thread",
+        description=(
+            "A grievance used to carry no running record: the intake "
+            "narrative, then the resolution. The weeks between had "
+            "nowhere to go. GET lists the thread oldest-first; POST "
+            "appends. Comments are append-only — a correction is "
+            "another comment."
+        ),
+        responses={200: GrievanceCommentSerializer(many=True)},
+    )
+    @action(detail=True, methods=["get", "post"], url_path="comments")
+    def comments(self, request, pk=None):
+        grievance = self.get_object()
+        if request.method == "GET":
+            rows = grievance.comments.all().select_related("task")
+            return Response(GrievanceCommentSerializer(rows, many=True).data)
+
+        ser = _CommentCreate(data=request.data)
+        ser.is_valid(raise_exception=True)
+        try:
+            comment = add_comment(
+                grievance,
+                body=ser.validated_data["body"],
+                actor=actor_from_request(request),
+            )
+        except GrievanceError as e:
+            return Response({"detail": str(e)},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return Response(GrievanceCommentSerializer(comment).data,
+                        status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        tags=["grm"],
+        summary="Open a linked UPD ChangeRequest",
+        description=(
+            "SAD §4.4: a grievance that resolves to a data correction "
+            "opens a linked UPD. The service has done this since "
+            "US-S21; nothing exposed it, so the Updates Queue and the "
+            "grievance that caused the update were two screens with no "
+            "path between them. Returns the grievance with "
+            "`linked_change_request_id` populated."
+        ),
+        request=_OpenChangeRequest,
+        responses={200: GrievanceSerializer},
+    )
+    @action(detail=True, methods=["post"], url_path="open-change-request")
+    def open_change_request(self, request, pk=None):
+        if not _is_grm_officer(request.user):
+            return Response(
+                {"detail": "GRM Officer role required."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        ser = _OpenChangeRequest(data=request.data)
+        ser.is_valid(raise_exception=True)
+        grievance = self.get_object()
+        try:
+            open_change_request_for_grievance(
+                grievance,
+                requester=actor_from_request(request),
+                changes=ser.validated_data.get("changes") or {},
+                auto_submit=ser.validated_data.get("auto_submit", False),
+            )
+        except GrievanceError as e:
+            return Response({"detail": str(e)},
+                            status=status.HTTP_400_BAD_REQUEST)
+        grievance.refresh_from_db()
+        return Response(self.get_serializer(grievance).data)
+
+    @extend_schema(
+        tags=["grm"],
         summary="Return the current user's GRM role + username",
         description=("Lets the React console show or hide the 'Add task' / "
                      "'Open grievance' affordances without a probe POST. "
@@ -312,6 +414,9 @@ class _TaskCreate(serializers.Serializer):
 
 class _TaskTransition(serializers.Serializer):
     new_status = serializers.ChoiceField(choices=TaskStatus.choices)
+    # Required when closing. The service enforces it; declaring it
+    # optional here lets re-open / start transitions stay one field.
+    note = serializers.CharField(required=False, allow_blank=True)
 
 
 @extend_schema_view(
@@ -408,6 +513,7 @@ class GrievanceTaskViewSet(viewsets.ModelViewSet):
                 task,
                 new_status=ser.validated_data["new_status"],
                 actor=user.username or "admin",
+                note=ser.validated_data.get("note", ""),
             )
         except GrievanceError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)

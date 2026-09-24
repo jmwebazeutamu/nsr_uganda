@@ -208,7 +208,19 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
   const [quickFilter, setQuickFilter] = useStateGrm(null);
   // 'assign' | 'escalate' | 'resolve' | 'close' | 'open_grievance' | 'add_task'
   const [modal, setModal] = useStateGrm(null);
-  const [assignee, setAssignee] = useStateGrm("");
+  const [assignee, setAssignee] = useStateGrm(null);
+  // null = unanswered, so the intake modal cannot be submitted with the
+  // question silently skipped.
+  const [aboutHousehold, setAboutHousehold] = useStateGrm(null);
+  const [pickedHousehold, setPickedHousehold] = useStateGrm(null);
+  const [taskAssignee, setTaskAssignee] = useStateGrm(null);
+  // Closing a task asks what was done. The note becomes a comment on
+  // the grievance, so the case has one timeline rather than a thread
+  // plus a set of closing notes filed on tasks nobody opens.
+  const [closingTask, setClosingTask] = useStateGrm(null);
+  const [closingNote, setClosingNote] = useStateGrm("");
+  const [comments, setComments] = useStateGrm([]);
+  const [commentDraft, setCommentDraft] = useStateGrm("");
   const [busy, setBusy] = useStateGrm(false);
   const [auditOpen, setAuditOpen] = useStateGrm(false);
   const [toast, setToast] = useStateGrm("");
@@ -234,9 +246,26 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
   // server-side.
   useEffectGrm(() => {
     if (!initialGrievance) return;
-    setOpenForm((form) => ({ ...form, ...initialGrievance }));
+    const { household, ...fields } = initialGrievance;
+    setOpenForm((form) => ({ ...form, ...fields }));
+    // A grievance raised from a household's own screen already knows
+    // which household it is about, so the question is answered and the
+    // picker is locked rather than asked again. `household` is the
+    // serialized row when the caller has it; otherwise the id alone is
+    // enough to submit, and the picker shows what it was given.
+    if (fields.household_id) {
+      setAboutHousehold(true);
+      setPickedHousehold(household || { id: fields.household_id });
+    }
     setModal("open_grievance");
   }, [initialGrievance]);
+
+  // Locked when the caller supplied the household — the operator is
+  // raising this FROM that record, so re-picking it is not a choice
+  // they should have to make or be able to get wrong.
+  const lockedHousehold = Boolean(
+    initialGrievance && initialGrievance.household_id,
+  );
 
   // Refresh the roster from the API. Used on mount + after every
   // successful action. On unreachable API (file:// preview) it
@@ -290,9 +319,43 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
       .then(data => { setTasks(data.results || data || []); })
       .catch(() => { setTasks([]); });
   };
+  const refreshComments = (grievanceId) => {
+    if (!grievanceId) { setComments([]); return Promise.resolve(); }
+    return fetch(
+      `/api/v1/grm/grievances/${encodeURIComponent(grievanceId)}/comments/`,
+      { credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => { setComments(Array.isArray(data) ? data : (data.results || [])); })
+      .catch(() => { setComments([]); });
+  };
+
+  const postComment = () => {
+    const body = commentDraft.trim();
+    if (!body || !current) return;
+    setBusy(true);
+    fetch(`/api/v1/grm/grievances/${current.id}/comments/`, {
+      method: "POST", credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": _grmCsrf(),
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ body }),
+    })
+      .then(async r => {
+        if (r.ok) return r.json();
+        const j = await r.json().catch(() => ({ detail: r.status }));
+        throw new Error(j.detail || `HTTP ${r.status}`);
+      })
+      .then(() => { setCommentDraft(""); refreshComments(current.id); })
+      .catch(e => setToast(`Comment failed: ${e.message}`))
+      .finally(() => setBusy(false));
+  };
+
   useEffectGrm(() => {
     if (dataSource === "live" || dataSource === "live-empty") {
       refreshTasks(selectedRow);
+      refreshComments(selectedRow);
     }
     /* eslint-disable-next-line */
   }, [selectedRow, dataSource]);
@@ -366,7 +429,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
   };
 
   // Transition a task's status (open ↔ in_progress, → closed).
-  const transitionTask = (taskId, new_status) => {
+  const transitionTask = (taskId, new_status, note = "") => {
     setBusy(true);
     fetch(`/api/v1/grm/tasks/${taskId}/transition/`, {
       method: "POST", credentials: "same-origin",
@@ -375,16 +438,20 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
         "X-CSRFToken": _grmCsrf(),
         Accept: "application/json",
       },
-      body: JSON.stringify({ new_status }),
+      body: JSON.stringify({ new_status, note }),
     })
       .then(async r => {
         if (r.ok) return r.json();
         const j = await r.json().catch(() => ({ detail: r.status }));
         throw new Error(j.detail || `HTTP ${r.status}`);
       })
-      .then(() => refreshTasks(current?.id))
+      .then(() => {
+        refreshTasks(current?.id);
+        // A closing note lands on the grievance thread, so refresh it.
+        if (new_status === "closed") refreshComments(current?.id);
+      })
       .catch(e => setToast(`Transition failed: ${e.message}`))
-      .finally(() => setBusy(false));
+      .finally(() => { setBusy(false); setClosingTask(null); });
   };
 
   // Keep selectedRow valid when allRows changes (e.g., after a live
@@ -475,6 +542,8 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
         escalate: `${selection.size || 1} grievance(s) escalated. (preview — not persisted)`,
         resolve:  `Grievance resolved. (preview — not persisted)`,
         close:    `${selection.size || 1} grievance(s) closed. (preview — not persisted)`,
+        "open-change-request":
+          "Update opened in the Updates Queue. (preview — not persisted)",
       };
       setToast(map[kind] || "Done.");
       setModal(null); setSelection(new Set());
@@ -549,7 +618,12 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
           </button>
           <button className="btn" onClick={exportCsv}><Icon name="download"/> Export CSV</button>
           {me.is_officer && (
-            <button className="btn primary" onClick={() => setModal("open_grievance")}>
+            <button className="btn primary" onClick={() => {
+                      setAboutHousehold(null);
+                      setPickedHousehold(null);
+                      setOpenForm(f => ({...f, household_id: "", member_id: ""}));
+                      setModal("open_grievance");
+                    }}>
               <Icon name="plus"/> Open grievance
             </button>
           )}
@@ -722,11 +796,55 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
                 <div className="t-bodysm muted">{current.relationship}</div>
                 {current.reporter_phone && <div className="t-bodysm muted t-mono" style={{fontSize:12}}>{current.reporter_phone}</div>}
 
-                {current.household_id && (
+                {current.household_id ? (
                   <>
                     <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>SUBJECT</div>
-                    <div className="t-mono" style={{fontSize:12}}>{current.household_id}</div>
+                    <button type="button" className="link-btn t-bodysm"
+                            style={{padding:0, textAlign:"left"}}
+                            onClick={() => onNavigate && onNavigate("household", { householdId: current.household_id })}>
+                      Open household {current.household_id.slice(0, 12)}…
+                    </button>
                     {current.member_id && <div className="t-mono muted" style={{fontSize:11, marginTop:2}}>member: {current.member_id.slice(0,18)}…</div>}
+                  </>
+                ) : (
+                  <>
+                    <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>SUBJECT</div>
+                    <div className="t-bodysm muted">Not about a specific household.</div>
+                  </>
+                )}
+
+                {/* GRM -> UPD. SAD §4.4: a grievance that resolves to a
+                    data correction opens a linked update. The service
+                    has done this since US-S21 and nothing exposed it,
+                    so the Updates Queue and the grievance that caused
+                    the update were two screens with no path between
+                    them. */}
+                {current.category === "data_correction" && (
+                  <>
+                    <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>DATA UPDATE</div>
+                    {current.linked_change_request_id ? (
+                      <button type="button" className="link-btn t-bodysm"
+                              style={{padding:0, textAlign:"left"}}
+                              onClick={() => onNavigate && onNavigate("upd", { changeRequestId: current.linked_change_request_id })}>
+                        Open update {current.linked_change_request_id.slice(0, 12)}… in the Updates Queue
+                      </button>
+                    ) : current.household_id ? (
+                      <>
+                        <button className="btn sm" disabled={busy}
+                                onClick={() => fire("open-change-request", { body: {} })}>
+                          Open an update from this grievance
+                        </button>
+                        <div className="t-cap muted" style={{marginTop:4}}>
+                          Creates a DRAFT in the Updates Queue, linked both ways.
+                          Approval still happens there.
+                        </div>
+                      </>
+                    ) : (
+                      <div className="t-bodysm muted">
+                        Name the household first — an update has to be
+                        about a record.
+                      </div>
+                    )}
                   </>
                 )}
 
@@ -809,6 +927,60 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
               </div>
             )}
 
+            {/* The running thread. A grievance is worked over days or
+                weeks; before this it carried the intake narrative and,
+                eventually, a resolution, with nothing in between — so
+                the resolution had to summarise from memory. Comments
+                are append-only: a correction is another comment. */}
+            {(dataSource === "live" || dataSource === "live-empty") && (
+              <div className="card">
+                <div className="card-header" style={{padding:"12px 16px"}}>
+                  <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)"}}>
+                    <Icon name="message" size={11}/> CASE NOTES
+                    {comments.length > 0 && (
+                      <Chip size="sm" tone="data" style={{marginLeft:6}}>{comments.length}</Chip>
+                    )}
+                  </div>
+                </div>
+                <div style={{padding:"12px 16px"}}>
+                  {comments.length === 0 && (
+                    <div className="t-bodysm muted" style={{fontStyle:"italic", marginBottom:10}}>
+                      Nothing recorded yet. Add a note as the case moves —
+                      a visit made, a call, a document still missing.
+                    </div>
+                  )}
+                  {comments.map(c => (
+                    <div key={c.id} style={{
+                      borderLeft: "2px solid var(--neutral-200)",
+                      padding: "0 0 0 10px", margin: "0 0 12px",
+                    }}>
+                      <div className="row gap-2" style={{alignItems:"baseline"}}>
+                        <span className="t-bodysm" style={{fontWeight:600}}>{c.author}</span>
+                        <span className="t-cap muted">{_grmFmtTime(c.created_at)}</span>
+                        {c.kind === "task_closed" && (
+                          <Chip size="sm" tone="quality">task closed</Chip>
+                        )}
+                      </div>
+                      <div className="t-bodysm" style={{color:"var(--neutral-800)", whiteSpace:"pre-wrap"}}>
+                        {c.body}
+                      </div>
+                    </div>
+                  ))}
+                  <textarea className="field-text"
+                            style={{width:"100%", minHeight:56, padding:8, fontFamily:"inherit"}}
+                            placeholder="Add a note — what happened, what is still outstanding."
+                            value={commentDraft}
+                            onChange={(e) => setCommentDraft(e.target.value)}/>
+                  <div className="row gap-2" style={{justifyContent:"flex-end", marginTop:6}}>
+                    <button className="btn sm" disabled={busy || !commentDraft.trim()}
+                            onClick={postComment}>
+                      {busy ? "Saving…" : "Add note"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* US-S21-003c — Tasks panel. GRM Officer scopes the work
                 into tasks; the assignee transitions them; the resolve
                 action below is disabled until every task is closed. */}
@@ -824,7 +996,11 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
                     )}
                   </div>
                   {me.is_officer && current.status !== "resolved" && current.status !== "closed" && (
-                    <button className="btn" onClick={() => setModal("add_task")}>
+                    <button className="btn" onClick={() => {
+                              setTaskAssignee(null);
+                              setTaskForm({title:"", description:"", assigned_to:""});
+                              setModal("add_task");
+                            }}>
                       <Icon name="plus" size={12}/> Add task
                     </button>
                   )}
@@ -877,7 +1053,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
                               )}
                               <button className="btn ghost" disabled={busy}
                                       title="Close task"
-                                      onClick={() => transitionTask(t.id, "closed")}
+                                      onClick={() => { setClosingNote(""); setClosingTask(t); }}
                                       style={{padding: "2px 6px", fontSize: 11}}>
                                 Close
                               </button>
@@ -1012,7 +1188,39 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
           body: { narrative: [reason, note].filter(Boolean).join(" — ") },
         })}/>
 
+      {/* Closing a task asks what was done. A grievance cannot resolve
+          until every task is closed, so a task closed with no
+          explanation is how a case reaches resolution with nothing
+          recorded about the work. */}
       <Modal
+        width={520}
+        open={Boolean(closingTask)}
+        title={closingTask ? `Close task: ${closingTask.title}` : "Close task"}
+        onClose={() => !busy && setClosingTask(null)}
+        footer={<>
+          <button className="btn" disabled={busy}
+                  onClick={() => setClosingTask(null)}>Cancel</button>
+          <button className="btn btn-primary"
+                  disabled={busy || !closingNote.trim()}
+                  onClick={() => transitionTask(closingTask.id, "closed", closingNote.trim())}>
+            {busy ? "Closing…" : "Close task"}
+          </button>
+        </>}>
+        <div className="t-bodysm" style={{marginBottom:10}}>
+          What was done? If the task is being dropped, say why.
+        </div>
+        <textarea className="field-text"
+                  style={{width:"100%", minHeight:90, padding:8, fontFamily:"inherit"}}
+                  placeholder="e.g. Visited the reporter on 12 Oct; NIN confirmed against the card."
+                  value={closingNote}
+                  onChange={(e) => setClosingNote(e.target.value)}/>
+        <div className="t-cap muted" style={{marginTop:6}}>
+          This goes on the grievance's case notes, under your name.
+        </div>
+      </Modal>
+
+      <Modal
+        width={520}
         open={modal === "assign"}
         title="Assign grievance(s)"
         onClose={() => setModal(null)}
@@ -1020,7 +1228,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
           <button className="btn" onClick={() => setModal(null)}>Cancel</button>
           <button className="btn btn-primary" disabled={!assignee || busy}
                   onClick={() => fire("assign", {
-                    body: { assigned_to: assignee },
+                    body: { assigned_to: assignee ? assignee.username : "" },
                   })}>
             {busy ? "Assigning…" : "Assign"}
           </button>
@@ -1028,20 +1236,26 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
         <div className="t-bodysm" style={{marginBottom:12}}>
           Assign {selection.size > 1 ? `${selection.size} grievances` : "this grievance"} to:
         </div>
-        <select className="field-select" style={{width:"100%"}}
-                value={assignee}
-                onChange={(e) => setAssignee(e.target.value)}>
-          <option value="">— pick an assignee —</option>
-          <option value="Adong Florence · CDO Tapac">Adong Florence · CDO Tapac</option>
-          <option value="Akiteng Lillian · Parish Chief, Nakiloro">Akiteng Lillian · Parish Chief, Nakiloro</option>
-          <option value="Twikirize J. · District M&E">Twikirize J. · District M&amp;E</option>
-          <option value="NSR Unit duty officer">NSR Unit duty officer</option>
-        </select>
+        {/* This was a <select> of four invented people — "Adong
+            Florence · CDO Tapac" and friends. None of them had an
+            account, so the string went into assigned_to and the
+            grievance sat with nobody working it. The server now
+            refuses an assignee that is not an active MIS user, and
+            this searches the real directory. */}
+        <UserPicker value={assignee} onChange={setAssignee}/>
+        {assignee && !assignee.email && (
+          <div className="t-cap muted" style={{marginTop:8}}>
+            {assignee.display_name || assignee.username} has no email on
+            file, so they will not receive the assignment alert. The
+            grievance will still appear in their queue.
+          </div>
+        )}
       </Modal>
 
       {/* US-S21-003c — Open Grievance modal. POSTs to
           /api/v1/grm/grievances/; the server stamps SLA + audit. */}
       <Modal
+        width={640}
         open={modal === "open_grievance"}
         title="Open a new grievance"
         onClose={() => setModal(null)}
@@ -1078,22 +1292,59 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
                     value={openForm.description}
                     onChange={(e) => setOpenForm({...openForm, description: e.target.value})}/>
 
-          <div className="row gap-2" style={{marginTop:8}}>
-            <div style={{flex:1}}>
-              <label className="t-cap" style={{fontWeight:600}}>HOUSEHOLD ID <span className="muted">(optional)</span></label>
-              <input className="field-text" type="text"
-                     style={{width:"100%", padding:6, fontFamily:"ui-monospace, monospace", fontSize:12}}
-                     placeholder="01HXY7K3B2N9PVQE4M6FZRWS18"
-                     value={openForm.household_id}
-                     onChange={(e) => setOpenForm({...openForm, household_id: e.target.value})}/>
+          {/* Is this about a household? Asked outright, because the
+              answer decides whether the grievance can ever become a
+              data correction — and because the box it replaces asked
+              for a Registry ID as free text with a ULID for a
+              placeholder. Nobody types a ULID; a typo made a grievance
+              that pointed at nothing. When the modal is opened from a
+              household's own screen the answer is already yes and the
+              household is already chosen, so the question is skipped. */}
+          <div style={{
+            marginTop: 12, padding: 12, borderRadius: 6,
+            border: "1px solid var(--neutral-200)", background: "var(--neutral-50)",
+          }}>
+            <div className="t-cap" style={{fontWeight:600, marginBottom:6}}>
+              IS THIS ABOUT A HOUSEHOLD IN THE REGISTRY?
             </div>
-            <div style={{flex:1}}>
-              <label className="t-cap" style={{fontWeight:600}}>MEMBER ID <span className="muted">(optional)</span></label>
-              <input className="field-text" type="text"
-                     style={{width:"100%", padding:6, fontFamily:"ui-monospace, monospace", fontSize:12}}
-                     value={openForm.member_id}
-                     onChange={(e) => setOpenForm({...openForm, member_id: e.target.value})}/>
-            </div>
+            {lockedHousehold ? (
+              <div className="t-bodysm">
+                Yes — raised from this household's record.
+              </div>
+            ) : (
+              <div className="row gap-3" style={{marginBottom: aboutHousehold ? 10 : 0}}>
+                <label className="row gap-1" style={{alignItems:"center", cursor:"pointer"}}>
+                  <input type="radio" name="grm-about-hh" checked={aboutHousehold === true}
+                         onChange={() => setAboutHousehold(true)}/>
+                  <span className="t-bodysm">Yes</span>
+                </label>
+                <label className="row gap-1" style={{alignItems:"center", cursor:"pointer"}}>
+                  <input type="radio" name="grm-about-hh" checked={aboutHousehold === false}
+                         onChange={() => {
+                           setAboutHousehold(false);
+                           setPickedHousehold(null);
+                           setOpenForm(f => ({...f, household_id: "", member_id: ""}));
+                         }}/>
+                  <span className="t-bodysm">No — operator conduct, a programme issue, or general</span>
+                </label>
+              </div>
+            )}
+
+            {aboutHousehold && (
+              <HouseholdPicker
+                value={pickedHousehold}
+                disabled={lockedHousehold}
+                onChange={(hh) => {
+                  setPickedHousehold(hh);
+                  setOpenForm(f => ({...f, household_id: hh ? hh.id : "", member_id: ""}));
+                }}/>
+            )}
+            {aboutHousehold && !pickedHousehold && (
+              <div className="t-cap muted" style={{marginTop:6}}>
+                A data-correction grievance can only open an update once
+                it names a household.
+              </div>
+            )}
           </div>
 
           <label className="t-cap" style={{fontWeight:600, marginTop:8}}>REPORTER</label>
@@ -1117,6 +1368,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
       {/* US-S21-003c — Add Task modal. Officer-only POSTs to
           /api/v1/grm/tasks/. The new task lands in OPEN status. */}
       <Modal
+        width={560}
         open={modal === "add_task"}
         title={current ? `Add task to ${current.id.slice(0, 12)}…` : "Add task"}
         onClose={() => setModal(null)}
@@ -1143,11 +1395,12 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
                     onChange={(e) => setTaskForm({...taskForm, description: e.target.value})}/>
 
           <label className="t-cap" style={{fontWeight:600, marginTop:8}}>ASSIGNED TO</label>
-          <input className="field-text" type="text"
-                 style={{width:"100%", padding:6, fontFamily:"ui-monospace, monospace"}}
-                 placeholder="username (e.g. parish-chief-3)"
-                 value={taskForm.assigned_to}
-                 onChange={(e) => setTaskForm({...taskForm, assigned_to: e.target.value})}/>
+          <UserPicker
+                 value={taskAssignee}
+                 onChange={(u) => {
+                   setTaskAssignee(u);
+                   setTaskForm({...taskForm, assigned_to: u ? u.username : ""});
+                 }}/>
           <div className="t-bodysm muted" style={{fontSize:11}}>
             The assignee will see this grievance in their queue until the
             task is closed. Resolve is blocked while any task is open.

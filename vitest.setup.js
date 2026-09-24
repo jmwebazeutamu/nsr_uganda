@@ -18,6 +18,13 @@ globalThis.React = React;
 // admin console loaded both.
 await import("./design/v0.1/data/geo-levels.jsx");
 
+// SearchPicker / HouseholdPicker / UserPicker are shared components the
+// browser harness loads before any screen, the same way it loads
+// components.jsx. UserPicker used to be declared inside
+// screens-admin.jsx; it moved out when the GRM console needed the same
+// search over the same endpoint.
+await import("./design/v0.1/components/search-picker.jsx");
+
 globalThis.Icon = ({ name, size, color, style, ...rest }) =>
   React.createElement("i", { "data-icon": name, style, ...rest });
 

@@ -829,7 +829,13 @@ button:focus-visible { outline: 0; box-shadow: var(--focus-ring); }
   width: 100%; max-width: 480px;
   box-shadow: 0 24px 64px rgba(0,0,0,0.2);
   display: flex; flex-direction: column;
-  max-height: 90vh;
+  /* The backdrop already pads by --space-6 on every side, so 90vh
+     could exceed the space left for it and clip the footer off the
+     bottom of the screen. Take whichever is smaller. */
+  max-height: min(90vh, calc(100vh - 2 * var(--space-6)));
+  /* A flex child's default min-height is its content, which defeats
+     max-height on a tall body and pushes the footer out of view. */
+  min-height: 0;
 }
 .modal-header {
   padding: var(--space-5);
@@ -837,8 +843,26 @@ button:focus-visible { outline: 0; box-shadow: var(--focus-ring); }
   gap: var(--space-3);
   border-bottom: 1px solid var(--neutral-200);
 }
-.modal-header h3 { margin: 0; }
-.modal-body { padding: var(--space-5); overflow-y: auto; }
+/* min-width:0 lets the title shrink inside the flex row; without it a
+   long unbroken token — a Registry ID, a code — sets the row's width
+   and pushes the close button off the edge. */
+.modal-header h3 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.modal-body {
+  padding: var(--space-5);
+  overflow-y: auto;
+  /* Same reason, for the body: ULIDs and dotted geography codes are
+     unbreakable words. break-word only breaks when a word genuinely
+     does not fit, so prose is unaffected. */
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+/* Fields inside a modal must not overflow it — an input with a long
+   value, or a select with a long option, otherwise widens the dialog
+   past its max-width and the right-hand edge clips. */
+.modal-body .field-text,
+.modal-body .field-select,
+.modal-body .field-input,
+.modal-body textarea { max-width: 100%; box-sizing: border-box; }
 .modal-footer {
   padding: var(--space-4) var(--space-5);
   display: flex; justify-content: flex-end; gap: var(--space-3);

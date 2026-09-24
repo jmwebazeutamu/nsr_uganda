@@ -113,6 +113,62 @@ class Grievance(models.Model):
         return f"Grievance {self.id} [{self.tier}/{self.status}]"
 
 
+class CommentKind(models.TextChoices):
+    """What put an entry on a grievance's thread.
+
+    A plain NOTE is someone writing on the case. TASK_CLOSED is the
+    note the closer had to give to close a task — it lives here rather
+    than on GrievanceTask so the grievance has ONE timeline instead of
+    a thread plus a set of closing notes filed somewhere else.
+    """
+
+    NOTE = "note"
+    TASK_CLOSED = "task_closed"
+
+
+class GrievanceComment(models.Model):
+    """A dated note on a grievance, written as the case moves.
+
+    A grievance used to carry no running record at all: the narrative
+    captured at intake, then `resolution_narrative` at the end. Weeks of
+    work in between — a visit made, a phone call, a document still
+    missing — had nowhere to go, so the resolution had to summarise from
+    memory, or not at all.
+
+    Comments are append-only. There is no edit and no delete, because
+    the value of the thread is that it says what was known at the time;
+    a correction is another comment. That is also what keeps it
+    consistent with the audit chain.
+    """
+
+    id = ULIDField(primary_key=True)
+    grievance = models.ForeignKey(
+        Grievance, on_delete=models.CASCADE, related_name="comments",
+    )
+    # Set when this entry is a task's closing note, so the thread can
+    # show what it refers to.
+    task = models.ForeignKey(
+        "GrievanceTask", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="closing_comments",
+    )
+    kind = models.CharField(
+        max_length=16, choices=CommentKind.choices, default=CommentKind.NOTE,
+    )
+    body = models.TextField()
+    author = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Grievance comment"
+        ordering = ("created_at",)
+        indexes = [
+            models.Index(fields=["grievance", "created_at"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"Comment on {self.grievance_id} by {self.author}"
+
+
 class GrievanceTask(models.Model):
     """US-S21-003 — a unit of follow-up work attached to a grievance.
 

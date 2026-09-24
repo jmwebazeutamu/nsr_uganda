@@ -79,7 +79,13 @@ const _buildHouseholdAggregatesUrl = (filters) => {
     : `${_HH_API_BASE}aggregates/`;
 };
 
-const _pmtBandLabel = (code) => String(code || "")
+// Renamed off `_pmtBandLabel`: screens-programme-detail.jsx declares
+// that name too, with different behaviour (a curated label map rather
+// than title-casing), and the console loads its JSX into one global
+// scope — so whichever file loaded last was labelling BOTH screens.
+// The two should converge on one band vocabulary; until somebody picks
+// which, they are at least no longer overwriting each other.
+const _registryPmtBandLabel = (code) => String(code || "")
   .replaceAll("_", " ")
   .replace(/\b\w/g, letter => letter.toUpperCase());
 
@@ -364,7 +370,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
           </label>
           <select className="field-select" style={{height:34, width:'auto', minWidth:140}} value={band} onChange={(e) => { setBand(e.target.value); setPage(0); }}>
             <option value="">Any PMT band</option>
-            {pmtBandOptions.map(code => <option key={code} value={code}>{_pmtBandLabel(code)}</option>)}
+            {pmtBandOptions.map(code => <option key={code} value={code}>{_registryPmtBandLabel(code)}</option>)}
           </select>
           <input
             type="text" value={prog}
@@ -395,7 +401,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
           {subreg && <Chip size="sm">{
             (subregs.find(s => s.code === subreg)?.name) || subreg
           }</Chip>}
-          {band && <Chip size="sm">{_pmtBandLabel(band)}</Chip>}
+          {band && <Chip size="sm">{_registryPmtBandLabel(band)}</Chip>}
           {headSex && <Chip size="sm">Head: {headSexOptions.find(option => option.code === headSex)?.label || headSex}</Chip>}
           {registeredFrom && <Chip size="sm">Registered from {registeredFrom}</Chip>}
           {registeredTo && <Chip size="sm">Registered to {registeredTo}</Chip>}
@@ -525,5 +531,5 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
 // been removed.
 Object.assign(window, {
   RegistryScreen, _buildHouseholdListUrl, _buildHouseholdAggregatesUrl,
-  _pmtBandLabel,
+  _registryPmtBandLabel,
 });

@@ -19,10 +19,15 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.security.audit import emit as emit_audit
+from apps.security.notifications import send_notification
+
+from . import assignees
 
 from .models import (
     Category,
+    CommentKind,
     Grievance,
+    GrievanceComment,
     GrievanceStatus,
     GrievanceTask,
     TaskStatus,
@@ -62,6 +67,24 @@ def open_grievance(
 ) -> Grievance:
     if category not in Category.values:
         raise GrievanceError(f"unknown category: {category!r}")
+    # A grievance either names a household that exists or names none.
+    # The console used to take the Registry ID as free text with a ULID
+    # as the placeholder — nobody types a ULID, and a typo produced a
+    # grievance pointing at nothing, which only surfaced when someone
+    # tried to open a correction from it.
+    household_id = (household_id or "").strip()
+    if household_id:
+        from apps.data_management.models import Household
+        if not Household.objects.filter(
+            id=household_id, is_deleted=False,
+        ).exists():
+            raise GrievanceError(
+                f"household {household_id} is not in the registry",
+            )
+    if member_id and not household_id:
+        raise GrievanceError(
+            "a grievance about a member must name that member's household",
+        )
     g = Grievance.objects.create(
         category=category,
         sub_category=sub_category,
@@ -89,13 +112,58 @@ def open_grievance(
 def assign(grievance: Grievance, *, assigned_to: str, actor: str) -> Grievance:
     if grievance.status not in (GrievanceStatus.OPEN, GrievanceStatus.IN_PROGRESS):
         raise GrievanceError(f"cannot assign from {grievance.status}")
-    grievance.assigned_to = assigned_to
+    # The assignee must be a real, active MIS user. The console used to
+    # offer four invented names; an invented assignee is a grievance
+    # nobody is working.
+    try:
+        user = assignees.resolve(assigned_to)
+    except assignees.UnknownAssignee as exc:
+        raise GrievanceError(str(exc)) from exc
+
+    grievance.assigned_to = user.username
     grievance.status = GrievanceStatus.IN_PROGRESS
     grievance.save(update_fields=["assigned_to", "status", "updated_at"])
     emit_audit("update", "grievance", grievance.id, actor=actor,
                reason="assigned",
-               field_changes={"assigned_to": assigned_to})
+               field_changes={"assigned_to": user.username})
+    notify_assignment(grievance, user=user, actor=actor)
     return grievance
+
+
+def notify_assignment(grievance: Grievance, *, user, actor: str) -> dict:
+    """Tell the assignee, by email, that a grievance is theirs.
+
+    Deliberately after the save and outside the audit-bearing decision:
+    send_notification never raises and audits its own outcome, so an
+    SMTP outage cannot roll back an assignment. A user with no address
+    on file is recorded as `notification.skipped` rather than silently
+    passed over.
+    """
+    deadline = (
+        grievance.sla_deadline.strftime("%d %b %Y %H:%M UTC")
+        if grievance.sla_deadline else "not set"
+    )
+    subject = f"[NSR GRM] Grievance {grievance.id} assigned to you"
+    body = (
+        f"{assignees.display_name(user)},\n\n"
+        f"Grievance {grievance.id} has been assigned to you by {actor}.\n\n"
+        f"  Category : {grievance.get_category_display()}\n"
+        f"  Tier     : {grievance.get_tier_display()}\n"
+        f"  Household: {grievance.household_id or '— not household-related —'}\n"
+        f"  SLA due  : {deadline}\n\n"
+        f"{grievance.description}\n\n"
+        "Open it in the console under Grievances → Assigned to me.\n"
+    )
+    return send_notification(
+        to=assignees.email_for(user),
+        subject=subject,
+        body=body,
+        entity_type="grievance",
+        entity_id=grievance.id,
+        audit_actor=actor,
+        audit_action="grm.assigned.notified",
+        audit_reason=f"assigned to {user.username}",
+    )
 
 
 @transaction.atomic
@@ -199,6 +267,36 @@ _TASK_TRANSITIONS = {
 
 
 @transaction.atomic
+def add_comment(
+    grievance: Grievance, *, body: str, actor: str,
+    kind: str = CommentKind.NOTE, task: GrievanceTask | None = None,
+) -> GrievanceComment:
+    """Append a note to a grievance's running thread.
+
+    Allowed in every status, including CLOSED. A comment records what
+    someone knew or did; refusing to store it because the case has
+    moved on loses the record rather than protecting anything. Nothing
+    about the grievance's state changes — this is not a transition.
+    """
+    body = (body or "").strip()
+    if not body:
+        raise GrievanceError("a comment needs something in it")
+    if not actor:
+        raise GrievanceError("actor required")
+
+    comment = GrievanceComment.objects.create(
+        grievance=grievance, task=task, kind=kind,
+        body=body, author=actor,
+    )
+    emit_audit(
+        "create", "grievance.comment", comment.id, actor=actor,
+        reason=f"comment on {grievance.id}",
+        field_changes={"grievance_id": grievance.id, "kind": kind},
+    )
+    return comment
+
+
+@transaction.atomic
 def create_task(
     grievance: Grievance, *,
     title: str, description: str, assigned_to: str, actor: str,
@@ -213,6 +311,10 @@ def create_task(
         raise GrievanceError("task must be assigned to someone")
     if not actor:
         raise GrievanceError("actor required")
+    try:
+        assignee = assignees.resolve(assigned_to)
+    except assignees.UnknownAssignee as exc:
+        raise GrievanceError(str(exc)) from exc
     if grievance.status in (GrievanceStatus.RESOLVED, GrievanceStatus.CLOSED):
         raise GrievanceError(
             f"cannot add task to a {grievance.status} grievance",
@@ -220,7 +322,7 @@ def create_task(
     task = GrievanceTask.objects.create(
         grievance=grievance,
         title=title, description=description or "",
-        assigned_to=assigned_to,
+        assigned_to=assignee.username,
         status=TaskStatus.OPEN, created_by=actor,
     )
     emit_audit(
@@ -228,19 +330,51 @@ def create_task(
         reason=f"task added to {grievance.id}",
         field_changes={
             "grievance_id": grievance.id,
-            "assigned_to": assigned_to,
+            "assigned_to": assignee.username,
             "title": title,
         },
     )
+    notify_task_assignment(task, user=assignee, actor=actor)
     return task
+
+
+def notify_task_assignment(task: GrievanceTask, *, user, actor: str) -> dict:
+    """Tell the assignee a task is theirs. Same fail-open contract as
+    notify_assignment — the email is a courtesy, the task is the record."""
+    body = (
+        f"{assignees.display_name(user)},\n\n"
+        f"{actor} assigned you a task on grievance {task.grievance_id}.\n\n"
+        f"  {task.title}\n\n"
+        f"{task.description or '(no further detail)'}\n\n"
+        "The grievance cannot be resolved until every task on it is "
+        "closed.\n"
+    )
+    return send_notification(
+        to=assignees.email_for(user),
+        subject=f"[NSR GRM] Task assigned: {task.title}",
+        body=body,
+        entity_type="grievance.task",
+        entity_id=task.id,
+        audit_actor=actor,
+        audit_action="grm.task.assigned.notified",
+        audit_reason=f"task assigned to {user.username}",
+    )
 
 
 @transaction.atomic
 def transition_task(
-    task: GrievanceTask, *, new_status: str, actor: str,
+    task: GrievanceTask, *, new_status: str, actor: str, note: str = "",
 ) -> GrievanceTask:
     """Move a task between statuses. Allowed paths: open↔in_progress,
-    in_progress→closed, open→closed. Closed is terminal."""
+    in_progress→closed, open→closed. Closed is terminal.
+
+    Closing requires `note` — what was done, or why the task is being
+    dropped. A grievance cannot be resolved until every task on it is
+    closed, so a task closed with no explanation is how a case reaches
+    resolution with nothing recorded about the work. The note is stored
+    as a comment on the grievance, not as a column here, so the
+    grievance keeps one timeline.
+    """
     if not actor:
         raise GrievanceError("actor required")
     if new_status not in TaskStatus.values:
@@ -251,6 +385,12 @@ def transition_task(
     if new_status not in allowed:
         raise GrievanceError(
             f"task transition {task.status!r}→{new_status!r} not allowed",
+        )
+    note = (note or "").strip()
+    if new_status == TaskStatus.CLOSED and not note:
+        raise GrievanceError(
+            "closing a task needs a note — say what was done, or why "
+            "it is being dropped",
         )
     prev_status = task.status
     task.status = new_status
@@ -272,6 +412,11 @@ def transition_task(
         reason=f"{prev_status}→{new_status}",
         field_changes={"status": [new_status, prev_status]},
     )
+    if new_status == TaskStatus.CLOSED:
+        add_comment(
+            task.grievance, body=note, actor=actor,
+            kind=CommentKind.TASK_CLOSED, task=task,
+        )
     return task
 
 

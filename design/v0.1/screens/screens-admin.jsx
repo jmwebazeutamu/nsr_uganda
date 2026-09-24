@@ -1427,75 +1427,13 @@ const GeoCascadePicker = ({ targetLevel, value, onChange, disabled }) => {
 
 
 // User-picker — search-as-you-type against /api/v1/security/users/.
-const UserPicker = ({ value, onChange, disabled }) => {
-  const [q, setQ] = useStateAdmin("");
-  const [results, setResults] = useStateAdmin([]);
-  const [loading, setLoading] = useStateAdmin(false);
-
-  useEffectAdmin(() => {
-    let cancelled = false;
-    setLoading(true);
-    const qs = q ? `?q=${encodeURIComponent(q)}` : "";
-    fetch(`/api/v1/security/users/${qs}`, {
-      credentials: "same-origin",
-      headers: { Accept: "application/json" },
-    })
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(data => {
-        if (cancelled) return;
-        setResults(Array.isArray(data) ? data : []);
-        setLoading(false);
-      })
-      .catch(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [q]);
-
-  return (
-    <div>
-      <input
-        type="text" value={q} onChange={e => setQ(e.target.value)}
-        placeholder="Search by username or name"
-        disabled={disabled}
-        style={{width:"100%", padding:"8px", border:"1px solid var(--neutral-300)",
-                borderRadius:"4px", fontSize:13, marginBottom:8}}
-      />
-      <div style={{
-        border:"1px solid var(--neutral-300)", borderRadius:"4px",
-        maxHeight:"160px", overflowY:"auto", background:"var(--neutral-50)",
-      }}>
-        {loading && <p className="t-cap muted" style={{padding:"8px"}}>Searching…</p>}
-        {!loading && results.length === 0 && (
-          <p className="t-cap muted" style={{padding:"8px"}}>No users match.</p>
-        )}
-        {results.map(u => {
-          const selected = value?.id === u.id;
-          return (
-            <button
-              key={u.id} type="button"
-              onClick={() => onChange(u)}
-              disabled={disabled}
-              style={{
-                display:"block", width:"100%", textAlign:"left",
-                padding:"6px 8px", fontSize:13,
-                background: selected ? "var(--accent-data-bg)" : "transparent",
-                border:"none", borderBottom:"1px solid var(--neutral-200)",
-                cursor:"pointer",
-              }}
-            >
-              <strong>{u.username}</strong>
-              {u.display_name !== u.username && (
-                <span className="muted"> — {u.display_name}</span>
-              )}
-              {u.groups.length > 0 && (
-                <div className="t-cap muted">{u.groups.join(", ")}</div>
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
+// UserPicker lives in v0.1/components/search-picker.jsx.
+//
+// It was declared here, and the GRM console needed the same thing —
+// searching the same /api/v1/security/users/ endpoint — so for a
+// moment there were two top-level `UserPicker` constants in one global
+// scope and no-duplicate-globals caught it. One definition, loaded
+// before both consumers.
 
 
 // Grant Scope modal — user → level → (parents → leaves) → submit.
@@ -2171,7 +2109,6 @@ if (typeof globalThis !== "undefined") {
     OperatorScopesTab,
     GrantScopeModal,
     GeoCascadePicker,
-    UserPicker,
     RevokeScopeConfirm,
     _SCOPE_LEVEL_OPTIONS,
     _GEO_LEVELS_ORDER,
