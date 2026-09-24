@@ -195,7 +195,7 @@ const _drsRenderCriteriaNode = (node, catalogueByKey, depth = 0) => {
   );
 };
 
-const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
+const OperatorDRSList = ({ onNewRequest, onNavigate, dsaId = "" }) => {
   // Wide view (ADR-0030). Declared here, above every early return in
   // this component: a hook that some renders skip changes the hook
   // order, which React treats as a different component.
@@ -210,7 +210,7 @@ const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
   const [liveRequests, setLiveRequests] = useStateDRS(null);
   const [dataSource, setDataSource] = useStateDRS("mock");
   const [reloadKey, setReloadKey] = useStateDRS(0);
-  const [statusFilter, setStatusFilter] = useStateDRS("submitted");
+  const [statusFilter, setStatusFilter] = useStateDRS(dsaId ? "all" : "submitted");
   const [selectedRow, setSelectedRow] = useStateDRS(null);
   const [approveOpen, setApproveOpen] = useStateDRS(false);
   const [rejectOpen, setRejectOpen] = useStateDRS(false);
@@ -234,7 +234,7 @@ const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
 
   useEffectDRS(() => {
     let cancelled = false;
-    _odrsFetchJson("/api/v1/drs/requests/?page_size=50")
+    _odrsFetchJson(`/api/v1/drs/requests/?page_size=50${dsaId ? `&dsa=${encodeURIComponent(dsaId)}` : ""}`)
       .then(data => {
         if (cancelled) return;
         const rows = (data.results || data || []).map(r => ({
@@ -246,7 +246,7 @@ const OperatorDRSList = ({ onNewRequest, onNavigate }) => {
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [reloadKey]);
+  }, [reloadKey, dsaId]);
 
   useEffectDRS(() => {
     let cancelled = false;
@@ -1338,16 +1338,76 @@ const _resolveOptionsForSchema = async (schemaFields) => {
 // "New request". Partner invocation (role="partner") still mounts
 // the wizard directly — partners have their own list elsewhere in
 // PartnerDRSScreen.
-const DRSScreen = ({ role = "operator", onExit, onNavigate } = {}) => {
+const DRSScreen = ({ role = "operator", onExit, onNavigate, dsaId = "" } = {}) => {
   const isPartner = role === "partner";
   const [view, setView] = useStateDRS(isPartner ? "build" : "list");
   if (view === "list" && !isPartner) {
-    return <OperatorDRSList onNewRequest={() => setView("build")} onNavigate={onNavigate}/>;
+    return <OperatorDRSList onNewRequest={() => setView("build")} onNavigate={onNavigate} dsaId={dsaId}/>;
   }
   return <DRSWizard
     role={role}
     onExit={onExit || (isPartner ? undefined : () => setView("list"))}
   />;
+};
+
+// Mirrors the canonical DSA scope checks closely enough to prevent an
+// avoidable submit. The server validates again at transition time because
+// a DSA can change while this browser tab is open.
+const _localDsaScopeIssues = (dsa, selectedFields, tree) => {
+  const scope = dsa?.scope;
+  if (!scope) return [];
+  const issues = [];
+  const fieldGroups = new Set(scope.field_groups || []);
+  if (scope.field_scope_restricted) {
+    const requested = [...new Set((selectedFields || []).map(
+      field => String(field || "").split(".")[0],
+    ))];
+    const outside = requested.filter(group => !fieldGroups.has(group));
+    if (outside.length) issues.push({
+      dimension: "fields", requested: outside,
+      allowed: [...fieldGroups],
+    });
+  }
+
+  const geoByLevel = {};
+  for (const unit of (scope.geographic_units || [])) {
+    if (!geoByLevel[unit.level]) geoByLevel[unit.level] = new Set();
+    geoByLevel[unit.level].add(unit.code);
+  }
+  const geoFields = {
+    "household.region_code": "region",
+    "household.sub_region_code": "sub_region",
+    "household.district_code": "district",
+    "household.county_code": "county",
+    "household.sub_county_code": "sub_county",
+    "household.parish_code": "parish",
+    "household.village_code": "village",
+  };
+  const requestedGeo = {};
+  const walk = (node) => {
+    if (!node) return;
+    if (node.kind === "rule") {
+      const level = geoFields[node.field];
+      if (!level) return;
+      if (!requestedGeo[level]) requestedGeo[level] = new Set();
+      for (const value of (Array.isArray(node.value) ? node.value : [node.value])) {
+        if (value != null && value !== "") requestedGeo[level].add(value);
+      }
+      return;
+    }
+    for (const child of (node.rules || [])) walk(child);
+  };
+  walk(tree);
+  for (const [level, requested] of Object.entries(requestedGeo)) {
+    const allowed = geoByLevel[level];
+    if (!allowed) continue;
+    const outside = [...requested].filter(code => !allowed.has(code));
+    if (outside.length) issues.push({
+      dimension: "geography", level, requested: outside,
+      allowed: [...allowed],
+    });
+  }
+  return issues;
 };
 
 const DRSWizard = ({ role = "operator", onExit } = {}) => {
@@ -1384,6 +1444,7 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
   const [submitOpen, setSubmitOpen] = useStateDRS(false);
   const [submitting, setSubmitting] = useStateDRS(false);
   const [toast, setToast] = useStateDRS("");
+  const [scopeViolations, setScopeViolations] = useStateDRS([]);
   // Operator-only: which DSA the operator is filing on behalf of.
   // Partner role inherits schema.dsa_id (a single bound DSA), so
   // pickedDsaId stays empty there and the effective DSA falls back
@@ -1447,7 +1508,7 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
       if (found) return found;
     }
     if (schema.dsa_id) {
-      return {
+      return (schema.available_dsas || []).find(d => d.id === schema.dsa_id) || {
         id: schema.dsa_id,
         reference: schema.dsa_reference,
         partner_code: "",
@@ -1523,6 +1584,11 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
     [schema, optionsCache],
   );
 
+  const liveScopeIssues = React.useMemo(
+    () => _localDsaScopeIssues(effectiveDsa, selectedFields, tree),
+    [effectiveDsa, selectedFields, tree],
+  );
+
   // Initialise the tree once the catalogue is ready. The first
   // available (non-disabled) field anchors the default rule.
   // qbNewGroup may be undefined if the template script failed to
@@ -1548,6 +1614,7 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
   // success toast.
   const confirmSubmit = async () => {
     if (submitting) return;
+    setScopeViolations([]);
     if (!schema) {
       setSubmitOpen(false);
       setToast("Schema not loaded — refresh and try again.");
@@ -1665,7 +1732,9 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
       );
       if (!submitR.ok) {
         const body = await submitR.json().catch(() => ({}));
-        throw new Error(body.detail || `HTTP ${submitR.status}`);
+        const error = new Error(body.detail || `HTTP ${submitR.status}`);
+        error.scopeViolations = body.scope_violations || [];
+        throw error;
       }
       const submitted = await submitR.json();
       setSubmitOpen(false);
@@ -1677,7 +1746,12 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
         window.setTimeout(() => onExit(), 600);
       }
     } catch (e) {
-      setToast(`Submit failed: ${e.message}`);
+      if (e.scopeViolations?.length) {
+        setScopeViolations(e.scopeViolations);
+        setToast("Request not submitted — correct the DSA scope issues below.");
+      } else {
+        setToast(`Submit failed: ${e.message}`);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -1820,6 +1894,7 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
       {/* Action bar */}
       <div style={{margin:'16px -24px 0', position:'sticky', bottom:0, zIndex:20, background:'var(--neutral-0)', borderTop:'1px solid var(--neutral-300)', padding:'12px 20px', display:'flex', gap:12, alignItems:'center', boxShadow:'0 -2px 8px rgba(0,0,0,0.04)'}}>
         <span className="t-bodysm muted">Step {stepIdx + 1} of {STEPS.length} · <strong style={{color:'var(--neutral-900)'}}>{STEPS[stepIdx].label}</strong></span>
+        {step === "submit" && liveScopeIssues.length > 0 && <span className="t-bodysm" style={{color:'var(--accent-danger, #b42318)'}}>Outside selected DSA scope — edit fields or geography</span>}
         <div style={{flex:1}}/>
         <button className="btn" onClick={prev} disabled={stepIdx === 0}><Icon name="chevronLeft" size={14}/> Back</button>
         {(() => {
@@ -1846,10 +1921,12 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
             <button
               className="btn btn-primary"
               onClick={() => setSubmitOpen(true)}
-              disabled={!effectiveDsa}
+              disabled={!effectiveDsa || liveScopeIssues.length > 0}
               title={!effectiveDsa
                 ? "Pick a DSA on Step 1 before submitting"
-                : ""}
+                : liveScopeIssues.length > 0
+                  ? "Edit the fields or geographic criteria to fit the selected DSA"
+                  : ""}
             ><Icon name="check" size={14}/> Submit for approval</button>
           );
         })()}
@@ -1862,7 +1939,18 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
             <Icon name="check" size={14}/> {submitting ? "Submitting…" : "Submit"}
           </button>
         </>}>
-        <div className="col gap-3">
+          <div className="col gap-3">
+          {scopeViolations.length > 0 && <div role="alert" style={{padding:12, borderRadius:6, borderLeft:'3px solid var(--accent-danger, #b42318)', background:'var(--tint-danger, #fef3f2)'}}>
+            <strong>Request is outside the selected DSA scope</strong>
+            <p className="t-bodysm" style={{margin:'4px 0 8px'}}>No request was submitted. Correct each item below, then submit again.</p>
+            <ul className="t-bodysm" style={{margin:'0 0 0 18px', padding:0}}>
+              {scopeViolations.map((issue, index) => <li key={`${issue.key}-${index}`}>
+                {issue.dimension === "geography"
+                  ? <>Geography at {String(issue.level || issue.key).replaceAll("_", " ")}: <span className="t-mono">{issue.requested.join(", ")}</span> is outside this DSA. Allowed: <span className="t-mono">{issue.allowed.join(", ")}</span>.</>
+                  : <>Requested {issue.dimension}: <span className="t-mono">{issue.requested.join(", ")}</span>. This DSA allows: <span className="t-mono">{issue.allowed.join(", ")}</span>.</>}
+              </li>)}
+            </ul>
+          </div>}
           <p style={{margin:0}}>
             A draft DataRequest will be created on
             {effectiveDsa?.reference
@@ -1911,8 +1999,8 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
             </div>
           </div>
           <div className="t-cap muted" style={{marginTop:8}}>
-            Note: today's validator enforces sub-region and programme rules
-            only. Other predicates (e.g. on member.sex, age_years) are
+            Note: today's validator enforces the selected DSA's geographic
+            levels and programme rules. Other predicates (e.g. on member.sex, age_years) are
             recorded in the audit chain but don't yet filter the result
             set; they'll start filtering when the criteria evaluator lands.
           </div>
@@ -2093,6 +2181,18 @@ const DSACard = ({ effectiveDsa = null } = {}) => {
   const budget = (effectiveDsa?.monthly_row_budget != null)
     ? `${effectiveDsa.monthly_row_budget.toLocaleString()} rows / month`
     : "—";
+  const scope = effectiveDsa?.scope || {};
+  const entities = scope.entities || [];
+  const fieldGroups = scope.field_groups || [];
+  const geoUnits = scope.geographic_units || [];
+  const sensitiveLabels = {
+    none: "None — sensitive fields excluded",
+    specific: "Specific sensitive fields only",
+    full: "Full — sensitive fields included",
+  };
+  const sensitiveData = sensitiveLabels[scope.sensitive_data_handling]
+    || scope.sensitive_data_handling || "Not specified";
+  const chip = (label, tone = "neutral") => <Chip key={label} tone={tone}>{label}</Chip>;
   return (
     <div className="card" style={{borderTop:'3px solid var(--accent-system)'}}>
       <div className="card-header" style={{padding:'12px 16px'}}>
@@ -2107,6 +2207,34 @@ const DSACard = ({ effectiveDsa = null } = {}) => {
           <div className="muted">Partner</div><div>{partner || "—"}</div>
           <div className="muted">Valid window</div><div>{validWindow}</div>
           <div className="muted">Row budget</div><div>{budget}</div>
+        </div>
+        <div style={{borderTop:'1px solid var(--neutral-200)', margin:'14px 0 0', paddingTop:14, display:'grid', gap:12}}>
+          <div>
+            <div className="t-cap muted" style={{marginBottom:5}}>Entities</div>
+            <div className="row gap-1" style={{flexWrap:'wrap'}}>
+              {entities.length ? entities.map(entity => chip(entity, "data")) : <span className="t-bodysm muted">Not specified</span>}
+            </div>
+          </div>
+          <div>
+            <div className="t-cap muted" style={{marginBottom:5}}>Field groups</div>
+            <div className="row gap-1" style={{flexWrap:'wrap'}}>
+              {scope.field_scope_restricted
+                ? fieldGroups.map(group => chip(group, "data"))
+                : <span className="t-bodysm muted">All field groups</span>}
+            </div>
+          </div>
+          <div>
+            <div className="t-cap muted" style={{marginBottom:5}}>Geographic scope</div>
+            <div className="row gap-1" style={{flexWrap:'wrap'}}>
+              {geoUnits.length
+                ? geoUnits.map(unit => chip(`${unit.name} · ${String(unit.level).replaceAll("_", " ")}`, "data"))
+                : <span className="t-bodysm muted">National — no geographic restriction</span>}
+            </div>
+          </div>
+          <div>
+            <div className="t-cap muted" style={{marginBottom:3}}>Sensitive data</div>
+            <div className="t-bodysm">{sensitiveData}</div>
+          </div>
         </div>
         <div className="t-cap mt-3">
           Your request is filed under this DSA. Requested fields and
@@ -2452,6 +2580,7 @@ const SubmitStep = ({
 
 Object.assign(window, {
   DRSScreen, PreviewStep, _previewCell, _buildPinMap, _renderPinned,
+  _localDsaScopeIssues,
   _inferImplicitGeoPins, _buildGeoPathsForRows, _GEO_CHAIN,
   _choiceListNameFor, _enrichFieldsWithOptions, _resolveOptionsForSchema,
   _OPTIONS_SOURCE_URL,

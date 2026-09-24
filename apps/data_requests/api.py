@@ -187,6 +187,19 @@ class DataRequestViewSet(
     filterset_fields = ["status", "dsa", "requester"]
     http_method_names = ["get", "post", "head", "options"]
 
+    def get_queryset(self):
+        """Honour the DSA filter used by the DSA workspace cross-link.
+
+        Keep this explicit rather than relying on an optional
+        django-filter installation: the DSA id is the canonical foreign key
+        on DataRequest and must work in every deployment.
+        """
+        qs = super().get_queryset()
+        dsa_id = (self.request.query_params.get("dsa") or "").strip()
+        if dsa_id:
+            qs = qs.filter(dsa_id=dsa_id)
+        return qs
+
     def perform_create(self, serializer):
         serializer.save(
             requester=self.request.user.username or "anonymous",
@@ -205,7 +218,10 @@ class DataRequestViewSet(
         try:
             submit_data_request(req)
         except DrsError as e:
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            body = {"detail": str(e)}
+            if e.scope_violations:
+                body["scope_violations"] = e.scope_violations
+            return Response(body, status=status.HTTP_400_BAD_REQUEST)
         req.refresh_from_db()
         return Response(self.get_serializer(req).data)
 

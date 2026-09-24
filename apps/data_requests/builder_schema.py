@@ -546,6 +546,29 @@ def build_schema(user) -> dict[str, Any]:
             "monthly_row_budget": d.monthly_row_budget,
             "status": d.status,
             "version": d.version,
+            # The picker needs the same canonical terms the submit
+            # validator reads, so it can disable submit before a user
+            # creates a rejected draft. The API remains authoritative.
+            "scope": {
+                "entities": sorted(
+                    key for key, enabled in (d.entities_scope or {}).items()
+                    if isinstance(enabled, bool) and enabled
+                ),
+                "field_groups": sorted(
+                    key for key, enabled in (d.field_scope or {}).items()
+                    if enabled
+                ),
+                "field_scope_restricted": bool(d.field_scope or {}),
+                "geographic_units": list(
+                    d.geographic_scope.order_by("level", "code").values(
+                        "level", "code", "name",
+                    )
+                ),
+                "programme_codes": (d.entities_scope or {}).get(
+                    "programmes_allowed",
+                ),
+                "sensitive_data_handling": d.sensitive_data_handling,
+            },
         }
         for d in _available_dsas_for_user(user)
     ]

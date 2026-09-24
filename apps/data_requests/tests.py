@@ -78,6 +78,39 @@ class TestValidateAgainstDsa:
                 {"sub_region_codes": ["SR-BUGANDA", "SR-WESTNILE"]}, active_dsa,
             )
 
+    def test_reports_field_and_geography_violations_together(self, partner):
+        """A requester must not have to fix one scope error per submit."""
+        western = GeographicUnit.objects.create(
+            level="region", code="R-WESTERN", name="Western",
+            effective_from=date(2026, 1, 1),
+        )
+        dsa = make_dsa(
+            partner=partner, reference="DSA-WEST", status="active",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={"fields": ["pmt.score"]},
+        )
+        dsa.geographic_scope.add(western)
+
+        with pytest.raises(DrsError) as error:
+            validate_against_dsa({
+                "fields": ["household.id", "member.name"],
+                "region_codes": ["R-CENTRAL"],
+            }, dsa)
+
+        assert "fields=['household', 'member']" in str(error.value)
+        assert "region_codes=['R-CENTRAL']" in str(error.value)
+        assert error.value.scope_violations == [
+            {
+                "dimension": "fields", "key": "fields",
+                "requested": ["household", "member"], "allowed": ["pmt"],
+            },
+            {
+                "dimension": "geography", "key": "region_codes",
+                "requested": ["R-CENTRAL"], "allowed": ["R-WESTERN"],
+                "level": "region",
+            },
+        ]
+
     def test_extra_district_rejected(self, active_dsa):
         # US-S27-016 — the validator walks every UBOS level on the
         # DSA's geographic_scope. A DSA may scope at any level
@@ -353,6 +386,7 @@ class TestApi:
         # Per ADR-0013 the validator gates at group level; the offender
         # is the `member` group, not the specific field name.
         assert "member" in r.data["detail"]
+        assert r.data["scope_violations"][0]["dimension"] == "fields"
 
 
 class TestEstimateMatches:
@@ -1748,10 +1782,32 @@ class TestBuilderSchema:
                 "id", "reference", "partner_code", "partner_name",
                 "effective_from", "effective_to",
                 "monthly_row_budget", "status", "version",
+                "scope",
             }
             # IDs are ULIDs — non-empty strings the wizard can POST back.
             assert d["id"]
             assert DataSharingAgreement.objects.filter(id=d["id"]).exists()
+
+    def test_available_dsa_includes_canonical_scope_for_submit_gate(
+        self, operator_client, partner_with_narrow_dsa,
+    ):
+        """The client-side gate must derive from the same DSA scope as submit."""
+        dsa = partner_with_narrow_dsa.dsas.get(reference="DSA-NARROW-1")
+        region = GeographicUnit.objects.create(
+            level="region", code="R-WESTERN", name="Western",
+            effective_from=date(2026, 1, 1),
+        )
+        dsa.geographic_scope.add(region)
+
+        response = operator_client.get("/api/v1/drs/requests/builder-schema/")
+        entry = next(d for d in response.data["available_dsas"] if d["id"] == dsa.id)
+        assert entry["scope"]["field_scope_restricted"] is True
+        assert entry["scope"]["field_groups"] == ["household", "member"]
+        assert entry["scope"]["entities"] == []
+        assert entry["scope"]["sensitive_data_handling"] == "none"
+        assert entry["scope"]["geographic_units"] == [{
+            "level": "region", "code": "R-WESTERN", "name": "Western",
+        }]
 
     def test_operator_available_dsas_empty_when_no_active_dsa(
         self, operator_client,

@@ -20,6 +20,7 @@ let _previewCell;
 let _buildPinMap;
 let _inferImplicitGeoPins;
 let _buildGeoPathsForRows;
+let _localDsaScopeIssues;
 // Pulled from screens-drs-fieldselector via dynamic import so the
 // shared screens-drs module body can also evaluate without throwing
 // on missing primitives.
@@ -42,11 +43,46 @@ beforeAll(async () => {
   ({
     PreviewStep, _previewCell, _buildPinMap,
     _inferImplicitGeoPins, _buildGeoPathsForRows,
+    _localDsaScopeIssues,
   } = globalThis);
 });
 
 afterEach(() => {
   cleanup();
+});
+
+describe("_localDsaScopeIssues", () => {
+  const dsa = {
+    scope: {
+      field_scope_restricted: true,
+      field_groups: ["household"],
+      geographic_units: [{ level: "region", code: "R-WESTERN", name: "Western" }],
+    },
+  };
+
+  it("blocks submit when fields and geography are outside the DSA", () => {
+    const issues = _localDsaScopeIssues(dsa, ["household.id", "member.name"], {
+      kind: "group", rules: [{
+        kind: "rule", field: "household.region_code", value: "R-CENTRAL",
+      }],
+    });
+
+    expect(issues).toEqual([
+      { dimension: "fields", requested: ["member"], allowed: ["household"] },
+      {
+        dimension: "geography", level: "region",
+        requested: ["R-CENTRAL"], allowed: ["R-WESTERN"],
+      },
+    ]);
+  });
+
+  it("does not block a request that matches the DSA scope", () => {
+    expect(_localDsaScopeIssues(dsa, ["household.id"], {
+      kind: "group", rules: [{
+        kind: "rule", field: "household.region_code", value: "R-WESTERN",
+      }],
+    })).toEqual([]);
+  });
 });
 
 const F = (over) => ({

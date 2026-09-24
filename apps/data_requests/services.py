@@ -37,7 +37,15 @@ DEFAULT_DELIVERY_TTL = timedelta(days=30)
 
 
 class DrsError(Exception):
-    """An API-DRS transition or DSA scope check failed."""
+    """An API-DRS transition or DSA scope check failed.
+
+    ``scope_violations`` is deliberately structured so API clients can show
+    actionable feedback without having to parse a human-readable error.
+    """
+
+    def __init__(self, detail: str, *, scope_violations: list[dict] | None = None):
+        super().__init__(detail)
+        self.scope_violations = scope_violations or []
 
 
 # ---------------------------------------------------------------------------
@@ -136,17 +144,54 @@ def validate_against_dsa(
     """
     payload = payload or {}
 
-    def _violation(key: str, extras: list[str], allowed_label: str) -> None:
+    violations: list[dict] = []
+
+    def _violation(
+        key: str,
+        extras: set[str],
+        allowed: set[str],
+        allowed_label: str,
+        *,
+        dimension: str,
+        level: str | None = None,
+    ) -> None:
+        requested = sorted(extras)
+        permitted = sorted(allowed)
         emit_audit(
             actor="drs.validator", actor_kind="system",
             action="dsa_scope_violation",
             entity_type="dsa", entity_id=dsa.id,
-            reason=f"{key}={sorted(extras)!r} outside {allowed_label}",
+            reason=f"{key}={requested!r} outside {allowed_label}",
         )
-        raise DrsError(
-            f"{key}={sorted(extras)!r} outside DSA scope "
-            f"(allowed {allowed_label})"
-        )
+        violation = {
+            "dimension": dimension,
+            "key": key,
+            "requested": requested,
+            "allowed": permitted,
+        }
+        if level:
+            violation["level"] = level
+        violations.append(violation)
+
+    def _raise_scope_violations() -> None:
+        if not violations:
+            return
+        summaries = []
+        for violation in violations:
+            key = violation["key"]
+            requested = violation["requested"]
+            allowed = violation["allowed"]
+            if violation["dimension"] == "geography":
+                summaries.append(
+                    f"{key}={requested!r} outside DSA geographic scope "
+                    f"(allowed {allowed!r})"
+                )
+            else:
+                summaries.append(
+                    f"{key}={requested!r} outside DSA scope "
+                    f"(allowed {allowed!r})"
+                )
+        raise DrsError("; ".join(summaries), scope_violations=violations)
 
     # Field groups
     wanted_fields = payload.get("fields")
@@ -157,8 +202,8 @@ def validate_against_dsa(
         extras = groups - allowed_fields
         if extras:
             _violation(
-                "fields", list(extras),
-                f"field_scope={sorted(allowed_fields)}",
+                "fields", extras, allowed_fields,
+                f"field_scope={sorted(allowed_fields)}", dimension="fields",
             )
 
     # Geographic scope — one validator per UBOS level. The DSA's
@@ -178,8 +223,9 @@ def validate_against_dsa(
         extras = set(wanted) - allowed
         if extras:
             _violation(
-                payload_key, list(extras),
+                payload_key, extras, allowed,
                 f"geographic_scope[{level}]={sorted(allowed)}",
+                dimension="geography", level=level,
             )
 
     # Programme codes
@@ -189,9 +235,15 @@ def validate_against_dsa(
         extras = set(wanted_progs) - allowed_progs
         if extras:
             _violation(
-                "programme_codes", list(extras),
+                "programme_codes", extras, allowed_progs,
                 f"entities_scope.programmes_allowed={sorted(allowed_progs)}",
+                dimension="programmes",
             )
+
+    # Do not hide a geographic or programme problem behind the first failed
+    # field check. A requester should be able to correct the complete DSA
+    # mismatch before trying again.
+    _raise_scope_violations()
 
     # Monthly row budget — total cap on a single request
     # (kept here for compatibility with the legacy max_rows check;
