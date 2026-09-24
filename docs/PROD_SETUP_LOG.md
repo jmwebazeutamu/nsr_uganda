@@ -2220,3 +2220,55 @@ not routed to the registry container. **A password-reset link emailed
 to a user would 404 in production** while passing every Django
 test-client test — which is exactly what that contract test exists to
 catch. Needs a `location /reset/` block proxying to `nsr_registry`.
+
+---
+
+## 2026-09-24 — correction: dev sends mail, production does not
+
+The entry above says no email has ever been sent and names DSA signing
+and password resets. **That is true of production and wrong as a
+general claim.** Dev has the credentials and delivers:
+
+```
+DEV  EMAIL_BACKEND …smtp.EmailBackend   HOST_USER admin@quasar.ug   PASS set
+PROD EMAIL_BACKEND …console.EmailBackend HOST_USER (unset)          PASS unset
+```
+
+The password-reset mails that arrived came from dev — the link in them
+points at `192.168.2.3:8005`, and the From was `admin@quasar.ug`. The
+eighteen undelivered notifications are production's.
+
+### Sending as johnson@quasar.ug needs a johnson@quasar.ug mailbox
+
+The relay enforces sender-login match. Tested from dev, where the
+credentials exist:
+
+```
+authenticated as admin@quasar.ug
+  MAIL FROM admin@quasar.ug   -> 250 | RCPT -> 250 2.1.5 Ok
+  MAIL FROM johnson@quasar.ug -> 553 5.7.1 Sender address rejected:
+                                 not owned by user
+```
+
+So the admin@quasar.ug credentials cannot send as johnson@quasar.ug.
+Either create/obtain that mailbox's credentials, or keep sending as
+admin@quasar.ug.
+
+`DEFAULT_FROM_EMAIL` now derives from `EMAIL_HOST_USER` rather than
+naming an address, so the two cannot drift apart; `security.W008` warns
+if an explicit override disagrees with the mailbox. Dev is unchanged —
+it authenticates as admin@quasar.ug and sends as admin@quasar.ug.
+
+### What production still needs
+
+```
+EMAIL_HOST_USER=<the mailbox>          # johnson@ or admin@quasar.ug
+EMAIL_HOST_PASSWORD=<its password>
+```
+
+then restart web + worker + beat. Nothing else: `EMAIL_HOST` is already
+`comms.quasar.ug:587` with STARTTLS, and the From follows the mailbox.
+
+Still open: no reverse DNS for 154.72.195.66 — the relay logs it as
+`unknown[...]`. Authentication fixes the rejection; the missing PTR may
+still cost deliverability with strict receivers.
