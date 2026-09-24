@@ -2272,3 +2272,97 @@ then restart web + worker + beat. Nothing else: `EMAIL_HOST` is already
 Still open: no reverse DNS for 154.72.195.66 — the relay logs it as
 `unknown[...]`. Authentication fixes the rejection; the missing PTR may
 still cost deliverability with strict receivers.
+
+---
+
+## 2026-09-25 — production is NOT up to date, and DDUP is down
+
+### Answer: no
+
+```
+prod   d22ca17
+main   5d304f5   (4 commits ahead)
+```
+
+Missing: `06e9b8d` (account recovery / registry filters), `be0ec32`
+(DDUP services + tests), `0375d8e` (the 47-failure fix), `5d304f5`.
+One unapplied migration: `reference_data.0021_seed_legacy_deprecated_options`.
+
+### Worse: what IS deployed is broken
+
+`d22ca17` carries `apps/ddup/config.py` — the approved-model contract.
+Production's ACTIVE model predates it:
+
+```json
+{"tier1": {"member": "nin", "household": "head_nin+village"}}
+```
+
+No `schema`, no `tiers`. So `get_active_model_version()` raises, and
+everything downstream of it stops:
+
+```
+get_active_model_version -> DdupApprovalError: active DDUP model v1 is not
+                            deployable: DDUP configuration requires a
+                            schema reference
+tier1_candidates_for_nin -> the same
+```
+
+Timeline from `deploy.log` and the worker log:
+
+```
+20:48:02  === deploy complete: 89d9486 -> d22ca17 ===
+21:15:00  Task apps.ddup.tasks.auto_merge_high_confidence_pairs_task
+          raised unexpected: DdupApprovalError('active DDUP model v1 is
+          not deployable...')
+```
+
+**Cause: I deployed a commit range containing work I had not checked was
+deployable.** My commits in that range were the email correction and its
+docs; the DDUP contract rode along and there is no model version that
+satisfies it. Deploying a range is deploying all of it.
+
+Impact: the hourly auto-merge task and the 01:00 discovery run both
+fail. DIH promotion calls the shared tier-1 matcher, so a staged record
+reaching the dedup step errors — 8 records sit in `ddup_review`, 9 in
+`idv_pending`. Last successful discovery: 2026-09-24 01:00, before the
+deploy. Tier 2 does not gate on the config and is unaffected in itself.
+
+### Authored, awaiting approval
+
+`DdupModelVersion v2`, DRAFT, id `01M3AQ20BNSTJEHDJFZRGN2G6D`, author
+`claude-remediation`:
+
+```json
+{"schema": "nsr.ddup.model.v1",
+ "tiers": {"tier1": {"enabled": true, "method": "exact_hash",
+                     "fields": ["nin_hash"], "candidate_score": 1.0,
+                     "match_reason": "nin_hash_exact"},
+           "tier2": {"enabled": false},
+           "tier3": {"enabled": false}}}
+```
+
+This restates v1's meaning — tier 1 is NIN exact match — in the shape
+the contract requires. It is not a policy change.
+
+**Tier 3 is left disabled deliberately.** It had been running on the
+hardcoded fallback weights in `services.py`, which nobody approved (the
+same finding as 23 Sep: "the active model version carries no tier3
+section at all"). Enabling it means approving weights, which is a
+separate decision — `manage.py propose_tier3_weights` authors that
+proposal.
+
+It is a DRAFT and inert. `activate_model_version` requires the approver
+to differ from the author, which is exactly the gate this needs, so it
+is not mine to activate:
+
+```bash
+ssh nsr-prod "cd /opt/nsrmis && docker compose -f compose.production.yml \
+  --env-file .env exec -T web python manage.py shell -c \"
+from apps.ddup.models import DdupModelVersion
+from apps.ddup.services import activate_model_version
+v = DdupModelVersion.objects.get(version=2)
+print(activate_model_version(v, approver='jmwebaze'))\""
+```
+
+That alone restores promotion and discovery on the currently-deployed
+code. Deploying main afterwards is a separate step.
