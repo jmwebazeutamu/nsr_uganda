@@ -330,33 +330,81 @@ class TestScopeAcrossFKRelations:
 
 
 class TestScopeViaHouseholdIdSubquery:
-    """As of US-S21-003b, Grievance visibility is role-based, not
-    geographic — GRM Officers see every row, every other authenticated
-    user sees only grievances assigned to them or carrying a task
-    assigned to them. These tests pin the new semantics; the original
-    geo-scoped tests are retained as regression markers for the
-    Submission / StageRecord paths below which still use the
-    HouseholdIdScopedQuerysetMixin."""
+    """Grievance visibility is geographic AGAIN, plus ownership.
 
-    def test_geo_scoped_user_without_assignment_sees_no_grievances(
+    US-S21-003b made it role-based only — GRM Officers saw everything,
+    everyone else saw only what they were assigned — because grievances
+    had no geography to scope by. That produced the 25 Sep report: an
+    nsr_admin with a national scope saw an empty workbench beside a
+    dashboard tile reading 5, because the tile counted through ABAC and
+    the list did not.
+
+    Grievance now carries the household's codes (migration 0006), so
+    `scope_q_for_field` works on it directly and there is one rule
+    again: scope grants your own area, ownership grants a row somebody
+    deliberately gave you, and the queue-wide roles grant everything.
+    Unscoped is still nothing — fail-closed.
+
+    The Submission / StageRecord tests below still exercise
+    HouseholdIdScopedQuerysetMixin and are unchanged."""
+
+    def test_geo_scoped_user_sees_their_own_sub_region_only(
         self, db, django_user_model, two_sub_regions, households_in_each,
     ):
-        """Geographic scope alone no longer grants Grievance visibility
-        (US-S21-003b). A sub-region operator who's neither assigned a
-        grievance nor a task on one sees zero rows."""
+        """Scope grants the operator's own area and nothing beyond it.
+
+        This asserted zero under US-S21-003b, when geography granted
+        nothing at all. A parish chief who cannot see the grievances in
+        their own parish cannot work them, which is what the 25 Sep
+        report was about.
+        """
+        from apps.grievance.models import Category
+        from apps.grievance.services import open_grievance
+
+        opened = {
+            code: open_grievance(
+                category=Category.OTHER, description="x", household_id=hh.id,
+            )
+            for code, hh in households_in_each.items()
+        }
+        assert len(opened) > 1, "fixture must span both sub-regions"
+
+        mine = two_sub_regions["SR-BUGANDA"]["sr"].code
+        u = django_user_model.objects.create_user(username="grm-op", password="p")
+        OperatorScope.objects.create(
+            user=u, scope_level=ScopeLevel.SUB_REGION, scope_code=mine,
+        )
+
+        r = _client_for(u).get("/api/v1/grm/grievances/")
+
+        assert r.status_code == 200
+        returned = {row["id"] for row in r.data["results"]}
+        expected = {
+            g.id for g in opened.values()
+            if g.sub_region_code == mine
+        }
+        assert returned == expected
+        assert 0 < len(expected) < len(opened), (
+            "the fixture must place grievances on BOTH sides, or this "
+            "proves nothing about exclusion"
+        )
+
+    def test_a_user_with_no_scope_still_sees_nothing(
+        self, db, django_user_model, households_in_each,
+    ):
+        """Fail-closed is unchanged."""
         from apps.grievance.models import Category
         from apps.grievance.services import open_grievance
 
         for hh in households_in_each.values():
             open_grievance(category=Category.OTHER, description="x",
                            household_id=hh.id)
-
-        u = django_user_model.objects.create_user(username="grm-op", password="p")
-        OperatorScope.objects.create(
-            user=u, scope_level=ScopeLevel.SUB_REGION,
-            scope_code=two_sub_regions["SR-BUGANDA"]["sr"].code,
+        u = django_user_model.objects.create_user(
+            username="grm-unscoped", password="p",
         )
+
         r = _client_for(u).get("/api/v1/grm/grievances/")
+
         assert r.status_code == 200
         assert r.data["count"] == 0
 

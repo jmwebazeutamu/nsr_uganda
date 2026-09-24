@@ -65,6 +65,27 @@ class Grievance(models.Model):
     household_id = models.CharField(max_length=26, blank=True, db_index=True)
     member_id = models.CharField(max_length=26, blank=True)
 
+    # The household's geography, copied on create.
+    #
+    # Column names match Household's denormalised set exactly, because
+    # apps.security.abac derives its level map from
+    # Household.GEO_CODE_FIELDS — so `scope_q_for_field(user,
+    # "sub_region_code")` filters a Grievance queryset with no special
+    # case, and a district-scoped operator sees district grievances
+    # without anyone writing a second scope rule.
+    #
+    # Blank when the grievance is not about a household (operator
+    # conduct, a programme complaint). Those are visible to whoever can
+    # see grievances at all, not to a geographic scope — a complaint
+    # about an enumerator belongs to nobody's district.
+    region_code = models.CharField(max_length=48, blank=True, db_index=True)
+    sub_region_code = models.CharField(max_length=48, blank=True, db_index=True)
+    district_code = models.CharField(max_length=48, blank=True, db_index=True)
+    county_code = models.CharField(max_length=48, blank=True)
+    sub_county_code = models.CharField(max_length=48, blank=True, db_index=True)
+    parish_code = models.CharField(max_length=48, blank=True, db_index=True)
+    village_code = models.CharField(max_length=48, blank=True)
+
     # Reporter — usually the head of household or a witness. Phone is
     # E.164 per AC-PHONE-FORMAT; full identification is optional.
     reporter_name = models.CharField(max_length=128, blank=True)

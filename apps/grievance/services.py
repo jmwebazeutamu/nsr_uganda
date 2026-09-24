@@ -73,14 +73,24 @@ def open_grievance(
     # grievance pointing at nothing, which only surfaced when someone
     # tried to open a correction from it.
     household_id = (household_id or "").strip()
+    geography: dict[str, str] = {}
     if household_id:
         from apps.data_management.models import Household
-        if not Household.objects.filter(
+        household = Household.objects.filter(
             id=household_id, is_deleted=False,
-        ).exists():
+        ).only("id", *Household.GEO_CODE_FIELDS.values()).first()
+        if household is None:
             raise GrievanceError(
                 f"household {household_id} is not in the registry",
             )
+        # Copy where it is, so the grievance can be scoped without a
+        # join and without a second scope rule. Column names match
+        # Household's, which is what lets scope_q_for_field filter a
+        # Grievance queryset unchanged.
+        geography = {
+            column: getattr(household, column) or ""
+            for column in Household.GEO_CODE_FIELDS.values()
+        }
     if member_id and not household_id:
         raise GrievanceError(
             "a grievance about a member must name that member's household",
@@ -97,6 +107,7 @@ def open_grievance(
         tier=tier,
         status=GrievanceStatus.OPEN,
         assigned_to=assigned_to,
+        **geography,
     )
     _set_sla(g)
     g.save(update_fields=["sla_deadline"])

@@ -527,7 +527,8 @@ function App() {
         {screen === "data-explorer" && <DataExplorerConsoleScreen/>}
         {screen === "grm"     && <GRMScreen
             onNavigate={navigate}
-            initialGrievance={screenPayload?.initialGrievance}/>}
+            initialGrievance={screenPayload?.initialGrievance}
+            selectGrievanceId={screenPayload?.selectGrievanceId}/>}
         {screen === "partner-drs" && <PartnerDRSScreen/>}
         {screen === "my-dsa" && <MyDsaScreen/>}
         {screen === "my-programmes" && <MyProgrammesScreen/>}

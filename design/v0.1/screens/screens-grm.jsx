@@ -187,7 +187,8 @@ const QUICK_FILTERS_GRM = [
   { id: "mine",      label: "Assigned to me",            icon: "user",       tone: "programme", predicate: r => r.assigned_to !== "" && r.status !== "closed" },
 ];
 
-const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
+const GRMScreen = ({ onNavigate, initialGrievance = null,
+                     selectGrievanceId = null }) => {
   // Wide view (ADR-0030). Declared here, above every early return in
   // this component: a hook that some renders skip changes the hook
   // order, which React treats as a different component.
@@ -259,6 +260,19 @@ const GRMScreen = ({ onNavigate, initialGrievance = null }) => {
     }
     setModal("open_grievance");
   }, [initialGrievance]);
+
+  // Open one specific grievance, by id.
+  //
+  // "Open in GRM" on the household toast used to navigate to a bare
+  // list, leaving the operator to find the row they had just created.
+  // When the list came back empty — which it did for every non-officer
+  // before the visibility fix — it read as though nothing had been
+  // created at all.
+  useEffectGrm(() => {
+    if (!selectGrievanceId) return;
+    setQuickFilter(null);
+    setSelectedRow(selectGrievanceId);
+  }, [selectGrievanceId]);
 
   // Locked when the caller supplied the household — the operator is
   // raising this FROM that record, so re-picking it is not a choice

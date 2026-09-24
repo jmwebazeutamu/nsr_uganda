@@ -16,7 +16,7 @@ this mixin writes; the volume signal lives in action='list_read' rows.
 
 from __future__ import annotations
 
-from .audit import emit
+from .audit import emit, stored_reason
 
 
 def _client_ip(request) -> str | None:
@@ -53,6 +53,79 @@ def _build_reason(request) -> str:
         if v:
             parts.append(f"{k}={v}")
     return " ".join(parts)
+
+
+
+# How long an identical list read is treated as the same visit.
+#
+# The console polls five endpoints for its sidebar badges about every
+# 30 seconds. On this database that produced 124,285 of 137,187 audit
+# rows — 91% of the chain was one browser tab counting things, roughly
+# 24,000 rows on each of stage_record, change_request, data_request,
+# grievance and match_pair. An audit trail nobody can read is not an
+# audit trail, and verifying it costs the same whether the rows mean
+# anything or not.
+#
+# Deduped rather than dropped, and deduped SERVER-side. A client header
+# saying "do not audit this one" would let any caller opt out of the
+# record of their own access to personal data.
+AUDIT_LIST_READ_DEDUPE_SECONDS = 300
+
+
+def _dedupe_window_seconds() -> int:
+    from django.conf import settings
+
+    return int(getattr(
+        settings, "AUDIT_LIST_READ_DEDUPE_SECONDS",
+        AUDIT_LIST_READ_DEDUPE_SECONDS,
+    ))
+
+
+
+def _is_plain_list_request(request) -> bool:
+    """True when the whole request is captured by what gets logged.
+
+    The dedupe matches on the stored `reason`, which projects only
+    _AUDIT_REASON_QUERY_KEYS. A request carrying anything outside that
+    set — a status filter, a search term — is not described by the row
+    it would match against, so collapsing it would hide a genuinely
+    different read behind an earlier one.
+
+    The console's badge poller sends `page_size` alone, so polls still
+    collapse; an operator narrowing a list does not.
+    """
+    if not hasattr(request, "query_params"):
+        return True
+    return all(
+        key in _AUDIT_REASON_QUERY_KEYS
+        for key, value in request.query_params.items()
+        if value
+    )
+
+
+def _is_repeat_list_read(*, actor: str, entity_type: str, reason: str) -> bool:
+    """True when this exact list read was already recorded recently.
+
+    Matched on actor + entity_type + reason, and `reason` carries the
+    request's filters — so a poller repeating one URL collapses, while
+    an operator changing a filter is a different read and is recorded.
+    The first call in each window is always written, so the access
+    itself is never invisible.
+    """
+    from datetime import timedelta
+
+    from django.utils import timezone
+
+    from apps.security.models import AuditEvent
+
+    since = timezone.now() - timedelta(seconds=_dedupe_window_seconds())
+    return AuditEvent.objects.filter(
+        action="list_read",
+        actor_id=actor,
+        entity_type=entity_type,
+        reason=reason,
+        occurred_at__gte=since,
+    ).exists()
 
 
 class AuditReadMixin:
@@ -99,16 +172,28 @@ class AuditReadMixin:
         )
         from apps.security.purpose import resolve_purpose
 
+        reason = _build_reason(request)
+        purpose = resolve_purpose(request, self)
+        if action == "list_read" and _is_plain_list_request(request) \
+                and _is_repeat_list_read(
+            actor=actor,
+            entity_type=self.audit_entity_type or getattr(self, "basename", "unknown"),
+            # The STORED form — emit folds the purpose into reason, so
+            # matching the pre-fold value matches nothing.
+            reason=stored_reason(reason, purpose),
+        ):
+            return
+
         emit(
             action=action,
             entity_type=self.audit_entity_type or getattr(self, "basename", "unknown"),
             entity_id=entity_id,
             actor=actor,
             actor_kind="user",
-            reason=_build_reason(request),
+            reason=reason,
             # Why this record was read. Declared by the viewset via
             # access_purpose / access_purpose_map; "" when undeclared.
-            purpose=resolve_purpose(request, self),
+            purpose=purpose,
             ip_address=_client_ip(request),
             user_agent=request.META.get("HTTP_USER_AGENT", ""),
         )

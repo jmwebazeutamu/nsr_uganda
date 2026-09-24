@@ -68,7 +68,22 @@ class AuditEventViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = AuditEventSerializer
     # entity_id added in US-S12-002 so the React household-detail
     # Audit tab can fetch a single entity's chain in one round-trip.
-    filterset_fields = ["action", "entity_type", "actor_kind", "entity_id"]
+    #
+    # Applied by hand in get_queryset, NOT by `filterset_fields`:
+    # django-filter is not installed, so that declaration was silently
+    # a no-op and every filter here was ignored. The household Audit
+    # tab asked for one household's events and was served the whole
+    # chain — the caller's events across the entire system, which reads
+    # as a leak and is certainly not what the tab claims to show.
+    FILTER_FIELDS = ("action", "entity_type", "actor_kind", "entity_id")
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        for field in self.FILTER_FIELDS:
+            value = self.request.query_params.get(field)
+            if value:
+                qs = qs.filter(**{field: value})
+        return qs
 
     @extend_schema(
         tags=["security"],

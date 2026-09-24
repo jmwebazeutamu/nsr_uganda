@@ -11,6 +11,26 @@ from __future__ import annotations
 from .models import AuditEvent
 
 
+
+def stored_reason(reason: str, purpose: str) -> str:
+    """The reason string as it is persisted.
+
+    The purpose is folded into `reason` as well as its own column:
+    `reason` is inside the trigger's hashed payload, so this is what
+    makes the purpose tamper-evident; the column exists to make it
+    queryable.
+
+    Exposed because anything that wants to MATCH an existing audit row
+    on its reason has to build the same string. The list-read dedupe in
+    audit_views compared the pre-fold value and never matched a single
+    row — it deduped nothing, silently.
+    """
+    if purpose:
+        marker = f"purpose={purpose}"
+        return f"{marker} {reason}".strip() if reason else marker
+    return reason
+
+
 def emit(
     action: str,
     entity_type: str,
@@ -24,12 +44,7 @@ def emit(
     ip_address: str | None = None,
     user_agent: str = "",
 ) -> AuditEvent:
-    # Fold the purpose into `reason` as well as the column. `reason` is inside
-    # the trigger's hashed payload, so this is what makes the purpose
-    # tamper-evident; the column exists to make it queryable.
-    if purpose:
-        marker = f"purpose={purpose}"
-        reason = f"{marker} {reason}".strip() if reason else marker
+    reason = stored_reason(reason, purpose)
 
     return AuditEvent.objects.create(
         actor_id=actor,

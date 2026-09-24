@@ -641,7 +641,11 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
             <button className="btn btn-sm"
               style={{background:"white", color:"var(--primary-900)"}}
               onClick={() => {
-                onNavigate("grm");
+                // Carry the id. This navigated to a bare list, which
+                // then had to be searched for the row just created —
+                // and while the list was empty for most operators it
+                // looked as though nothing had been created at all.
+                onNavigate("grm", { selectGrievanceId: lastCreated.id });
                 setToast("");
                 setLastCreated(null);
               }}>

@@ -173,3 +173,109 @@ class TestAuditReasonEnrichment:
         ).order_by("-occurred_at").first()
         assert ev is not None
         assert ev.reason == ""
+
+
+# ---------------------------------------------------------------------------
+# Background polling must not drown the chain
+# ---------------------------------------------------------------------------
+
+class TestListReadDedupe:
+    """The console polls five endpoints for its sidebar badges roughly
+    every 30 seconds. On the dev database that produced 124,285 of
+    137,187 audit rows — 91% of the chain was one browser tab counting
+    things. An audit trail nobody can read is not an audit trail.
+
+    Deduped, not dropped: the first read in each window is always
+    written, so the access is never invisible. Deduped SERVER-side,
+    because a client header saying "do not audit this one" would let
+    any caller opt out of the record of their own access.
+    """
+
+    def _client(self, django_user_model, username="poller"):
+        from rest_framework.test import APIClient
+
+        user = django_user_model.objects.create_user(
+            username=username, password="p",
+            is_superuser=True, is_staff=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+        return client
+
+    def _list_reads(self, entity_type="grievance"):
+        from apps.security.models import AuditEvent
+
+        return AuditEvent.objects.filter(
+            action="list_read", entity_type=entity_type,
+        ).count()
+
+    def test_the_first_read_is_always_recorded(self, db, django_user_model):
+        client = self._client(django_user_model)
+
+        client.get("/api/v1/grm/grievances/")
+
+        assert self._list_reads() == 1
+
+    def test_an_identical_repeat_is_not_recorded_again(
+        self, db, django_user_model,
+    ):
+        client = self._client(django_user_model)
+
+        for _ in range(12):
+            client.get("/api/v1/grm/grievances/")
+
+        assert self._list_reads() == 1
+
+    def test_a_different_filter_is_a_different_read(
+        self, db, django_user_model,
+    ):
+        """Dedupe keys on the request's filters, so an operator
+        narrowing a list is recorded — only a poller repeating one URL
+        collapses."""
+        client = self._client(django_user_model)
+
+        client.get("/api/v1/grm/grievances/")
+        client.get("/api/v1/grm/grievances/", {"status": "open"})
+        client.get("/api/v1/grm/grievances/", {"status": "closed"})
+
+        assert self._list_reads() == 3
+
+    def test_another_actor_is_a_different_read(self, db, django_user_model):
+        first = self._client(django_user_model, "poller-a")
+        second = self._client(django_user_model, "poller-b")
+
+        first.get("/api/v1/grm/grievances/")
+        second.get("/api/v1/grm/grievances/")
+
+        assert self._list_reads() == 2
+
+    def test_the_window_expires(self, db, django_user_model, settings):
+        """Outside the window it is a new visit and is recorded again.
+
+        The window is shrunk rather than the rows aged: AuditEvent is
+        append-only by database trigger, so a test cannot rewrite an
+        occurred_at to simulate the passage of time — which is exactly
+        the property that makes the chain worth having.
+        """
+        settings.AUDIT_LIST_READ_DEDUPE_SECONDS = 0
+        client = self._client(django_user_model)
+
+        client.get("/api/v1/grm/grievances/")
+        client.get("/api/v1/grm/grievances/")
+
+        assert self._list_reads() == 2
+
+    def test_a_retrieve_is_never_deduped(self, db, django_user_model):
+        """Opening one record is a deliberate act, not a poll."""
+        from apps.security.models import AuditEvent
+        from apps.grievance.services import open_grievance
+
+        g = open_grievance(category="other", description="x")
+        client = self._client(django_user_model)
+
+        client.get(f"/api/v1/grm/grievances/{g.id}/")
+        client.get(f"/api/v1/grm/grievances/{g.id}/")
+
+        assert AuditEvent.objects.filter(
+            action="read", entity_type="grievance", entity_id=g.id,
+        ).count() == 2

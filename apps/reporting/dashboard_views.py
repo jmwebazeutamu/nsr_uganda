@@ -116,17 +116,27 @@ def _count_open_grievances(
     user, *, tier: str | None = None, region: str | None = None,
 ) -> int:
     from apps.grievance.models import Grievance, GrievanceStatus
-    base = Grievance.objects.exclude(
+    from apps.grievance.visibility import visible_grievances
+
+    # The same rule the workbench list uses. These two disagreed: the
+    # tile counted through _scoped_household_ids (national scope -> all)
+    # while the list asked whether you were a superuser or in the "GRM
+    # Officer" group. One screen, two numbers.
+    base = visible_grievances(user, Grievance.objects.all()).exclude(
         status__in=[GrievanceStatus.RESOLVED, GrievanceStatus.CLOSED],
     )
     if tier:
         base = base.filter(tier=tier)
-    hh_ids = _scoped_household_ids(user, region=region)
-    if hh_ids is None:
-        return base.count()
-    if not hh_ids:
-        return 0
-    return base.filter(household_id__in=hh_ids).count()
+    if region:
+        # Home-screen drill-down. Narrowing inside what the user may
+        # already see, never widening it.
+        hh_ids = _scoped_household_ids(user, region=region)
+        if hh_ids is None:
+            return base.filter(sub_region_code=region).count()
+        if not hh_ids:
+            return 0
+        return base.filter(household_id__in=hh_ids).count()
+    return base.count()
 
 
 def _count_data_requests(user, status_value: str) -> int:

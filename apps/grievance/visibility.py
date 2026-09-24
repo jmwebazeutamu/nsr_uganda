@@ -1,0 +1,94 @@
+"""Who may see a grievance. One definition.
+
+There were two, and they disagreed. The GRM list viewset asked
+`_is_grm_officer()` — Django's `is_superuser` flag, or membership of a
+group literally named "GRM Officer" — and gave anyone else only the
+grievances they were assigned. The home dashboard counted the same rows
+through the registry's normal ABAC scope, where a national OperatorScope
+means "everything".
+
+So an `nsr_admin` with a national scope, which is what a Super Admin
+account actually looks like here, saw "5 Grievances open" on the
+dashboard and an empty workbench. Neither number was wrong for the rule
+that produced it; there should not have been two rules.
+
+This module is the rule. It reuses `scope_q_for_field`, the same helper
+Household and Member enforce with, so:
+
+  * a superuser or a national scope matches every row;
+  * a district / parish / village scope matches rows in those units;
+  * no active scope matches nothing — fail-closed, deliberately.
+
+Two grants sit beside the geographic one:
+
+  * **GRM Officer**, the role whose job is the whole queue. Kept as it
+    was, now read from the role catalogue rather than only a group name.
+  * **Ownership** — the grievance is assigned to you, or you hold an
+    open task on it. Without this an operator assigned a case outside
+    their own area could not open the thing they were told to work on.
+    It grants access to a specific row someone deliberately gave them,
+    never to a class of rows, so it widens nothing by scope.
+
+A grievance about no household has no geography, and geography cannot
+decide it. Those are visible to the officers and to whoever owns them.
+"""
+
+from __future__ import annotations
+
+from django.db.models import Q
+
+from apps.security.abac import scope_q_for_field
+
+from .models import TaskStatus
+
+GRM_OFFICER_GROUP = "GRM Officer"
+
+# Roles that carry the whole queue rather than a geographic slice.
+# Named from the ADR-0028 catalogue, not invented here.
+QUEUE_WIDE_ROLES = ("nsr_admin", "GRM Officer", "grm_officer")
+
+
+def sees_every_grievance(user) -> bool:
+    """True for the accounts whose job is the queue itself.
+
+    Superusers, and the roles that administer the registry or run the
+    GRM. `is_superuser` alone was the old test, which is why an
+    `nsr_admin` was treated as an ordinary operator.
+    """
+    if not getattr(user, "is_authenticated", False):
+        return False
+    if getattr(user, "is_superuser", False):
+        return True
+    return user.groups.filter(name__in=QUEUE_WIDE_ROLES).exists()
+
+
+def owned_q(user) -> Q:
+    """Rows this user was personally given."""
+    username = getattr(user, "username", "") or ""
+    if not username:
+        return Q(pk__in=[])
+    return Q(assigned_to=username) | Q(
+        tasks__assigned_to=username,
+        tasks__status__in=[TaskStatus.OPEN, TaskStatus.IN_PROGRESS],
+    )
+
+
+def visible_grievances(user, queryset=None):
+    """The grievances `user` may see, for lists AND for counts.
+
+    Every surface that shows a number about grievances calls this — the
+    workbench list, the home dashboard tile, the sidebar badge, the "in
+    scope" label — so the numbers cannot disagree again.
+    """
+    from .models import Grievance
+
+    qs = Grievance.objects.all() if queryset is None else queryset
+    if not getattr(user, "is_authenticated", False):
+        return qs.none()
+    if sees_every_grievance(user):
+        return qs
+
+    # scope_q_for_field is fail-closed: no active scope yields
+    # Q(pk__in=[]), so an unscoped operator sees only what they own.
+    in_scope = scope_q_for_field(user, "sub_region_code")
+    return qs.filter(in_scope | owned_q(user)).distinct()

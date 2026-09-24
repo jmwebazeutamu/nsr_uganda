@@ -33,11 +33,13 @@ def _is_grm_officer(user) -> bool:
     """True if the user is a superuser OR belongs to the GRM Officer
     Django group. GRM Officers see every grievance + every task,
     regardless of who they're assigned to."""
-    if not getattr(user, "is_authenticated", False):
-        return False
-    if getattr(user, "is_superuser", False):
-        return True
-    return user.groups.filter(name=GRM_OFFICER_GROUP).exists()
+    from .visibility import sees_every_grievance
+
+    # Same definition the list uses. This asked only for is_superuser
+    # or the literal "GRM Officer" group, so an nsr_admin — which is
+    # what a Super Admin account looks like here — was treated as an
+    # ordinary operator and could neither see the queue nor act on it.
+    return sees_every_grievance(user)
 
 
 class GrievanceSerializer(serializers.ModelSerializer):
@@ -159,23 +161,14 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
         alone was silently a no-op. Supported: status, tier, category,
         assigned_to, household_id (+ sub_region_code drill-down).
         """
-        from django.db.models import Q
+        from .visibility import visible_grievances
 
-        qs = super().get_queryset()
-        user = self.request.user
-        if _is_grm_officer(user):
-            pass  # full visibility
-        elif getattr(user, "is_authenticated", False):
-            uname = user.username or ""
-            qs = qs.filter(
-                Q(assigned_to=uname)
-                | Q(tasks__assigned_to=uname,
-                    tasks__status__in=[
-                        TaskStatus.OPEN, TaskStatus.IN_PROGRESS,
-                    ]),
-            ).distinct()
-        else:
-            qs = qs.none()
+        # One rule, shared with the dashboard count and the sidebar
+        # badge — see apps/grievance/visibility.py. This used to be a
+        # local rule that knew only `is_superuser` and a group named
+        # "GRM Officer", so an nsr_admin with a national scope saw an
+        # empty workbench beside a dashboard tile reading 5.
+        qs = visible_grievances(self.request.user, super().get_queryset())
 
         # Apply per-field query-param filters. Each is opt-in — empty
         # string or missing leaves the queryset alone.
