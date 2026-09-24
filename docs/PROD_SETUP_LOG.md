@@ -2366,3 +2366,70 @@ print(activate_model_version(v, approver='jmwebaze'))\""
 
 That alone restores promotion and discovery on the currently-deployed
 code. Deploying main afterwards is a separate step.
+
+---
+
+## 2026-09-25 — DDUP v2 activated; the outage is over
+
+`activate_model_version(v2, approver="jmwebaze")` — authored by
+`claude-remediation`, approved by the registry owner, so the
+author-≠-approver gate held with two real parties rather than being
+worked around.
+
+```
+author: claude-remediation | status before: draft
+status after: active | approved_by: jmwebaze
+  v 1 -> retired
+```
+
+Everything that was failing now runs:
+
+```
+active model: v 2 OK
+tier1 matcher            -> [] (no match for a probe NIN — correct)
+discovery                -> succeeded | tier1 0 tier2 0 tier3 0
+auto-merge task          -> {'processed': 0, 'merged': 0, 'skipped': 0, 'disabled': 1}
+DIH dedup on a staged record -> OK, 1 candidate
+```
+
+`disabled: 1` on auto-merge is correct: tier 3 is off, so there is
+nothing to sweep. The DIH dedup step returning a candidate is the one
+that mattered — 8 records in `ddup_review` and 9 in `idv_pending` were
+blocked behind it.
+
+Stage-record states are unchanged (354 promoted / 9 idv_pending /
+8 ddup_review / 15 rejected / 11 quality_failed) — the outage blocked
+progress, it did not corrupt anything.
+
+### Still open
+
+- **Tier 3 remains disabled.** It was running on unapproved hardcoded
+  weights before the contract landed. Re-enabling it is a weights
+  decision — `manage.py propose_tier3_weights` authors the proposal.
+- Production is still on `d22ca17`; main is 5 commits ahead with
+  `reference_data.0021` unapplied.
+
+### Where configuration lives
+
+| | path | mode | owner |
+|---|---|---|---|
+| dev | `/home/ubuntu/nsr_sris_dev/.env` | `-rw-r--r--` | ubuntu |
+| dev (CI) | `/home/ubuntu/nsr_sris_dev/.ci-test.env` | `-rw-r--r--` | ubuntu |
+| prod | `/opt/nsrmis/.env` | `-rw-------` | jmwebaze |
+
+Templates, committed: `.env.example`, `.env.prod.example`,
+`.env.production.example`. `deploy.sh` passes `--env-file "$ENV_FILE"`
+to every compose call.
+
+No `.env` is tracked, and none appears anywhere in git history.
+
+**Finding: the dev `.env` is world-readable** (`-rw-r--r--`) while
+production's is `0600`. It holds `EMAIL_HOST_PASSWORD`,
+`DJANGO_SECRET_KEY`, `NSR_DATA_KEY`, `NSR_NIN_PEPPER` and
+`ANTHROPIC_API_KEY`. Any local account can read it. `chmod 600` costs
+nothing.
+
+Email keys confirm the earlier finding — dev sets `EMAIL_BACKEND`,
+`EMAIL_HOST`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` and
+`DEFAULT_FROM_EMAIL`; production sets only `EMAIL_PORT` and
+`EMAIL_USE_TLS`.
