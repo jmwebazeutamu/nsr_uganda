@@ -138,6 +138,60 @@ THRESHOLD_CEILING = 1.00
 SAFE_DEFAULT_THRESHOLD = 0.95
 
 
+
+# The fields the tier-3 matcher actually computes a score for. A
+# declared feature outside this set cannot be scored, so it is refused
+# rather than weighted zero.
+TIER3_SCORED_FIELDS = frozenset(
+    {"surname", "first_name", "date_of_birth", "sex", "village"},
+)
+
+
+def _tier3_policy(model: DdupModelVersion) -> dict:
+    """The approved tier-3 policy, or nothing to run.
+
+    Read through the validator, from `config["tiers"]["tier3"]`. Three
+    call sites used to read a top-level `config["tier3"]` instead — the
+    same policy under two different keys in one module — and the one
+    that scored members carried hardcoded fallbacks:
+
+        weights = cfg.get("weights") or {"surname": 0.30, ...}
+        threshold = cfg.get("threshold", 0.85)
+
+    which is exactly what apps/ddup/config.py exists to forbid: "It
+    deliberately contains no scoring defaults, weights, thresholds, or
+    fallback field lists. An incomplete active version is unusable
+    rather than silently changing how people are matched." A code
+    release must not be able to alter who gets merged.
+
+    Returns {} when tier 3 is not enabled, so callers no-op rather than
+    inventing a model.
+    """
+    tier = validate_ddup_configuration(model.config).tiers.get("tier3") or {}
+    return tier if tier.get("enabled") else {}
+
+
+def _tier3_weights(tier: dict) -> dict[str, float]:
+    """Declared features -> the scorer's field keys.
+
+    The contract names fields canonically ("member.surname",
+    "household.village"); the scorer computes them under the short name.
+    A declared feature the scorer does not compute is a configuration
+    error, not a zero weight — silently scoring it as 0 would change
+    matching without anybody being told.
+    """
+    weights: dict[str, float] = {}
+    for feature in tier.get("features") or []:
+        key = str(feature["field"]).rsplit(".", 1)[-1]
+        if key not in TIER3_SCORED_FIELDS:
+            raise DdupApprovalError(
+                f"tier3 feature {feature['field']!r} is not a field the "
+                f"matcher computes ({sorted(TIER3_SCORED_FIELDS)})",
+            )
+        weights[key] = float(feature["weight"])
+    return weights
+
+
 @transaction.atomic
 def clone_with_threshold_delta(
     source: DdupModelVersion, *, delta: float, actor: str, reason: str,
@@ -156,7 +210,8 @@ def clone_with_threshold_delta(
     against this version. New version = clean audit boundary.
     """
     current_config = source.config or {}
-    tier3 = dict(current_config.get("tier3") or {})
+    tiers = dict(current_config.get("tiers") or {})
+    tier3 = dict(tiers.get("tier3") or {})
     current_threshold = float(tier3.get("auto_merge_threshold", SAFE_DEFAULT_THRESHOLD))
     new_threshold = max(THRESHOLD_FLOOR, min(THRESHOLD_CEILING, current_threshold + delta))
     if new_threshold == current_threshold:
@@ -166,7 +221,7 @@ def clone_with_threshold_delta(
         )
 
     tier3["auto_merge_threshold"] = new_threshold
-    new_config = {**current_config, "tier3": tier3}
+    new_config = {**current_config, "tiers": {**tiers, "tier3": tier3}}
 
     next_version = (
         DdupModelVersion.objects.order_by("-version").values_list("version", flat=True).first() or 0
@@ -721,7 +776,7 @@ def auto_merge_high_confidence_pairs(
     merged on the previous run) so the second run is a no-op.
     """
     model = get_active_model_version()
-    cfg = (model.config or {}).get("tier3") or {}
+    cfg = _tier3_policy(model)
 
     # Off unless the approved model version says otherwise.
     #
@@ -933,12 +988,13 @@ def discover_incremental_tier3(
     )
 
     model = get_active_model_version()
-    cfg = (model.config or {}).get("tier3") or {}
-    weights = cfg.get("weights") or {
-        "surname": 0.30, "first_name": 0.30,
-        "date_of_birth": 0.15, "sex": 0.10, "village": 0.15,
-    }
-    threshold = cfg.get("threshold", 0.85)
+    cfg = _tier3_policy(model)
+    if not cfg:
+        # Tier 3 is not enabled in the approved model. Nothing to run —
+        # and nothing to invent.
+        return [], 0
+    weights = _tier3_weights(cfg)
+    threshold = float(cfg["review_threshold"])
 
     members = (
         Member.objects

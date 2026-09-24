@@ -86,6 +86,68 @@ def active_model(db):
     return v
 
 
+
+# The approved-model shape, in one place. apps/ddup/config.py refuses a
+# model that does not declare its schema, tiers, fields, methods,
+# weights and thresholds — "an incomplete active version is unusable
+# rather than silently changing how people are matched" — so tests
+# state a whole policy rather than a fragment of one.
+def model_config(*, tier1=True, tier3=None):
+    """`tier3` is a dict of overrides (review_threshold,
+    auto_merge_threshold, auto_merge_enabled, features); pass None to
+    leave tier 3 disabled."""
+    tiers = {
+        "tier1": {
+            "enabled": bool(tier1),
+            "method": "exact_hash",
+            "fields": ["nin_hash"],
+            "candidate_score": 1.0,
+            "match_reason": "nin_hash_exact",
+        } if tier1 else {"enabled": False},
+        "tier2": {"enabled": False},
+        "tier3": {"enabled": False},
+    }
+    if tier3 is not None:
+        tiers["tier3"] = {
+            "enabled": True,
+            "method": "weighted_similarity",
+            "fields": [
+                "member.surname", "member.first_name",
+                "member.date_of_birth", "member.sex", "household.village",
+            ],
+            "block_field": "household.village",
+            "review_threshold": 0.85,
+            "features": [
+                {"field": "member.surname", "comparator": "jaro_winkler", "weight": 0.30},
+                {"field": "member.first_name", "comparator": "jaro_winkler", "weight": 0.30},
+                {"field": "member.date_of_birth", "comparator": "birth_date_proximity", "weight": 0.15},
+                {"field": "member.sex", "comparator": "exact", "weight": 0.10},
+                {"field": "household.village", "comparator": "exact", "weight": 0.15},
+            ],
+            **tier3,
+        }
+    return {"schema": "nsr.ddup.model.v1", "tiers": tiers}
+
+
+
+@pytest.fixture
+def tier3_model(db):
+    """An active model with tier 3 ENABLED.
+
+    `active_model` enables tier 1 only. Tier-3 discovery used to run
+    anyway, off hardcoded weights and a 0.85 default; it now honours
+    the approved model, so a test about tier 3 has to approve one.
+    """
+    v = DdupModelVersion.objects.create(
+        version=1, description="tier3 probabilistic",
+        config=model_config(tier3={"auto_merge_enabled": True}),
+        author="archer",
+    )
+    activate_model_version(v, approver="bob")
+    v.refresh_from_db()
+    return v
+
+
 def _hash(nin: str) -> bytes:
     # Use the canonical project hash so the DB-side rows match what
     # apps.ingestion_hub.services._discover_stage_candidates would compute.
@@ -134,21 +196,21 @@ class TestDdupConfigurationContract:
 
 class TestModelVersionApproval:
     def test_activate_happy_path(self, db):
-        v = DdupModelVersion.objects.create(version=1, config={}, author="alice")
+        v = DdupModelVersion.objects.create(version=1, config=model_config(), author="alice")
         activate_model_version(v, approver="bob")
         v.refresh_from_db()
         assert v.status == ModelStatus.ACTIVE
         assert v.approved_by == "bob"
 
     def test_author_cannot_approve_own(self, db):
-        v = DdupModelVersion.objects.create(version=1, config={}, author="alice")
+        v = DdupModelVersion.objects.create(version=1, config=model_config(), author="alice")
         with pytest.raises(DdupApprovalError, match="differ"):
             activate_model_version(v, approver="alice")
 
     def test_activating_v2_retires_v1(self, db):
-        v1 = DdupModelVersion.objects.create(version=1, config={}, author="alice")
+        v1 = DdupModelVersion.objects.create(version=1, config=model_config(), author="alice")
         activate_model_version(v1, approver="bob")
-        v2 = DdupModelVersion.objects.create(version=2, config={}, author="alice")
+        v2 = DdupModelVersion.objects.create(version=2, config=model_config(), author="alice")
         activate_model_version(v2, approver="bob")
         v1.refresh_from_db()
         v2.refresh_from_db()
@@ -169,7 +231,9 @@ class TestNinDiscovery:
         assert len(created) == 1
         pair = created[0]
         assert pair.tier == 1
-        assert pair.match_reason == "nin"
+        # The reason is the one the approved model declares, not a
+        # literal in the matcher.
+        assert pair.match_reason == "nin_hash_exact"
         assert {pair.record_a_id, pair.record_b_id} == {m1.id, m2.id}
         assert pair.status == PairStatus.PENDING
 
@@ -1262,7 +1326,7 @@ class TestProbabilisticDiscovery:
         )
 
     def test_high_similarity_pair_within_village(
-        self, two_households_same_village, active_model,
+        self, two_households_same_village, tier3_model,
     ):
         from apps.ddup.services import discover_probabilistic_pairs
         h1, h2 = two_households_same_village
@@ -1350,7 +1414,7 @@ class TestProbabilisticDiscovery:
         assert len(tier1) == 1 and tier1[0].tier == 1
         assert tier3 == []  # already represented as tier 1
 
-    def test_idempotent(self, two_households_same_village, active_model):
+    def test_idempotent(self, two_households_same_village, tier3_model):
         from apps.ddup.services import discover_probabilistic_pairs
         h1, h2 = two_households_same_village
         for hh in (h1, h2):
@@ -1374,7 +1438,7 @@ class TestProbabilisticDiscovery:
         )
         permissive = DdupModelVersion.objects.create(
             version=2, author="archer",
-            config={"tier3": {"threshold": 0.5, "auto_merge_enabled": True}},
+            config=model_config(tier3={"review_threshold": 0.5, "auto_merge_enabled": True}),
         )
         activate_model_version(permissive, approver="bob")
         h1, h2 = two_households_same_village
@@ -1421,7 +1485,7 @@ class TestAutoMergeHighConfidence:
         )
         return m1, m2
 
-    def test_above_threshold_pair_auto_merges(self, db, geo, active_model):
+    def test_above_threshold_pair_auto_merges(self, db, geo, tier3_model):
         from apps.ddup.services import (
             auto_merge_high_confidence_pairs,
             discover_probabilistic_pairs,
@@ -1448,12 +1512,13 @@ class TestAutoMergeHighConfidence:
         )
         permissive = DdupModelVersion.objects.create(
             version=3, author="archer",
-            config={"tier3": {"threshold": 0.5,
-                              "auto_merge_threshold": 0.95,
-                              # The point of this test is that the pair
-                              # survives a real sweep, so the sweep has
-                              # to actually run.
-                              "auto_merge_enabled": True}},
+            # The point of this test is that the pair survives a real
+            # sweep, so the sweep has to actually run.
+            config=model_config(tier3={
+                "review_threshold": 0.5,
+                "auto_merge_threshold": 0.95,
+                "auto_merge_enabled": True,
+            }),
         )
         activate_model_version(permissive, approver="bob")
         h1 = Household.objects.create(
@@ -1482,7 +1547,7 @@ class TestAutoMergeHighConfidence:
         created[0].refresh_from_db()
         assert created[0].status == PairStatus.PENDING
 
-    def test_emits_auto_merge_audit_event(self, db, geo, active_model):
+    def test_emits_auto_merge_audit_event(self, db, geo, tier3_model):
         from apps.ddup.services import (
             auto_merge_high_confidence_pairs,
             discover_probabilistic_pairs,
@@ -1509,11 +1574,13 @@ class TestAutoMergeHighConfidence:
         )
         v = DdupModelVersion.objects.create(
             version=4, author="archer",
-            config={"tier3": {"threshold": 0.5,
-                              "auto_merge_threshold": 0.6,
-                              # This test is about the sweep honouring a
-                              # permissive threshold, so the sweep runs.
-                              "auto_merge_enabled": True}},
+            # This test is about the sweep honouring a permissive
+            # threshold, so the sweep runs.
+            config=model_config(tier3={
+                "review_threshold": 0.5,
+                "auto_merge_threshold": 0.6,
+                "auto_merge_enabled": True,
+            }),
         )
         activate_model_version(v, approver="bob")
         h1 = Household.objects.create(
@@ -1539,7 +1606,7 @@ class TestAutoMergeHighConfidence:
         # Permissive auto-threshold should pick this one up.
         assert counts["merged"] == 1
 
-    def test_idempotent(self, db, geo, active_model):
+    def test_idempotent(self, db, geo, tier3_model):
         from apps.ddup.services import (
             auto_merge_high_confidence_pairs,
             discover_probabilistic_pairs,
@@ -1552,7 +1619,7 @@ class TestAutoMergeHighConfidence:
         # Already MERGED -> excluded from the second sweep.
         assert second == {"processed": 0, "merged": 0, "skipped": 0}
 
-    def test_celery_task_runs(self, db, geo, active_model):
+    def test_celery_task_runs(self, db, geo, tier3_model):
         from apps.ddup.services import discover_probabilistic_pairs
         from apps.ddup.tasks import auto_merge_high_confidence_pairs_task
         self._make_two_high_confidence_members(db, geo)
@@ -1580,8 +1647,7 @@ class TestThresholdCalibration:
     def _make_v1(self, *, threshold=0.95):
         return DdupModelVersion.objects.create(
             version=1,
-            config={"tier3": {"auto_merge_threshold": threshold,
-                              "weights": {"surname": 0.30, "first_name": 0.30}}},
+            config=model_config(tier3={"auto_merge_threshold": threshold}),
             author="alice",
         )
 
@@ -1593,9 +1659,13 @@ class TestThresholdCalibration:
         )
         assert draft.version == 2
         assert draft.status == ModelStatus.DRAFT
-        assert draft.config["tier3"]["auto_merge_threshold"] == pytest.approx(0.90)
-        # Other config fields preserved.
-        assert draft.config["tier3"]["weights"]["surname"] == 0.30
+        assert draft.config["tiers"]["tier3"]["auto_merge_threshold"] == pytest.approx(0.90)
+        # The rest of the tier-3 policy rides along unchanged.
+        features = {
+            f["field"]: f["weight"]
+            for f in draft.config["tiers"]["tier3"]["features"]
+        }
+        assert features["member.surname"] == 0.30
 
     def test_nudge_down_creates_new_draft(self, db):
         from apps.ddup.services import clone_with_threshold_delta
@@ -1603,7 +1673,7 @@ class TestThresholdCalibration:
         draft = clone_with_threshold_delta(
             v1, delta=-0.05, actor="dpo-bot", reason="backlog",
         )
-        assert draft.config["tier3"]["auto_merge_threshold"] == pytest.approx(0.90)
+        assert draft.config["tiers"]["tier3"]["auto_merge_threshold"] == pytest.approx(0.90)
 
     def test_clamp_at_ceiling(self, db):
         from apps.ddup.services import clone_with_threshold_delta
@@ -1654,11 +1724,11 @@ class TestThresholdCalibration:
     def test_version_number_increments_from_max(self, db):
         from apps.ddup.services import clone_with_threshold_delta
         DdupModelVersion.objects.create(
-            version=1, config={"tier3": {"auto_merge_threshold": 0.85}},
+            version=1, config=model_config(tier3={"auto_merge_threshold": 0.85}),
             author="alice",
         )
         v5 = DdupModelVersion.objects.create(
-            version=5, config={"tier3": {"auto_merge_threshold": 0.85}},
+            version=5, config=model_config(tier3={"auto_merge_threshold": 0.85}),
             author="alice",
         )
         draft = clone_with_threshold_delta(
