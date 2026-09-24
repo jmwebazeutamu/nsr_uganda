@@ -14,6 +14,7 @@ from pathlib import Path
 import environ
 
 from nsr_mis.email_settings import (
+    default_from_email,
     default_email_backend,
     server_email_from_default,
 )
@@ -451,14 +452,22 @@ EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 EMAIL_HOST_USER = _email_host_user
 EMAIL_HOST_PASSWORD = _email_host_password
 EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=30)
-# The mailbox the registry sends as. It must be one the relay at
-# EMAIL_HOST will authenticate — comms.quasar.ug rejects any client it
-# has not authenticated, for local and external recipients alike:
-#   554 5.7.1 <unknown[...]>: Client host rejected: Access denied
-# so EMAIL_HOST_USER / EMAIL_HOST_PASSWORD must name this mailbox.
+# The From address is NOT a free choice. comms.quasar.ug enforces
+# sender-login match — authenticated as admin@quasar.ug, sending as
+# anything else is refused outright:
+#
+#   MAIL FROM admin@quasar.ug   -> 250 2.1.0 Ok
+#   MAIL FROM johnson@quasar.ug -> 553 5.7.1 Sender address rejected:
+#                                  not owned by user
+#
+# So it is derived from the mailbox we authenticate as, and the
+# mismatch becomes impossible to configure. To send as somebody else,
+# authenticate as them: set EMAIL_HOST_USER (and its password) and this
+# follows. An explicit DEFAULT_FROM_EMAIL still wins, for a relay that
+# permits it — security.W008 warns when the two disagree.
 DEFAULT_FROM_EMAIL = env(
     "DEFAULT_FROM_EMAIL",
-    default="NSR MIS <johnson@quasar.ug>",
+    default=default_from_email(_email_host_user),
 )
 SERVER_EMAIL = env(
     "SERVER_EMAIL",

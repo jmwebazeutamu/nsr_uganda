@@ -30,3 +30,20 @@ def server_email_from_default(default_from_email: str) -> str:
     """
     _name, addr = parseaddr(default_from_email or "")
     return addr or default_from_email
+
+
+def default_from_email(host_user: str = "", fallback: str = "admin@quasar.ug") -> str:
+    """The From header, derived from the mailbox we authenticate as.
+
+    `comms.quasar.ug` enforces sender-login match, so the From address
+    is not a free choice:
+
+        MAIL FROM admin@quasar.ug   -> 250 2.1.0 Ok
+        MAIL FROM johnson@quasar.ug -> 553 5.7.1 Sender address
+                                       rejected: not owned by user
+
+    Deriving it means a deployment that changes mailbox cannot end up
+    sending as the old one. `fallback` covers the case where no mailbox
+    is configured at all — nothing is being delivered then anyway.
+    """
+    return f"NSR MIS <{host_user or fallback}>"

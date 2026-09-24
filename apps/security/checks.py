@@ -251,3 +251,42 @@ def check_email_backend_delivers_in_production(app_configs, **kwargs):
         ),
         id="security.W007",
     )]
+
+
+@register()
+def check_from_address_matches_the_authenticated_mailbox(app_configs, **kwargs):
+    """Warn when DEFAULT_FROM_EMAIL is a mailbox we cannot send as.
+
+    comms.quasar.ug enforces sender-login match. Authenticated as
+    admin@quasar.ug, a message from johnson@quasar.ug is refused:
+
+        553 5.7.1 <johnson@quasar.ug>: Sender address rejected:
+        not owned by user
+
+    The failure arrives at send time, one message at a time, as a
+    `notification.failed` row — long after whoever set the From has
+    moved on. This says it at configuration time instead.
+    """
+    from email.utils import parseaddr
+
+    from django.conf import settings
+
+    from apps.security.notifications import delivers_mail
+
+    host_user = (getattr(settings, "EMAIL_HOST_USER", "") or "").strip()
+    if not host_user or not delivers_mail():
+        return []
+    _name, sender = parseaddr(getattr(settings, "DEFAULT_FROM_EMAIL", "") or "")
+    if not sender or sender.lower() == host_user.lower():
+        return []
+    return [Warning(
+        f"DEFAULT_FROM_EMAIL sends as {sender!r} but EMAIL_HOST_USER "
+        f"authenticates as {host_user!r}.",
+        hint=(
+            "comms.quasar.ug refuses a sender the login does not own "
+            "(553 5.7.1 'not owned by user'). Authenticate as the "
+            "mailbox you want to send as, or drop DEFAULT_FROM_EMAIL "
+            "and let it derive from EMAIL_HOST_USER."
+        ),
+        id="security.W008",
+    )]
