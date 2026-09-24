@@ -60,6 +60,46 @@ def _operators(db, django_user_model):
         for username in TEST_OPERATORS if username not in existing
     ])
 
+    # Assignment now also checks that the assignee's role carries the
+    # case's tier and that their scope reaches the household (QA
+    # P2.10). These are the generic stand-in operators — a test that
+    # cares about the rule builds its own user — so they get the role
+    # whose job is the whole queue, which is the exemption the rule
+    # itself states, plus a national scope.
+    from django.contrib.auth.models import Group
+
+    from apps.security.models import OperatorScope, ScopeLevel
+
+    officers = Group.objects.get_or_create(name="GRM Officer")[0]
+    for user in django_user_model.objects.filter(username__in=TEST_OPERATORS):
+        user.groups.add(officers)
+        OperatorScope.objects.get_or_create(
+            user=user, scope_level=ScopeLevel.NATIONAL, scope_code="",
+        )
+
+
+def make_operator(django_user_model, username, *, role="GRM Officer", **kw):
+    """A user who can actually be given a case.
+
+    Assignment checks the assignee's role against the tier and their
+    scope against the household (QA P2.10). "GRM Officer" is the
+    default because it is the role that carries the whole queue —
+    which is what a test operator with no opinion about tiers is.
+    Tests about the rule itself pass a specific role and scope.
+    """
+    from django.contrib.auth.models import Group
+
+    from apps.security.models import OperatorScope, ScopeLevel
+
+    kw.setdefault("password", "p")
+    user = django_user_model.objects.create_user(username=username, **kw)
+    if role:
+        user.groups.add(Group.objects.get_or_create(name=role)[0])
+    OperatorScope.objects.get_or_create(
+        user=user, scope_level=ScopeLevel.NATIONAL, scope_code="",
+    )
+    return user
+
 
 def make_household(prefix="GRM"):
     """A minimal registered household, for tests that must NAME one.
@@ -767,9 +807,7 @@ class TestApi:
         gid = r.data["id"]
         # Assign — to a real, active MIS user. "pc-3" used to work
         # because the column took any string; it is now refused.
-        django_user_model.objects.create_user(
-            username="pc-3", password="p", email="pc3@example.test",
-        )
+        make_operator(django_user_model, "pc-3", email="pc3@example.test")
         r = c.post(f"/api/v1/grm/grievances/{gid}/assign/",
                    data={"actor": "supervisor-1", "assigned_to": "pc-3"},
                    format="json")
@@ -997,7 +1035,9 @@ class TestAssignmentNotifies:
     def _officer(self, django_user_model, **over):
         defaults = {"username": "grm-officer", "email": "officer@example.test"}
         defaults.update(over)
-        return django_user_model.objects.create_user(password="p", **defaults)
+        return make_operator(
+            django_user_model, defaults.pop("username"), **defaults,
+        )
 
     def test_assignee_is_emailed(self, db, django_user_model, mailoutbox):
         assignee = self._officer(

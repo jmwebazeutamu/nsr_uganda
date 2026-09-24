@@ -27,9 +27,25 @@ pytestmark = pytest.mark.django_db
 
 @pytest.fixture(autouse=True)
 def _assignee(django_user_model):
-    return django_user_model.objects.create_user(
+    """One operator who can take any case here.
+
+    Assignment checks the assignee's role against the tier's
+    GrmTierRule and their scope against the household (QA P2.10).
+    These tests are about the state machine, not about who may hold a
+    case, so this is the role that carries the whole queue.
+    """
+    from django.contrib.auth.models import Group
+
+    from apps.security.models import OperatorScope, ScopeLevel
+
+    user = django_user_model.objects.create_user(
         username="cdo-1", password="p", email="cdo@example.test",
     )
+    user.groups.add(Group.objects.get_or_create(name="GRM Officer")[0])
+    OperatorScope.objects.get_or_create(
+        user=user, scope_level=ScopeLevel.NATIONAL, scope_code="",
+    )
+    return user
 
 
 def _open(**kw):

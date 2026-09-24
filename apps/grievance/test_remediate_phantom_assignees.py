@@ -32,9 +32,26 @@ def _run(*args):
 
 @pytest.fixture
 def owner(django_user_model):
-    return django_user_model.objects.create_user(
+    """The account the live case is moved onto.
+
+    On production this is an nsr_admin with a national scope, which is
+    why the remediation could run at all — assignment now checks that
+    the target's role carries the tier and that their scope reaches
+    the household (QA P2.10). The fixture says so rather than relying
+    on a bare user that the service would refuse.
+    """
+    from django.contrib.auth.models import Group
+
+    from apps.security.models import OperatorScope, ScopeLevel
+
+    user = django_user_model.objects.create_user(
         username=LIVE_OWNER, password="p", email="owner@example.test",
     )
+    user.groups.add(Group.objects.get_or_create(name="nsr_admin")[0])
+    OperatorScope.objects.get_or_create(
+        user=user, scope_level=ScopeLevel.NATIONAL, scope_code="",
+    )
+    return user
 
 
 @pytest.fixture

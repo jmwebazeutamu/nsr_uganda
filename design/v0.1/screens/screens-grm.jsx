@@ -255,6 +255,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
   const [comments, setComments] = useStateGrm([]);
   const [commentDraft, setCommentDraft] = useStateGrm("");
   const [busy, setBusy] = useStateGrm(false);
+  const [caseDrawer, setCaseDrawer] = useStateGrm(false);
   const [auditOpen, setAuditOpen] = useStateGrm(false);
   const [auditRaw, setAuditRaw] = useStateGrm([]);
   const [toast, setToast] = useStateGrm("");
@@ -501,6 +502,12 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
       .finally(() => { setBusy(false); setClosingTask(null); });
   };
 
+  // Narrow view shows the panel inline, so a drawer left open in wide
+  // view must not follow the operator back.
+  useEffectGrm(() => {
+    if (!wide.isWide) setCaseDrawer(false);
+  }, [wide.isWide]);
+
   // Load the chain when the drawer opens, and again if the operator
   // switches case with it open. Not on selection alone: the chain is
   // a click the operator asked for, not something to fetch for every
@@ -650,6 +657,29 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
       });
   };
 
+  // Who the assign modal may offer.
+  //
+  // The picker searched the whole user directory — every account,
+  // active or not, whatever their role or area. An L3 District case
+  // could be handed to an enumerator in another sub-region: someone
+  // with neither the authority to decide it nor the scope to open it.
+  // For one case the server can answer this exactly, so ask it.
+  //
+  // A bulk selection spanning different tiers or households has no
+  // single answer; the rule is enforced per case on submit and the
+  // result reports what it refused, so the modal says so rather than
+  // pretending to a list it cannot compute.
+  const assignTargets = selection.size > 0
+    ? allRows.filter(r => selection.has(r.id))
+    : (current ? [current] : []);
+  const oneKindOfTarget = assignTargets.length > 0 && assignTargets.every(
+    r => r.tier === assignTargets[0].tier
+      && r.household_id === assignTargets[0].household_id,
+  );
+  const assigneeEndpoint = oneKindOfTarget
+    ? `/api/v1/grm/grievances/${assignTargets[0].id}/assignable/`
+    : undefined;
+
   // Real audit-chain events for this grievance.
   //
   // This block used to fabricate them from the CURRENT state: "Via
@@ -667,6 +697,405 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
     audit: (e.self_hash || e.id || "").slice(0, 12),
     tone: e.actor_kind === "system" ? "system" : "user",
   }));
+
+  // The case panel, hoisted so wide view can put it somewhere
+  // other than under the list.
+  //
+  // In wide view the split grid collapses to a single column so
+  // the list gets the whole width — and the panel, still the
+  // second grid child, went below it. With a full queue that is
+  // several screens down: the panel was reported missing, and for
+  // any practical purpose it was. Wide view puts it in a drawer
+  // instead, which is where a 380px rail belongs when the thing
+  // beside it is 1600px wide.
+  const casePanel = current ? (
+        <div className="col gap-3">
+          <div className="card" style={{borderTop:"3px solid var(--accent-data)"}}>
+            <div className="card-header" style={{padding:"12px 16px"}}>
+              <div>
+                <div className="t-cap"><Icon name="message" size={11}/> CASE DETAIL</div>
+                <h3 className="t-h3" style={{margin:"2px 0 0"}}>{GRM_CATEGORIES[current.category]}</h3>
+              </div>
+              <Chip tone={GRM_STATUSES[current.status].tone}>{GRM_STATUSES[current.status].label}</Chip>
+            </div>
+            <div style={{padding:16}}>
+              <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:6}}>ID</div>
+              <div className="t-mono" style={{fontSize:12}}>{current.id}</div>
+
+              <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>TIER + SLA</div>
+              <div className="row gap-2">
+                <Chip tone="data">{GRM_TIERS[current.tier].short} · {GRM_TIERS[current.tier].label}</Chip>
+                {slaChip(current.hours_to_breach, current.status)}
+              </div>
+
+              <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>NARRATIVE</div>
+              <div className="t-bodysm" style={{color:"var(--neutral-800)", lineHeight:1.5}}>
+                {current.narrative}
+              </div>
+
+              <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>REPORTER</div>
+              <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>{current.reporter_name}</div>
+              <div className="t-bodysm muted">{current.relationship}</div>
+              {current.reporter_phone && <div className="t-bodysm muted t-mono" style={{fontSize:12}}>{current.reporter_phone}</div>}
+
+              {current.household_id ? (
+                <>
+                  <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>SUBJECT</div>
+                  <button type="button" className="link-btn t-bodysm"
+                          style={{padding:0, textAlign:"left"}}
+                          onClick={() => onNavigate && onNavigate("household", { householdId: current.household_id })}>
+                    Open household {current.household_id.slice(0, 12)}…
+                  </button>
+                  {current.member_id && <div className="t-mono muted" style={{fontSize:11, marginTop:2}}>member: {current.member_id.slice(0,18)}…</div>}
+                </>
+              ) : (
+                <>
+                  <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>SUBJECT</div>
+                  <div className="t-bodysm muted">Not about a specific household.</div>
+                </>
+              )}
+
+              {/* GRM -> UPD. SAD §4.4: a grievance that resolves to a
+                  data correction opens a linked update. The service
+                  has done this since US-S21 and nothing exposed it,
+                  so the Updates Queue and the grievance that caused
+                  the update were two screens with no path between
+                  them. */}
+              {current.category === "data_correction" && (
+                <>
+                  <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>DATA UPDATE</div>
+                  {current.linked_change_request_id ? (
+                    <button type="button" className="link-btn t-bodysm"
+                            style={{padding:0, textAlign:"left"}}
+                            onClick={() => onNavigate && onNavigate("upd", { changeRequestId: current.linked_change_request_id })}>
+                      Open update {current.linked_change_request_id.slice(0, 12)}… in the Updates Queue
+                    </button>
+                  ) : current.household_id ? (
+                    <>
+                      <button className="btn sm" disabled={busy}
+                              onClick={() => fire("open-change-request", { body: {} })}>
+                        Open an update from this grievance
+                      </button>
+                      <div className="t-cap muted" style={{marginTop:4}}>
+                        Creates a DRAFT in the Updates Queue, linked both ways.
+                        Approval still happens there.
+                      </div>
+                    </>
+                  ) : (
+                    <div className="t-bodysm muted">
+                      Name the household first — an update has to be
+                      about a record.
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>ASSIGNED</div>
+              <div className="t-bodysm" style={{color: current.assigned_to ? "var(--neutral-800)" : "var(--neutral-500)"}}>
+                {current.assigned_to || <em>unassigned — pick this case up</em>}
+              </div>
+            </div>
+          </div>
+
+          {/* US-S21-005 — Resolution & Closing block. Surfaces
+              the captured narrative + actor + timestamp pair for
+              each lifecycle close-out so the operator doesn't have
+              to dig into the audit drawer. Renders only when
+              the grievance has actually been resolved or closed. */}
+          {current && (current.status === "resolved" || current.status === "closed") && (
+            <div className="card" style={{borderTop:"3px solid var(--accent-eligibility)"}}>
+              <div style={{padding:"12px 16px"}}>
+                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:8}}>
+                  <Icon name="check" size={11}/> RESOLUTION
+                  <Chip size="sm" tone="eligibility" style={{marginLeft:6}}>
+                    Resolved
+                  </Chip>
+                </div>
+                {current.resolution_narrative ? (
+                  <div className="t-bodysm" style={{
+                    color:"var(--neutral-800)",
+                    lineHeight:1.5,
+                    whiteSpace:"pre-wrap",
+                    padding:"8px 10px",
+                    background:"var(--accent-eligibility-bg)",
+                    borderRadius:4,
+                  }}>
+                    {current.resolution_narrative}
+                  </div>
+                ) : (
+                  <div className="t-bodysm muted" style={{fontStyle:"italic"}}>
+                    No narrative captured.
+                  </div>
+                )}
+                <div className="t-bodysm muted" style={{fontSize:11, marginTop:6}}>
+                  by <strong>{current.resolved_by || "—"}</strong>
+                  {current.resolved_at && <> · {current.resolved_at}</>}
+                </div>
+
+                {current.status === "closed" && (
+                  <>
+                    <div className="t-cap" style={{
+                      fontWeight:600, color:"var(--neutral-700)",
+                      margin:"14px 0 8px",
+                    }}>
+                      <Icon name="lock" size={11}/> CLOSING
+                      <Chip size="sm" tone="neutral" style={{marginLeft:6}}>
+                        Closed
+                      </Chip>
+                    </div>
+                    {current.closing_narrative ? (
+                      <div className="t-bodysm" style={{
+                        color:"var(--neutral-800)",
+                        lineHeight:1.5,
+                        whiteSpace:"pre-wrap",
+                        padding:"8px 10px",
+                        background:"var(--neutral-100)",
+                        borderRadius:4,
+                      }}>
+                        {current.closing_narrative}
+                      </div>
+                    ) : (
+                      <div className="t-bodysm muted" style={{fontStyle:"italic"}}>
+                        No closing note captured.
+                      </div>
+                    )}
+                    <div className="t-bodysm muted" style={{fontSize:11, marginTop:6}}>
+                      by <strong>{current.closed_by || "—"}</strong>
+                      {current.closed_at && <> · {current.closed_at}</>}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* The running thread. A grievance is worked over days or
+              weeks; before this it carried the intake narrative and,
+              eventually, a resolution, with nothing in between — so
+              the resolution had to summarise from memory. Comments
+              are append-only: a correction is another comment. */}
+          {(dataSource === "live" || dataSource === "live-empty") && (
+            <div className="card">
+              <div className="card-header" style={{padding:"12px 16px"}}>
+                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)"}}>
+                  <Icon name="message" size={11}/> CASE NOTES
+                  {comments.length > 0 && (
+                    <Chip size="sm" tone="data" style={{marginLeft:6}}>{comments.length}</Chip>
+                  )}
+                </div>
+              </div>
+              <div style={{padding:"12px 16px"}}>
+                {comments.length === 0 && (
+                  <div className="t-bodysm muted" style={{fontStyle:"italic", marginBottom:10}}>
+                    Nothing recorded yet. Add a note as the case moves —
+                    a visit made, a call, a document still missing.
+                  </div>
+                )}
+                {comments.map(c => (
+                  <div key={c.id} style={{
+                    borderLeft: "2px solid var(--neutral-200)",
+                    padding: "0 0 0 10px", margin: "0 0 12px",
+                  }}>
+                    <div className="row gap-2" style={{alignItems:"baseline"}}>
+                      <span className="t-bodysm" style={{fontWeight:600}}>{c.author}</span>
+                      <span className="t-cap muted">{_grmFmtTime(c.created_at)}</span>
+                      {c.kind === "task_closed" && (
+                        <Chip size="sm" tone="quality">task closed</Chip>
+                      )}
+                    </div>
+                    <div className="t-bodysm" style={{color:"var(--neutral-800)", whiteSpace:"pre-wrap"}}>
+                      {c.body}
+                    </div>
+                  </div>
+                ))}
+                <textarea className="field-text"
+                          style={{width:"100%", minHeight:56, padding:8, fontFamily:"inherit"}}
+                          placeholder="Add a note — what happened, what is still outstanding."
+                          value={commentDraft}
+                          onChange={(e) => setCommentDraft(e.target.value)}/>
+                <div className="row gap-2" style={{justifyContent:"flex-end", marginTop:6}}>
+                  <button className="btn sm" disabled={busy || !commentDraft.trim()}
+                          onClick={postComment}>
+                    {busy ? "Saving…" : "Add note"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* US-S21-003c — Tasks panel. GRM Officer scopes the work
+              into tasks; the assignee transitions them; the resolve
+              action below is disabled until every task is closed. */}
+          {(dataSource === "live" || dataSource === "live-empty") && (
+            <div className="card">
+              <div className="card-header" style={{padding:"12px 16px"}}>
+                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)"}}>
+                  <Icon name="check" size={11}/> TASKS
+                  {tasks.length > 0 && (
+                    <Chip size="sm" tone="data" style={{marginLeft:6}}>
+                      {tasks.filter(t => t.status !== "closed").length} open · {tasks.length} total
+                    </Chip>
+                  )}
+                </div>
+                {me.is_officer && current.status !== "resolved" && current.status !== "closed" && (
+                  <button className="btn" onClick={() => {
+                            setTaskAssignee(null);
+                            setTaskForm({title:"", description:"", assigned_to:""});
+                            setModal("add_task");
+                          }}>
+                    <Icon name="plus" size={12}/> Add task
+                  </button>
+                )}
+              </div>
+              <div style={{padding: tasks.length === 0 ? 16 : 0}}>
+                {tasks.length === 0 && (
+                  <div className="t-bodysm muted" style={{fontStyle:"italic"}}>
+                    No tasks yet.
+                    {me.is_officer && " Use Add task to scope the work."}
+                  </div>
+                )}
+                {tasks.map(t => {
+                  const isMine = me.username && t.assigned_to === me.username;
+                  const canTransition = isMine || me.is_officer;
+                  const statusTone = t.status === "closed" ? "neutral"
+                    : t.status === "in_progress" ? "update" : "data";
+                  return (
+                    <div key={t.id} style={{
+                      padding: "10px 16px",
+                      borderTop: "1px solid var(--neutral-200)",
+                      display: "flex", alignItems: "flex-start", gap: 8,
+                    }}>
+                      <div style={{flex: 1, minWidth: 0}}>
+                        <div className="t-bodysm" style={{fontWeight: 500, color: "var(--neutral-900)"}}>
+                          {t.title}
+                        </div>
+                        {t.description && (
+                          <div className="t-bodysm muted" style={{marginTop: 2, fontSize: 12}}>
+                            {t.description}
+                          </div>
+                        )}
+                        <div className="t-bodysm muted" style={{fontSize: 11, marginTop: 4}}>
+                          {t.assigned_to}{isMine && " · you"}
+                          {t.closed_at && ` · closed by ${t.closed_by || "—"}`}
+                        </div>
+                      </div>
+                      <div style={{display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end"}}>
+                        <Chip size="sm" tone={statusTone}>
+                          {t.status === "in_progress" ? "in progress" : t.status}
+                        </Chip>
+                        {canTransition && t.status !== "closed" && (
+                          <div style={{display: "flex", gap: 4}}>
+                            {t.status === "open" && (
+                              <button className="btn ghost" disabled={busy}
+                                      title="Mark in progress"
+                                      onClick={() => transitionTask(t.id, "in_progress")}
+                                      style={{padding: "2px 6px", fontSize: 11}}>
+                                Start
+                              </button>
+                            )}
+                            <button className="btn ghost" disabled={busy}
+                                    title="Close task"
+                                    onClick={() => { setClosingNote(""); setClosingTask(t); }}
+                                    style={{padding: "2px 6px", fontSize: 11}}>
+                              Close
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* US-S21-003c — Timeline. Synthetic chronology built from
+              the grievance fields + tasks state. Surfaces work-log
+              progression inline rather than only via the audit drawer. */}
+          {(dataSource === "live" || dataSource === "live-empty") && (
+            <div className="card">
+              <div style={{padding: "12px 16px"}}>
+                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom: 8}}>
+                  <Icon name="history" size={11}/> TIMELINE
+                </div>
+                <ul style={{margin: 0, padding: 0, listStyle: "none", borderLeft: "2px solid var(--neutral-200)"}}>
+                  {_grmTimelineFor(current, tasks).map((ev, i) => (
+                    <li key={i} style={{padding: "6px 0 6px 14px", position: "relative"}}>
+                      <span style={{
+                        position: "absolute", left: -5, top: 10,
+                        width: 8, height: 8, borderRadius: 4,
+                        background: `var(--accent-${ev.tone || "data"})`,
+                      }}/>
+                      <div className="t-bodysm" style={{color: "var(--neutral-900)", fontWeight: 500}}>
+                        {ev.label}
+                      </div>
+                      <div className="t-bodysm muted" style={{fontSize: 11}}>
+                        {ev.detail && <>{ev.detail} · </>}
+                        {ev.at}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+
+          {/* Per-row actions */}
+          <div className="card">
+            <div style={{padding:"12px 16px"}}>
+              <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:8}}>ACTIONS</div>
+              <div className="col gap-2">
+                {!current.assigned_to && (
+                  <button className="btn" onClick={() => setModal("assign")}>
+                    <Icon name="user" size={13}/> Assign to me
+                  </button>
+                )}
+                {current.status !== "resolved" && current.status !== "closed" && current.tier !== "l4_nsr_unit" && (
+                  <button className="btn" onClick={() => setModal("escalate")}>
+                    <Icon name="arrowUp" size={13}/> Escalate one tier
+                  </button>
+                )}
+                {current.status !== "resolved" && current.status !== "closed" && (() => {
+                  // US-S21-003 — resolve is gated by every task being closed.
+                  const openTasks = tasks.filter(t => t.status !== "closed").length;
+                  const disabled = openTasks > 0 && (dataSource === "live" || dataSource === "live-empty");
+                  return (
+                    <button className="btn primary"
+                            disabled={disabled}
+                            title={disabled ? `${openTasks} task(s) still open — close them first` : undefined}
+                            onClick={() => setModal("resolve")}>
+                      <Icon name="check" size={13}/> Resolve with narrative
+                      {disabled && <span style={{fontSize: 11, opacity: 0.8}}> · {openTasks} open task(s)</span>}
+                    </button>
+                  );
+                })()}
+                {current.status === "resolved" && (
+                  <button className="btn primary" onClick={() => setModal("close")}>
+                    <Icon name="lock" size={13}/> Close grievance
+                  </button>
+                )}
+                {/* "Open linked UPD" used to synthesise an id —
+                    "01HXYUPD" + the tail of the grievance id — and
+                    hand it to the Updates Queue, which then showed
+                    whatever unrelated CR that matched, or nothing.
+                    The DATA UPDATE block above navigates to the real
+                    linked_change_request_id and offers to open one
+                    when there is none, so this button had no job
+                    left but to be wrong. */}
+                {current.category === "data_correction"
+                  && current.status !== "closed"
+                  && current.linked_change_request_id && (
+                  <button className="btn" onClick={() => onNavigate?.(
+                    "upd", { changeRequestId: current.linked_change_request_id },
+                  )}>
+                    <Icon name="edit" size={13}/> Open linked UPD
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+  ) : null;
 
   return (
     <WideShell wide={wide}>
@@ -755,6 +1184,11 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
                 : <>{rows.length} grievances</>}
             </strong>
             <div style={{flex:1}}/>
+            {wide.isWide && current && !caseDrawer && (
+              <button className="btn" onClick={() => setCaseDrawer(true)}>
+                <Icon name="message" size={13}/> Open case
+              </button>
+            )}
             {selection.size > 0 && (
               <div className="row gap-2">
                 <button className="btn" onClick={() => setModal("assign")}>
@@ -791,7 +1225,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
             return (
               <div
                 key={r.id}
-                onClick={() => setSelectedRow(r.id)}
+                onClick={() => { setSelectedRow(r.id); setCaseDrawer(true); }}
                 style={{
                   display:"grid", gridTemplateColumns:"32px 1fr 110px 100px 130px 140px 130px",
                   borderBottom:"1px solid var(--neutral-200)",
@@ -838,396 +1272,35 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
           )}
         </div>
 
-        {/* Detail rail */}
-        {current && (
-          <div className="col gap-3">
-            <div className="card" style={{borderTop:"3px solid var(--accent-data)"}}>
-              <div className="card-header" style={{padding:"12px 16px"}}>
-                <div>
-                  <div className="t-cap"><Icon name="message" size={11}/> CASE DETAIL</div>
-                  <h3 className="t-h3" style={{margin:"2px 0 0"}}>{GRM_CATEGORIES[current.category]}</h3>
-                </div>
-                <Chip tone={GRM_STATUSES[current.status].tone}>{GRM_STATUSES[current.status].label}</Chip>
-              </div>
-              <div style={{padding:16}}>
-                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:6}}>ID</div>
-                <div className="t-mono" style={{fontSize:12}}>{current.id}</div>
-
-                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>TIER + SLA</div>
-                <div className="row gap-2">
-                  <Chip tone="data">{GRM_TIERS[current.tier].short} · {GRM_TIERS[current.tier].label}</Chip>
-                  {slaChip(current.hours_to_breach, current.status)}
-                </div>
-
-                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>NARRATIVE</div>
-                <div className="t-bodysm" style={{color:"var(--neutral-800)", lineHeight:1.5}}>
-                  {current.narrative}
-                </div>
-
-                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>REPORTER</div>
-                <div className="t-bodysm" style={{color:"var(--neutral-800)"}}>{current.reporter_name}</div>
-                <div className="t-bodysm muted">{current.relationship}</div>
-                {current.reporter_phone && <div className="t-bodysm muted t-mono" style={{fontSize:12}}>{current.reporter_phone}</div>}
-
-                {current.household_id ? (
-                  <>
-                    <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>SUBJECT</div>
-                    <button type="button" className="link-btn t-bodysm"
-                            style={{padding:0, textAlign:"left"}}
-                            onClick={() => onNavigate && onNavigate("household", { householdId: current.household_id })}>
-                      Open household {current.household_id.slice(0, 12)}…
-                    </button>
-                    {current.member_id && <div className="t-mono muted" style={{fontSize:11, marginTop:2}}>member: {current.member_id.slice(0,18)}…</div>}
-                  </>
-                ) : (
-                  <>
-                    <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>SUBJECT</div>
-                    <div className="t-bodysm muted">Not about a specific household.</div>
-                  </>
-                )}
-
-                {/* GRM -> UPD. SAD §4.4: a grievance that resolves to a
-                    data correction opens a linked update. The service
-                    has done this since US-S21 and nothing exposed it,
-                    so the Updates Queue and the grievance that caused
-                    the update were two screens with no path between
-                    them. */}
-                {current.category === "data_correction" && (
-                  <>
-                    <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>DATA UPDATE</div>
-                    {current.linked_change_request_id ? (
-                      <button type="button" className="link-btn t-bodysm"
-                              style={{padding:0, textAlign:"left"}}
-                              onClick={() => onNavigate && onNavigate("upd", { changeRequestId: current.linked_change_request_id })}>
-                        Open update {current.linked_change_request_id.slice(0, 12)}… in the Updates Queue
-                      </button>
-                    ) : current.household_id ? (
-                      <>
-                        <button className="btn sm" disabled={busy}
-                                onClick={() => fire("open-change-request", { body: {} })}>
-                          Open an update from this grievance
-                        </button>
-                        <div className="t-cap muted" style={{marginTop:4}}>
-                          Creates a DRAFT in the Updates Queue, linked both ways.
-                          Approval still happens there.
-                        </div>
-                      </>
-                    ) : (
-                      <div className="t-bodysm muted">
-                        Name the household first — an update has to be
-                        about a record.
-                      </div>
-                    )}
-                  </>
-                )}
-
-                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>ASSIGNED</div>
-                <div className="t-bodysm" style={{color: current.assigned_to ? "var(--neutral-800)" : "var(--neutral-500)"}}>
-                  {current.assigned_to || <em>unassigned — pick this case up</em>}
-                </div>
-              </div>
-            </div>
-
-            {/* US-S21-005 — Resolution & Closing block. Surfaces
-                the captured narrative + actor + timestamp pair for
-                each lifecycle close-out so the operator doesn't have
-                to dig into the audit drawer. Renders only when
-                the grievance has actually been resolved or closed. */}
-            {current && (current.status === "resolved" || current.status === "closed") && (
-              <div className="card" style={{borderTop:"3px solid var(--accent-eligibility)"}}>
-                <div style={{padding:"12px 16px"}}>
-                  <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:8}}>
-                    <Icon name="check" size={11}/> RESOLUTION
-                    <Chip size="sm" tone="eligibility" style={{marginLeft:6}}>
-                      Resolved
-                    </Chip>
-                  </div>
-                  {current.resolution_narrative ? (
-                    <div className="t-bodysm" style={{
-                      color:"var(--neutral-800)",
-                      lineHeight:1.5,
-                      whiteSpace:"pre-wrap",
-                      padding:"8px 10px",
-                      background:"var(--accent-eligibility-bg)",
-                      borderRadius:4,
-                    }}>
-                      {current.resolution_narrative}
-                    </div>
-                  ) : (
-                    <div className="t-bodysm muted" style={{fontStyle:"italic"}}>
-                      No narrative captured.
-                    </div>
-                  )}
-                  <div className="t-bodysm muted" style={{fontSize:11, marginTop:6}}>
-                    by <strong>{current.resolved_by || "—"}</strong>
-                    {current.resolved_at && <> · {current.resolved_at}</>}
-                  </div>
-
-                  {current.status === "closed" && (
-                    <>
-                      <div className="t-cap" style={{
-                        fontWeight:600, color:"var(--neutral-700)",
-                        margin:"14px 0 8px",
-                      }}>
-                        <Icon name="lock" size={11}/> CLOSING
-                        <Chip size="sm" tone="neutral" style={{marginLeft:6}}>
-                          Closed
-                        </Chip>
-                      </div>
-                      {current.closing_narrative ? (
-                        <div className="t-bodysm" style={{
-                          color:"var(--neutral-800)",
-                          lineHeight:1.5,
-                          whiteSpace:"pre-wrap",
-                          padding:"8px 10px",
-                          background:"var(--neutral-100)",
-                          borderRadius:4,
-                        }}>
-                          {current.closing_narrative}
-                        </div>
-                      ) : (
-                        <div className="t-bodysm muted" style={{fontStyle:"italic"}}>
-                          No closing note captured.
-                        </div>
-                      )}
-                      <div className="t-bodysm muted" style={{fontSize:11, marginTop:6}}>
-                        by <strong>{current.closed_by || "—"}</strong>
-                        {current.closed_at && <> · {current.closed_at}</>}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* The running thread. A grievance is worked over days or
-                weeks; before this it carried the intake narrative and,
-                eventually, a resolution, with nothing in between — so
-                the resolution had to summarise from memory. Comments
-                are append-only: a correction is another comment. */}
-            {(dataSource === "live" || dataSource === "live-empty") && (
-              <div className="card">
-                <div className="card-header" style={{padding:"12px 16px"}}>
-                  <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)"}}>
-                    <Icon name="message" size={11}/> CASE NOTES
-                    {comments.length > 0 && (
-                      <Chip size="sm" tone="data" style={{marginLeft:6}}>{comments.length}</Chip>
-                    )}
-                  </div>
-                </div>
-                <div style={{padding:"12px 16px"}}>
-                  {comments.length === 0 && (
-                    <div className="t-bodysm muted" style={{fontStyle:"italic", marginBottom:10}}>
-                      Nothing recorded yet. Add a note as the case moves —
-                      a visit made, a call, a document still missing.
-                    </div>
-                  )}
-                  {comments.map(c => (
-                    <div key={c.id} style={{
-                      borderLeft: "2px solid var(--neutral-200)",
-                      padding: "0 0 0 10px", margin: "0 0 12px",
-                    }}>
-                      <div className="row gap-2" style={{alignItems:"baseline"}}>
-                        <span className="t-bodysm" style={{fontWeight:600}}>{c.author}</span>
-                        <span className="t-cap muted">{_grmFmtTime(c.created_at)}</span>
-                        {c.kind === "task_closed" && (
-                          <Chip size="sm" tone="quality">task closed</Chip>
-                        )}
-                      </div>
-                      <div className="t-bodysm" style={{color:"var(--neutral-800)", whiteSpace:"pre-wrap"}}>
-                        {c.body}
-                      </div>
-                    </div>
-                  ))}
-                  <textarea className="field-text"
-                            style={{width:"100%", minHeight:56, padding:8, fontFamily:"inherit"}}
-                            placeholder="Add a note — what happened, what is still outstanding."
-                            value={commentDraft}
-                            onChange={(e) => setCommentDraft(e.target.value)}/>
-                  <div className="row gap-2" style={{justifyContent:"flex-end", marginTop:6}}>
-                    <button className="btn sm" disabled={busy || !commentDraft.trim()}
-                            onClick={postComment}>
-                      {busy ? "Saving…" : "Add note"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* US-S21-003c — Tasks panel. GRM Officer scopes the work
-                into tasks; the assignee transitions them; the resolve
-                action below is disabled until every task is closed. */}
-            {(dataSource === "live" || dataSource === "live-empty") && (
-              <div className="card">
-                <div className="card-header" style={{padding:"12px 16px"}}>
-                  <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)"}}>
-                    <Icon name="check" size={11}/> TASKS
-                    {tasks.length > 0 && (
-                      <Chip size="sm" tone="data" style={{marginLeft:6}}>
-                        {tasks.filter(t => t.status !== "closed").length} open · {tasks.length} total
-                      </Chip>
-                    )}
-                  </div>
-                  {me.is_officer && current.status !== "resolved" && current.status !== "closed" && (
-                    <button className="btn" onClick={() => {
-                              setTaskAssignee(null);
-                              setTaskForm({title:"", description:"", assigned_to:""});
-                              setModal("add_task");
-                            }}>
-                      <Icon name="plus" size={12}/> Add task
-                    </button>
-                  )}
-                </div>
-                <div style={{padding: tasks.length === 0 ? 16 : 0}}>
-                  {tasks.length === 0 && (
-                    <div className="t-bodysm muted" style={{fontStyle:"italic"}}>
-                      No tasks yet.
-                      {me.is_officer && " Use Add task to scope the work."}
-                    </div>
-                  )}
-                  {tasks.map(t => {
-                    const isMine = me.username && t.assigned_to === me.username;
-                    const canTransition = isMine || me.is_officer;
-                    const statusTone = t.status === "closed" ? "neutral"
-                      : t.status === "in_progress" ? "update" : "data";
-                    return (
-                      <div key={t.id} style={{
-                        padding: "10px 16px",
-                        borderTop: "1px solid var(--neutral-200)",
-                        display: "flex", alignItems: "flex-start", gap: 8,
-                      }}>
-                        <div style={{flex: 1, minWidth: 0}}>
-                          <div className="t-bodysm" style={{fontWeight: 500, color: "var(--neutral-900)"}}>
-                            {t.title}
-                          </div>
-                          {t.description && (
-                            <div className="t-bodysm muted" style={{marginTop: 2, fontSize: 12}}>
-                              {t.description}
-                            </div>
-                          )}
-                          <div className="t-bodysm muted" style={{fontSize: 11, marginTop: 4}}>
-                            {t.assigned_to}{isMine && " · you"}
-                            {t.closed_at && ` · closed by ${t.closed_by || "—"}`}
-                          </div>
-                        </div>
-                        <div style={{display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end"}}>
-                          <Chip size="sm" tone={statusTone}>
-                            {t.status === "in_progress" ? "in progress" : t.status}
-                          </Chip>
-                          {canTransition && t.status !== "closed" && (
-                            <div style={{display: "flex", gap: 4}}>
-                              {t.status === "open" && (
-                                <button className="btn ghost" disabled={busy}
-                                        title="Mark in progress"
-                                        onClick={() => transitionTask(t.id, "in_progress")}
-                                        style={{padding: "2px 6px", fontSize: 11}}>
-                                  Start
-                                </button>
-                              )}
-                              <button className="btn ghost" disabled={busy}
-                                      title="Close task"
-                                      onClick={() => { setClosingNote(""); setClosingTask(t); }}
-                                      style={{padding: "2px 6px", fontSize: 11}}>
-                                Close
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* US-S21-003c — Timeline. Synthetic chronology built from
-                the grievance fields + tasks state. Surfaces work-log
-                progression inline rather than only via the audit drawer. */}
-            {(dataSource === "live" || dataSource === "live-empty") && (
-              <div className="card">
-                <div style={{padding: "12px 16px"}}>
-                  <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom: 8}}>
-                    <Icon name="history" size={11}/> TIMELINE
-                  </div>
-                  <ul style={{margin: 0, padding: 0, listStyle: "none", borderLeft: "2px solid var(--neutral-200)"}}>
-                    {_grmTimelineFor(current, tasks).map((ev, i) => (
-                      <li key={i} style={{padding: "6px 0 6px 14px", position: "relative"}}>
-                        <span style={{
-                          position: "absolute", left: -5, top: 10,
-                          width: 8, height: 8, borderRadius: 4,
-                          background: `var(--accent-${ev.tone || "data"})`,
-                        }}/>
-                        <div className="t-bodysm" style={{color: "var(--neutral-900)", fontWeight: 500}}>
-                          {ev.label}
-                        </div>
-                        <div className="t-bodysm muted" style={{fontSize: 11}}>
-                          {ev.detail && <>{ev.detail} · </>}
-                          {ev.at}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            )}
-
-            {/* Per-row actions */}
-            <div className="card">
-              <div style={{padding:"12px 16px"}}>
-                <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:8}}>ACTIONS</div>
-                <div className="col gap-2">
-                  {!current.assigned_to && (
-                    <button className="btn" onClick={() => setModal("assign")}>
-                      <Icon name="user" size={13}/> Assign to me
-                    </button>
-                  )}
-                  {current.status !== "resolved" && current.status !== "closed" && current.tier !== "l4_nsr_unit" && (
-                    <button className="btn" onClick={() => setModal("escalate")}>
-                      <Icon name="arrowUp" size={13}/> Escalate one tier
-                    </button>
-                  )}
-                  {current.status !== "resolved" && current.status !== "closed" && (() => {
-                    // US-S21-003 — resolve is gated by every task being closed.
-                    const openTasks = tasks.filter(t => t.status !== "closed").length;
-                    const disabled = openTasks > 0 && (dataSource === "live" || dataSource === "live-empty");
-                    return (
-                      <button className="btn primary"
-                              disabled={disabled}
-                              title={disabled ? `${openTasks} task(s) still open — close them first` : undefined}
-                              onClick={() => setModal("resolve")}>
-                        <Icon name="check" size={13}/> Resolve with narrative
-                        {disabled && <span style={{fontSize: 11, opacity: 0.8}}> · {openTasks} open task(s)</span>}
-                      </button>
-                    );
-                  })()}
-                  {current.status === "resolved" && (
-                    <button className="btn primary" onClick={() => setModal("close")}>
-                      <Icon name="lock" size={13}/> Close grievance
-                    </button>
-                  )}
-                  {/* "Open linked UPD" used to synthesise an id —
-                      "01HXYUPD" + the tail of the grievance id — and
-                      hand it to the Updates Queue, which then showed
-                      whatever unrelated CR that matched, or nothing.
-                      The DATA UPDATE block above navigates to the real
-                      linked_change_request_id and offers to open one
-                      when there is none, so this button had no job
-                      left but to be wrong. */}
-                  {current.category === "data_correction"
-                    && current.status !== "closed"
-                    && current.linked_change_request_id && (
-                    <button className="btn" onClick={() => onNavigate?.(
-                      "upd", { changeRequestId: current.linked_change_request_id },
-                    )}>
-                      <Icon name="edit" size={13}/> Open linked UPD
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        {!wide.isWide && casePanel}
       </div>
+
+      {/* Wide view: the panel as a drawer over the list, not a strip
+          below it. Opened by picking a row, and by the toolbar button
+          for when it has been closed. */}
+      {wide.isWide && (
+        <>
+          <div className={`drawer-backdrop ${caseDrawer && current ? "open" : ""}`}
+               onClick={() => setCaseDrawer(false)}/>
+          <aside className={`drawer ${caseDrawer && current ? "open" : ""}`}
+                 aria-hidden={!(caseDrawer && current)}>
+            <div className="drawer-header">
+              <div>
+                <div className="t-cap">CASE DETAIL</div>
+                <h3 className="t-h2" style={{margin:"2px 0 0"}}>
+                  {current ? GRM_CATEGORIES[current.category] : ""}
+                </h3>
+              </div>
+              <button className="icon-btn" onClick={() => setCaseDrawer(false)}>
+                <Icon name="x"/>
+              </button>
+            </div>
+            <div className="drawer-body" style={{padding:12}}>
+              {casePanel}
+            </div>
+          </aside>
+        </>
+      )}
 
       {/* Modal stack — wired to canned reason lists from the service guards.
           ReasonModal in components.jsx expects open + reasonOptions +
@@ -1320,7 +1393,25 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
             grievance sat with nobody working it. The server now
             refuses an assignee that is not an active MIS user, and
             this searches the real directory. */}
-        <UserPicker value={assignee} onChange={setAssignee}/>
+        <UserPicker
+          value={assignee} onChange={setAssignee}
+          endpoint={assigneeEndpoint}
+          emptyHint={oneKindOfTarget
+            ? "Nobody holds this tier's role with access to this household. Escalate, or grant the scope first."
+            : "No users match."}/>
+        {oneKindOfTarget ? (
+          <div className="t-cap muted" style={{marginTop:6}}>
+            Showing the people whose role carries this tier and whose area
+            covers the household.
+          </div>
+        ) : (
+          <div className="t-cap muted" style={{marginTop:6}}>
+            These grievances are at different tiers or about different
+            households, so one eligible list cannot be shown. Each
+            assignment is checked on submit and any that are refused are
+            listed back.
+          </div>
+        )}
         {assignee && !assignee.email && (
           <div className="t-cap muted" style={{marginTop:8}}>
             {assignee.display_name || assignee.username} has no email on
@@ -1475,6 +1566,10 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
           <label className="t-cap" style={{fontWeight:600, marginTop:8}}>ASSIGNED TO</label>
           <UserPicker
                  value={taskAssignee}
+                 endpoint={current
+                   ? `/api/v1/grm/grievances/${current.id}/assignable/`
+                   : undefined}
+                 emptyHint="Nobody holds this tier's role with access to this household."
                  onChange={(u) => {
                    setTaskAssignee(u);
                    setTaskForm({...taskForm, assigned_to: u ? u.username : ""});

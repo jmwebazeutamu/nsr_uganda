@@ -34,12 +34,18 @@ from .models import (
     Tier,
 )
 
-SLA_BY_TIER = {
-    Tier.L1_PARISH_CHIEF: timedelta(hours=24),
-    Tier.L2_CDO: timedelta(hours=48),
-    Tier.L3_DISTRICT: timedelta(hours=72),
-    Tier.L4_NSR_UNIT: timedelta(days=7),
-}
+def sla_for(tier: str) -> timedelta:
+    """The window this tier gets, from the configured ladder.
+
+    These four numbers were a module constant — 24/48/72/168 hours —
+    beside a tier-to-role mapping that existed only inside the Tier
+    enum's value strings. Both are policy, and policy that needs a
+    deploy to change is policy operations cannot see. They live
+    together in GrmTierRule now (see apps/grievance/models.py).
+    """
+    from .assignees import tier_rule
+
+    return timedelta(hours=tier_rule(tier).sla_hours)
 
 
 class GrievanceError(Exception):
@@ -57,7 +63,7 @@ def _set_sla(grievance: Grievance) -> None:
     tier they had only just reached.
     """
     started = grievance.tier_started_at or grievance.opened_at
-    grievance.sla_deadline = started + SLA_BY_TIER[grievance.tier]
+    grievance.sla_deadline = started + sla_for(grievance.tier)
 
 
 @transaction.atomic
@@ -160,12 +166,19 @@ def assign(grievance: Grievance, *, assigned_to: str, actor: str) -> Grievance:
             f"cannot assign a {grievance.status} grievance — "
             "reopen it first",
         )
-    # The assignee must be a real, active MIS user. The console used to
-    # offer four invented names; an invented assignee is a grievance
-    # nobody is working.
+    # The assignee must be a real, active MIS user who can actually
+    # carry this case. The console used to offer four invented names;
+    # an invented assignee is a grievance nobody is working. Then it
+    # offered the whole user directory, which is the same problem
+    # wearing real names — an L3 case handed to an enumerator in
+    # another sub-region reaches someone with neither the authority to
+    # decide it nor the scope to open it.
     try:
-        user = assignees.resolve(assigned_to)
-    except assignees.UnknownAssignee as exc:
+        user = assignees.resolve_for(
+            assigned_to, tier=grievance.tier,
+            household_id=grievance.household_id or "",
+        )
+    except (assignees.UnknownAssignee, assignees.IneligibleAssignee) as exc:
         raise GrievanceError(str(exc)) from exc
 
     grievance.assigned_to = user.username
@@ -475,9 +488,13 @@ def create_task(
         raise GrievanceError("task must be assigned to someone")
     if not actor:
         raise GrievanceError("actor required")
+    # A task is work at the case's tier, so it takes the case's rule.
     try:
-        assignee = assignees.resolve(assigned_to)
-    except assignees.UnknownAssignee as exc:
+        assignee = assignees.resolve_for(
+            assigned_to, tier=grievance.tier,
+            household_id=grievance.household_id or "",
+        )
+    except (assignees.UnknownAssignee, assignees.IneligibleAssignee) as exc:
         raise GrievanceError(str(exc)) from exc
     if grievance.status in (GrievanceStatus.RESOLVED, GrievanceStatus.CLOSED):
         raise GrievanceError(

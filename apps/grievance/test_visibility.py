@@ -204,16 +204,50 @@ class TestOwnership:
     def test_a_task_holder_sees_the_grievance(
         self, two_areas, django_user_model,
     ):
+        """A task row written before P2.10 still grants its holder
+        sight of the case.
+
+        create_task now refuses this combination — a NORTH-scoped user
+        cannot be given work on a SOUTH household, which is the point
+        of the eligibility rule. The row is built directly here because
+        rows like it exist: the registry has been assigning tasks
+        since US-S21 with no scope check, and the visibility grant is
+        what lets those people open the work they were told to do.
+        """
+        from apps.grievance.models import GrievanceTask
+
         user = _user(django_user_model, "task-holder")
         _scope(user, ScopeLevel.SUB_REGION, "NORTH-SUB_REGION")
-        create_task(
-            two_areas["south_g"], title="visit", description="",
-            assigned_to=user.username, actor="officer",
+        GrievanceTask.objects.create(
+            grievance=two_areas["south_g"], title="visit", description="",
+            assigned_to=user.username, created_by="officer",
+            status=TaskStatus.OPEN,
         )
 
         assert two_areas["south_g"].id in {
             g.id for g in visible_grievances(user)
         }
+
+    def test_a_task_can_no_longer_be_given_across_a_scope_boundary(
+        self, two_areas, django_user_model,
+    ):
+        """The other half of the same rule. The grant above exists for
+        history; new work is not created outside the holder's reach."""
+        from django.contrib.auth.models import Group
+
+        from apps.grievance.services import GrievanceError
+
+        # The right role for an L1 case, so it is scope alone that
+        # refuses — not the role check firing first.
+        user = _user(django_user_model, "north-only")
+        user.groups.add(Group.objects.get_or_create(name="parish_chief")[0])
+        _scope(user, ScopeLevel.SUB_REGION, "NORTH-SUB_REGION")
+
+        with pytest.raises(GrievanceError, match="no access to the household"):
+            create_task(
+                two_areas["south_g"], title="visit", description="",
+                assigned_to=user.username, actor="officer",
+            )
 
     def test_ownership_does_not_widen_the_area(
         self, two_areas, django_user_model,

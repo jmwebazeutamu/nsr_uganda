@@ -408,6 +408,63 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
 
     @extend_schema(
         tags=["grm"],
+        summary="Who this grievance can be assigned to",
+        description=(
+            "Active users whose role carries this grievance's tier and "
+            "whose geographic scope reaches its household.\n\n"
+            "The console's assignee picker searched "
+            "`/security/users/`, which is the whole directory — every "
+            "account, active or not, with no regard for what the case "
+            "needed. An L3 District case could be handed to an "
+            "enumerator in another sub-region: someone with neither the "
+            "authority to decide it nor the scope to open it. They "
+            "would get the email, follow the link, and be refused their "
+            "own work.\n\n"
+            "The same rule refuses an ineligible assignee at "
+            "`/assign/` and at task creation, so a stale client cannot "
+            "route around the list. Optional `?q=` narrows by username "
+            "or name; `?for_tier=` asks about the tier a case is about "
+            "to be escalated to rather than the one it is on — not "
+            "`?tier=`, which this viewset already uses to mean 'cases "
+            "at this tier' and which on a detail route filters the "
+            "case itself away."
+        ),
+        responses={200: OpenApiResponse(description="eligible assignees")},
+    )
+    @action(detail=True, methods=["get"], url_path="assignable")
+    def assignable(self, request, pk=None):
+        from . import assignees
+
+        grievance = self.get_object()
+        tier = request.query_params.get("for_tier") or grievance.tier
+        try:
+            qs = assignees.candidates(
+                tier=tier, household_id=grievance.household_id or "",
+            )
+        except assignees.IneligibleAssignee as exc:
+            return Response({"detail": str(exc)},
+                            status=status.HTTP_409_CONFLICT)
+
+        q = (request.query_params.get("q") or "").strip()
+        if q:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(username__icontains=q)
+                | Q(first_name__icontains=q)
+                | Q(last_name__icontains=q),
+            )
+        return Response([
+            {
+                "username": u.username,
+                "display_name": assignees.display_name(u),
+                "email": u.email or "",
+                "roles": sorted(g.name for g in u.groups.all()),
+            }
+            for u in qs[:50]
+        ])
+
+    @extend_schema(
+        tags=["grm"],
         summary="Read one grievance's audit chain",
         description=(
             "The events this case actually produced, oldest first: the "

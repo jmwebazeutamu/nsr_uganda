@@ -69,7 +69,14 @@ def worked_case(django_user_model):
     task, commented on, and had the task closed — one of each kind of
     event the drawer claims to show."""
     household = _household("AUD")
+    # Assignment checks the assignee's role and scope (QA P2.10). This
+    # officer works the queue, which is what carries a case through
+    # L1 assignment and an L2 task in one fixture.
     officer = django_user_model.objects.create_user(username="cdo.aine", password="p")
+    officer.groups.add(Group.objects.get_or_create(name="GRM Officer")[0])
+    OperatorScope.objects.get_or_create(
+        user=officer, scope_level=ScopeLevel.NATIONAL, scope_code="",
+    )
     g = open_grievance(
         category="data_correction", description="wrong district on file",
         household_id=household.id, actor="parish.chief",

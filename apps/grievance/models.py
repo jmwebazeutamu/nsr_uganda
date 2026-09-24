@@ -243,3 +243,56 @@ class GrievanceTask(models.Model):
 
     def __str__(self) -> str:
         return f"Task {self.id} on {self.grievance_id} [{self.status}]"
+
+
+class GrmTierRule(models.Model):
+    """Who owns a grievance at each tier, and for how long.
+
+    Both halves of this were hardcoded, in two places. `SLA_BY_TIER` in
+    services.py held 24/48/72/168 hours as a module constant, and the
+    role that a tier belongs to existed only inside the Tier enum's own
+    value strings — "l2_cdo" is a role name spelled into an identifier,
+    which nothing could read as configuration.
+
+    That mattered once assignment had to check it. Refusing to assign a
+    case to someone whose role does not carry that tier is a policy
+    decision; policy in a Python constant means rebalancing the ladder
+    needs a deploy, and the operations team cannot see what the rule
+    currently is. Same reasoning, and the same shape, as
+    UpdRoutingRule (UPD-O-01).
+
+    Seeded from SAD §5.1, which names the ladder: "tier (L1 Parish
+    Chief / L2 CDO / L3 District / L4 NSR Unit)", with the role codes
+    taken from the ADR-0028 catalogue in apps/security/roles.py. The
+    SLA hours are the ones the service already used.
+
+    There is no code fallback. An active row per tier is required, so a
+    half-configured ladder fails loudly rather than quietly reverting
+    to whatever a constant last said.
+    """
+
+    tier = models.CharField(max_length=24, choices=Tier.choices)
+    #: Role code from apps.security.roles.ROLES whose holders carry
+    #: cases at this tier.
+    required_role = models.CharField(max_length=32)
+    sla_hours = models.PositiveIntegerField()
+    is_active = models.BooleanField(default=True)
+    note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "GRM tier rule"
+        verbose_name_plural = "GRM tier rules"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tier"],
+                condition=models.Q(is_active=True),
+                name="grm_tier_unique_active",
+            ),
+        ]
+        indexes = [models.Index(fields=["tier", "is_active"])]
+        ordering = ("tier",)
+
+    def __str__(self) -> str:
+        return f"{self.tier} -> {self.required_role} ({self.sla_hours}h)"

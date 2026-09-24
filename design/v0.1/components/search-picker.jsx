@@ -188,11 +188,23 @@ const HouseholdPicker = ({ value, onChange, disabled, label = "Household" }) => 
 );
 
 /* The user picker, moved here from screens-admin.jsx when the GRM
-   console needed the same search over the same endpoint. Kept as it
-   was — the admin surfaces are built around its behaviour (it lists on
-   mount rather than waiting for a query) and this move is about having
-   one of it, not about changing it. */
-const UserPicker = ({ value, onChange, disabled }) => {
+   console needed the same search over the same endpoint.
+
+   `endpoint` was added for QA P2.10. The GRM assignee pickers no
+   longer search the whole directory: they ask the case which users may
+   carry it, at /grm/grievances/<id>/assignable/, which applies the
+   tier's role and the household's scope. The admin surfaces keep the
+   directory search — granting a scope is precisely the act of
+   choosing someone who does not have one yet.
+
+   Both shapes are read here rather than in two components: the
+   directory returns `groups` and an `id`, the GRM list returns `roles`
+   and no id, and `username` is the identity in either. */
+const UserPicker = ({
+  value, onChange, disabled,
+  endpoint = USER_SEARCH_API,
+  emptyHint = "No users match.",
+}) => {
   const [q, setQ] = _spState("");
   const [results, setResults] = _spState([]);
   const [loading, setLoading] = _spState(false);
@@ -200,8 +212,9 @@ const UserPicker = ({ value, onChange, disabled }) => {
   _spEffect(() => {
     let cancelled = false;
     setLoading(true);
-    const qs = q ? `?q=${encodeURIComponent(q)}` : "";
-    fetch(`${USER_SEARCH_API}${qs}`, {
+    const sep = endpoint.includes("?") ? "&" : "?";
+    const qs = q ? `${sep}q=${encodeURIComponent(q)}` : "";
+    fetch(`${endpoint}${qs}`, {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
     })
@@ -213,7 +226,7 @@ const UserPicker = ({ value, onChange, disabled }) => {
       })
       .catch(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [q]);
+  }, [q, endpoint]);
 
   return (
     <div>
@@ -230,13 +243,14 @@ const UserPicker = ({ value, onChange, disabled }) => {
       }}>
         {loading && <p className="t-cap muted" style={{padding:"8px"}}>Searching…</p>}
         {!loading && results.length === 0 && (
-          <p className="t-cap muted" style={{padding:"8px"}}>No users match.</p>
+          <p className="t-cap muted" style={{padding:"8px"}}>{emptyHint}</p>
         )}
         {results.map(u => {
-          const selected = value?.id === u.id;
+          const roles = u.roles || u.groups || [];
+          const selected = value?.username === u.username;
           return (
             <button
-              key={u.id} type="button"
+              key={u.username} type="button"
               onClick={() => onChange(u)}
               disabled={disabled}
               style={{
@@ -251,8 +265,8 @@ const UserPicker = ({ value, onChange, disabled }) => {
               {u.display_name !== u.username && (
                 <span className="muted"> — {u.display_name}</span>
               )}
-              {u.groups.length > 0 && (
-                <div className="t-cap muted">{u.groups.join(", ")}</div>
+              {roles.length > 0 && (
+                <div className="t-cap muted">{roles.join(", ")}</div>
               )}
             </button>
           );
