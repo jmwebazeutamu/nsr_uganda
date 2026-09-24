@@ -511,6 +511,22 @@ class DsaSerializer(serializers.ModelSerializer):
     partner_code = serializers.CharField(source="partner.code", read_only=True)
     partner_name = serializers.CharField(source="partner.name", read_only=True)
     partner_tone = serializers.CharField(source="partner.tone", read_only=True)
+    geographic_scope_details = serializers.SerializerMethodField()
+
+    def get_geographic_scope_details(self, dsa):
+        """Human-readable companion to the stable geographic-scope IDs.
+
+        `geographic_scope` remains the canonical M2M write field. This
+        companion avoids every consumer independently resolving IDs and
+        prevents the Partner detail from silently dropping valid scope.
+        """
+        return [
+            {
+                "id": str(unit.id), "code": unit.code,
+                "name": unit.name, "level": unit.level,
+            }
+            for unit in dsa.geographic_scope.all()
+        ]
 
     def validate_geographic_scope(self, units):
         """New DSAs can only be scoped to currently usable UBOS units."""
@@ -530,6 +546,7 @@ class DsaSerializer(serializers.ModelSerializer):
             "status", "status_label",
             "effective_from", "effective_to", "monthly_row_budget",
             "entities_scope", "field_scope", "geographic_scope",
+            "geographic_scope_details",
             "sensitive_data_handling", "sensitive_data_handling_label",
             "retention_days", "classification",
             "dpia_document_ref", "breach_sla_hours",
@@ -566,7 +583,7 @@ class DsaViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
     queryset = (
         DataSharingAgreement.objects.all()
         .select_related("partner")
-        .prefetch_related("signatures")
+        .prefetch_related("signatures", "geographic_scope")
         .order_by("-created_at")
     )
     serializer_class = DsaSerializer

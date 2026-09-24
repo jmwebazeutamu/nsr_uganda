@@ -117,10 +117,18 @@ const NAV_GROUPS = [
 
 const AdminDsasScreen = () => {
   const [view, setView] = useStateAdmin({ name: "list", dsaId: null });
+  const followCrossLink = (target, params = {}) => {
+    const query = new URLSearchParams({ screen: target });
+    if (target === "partner-detail" && params.partnerId) query.set("partnerId", params.partnerId);
+    if (target === "drs" && params.dsaId) query.set("dsaId", params.dsaId);
+    window.location.assign(`/console/?${query.toString()}`);
+  };
   if (view.name === "detail") return <DsaDetailScreen dsaId={view.dsaId}
     onBack={() => setView({ name: "list", dsaId: null })}
-    onNavigate={(target, params = {}) => target === "dsa-detail" && params.dsaId
-      && setView({ name: "detail", dsaId: params.dsaId })}/>;
+    onNavigate={(target, params = {}) => {
+      if (target === "dsa-detail" && params.dsaId) setView({ name: "detail", dsaId: params.dsaId });
+      if (target === "partner-detail" || target === "drs") followCrossLink(target, params);
+    }}/>;
   if (view.name === "new") return <DsaCreateWizard
     onBack={() => setView({ name: "list", dsaId: null })}
     onCreated={(dsa) => setView({ name: "detail", dsaId: dsa.id })}/>;

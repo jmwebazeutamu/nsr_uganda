@@ -302,10 +302,19 @@ class TestDsaApiEndpoints:
 
     def test_dsa_response_carries_labels(self, api, draft_dsa):
         c, _ = api
+        geography = GeographicUnit.objects.create(
+            level="region", code="R-WESTERN", name="Western",
+            effective_from="2020-01-01", status=GeographicUnit.Status.ACTIVE,
+        )
+        draft_dsa.geographic_scope.add(geography)
         r = c.get(f"{URL_DSAS}{draft_dsa.id}/")
         assert r.status_code == 200
         assert r.data["status_label"] == "Draft"
         assert r.data["sensitive_data_handling_label"] == "None"
+        assert r.data["geographic_scope_details"] == [{
+            "id": str(geography.id), "code": "R-WESTERN",
+            "name": "Western", "level": "region",
+        }]
 
     def test_nominated_console_user_can_sign_current_step(self, api, draft_dsa):
         c, user = api

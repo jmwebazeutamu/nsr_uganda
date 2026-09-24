@@ -3,6 +3,23 @@
 
 const { useState: useStateApp, useEffect: useEffectApp } = React;
 
+// Cross-console DSA links use these narrow, explicit routes. Keeping the
+// accepted screens small prevents arbitrary query parameters becoming a
+// second router, while allowing Admin DSA records to open their real partner
+// and DRS contexts in the Operator Console.
+const _appRouteFromUrl = () => {
+  if (typeof window === "undefined") return { screen: "home", payload: null };
+  const query = new URLSearchParams(window.location.search || "");
+  const screen = query.get("screen");
+  if (screen === "partner-detail" && query.get("partnerId")) {
+    return { screen, payload: { partnerId: query.get("partnerId") } };
+  }
+  if (screen === "drs") {
+    return { screen, payload: { dsaId: query.get("dsaId") || "" } };
+  }
+  return { screen: "home", payload: null };
+};
+
 // CSRF helper for the impersonation Stop button (US-S11-042). Same
 // pattern as _getCsrfToken in screens-dih / _adminCsrfToken in
 // screens-admin — read Django's csrftoken cookie, fall back to "".
@@ -136,7 +153,9 @@ const NAV = [
 
 function App() {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
-  const [screen, setScreen] = useStateApp("home");
+  const initialRoute = _appRouteFromUrl();
+  const [screen, setScreen] = useStateApp(initialRoute.screen);
+  const [screenPayload, setScreenPayload] = useStateApp(initialRoute.payload);
   const [device, setDevice] = useStateApp("desktop");
   // Live nav counters keyed by nav id. Falls back to NAV.count when
   // the API is unreachable so the design preview still renders.
@@ -163,7 +182,6 @@ function App() {
   // consumed by the destination screen on mount, cleared when the
   // user navigates away. Lets GRM → UPD pass a changeRequestId
   // without inventing a real URL router for the mockup harness.
-  const [screenPayload, setScreenPayload] = useStateApp(null);
   // Console quick-find overlay — global affordance to jump to a DSA
   // from anywhere in the app. ⌘/Ctrl-K opens it; clicking a result
   // navigates to the DSA detail screen.
@@ -501,7 +519,7 @@ function App() {
         {screen === "dih"     && <DIHScreen/>}
         {screen === "dedup"   && <DedupScreen/>}
         {screen === "upd"     && <UPDScreen changeRequestId={screenPayload?.changeRequestId} onNavigate={navigate}/>}
-        {screen === "drs"     && <DRSScreen onNavigate={navigate}/>}
+        {screen === "drs"     && <DRSScreen onNavigate={navigate} dsaId={screenPayload?.dsaId}/>}
         {screen === "data-explorer" && <DataExplorerConsoleScreen/>}
         {screen === "grm"     && <GRMScreen
             onNavigate={navigate}

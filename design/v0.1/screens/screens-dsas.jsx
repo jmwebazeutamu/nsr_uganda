@@ -35,6 +35,10 @@ const DSA_STATUSES = [
   { id: "renewed",            label: "Superseded",         tone: "neutral" },
 ];
 const DSA_STATUS_BY_ID = Object.fromEntries(DSA_STATUSES.map(s => [s.id, s]));
+// The workspace is an operational register, not an active-only dashboard.
+// Pending sign-offs and drafts must be visible without an operator first
+// discovering the status filter.
+const DSA_WORKSPACE_DEFAULT_STATUS = "all";
 
 // Lifecycle stages the workspace can ACT on. Anything else is
 // terminal / awaiting external sign-off.
@@ -148,7 +152,7 @@ const DsaGeographicScopeSummary = ({ geographicScope }) => {
 // ════════════════════════════════════════════════════════════════
 
 const DsasScreen = ({ onOpen, onNew, onNavigate }) => {
-  const [statusFilter, setStatusFilter] = useSDsa("active");
+  const [statusFilter, setStatusFilter] = useSDsa(DSA_WORKSPACE_DEFAULT_STATUS);
   const [partnerFilter, setPartnerFilter] = useSDsa("");
   const [expiringFilter, setExpiringFilter] = useSDsa("");
   const [q, setQ] = useSDsa("");
@@ -491,7 +495,9 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
 
               <div className="t-cap muted" style={{marginBottom: 6}}>GEOGRAPHIC SCOPE</div>
               <div style={{marginBottom: 14}}>
-                <DsaGeographicScopeSummary geographicScope={d.geographic_scope}/>
+                <DsaGeographicScopeSummary geographicScope={
+                  d.geographic_scope_details || d.geographic_scope
+                }/>
               </div>
 
               <div style={{display: "grid", gridTemplateColumns: "180px 1fr", rowGap: 6, fontSize: 13}}>
@@ -648,7 +654,7 @@ const DsaDetailScreen = ({ dsaId, onBack, onNavigate }) => {
               </button>
               <button
                 className="btn btn-sm"
-                onClick={() => onNavigate && onNavigate("drs")}
+                onClick={() => onNavigate && onNavigate("drs", { dsaId: d.id })}
               >
                 <Icon name="download" size={13}/> View DRS requests under this DSA
               </button>
@@ -1849,4 +1855,5 @@ Object.assign(window, {
   _geographicScopeUnitLabel,
   buildCreateDsaPayload,
   DSA_STATUSES,
+  DSA_WORKSPACE_DEFAULT_STATUS,
 });

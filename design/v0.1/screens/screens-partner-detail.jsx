@@ -123,7 +123,9 @@ const _projectDsa = (d) => ({
     .filter(([, v]) => v).map(([k]) => k),
   fieldGroups: Object.entries(d.field_scope || {})
     .filter(([, v]) => v).map(([k]) => k),
-  geo: [],
+  geo: (d.geographic_scope_details || []).map(unit => (
+    `${unit.name} · ${String(unit.level || "").replace("_", " ")}`
+  )),
   sensitive: d.sensitive_data_handling || "none",
   sensitive_label: d.sensitive_data_handling_label,
   retention: d.retention_days || 0,
@@ -424,7 +426,7 @@ const PartnerDetailScreen = ({ partnerId, onBack, onRegisterProgramme, onNavigat
     return (
       <div className="page">
         <PageHeader eyebrow="PARTNERS" title="No partner selected"/>
-        <div className="card" style={{padding: 20}} className="muted">
+          <div className="card muted" style={{padding: 20}}>
           Open a partner from the Partners table to see its detail view.
         </div>
       </div>
@@ -1058,7 +1060,7 @@ const PDDsas = ({ p, onToast, onRefresh, onEditScope, onOpenDsa, onNewDsa }) => 
                     <KVCardPD title="Scope" tint="data" rows={[
                       ["Entities",      <div className="row-wrap">{d.entities.map(e => <Chip key={e} size="sm" tone="data">{e}</Chip>)}</div>],
                       ["Field groups",  <div className="row-wrap">{d.fieldGroups.map(f => <Chip key={f} size="sm">{f}</Chip>)}</div>],
-                      ["Geography",     <div className="row-wrap">{d.geo.map(g => <Chip key={g} size="sm" tone="neutral">{g}</Chip>)}</div>],
+                      ["Geography",     d.geo.length ? <div className="row-wrap">{d.geo.map(g => <Chip key={g} size="sm" tone="neutral">{g}</Chip>)}</div> : <span className="muted">National — no units pinned</span>],
                       ["Sensitive",     d.sensitive === "none" ? "Blocked — clause 4.2.b" : d.sensitive === "specific" ? "Specific clause" : "Case-by-case"],
                       ["Classification", d.classification],
                       ["Retention",     `${d.retention}d post project close`],
@@ -1479,4 +1481,4 @@ const PDAudit = ({ p }) => (
 /* ============================================================
    Export
    ============================================================ */
-Object.assign(window, { PartnerDetailScreen });
+Object.assign(window, { PartnerDetailScreen, _projectDsa });

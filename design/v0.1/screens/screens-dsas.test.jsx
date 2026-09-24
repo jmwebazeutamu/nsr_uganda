@@ -15,6 +15,7 @@ let _canDiscardUnsignedDsa;
 let _geographicScopeUnitLabel;
 let buildCreateDsaPayload;
 let DSA_STATUSES;
+let DSA_WORKSPACE_DEFAULT_STATUS;
 
 beforeAll(async () => {
   // The screen body references several global UI primitives. Stub
@@ -39,6 +40,7 @@ beforeAll(async () => {
     _geographicScopeUnitLabel,
     buildCreateDsaPayload,
     DSA_STATUSES,
+    DSA_WORKSPACE_DEFAULT_STATUS,
   } = globalThis);
 });
 
@@ -191,5 +193,12 @@ describe("DSA_STATUSES catalogue", () => {
       expect(s.label).toBeTruthy();
       expect(s.tone).toBeTruthy();
     }
+  });
+});
+
+
+describe("DSA workspace default filter", () => {
+  it("opens the operational register with every DSA status visible", () => {
+    expect(DSA_WORKSPACE_DEFAULT_STATUS).toBe("all");
   });
 });
