@@ -173,6 +173,8 @@ class DataRequestViewSet(
     # verbs are Data Approval, and collecting the bundle is Data Download.
     data_permission_map = {
         "create": "data_export",
+        "partial_update": "data_export",
+        "destroy": "data_export",
         "estimate": "data_export",
         "submit": "data_export",
         "approve": "data_approve",
@@ -185,7 +187,7 @@ class DataRequestViewSet(
     queryset = DataRequest.objects.all().order_by("-created_at")
     serializer_class = DataRequestSerializer
     filterset_fields = ["status", "dsa", "requester"]
-    http_method_names = ["get", "post", "head", "options"]
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
         """Honour the DSA filter used by the DSA workspace cross-link.
@@ -205,6 +207,46 @@ class DataRequestViewSet(
             requester=self.request.user.username or "anonymous",
             status=RequestStatus.DRAFT,
         )
+
+    def partial_update(self, request, *args, **kwargs):
+        """Save changes to a request that has not entered review.
+
+        A draft belongs to the existing DataRequest row; reusing it avoids
+        duplicate requests and preserves the original audit identity.  Once
+        submitted, its selection is immutable and the normal review
+        lifecycle takes over.
+        """
+        req = self.get_object()
+        if req.status != RequestStatus.DRAFT:
+            return Response(
+                {"detail": "Only a draft data request can be edited."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        serializer = self.get_serializer(req, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        emit_audit(
+            "draft_updated", "data_request", req.id,
+            actor=actor_from_request(request),
+            field_changes={"fields": sorted(request.data.keys())},
+        )
+        return Response(self.get_serializer(req).data)
+
+    def destroy(self, request, *args, **kwargs):
+        """Discard an unsubmitted request without leaving a false request."""
+        req = self.get_object()
+        if req.status != RequestStatus.DRAFT:
+            return Response(
+                {"detail": "Only a draft data request can be discarded."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        emit_audit(
+            "draft_discarded", "data_request", req.id,
+            actor=actor_from_request(request),
+            field_changes={"dsa": str(req.dsa_id)},
+        )
+        req.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @extend_schema(
         tags=["api-drs"], summary="Submit a DRAFT request",

@@ -11,7 +11,7 @@
 // ChangeRequestModal component; payload + endpoint contract match
 // /api/v1/upd/change-requests/bundle/.
 
-const { useState: useApp, useMemo: useAppM, useEffect: useAppE } = React;
+const { useState: useApp, useMemo: useAppM, useEffect: useAppE, useRef: useAppRef } = React;
 
 /* ================================================================
    Reason section
@@ -275,7 +275,7 @@ const ReviewSection = ({ scope, member, rows, changeType, pmtRelevant, note, doc
 /* ================================================================
    Right-rail — Change history
    ================================================================ */
-const HistoryRail = ({ open, setOpen, scope, member, householdId }) => {
+const HistoryRail = ({ open, setOpen, scope, member, householdId, onResume }) => {
   // Prior change requests for THIS household, from the API. The HISTORY
   // fixture this replaces listed five fabricated decisions — including
   // approvals and a rejection, each attributed to a named reviewer. A
@@ -389,6 +389,11 @@ const HistoryRail = ({ open, setOpen, scope, member, householdId }) => {
                 <Icon name="info" size={10}/> {h.note}
               </div>
             )}
+            {h.status === "draft" && onResume && (
+              <button className="btn btn-sm" onClick={() => onResume(h.id)}>
+                <Icon name="history" size={12}/> Resume draft
+              </button>
+            )}
           </div>
         ))}
         <div className="t-cap" style={{padding:14, textAlign:"center"}}>
@@ -455,6 +460,7 @@ const submitBundle = async (payload) => {
    ================================================================ */
 const ChangeRequestScreen = ({
   initialScope = "household",
+  draftId = "",
   // Host household identity. When omitted (standalone preview) the
   // screen renders no household context and cannot submit.
   householdId,
@@ -478,6 +484,9 @@ const ChangeRequestScreen = ({
   // household screen carrying the new cr_id; standalone preview
   // leaves it undefined.
   onSuccess,
+  // Reopens an existing canonical ChangeRequest draft from the history
+  // rail. No browser-only copy of the request is created.
+  onResumeDraft,
   // Called when the operator dismisses the screen without submitting.
   // App-shell consumers navigate back to the household screen.
   onBack,
@@ -502,6 +511,7 @@ const ChangeRequestScreen = ({
   const [historyOpen, setHistoryOpen] = useApp(true);
   const [busy, setBusy] = useApp(false);
   const [error, setError] = useApp("");
+  const loadedDraft = useAppRef("");
 
   // Live field catalog from /api/v1/upd/field-catalog/. Drives the
   // composer, PMT auto-derivation, and the submit payload's native
@@ -542,6 +552,45 @@ const ChangeRequestScreen = ({
     }
   }, [scope]);
 
+  // Rehydrate from the persisted ChangeRequest row.  The stored changes
+  // are already validated against the canonical field catalogue by the
+  // bundle endpoint, so this only projects them back into the editor.
+  useAppE(() => {
+    if (!draftId || loadedDraft.current === draftId) return undefined;
+    let cancelled = false;
+    fetch(`/api/v1/upd/change-requests/${encodeURIComponent(draftId)}/`, {
+      credentials: "same-origin", headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(draft => {
+        if (cancelled) return;
+        if (draft.status !== "draft") {
+          setError("This change request is no longer a draft and cannot be resumed.");
+          return;
+        }
+        loadedDraft.current = draftId;
+        const memberScope = draft.entity_type === "member";
+        setTweak("scope", memberScope ? "member" : "household");
+        // Scope changes reset dependent inputs, so populate after that
+        // state transition has been scheduled.
+        window.setTimeout(() => {
+          if (cancelled) return;
+          setMember(memberScope
+            ? effectiveRoster.find(row => row.id === draft.entity_id) || null
+            : null);
+          setRows(Object.entries(draft.changes || {}).map(([key, change]) => {
+            const [cat, field] = key.split(".");
+            return { cat, field, value: String(change?.new ?? "") };
+          }));
+          setChangeType(draft.change_type);
+          setPmtOverride(Boolean(draft.pmt_relevant));
+          setNote(draft.requester_note || "");
+        }, 0);
+      })
+      .catch(e => { if (!cancelled) setError(`Could not resume draft: ${e.message}`); });
+    return () => { cancelled = true; };
+  }, [draftId, effectiveRoster]);
+
   const autoPmt = useAppM(
     () => rows.some(r => fieldDef(liveCatalog.fieldsFlat, r.cat, r.field)?.pmt),
     [rows, liveCatalog.fieldsFlat],
@@ -572,27 +621,58 @@ const ChangeRequestScreen = ({
   // onSuccess take over (navigate back to the household record). On
   // file:// preview the fetch fails; we surface the error inline and
   // keep the operator on the page so nothing is silently lost.
+  const requestPayload = () => ({
+    household_id: householdId,
+    entity: scope === "household" ? "household" : "member",
+    ...(scope === "member" && member?.id ? { member_id: member.id } : {}),
+    change_type: changeType,
+    pmt_relevant: pmtRelevant,
+    rows: rows.map(r => ({ category: r.cat, field: r.field, new_value: String(r.value) })),
+    note,
+  });
+
+  const saveDraft = async () => {
+    if (busy || !householdId || rows.length === 0 || !note.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await submitBundle({ ...requestPayload(), ...(draftId ? { draft_id: draftId } : {}), submit: false });
+      setToast(`Draft ${result.cr_id} saved. You can resume or discard it from change history.`);
+      onResumeDraft?.(result.cr_id);
+    } catch (e) {
+      setError(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const discardDraft = async () => {
+    if (!draftId || busy) { onBack?.(); return; }
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/v1/upd/change-requests/${encodeURIComponent(draftId)}/`, {
+        method: "DELETE", credentials: "same-origin",
+        headers: { "X-CSRFToken": _crCsrf(), Accept: "application/json" },
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.detail || `HTTP ${r.status}`);
+      }
+      onBack?.();
+    } catch (e) {
+      setError(`Could not discard draft: ${e.message || e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const submit = async () => {
     if (!canSubmit) return;
     setBusy(true);
     setError("");
     const payload = {
-      household_id: householdId,
-      entity: scope === "household" ? "household" : "member",
-      // Member ULID for member-scope CRs. Server requires exactly 26
-      // chars; the live-roster path supplies a real Member.id, the
-      // standalone-mock path has none (server will 400, which is the
-      // correct signal that you can't submit member-scope from the
-      // file:// preview).
-      ...(scope === "member" && member?.id ? { member_id: member.id } : {}),
-      change_type: changeType,
-      pmt_relevant: pmtRelevant,
-      rows: rows.map(r => ({
-        category: r.cat,
-        field: r.field,
-        new_value: String(r.value),
-      })),
-      note,
+      ...requestPayload(),
+      ...(draftId ? { draft_id: draftId } : {}),
     };
     try {
       const result = await submitBundle(payload);
@@ -629,10 +709,10 @@ const ChangeRequestScreen = ({
               <strong>PENDING_APPROVAL</strong> on submit.
             </>}
             right={<>
-              <button className="btn"><Icon name="save" size={14}/> Save draft</button>
+              <button className="btn" disabled={busy || rows.length === 0 || !note.trim()} onClick={saveDraft}><Icon name="save" size={14}/> Save draft</button>
               {onBack
-                ? <button className="btn btn-ghost" onClick={onBack}><Icon name="chevronLeft" size={14}/> Back to household</button>
-                : <button className="btn btn-ghost"><Icon name="x" size={14}/> Discard</button>}
+                ? <button className="btn btn-ghost" onClick={draftId ? discardDraft : onBack}><Icon name={draftId ? "trash" : "chevronLeft"} size={14}/>{draftId ? " Discard draft" : " Back to household"}</button>
+                : <button className="btn btn-ghost" onClick={discardDraft}><Icon name="x" size={14}/> Discard</button>}
             </>}
           />
 
@@ -754,7 +834,7 @@ const ChangeRequestScreen = ({
               {" "}Routes to: <strong style={{color:"var(--neutral-900)"}}>{routingFor(changeType, pmtRelevant)}</strong>
             </div>
             <div style={{flex:1}}/>
-            <button className="btn" disabled={busy}><Icon name="save" size={14}/> Save as draft</button>
+            <button className="btn" disabled={busy || rows.length === 0 || !note.trim()} onClick={saveDraft}><Icon name="save" size={14}/> Save as draft</button>
             <button className="btn btn-ghost" disabled={busy} onClick={onBack}>
               <Icon name="x" size={14}/> Cancel
             </button>
@@ -767,7 +847,7 @@ const ChangeRequestScreen = ({
         </div>
 
         {/* Right rail — history */}
-        <HistoryRail householdId={householdId} open={historyOpen} setOpen={setHistoryOpen} scope={scope} member={member}/>
+          <HistoryRail householdId={householdId} open={historyOpen} setOpen={setHistoryOpen} scope={scope} member={member} onResume={onResumeDraft}/>
       </div>
 
       {/* Tweaks */}

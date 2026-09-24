@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 
 from apps.security.abac import ChangeRequestScopedQuerysetMixin
 from apps.security.actor import actor_from_request
+from apps.security.audit import emit as emit_audit
 from apps.security.audit_views import AuditReadMixin
 from apps.security.models import AuditEvent
 
@@ -458,6 +459,9 @@ class _BundleDocument(serializers.Serializer):
 
 
 class _BundleRequest(serializers.Serializer):
+    # When supplied, save back into this existing canonical DRAFT instead
+    # of opening a second ChangeRequest for the same in-progress work.
+    draft_id = serializers.CharField(max_length=26, min_length=26, required=False)
     household_id = serializers.CharField(max_length=26, min_length=26)
     entity = serializers.ChoiceField(choices=[t.value for t in EntityType])
     # Required when entity='member'; ignored otherwise. Validated against
@@ -473,6 +477,7 @@ class _BundleRequest(serializers.Serializer):
     # Caps + MIME whitelist enforced in validate_documents().
     documents = _BundleDocument(many=True, required=False, default=list)
     note = serializers.CharField(min_length=6, max_length=2048)
+    submit = serializers.BooleanField(required=False, default=True)
 
     def validate_rows(self, value):
         if not value:
@@ -623,7 +628,7 @@ class ChangeRequestViewSet(
         # history in one round-trip.
         "entity_id",
     ]
-    http_method_names = ["get", "post", "head", "options"]
+    http_method_names = ["get", "post", "delete", "head", "options"]
 
     def get_queryset(self):
         # US-S15-003 — optional ?sub_region_code= drill-down.
@@ -668,6 +673,28 @@ class ChangeRequestViewSet(
                 entity_id__in=hh_ids,
             )
         return qs
+
+    def destroy(self, request, *args, **kwargs):
+        """Discard only a request that has not entered approval.
+
+        The authoritative ChangeRequest row is intentionally removed rather
+        than copied into another draft store.  Its discard remains visible in
+        the audit chain, while submitted requests retain their full review
+        history and cannot be discarded.
+        """
+        req = self.get_object()
+        if req.status != ChangeStatus.DRAFT:
+            return Response(
+                {"detail": "Only a draft change request can be discarded."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        emit_audit(
+            "draft_discarded", "change_request", req.id,
+            actor=actor_from_request(request),
+            field_changes={"entity_type": req.entity_type, "entity_id": req.entity_id},
+        )
+        req.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @extend_schema(
         tags=["upd"],
@@ -781,7 +808,8 @@ class ChangeRequestViewSet(
     # --- US-S22-003 — bundle endpoint -------------------------------------
     #
     # Accepts the rich Open-CR modal's payload (multi-row, multi-
-    # category) and creates a single ChangeRequest in PENDING_APPROVAL.
+    # category) and creates a single ChangeRequest in PENDING_APPROVAL
+    # unless the caller explicitly saves it as the canonical DRAFT row.
     # Rows are validated against the field catalog; the changes JSON
     # is `{field: {old: "", new: row.new_value}}` since the modal
     # captures only the new value (old comes from the household
@@ -863,21 +891,58 @@ class ChangeRequestViewSet(
                 "sha256": sha,
             })
 
-        cr = ChangeRequest.objects.create(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            change_type=data["change_type"],
-            pmt_relevant=pmt_relevant,
-            changes=changes,
-            evidence=evidence_rows,
-            source_channel=SourceChannel.WEB,
-            requester=actor,
-            requester_note=note,
-        )
+        draft_id = data.get("draft_id")
+        is_existing_draft = bool(draft_id)
+        if draft_id:
+            cr = self.get_queryset().filter(pk=draft_id).first()
+            if cr is None:
+                return Response({"detail": "Draft change request was not found."}, status=status.HTTP_404_NOT_FOUND)
+            if cr.status != ChangeStatus.DRAFT:
+                return Response({"detail": "Only a draft change request can be saved."}, status=status.HTTP_400_BAD_REQUEST)
+            cr.entity_type = entity_type
+            cr.entity_id = entity_id
+            cr.change_type = data["change_type"]
+            cr.pmt_relevant = pmt_relevant
+            cr.changes = changes
+            cr.evidence = evidence_rows
+            cr.requester_note = note
+            cr.save()
+            draft_event = "draft_updated"
+        else:
+            cr = ChangeRequest.objects.create(
+                entity_type=entity_type,
+                entity_id=entity_id,
+                change_type=data["change_type"],
+                pmt_relevant=pmt_relevant,
+                changes=changes,
+                evidence=evidence_rows,
+                source_channel=SourceChannel.WEB,
+                requester=actor,
+                requester_note=note,
+            )
+            draft_event = "draft_created"
+        if not data["submit"]:
+            emit_audit(
+                draft_event, "change_request", cr.id,
+                actor=actor,
+                field_changes={"entity_type": cr.entity_type, "entity_id": cr.entity_id},
+            )
+            return Response(
+                {
+                    "cr_id": cr.id,
+                    "changes": len(changes),
+                    "status": cr.status,
+                },
+                status=status.HTTP_201_CREATED,
+            )
         try:
             submit_change_request(cr)
         except UpdError as e:
-            cr.delete()
+            # A resumed draft must remain available for correction when the
+            # submit guard rejects it.  New, one-shot submissions retain the
+            # prior behaviour of removing their transient row.
+            if not is_existing_draft:
+                cr.delete()
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
         # Resolve the AuditEvent id stamped by submit_change_request

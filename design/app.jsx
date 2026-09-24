@@ -519,7 +519,12 @@ function App() {
         {screen === "dih"     && <DIHScreen/>}
         {screen === "dedup"   && <DedupScreen/>}
         {screen === "upd"     && <UPDScreen changeRequestId={screenPayload?.changeRequestId} onNavigate={navigate}/>}
-        {screen === "drs"     && <DRSScreen onNavigate={navigate} dsaId={screenPayload?.dsaId}/>}
+        {screen === "drs"     && <DRSScreen
+            onNavigate={navigate}
+            dsaId={screenPayload?.dsaId}
+            draftId={screenPayload?.draftId}
+            onResumeDraft={(draftId) => navigate("drs", { draftId })}
+          />}
         {screen === "data-explorer" && <DataExplorerConsoleScreen/>}
         {screen === "grm"     && <GRMScreen
             onNavigate={navigate}
@@ -537,12 +542,17 @@ function App() {
         {screen === "household" && <HouseholdScreen householdId={screenPayload?.householdId} onNavigate={navigate}/>}
         {screen === "change-request" && <ChangeRequestScreen
             householdId={screenPayload?.householdId}
+            draftId={screenPayload?.draftId}
             initialScope={screenPayload?.initialScope || "household"}
             roster={screenPayload?.roster || null}
             household={screenPayload?.household || null}
             me={me}
             onBack={() => navigate("household", { householdId: screenPayload?.householdId })}
-            onSuccess={() => navigate("household", { householdId: screenPayload?.householdId })}/>}
+            onSuccess={() => navigate("household", { householdId: screenPayload?.householdId })}
+            onResumeDraft={(draftId) => navigate("change-request", {
+              ...screenPayload,
+              draftId,
+            })}/>}
         {screen === "registry-member-detail" && <MemberDetailScreen
             memberId={screenPayload?.memberId}
             onBack={() => navigate("registry", { initialView: "members" })}

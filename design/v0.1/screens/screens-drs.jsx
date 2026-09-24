@@ -195,7 +195,7 @@ const _drsRenderCriteriaNode = (node, catalogueByKey, depth = 0) => {
   );
 };
 
-const OperatorDRSList = ({ onNewRequest, onNavigate, dsaId = "" }) => {
+const OperatorDRSList = ({ onNewRequest, onNavigate, onResumeDraft, dsaId = "" }) => {
   // Wide view (ADR-0030). Declared here, above every early return in
   // this component: a hook that some renders skip changes the hook
   // order, which React treats as a different component.
@@ -675,6 +675,34 @@ const OperatorDRSList = ({ onNewRequest, onNavigate, dsaId = "" }) => {
                 <p className="t-cap" style={{marginTop:8, color:"var(--neutral-600)"}}>
                   Approver cannot be the original requester (AC-DRS-DUAL-ACTOR).
                 </p>
+              </div>
+            )}
+
+            {current.status === "draft" && (
+              <div className="card" style={{padding:16}}>
+                <div className="t-cap" style={{fontWeight:600, marginBottom:8}}>DRAFT ACTIONS</div>
+                <div className="row gap-2" style={{flexWrap:"wrap"}}>
+                  <button className="btn btn-primary" onClick={() => onResumeDraft?.(current.id)}>
+                    <Icon name="history" size={14}/> Resume draft
+                  </button>
+                  <button className="btn btn-danger" onClick={() => {
+                    if (!window.confirm("Discard this unsubmitted data request?")) return;
+                    fetch(`/api/v1/drs/requests/${encodeURIComponent(current.id)}/`, {
+                      method:"DELETE", credentials:"same-origin",
+                      headers:{"X-CSRFToken":_odrsCsrf(), Accept:"application/json"},
+                    }).then(async r => {
+                      if (!r.ok) {
+                        const body = await r.json().catch(() => ({}));
+                        throw new Error(body.detail || `HTTP ${r.status}`);
+                      }
+                      setToast("Draft discarded.");
+                      setSelectedRow("");
+                      setReloadKey(k => k + 1);
+                    }).catch(e => setToast(`Discard failed: ${e.message}`));
+                  }}>
+                    <Icon name="x" size={14}/> Discard draft
+                  </button>
+                </div>
               </div>
             )}
 
@@ -1338,14 +1366,16 @@ const _resolveOptionsForSchema = async (schemaFields) => {
 // "New request". Partner invocation (role="partner") still mounts
 // the wizard directly — partners have their own list elsewhere in
 // PartnerDRSScreen.
-const DRSScreen = ({ role = "operator", onExit, onNavigate, dsaId = "" } = {}) => {
+const DRSScreen = ({ role = "operator", onExit, onNavigate, onResumeDraft, dsaId = "", draftId = "" } = {}) => {
   const isPartner = role === "partner";
-  const [view, setView] = useStateDRS(isPartner ? "build" : "list");
+  const [view, setView] = useStateDRS((isPartner || draftId) ? "build" : "list");
+  React.useEffect(() => { if (draftId) setView("build"); }, [draftId]);
   if (view === "list" && !isPartner) {
-    return <OperatorDRSList onNewRequest={() => setView("build")} onNavigate={onNavigate} dsaId={dsaId}/>;
+    return <OperatorDRSList onNewRequest={() => setView("build")} onNavigate={onNavigate} onResumeDraft={onResumeDraft} dsaId={dsaId}/>;
   }
   return <DRSWizard
     role={role}
+    draftId={draftId}
     onExit={onExit || (isPartner ? undefined : () => setView("list"))}
   />;
 };
@@ -1410,7 +1440,7 @@ const _localDsaScopeIssues = (dsa, selectedFields, tree) => {
   return issues;
 };
 
-const DRSWizard = ({ role = "operator", onExit } = {}) => {
+const DRSWizard = ({ role = "operator", onExit, draftId = "" } = {}) => {
   const isPartner = role === "partner";
   // Start on Step 1 (Scope). The operator path REQUIRES picking an
   // organisation + DSA here before the rest of the wizard makes
@@ -1451,6 +1481,7 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
   // to schema.dsa_id. Without this, the operator submit path
   // silently dead-ended (modal closed, no POST, no inbox row).
   const [pickedDsaId, setPickedDsaId] = useStateDRS("");
+  const loadedDraft = React.useRef("");
   const stepIdx = STEPS.findIndex(s => s.id === step);
 
   const next = () => setStep(STEPS[Math.min(stepIdx + 1, STEPS.length - 1)].id);
@@ -1495,6 +1526,30 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  React.useEffect(() => {
+    if (!draftId || !schema || loadedDraft.current === draftId) return undefined;
+    let cancelled = false;
+    fetch(`/api/v1/drs/requests/${encodeURIComponent(draftId)}/`, {
+      credentials: "same-origin", headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(draft => {
+        if (cancelled) return;
+        if (draft.status !== "draft") throw new Error("This request is no longer a draft.");
+        loadedDraft.current = draftId;
+        const payload = draft.request_payload || {};
+        setPickedDsaId(draft.dsa);
+        const owner = (schema.available_dsas || []).find(d => d.id === draft.dsa);
+        if (owner) setPickedPartnerCode(owner.partner_code || "");
+        setSel(payload.fields || []);
+        setTree(payload.criteria || null);
+        setMaxRows(payload.max_rows ? String(payload.max_rows) : "");
+        setStep("build");
+      })
+      .catch(e => { if (!cancelled) setToast(`Could not resume draft: ${e.message}`); });
+    return () => { cancelled = true; };
+  }, [draftId, schema]);
 
   // Resolve the DSA the wizard is filing under. For partners this
   // is the one DSA bound to their account (schema.dsa_id). For
@@ -1702,8 +1757,13 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
     if (deliveryMethod) noteBits.push(`delivery=${deliveryMethod}`);
     const requesterNote = noteBits.join(" · ");
     try {
-      const createR = await fetch("/api/v1/drs/requests/", {
-        method: "POST", credentials: "same-origin",
+      const savingExistingDraft = Boolean(draftId && loadedDraft.current === draftId);
+      const createR = await fetch(
+        savingExistingDraft
+          ? `/api/v1/drs/requests/${encodeURIComponent(draftId)}/`
+          : "/api/v1/drs/requests/",
+        {
+        method: savingExistingDraft ? "PATCH" : "POST", credentials: "same-origin",
         headers: {
           "Content-Type": "application/json",
           "X-CSRFToken": _odrsCsrf(),
@@ -1714,7 +1774,8 @@ const DRSWizard = ({ role = "operator", onExit } = {}) => {
           request_payload: payload,
           requester_note: requesterNote,
         }),
-      });
+        },
+      );
       if (!createR.ok) {
         const body = await createR.json().catch(() => ({}));
         throw new Error(body.detail || `HTTP ${createR.status}`);

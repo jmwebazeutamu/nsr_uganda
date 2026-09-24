@@ -333,6 +333,36 @@ class TestExpire:
 
 
 class TestApi:
+    def test_draft_can_be_saved_resumed_and_discarded(self, db, django_user_model, active_dsa):
+        user = django_user_model.objects.create_user(
+            username="draft-owner", password="p", is_superuser=True, is_staff=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+        created = client.post("/api/v1/drs/requests/", data={
+            "dsa": active_dsa.id,
+            "request_payload": {"fields": ["household.id"]},
+        }, format="json")
+        assert created.status_code == 201, created.data
+        request_id = created.data["id"]
+
+        saved = client.patch(f"/api/v1/drs/requests/{request_id}/", data={
+            "request_payload": {"fields": ["household.id", "household.sub_region_code"]},
+        }, format="json")
+        assert saved.status_code == 200, saved.data
+        assert saved.data["status"] == RequestStatus.DRAFT
+        assert saved.data["request_payload"]["fields"] == [
+            "household.id", "household.sub_region_code",
+        ]
+
+        discarded = client.delete(f"/api/v1/drs/requests/{request_id}/")
+        assert discarded.status_code == 204
+        assert not DataRequest.objects.filter(pk=request_id).exists()
+        assert AuditEvent.objects.filter(
+            entity_type="data_request", entity_id=request_id,
+            action="draft_discarded",
+        ).exists()
+
     def test_full_flow_via_api(self, db, django_user_model, active_dsa):
         u = django_user_model.objects.create_user(
             username="partner-x", password="p", is_superuser=True, is_staff=True,

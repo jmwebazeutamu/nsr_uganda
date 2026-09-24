@@ -1039,6 +1039,64 @@ class TestBundleEndpoint:
         }
         assert cr.status == ChangeStatus.PENDING_APPROVAL
 
+    def test_save_draft_and_discard_keep_the_existing_change_request_ssot(self, household, api_client):
+        r = api_client.post(
+            "/api/v1/upd/change-requests/bundle/",
+            data=self._payload(household, submit=False),
+            format="json",
+        )
+        assert r.status_code == 201, r.data
+        assert r.data["status"] == ChangeStatus.DRAFT
+        cr_id = r.data["cr_id"]
+        assert ChangeRequest.objects.get(pk=cr_id).status == ChangeStatus.DRAFT
+
+        discarded = api_client.delete(f"/api/v1/upd/change-requests/{cr_id}/")
+        assert discarded.status_code == 204
+        assert not ChangeRequest.objects.filter(pk=cr_id).exists()
+        assert AuditEvent.objects.filter(
+            entity_type="change_request", entity_id=cr_id,
+            action="draft_discarded",
+        ).exists()
+
+    def test_saving_a_resumed_draft_updates_in_place(self, household, api_client):
+        created = api_client.post(
+            "/api/v1/upd/change-requests/bundle/",
+            data=self._payload(household, submit=False),
+            format="json",
+        )
+        assert created.status_code == 201, created.data
+        cr_id = created.data["cr_id"]
+
+        resumed = api_client.post(
+            "/api/v1/upd/change-requests/bundle/",
+            data=self._payload(
+                household,
+                draft_id=cr_id,
+                rows=[{
+                    "category": "household",
+                    "field": "address_narrative",
+                    "new_value": "Plot 22, resumed draft",
+                }],
+                submit=False,
+            ),
+            format="json",
+        )
+        assert resumed.status_code == 201, resumed.data
+        assert resumed.data["cr_id"] == cr_id
+        assert ChangeRequest.objects.filter(status=ChangeStatus.DRAFT).count() == 1
+        assert ChangeRequest.objects.get(pk=cr_id).changes[
+            "household.address_narrative"
+        ]["new"] == "Plot 22, resumed draft"
+
+        submitted = api_client.post(
+            "/api/v1/upd/change-requests/bundle/",
+            data=self._payload(household, draft_id=cr_id),
+            format="json",
+        )
+        assert submitted.status_code == 201, submitted.data
+        assert submitted.data["cr_id"] == cr_id
+        assert ChangeRequest.objects.get(pk=cr_id).status == ChangeStatus.PENDING_APPROVAL
+
     def test_auto_derives_pmt_relevant_from_rows(self, household, api_client):
         payload = self._payload(household, rows=[
             {"category": "dwelling", "field": "roof_material", "new_value": "Tiles"},
