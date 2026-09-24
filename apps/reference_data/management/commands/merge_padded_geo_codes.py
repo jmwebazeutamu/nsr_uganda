@@ -39,25 +39,14 @@ from __future__ import annotations
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
 from django.utils import timezone
 
-from apps.data_management.models import Household
+from apps.reference_data import merge as merge_units
 from apps.reference_data.code_frames import code_spellings
 from apps.reference_data.models import GeographicUnit
-from apps.security.audit import emit
-from apps.security.models import OperatorScope
 
 # Only these levels carry a county segment that can differ.
 MERGEABLE_LEVELS = ("county", "sub_county", "parish")
-
-# Household FK -> denormalised code column, for the levels we repoint.
-_HOUSEHOLD_FIELDS = {
-    "county": "county_code",
-    "sub_county": "sub_county_code",
-    "parish": "parish_code",
-}
-
 
 def find_placeholders():
     """Placeholder rows: ACTIVE, at a mergeable level, name == code."""
@@ -140,11 +129,18 @@ class Command(BaseCommand):
         if not pairs:
             return
 
+        for placeholder, twin in pairs:
+            self.stdout.write(
+                f"  {placeholder.level:11} {placeholder.code:14} -> "
+                f"{twin.code:12} {twin.name}",
+            )
+
         if apply:
-            with transaction.atomic():
-                totals = self._merge(pairs, actor=actor)
+            totals = merge_units.merge(
+                pairs, actor=actor, reason_for=_reason,
+            )
         else:
-            totals = self._plan(pairs)
+            totals = merge_units.plan(pairs)
 
         verb = "merged" if apply else "would merge"
         self.stdout.write("")
@@ -157,107 +153,9 @@ class Command(BaseCommand):
                 self.style.WARNING("Dry run — nothing written. Re-run with --apply --actor <name>."),
             )
 
-    # -- planning ---------------------------------------------------------
 
-    def _plan(self, pairs) -> dict:
-        totals = {
-            "units retired": 0, "households repointed": 0,
-            "child units reparented": 0, "operator scopes rewritten": 0,
-        }
-        households = set()
-        for placeholder, twin in pairs:
-            field = None
-            for level, _column in _HOUSEHOLD_FIELDS.items():
-                if placeholder.level == level:
-                    field = level
-            self.stdout.write(
-                f"  {placeholder.level:11} {placeholder.code:14} -> "
-                f"{twin.code:12} {twin.name}",
-            )
-            totals["units retired"] += 1
-            if field:
-                ids = Household.objects.filter(
-                    **{f"{field}_id": placeholder.pk},
-                ).values_list("id", flat=True)
-                households.update(ids)
-            totals["child units reparented"] += GeographicUnit.objects.filter(
-                parent=placeholder,
-            ).count()
-            totals["operator scopes rewritten"] += OperatorScope.objects.filter(
-                scope_level=placeholder.level, scope_code=placeholder.code,
-            ).count()
-        totals["households repointed"] = len(households)
-        return totals
-
-    # -- writing ----------------------------------------------------------
-
-    def _merge(self, pairs, *, actor: str) -> dict:
-        totals = {
-            "units retired": 0, "households repointed": 0,
-            "child units reparented": 0, "operator scopes rewritten": 0,
-        }
-        # Household id -> {column: (before, after)}, accumulated across
-        # levels so one household gets one AuditEvent rather than three.
-        changes: dict[str, dict] = {}
-
-        for placeholder, twin in pairs:
-            level = placeholder.level
-            if level in _HOUSEHOLD_FIELDS:
-                column = _HOUSEHOLD_FIELDS[level]
-                for household in Household.objects.filter(
-                    **{f"{level}_id": placeholder.pk},
-                ):
-                    changes.setdefault(str(household.id), {})[column] = [
-                        placeholder.code, twin.code,
-                    ]
-                    setattr(household, f"{level}_id", twin.pk)
-                    # save() re-derives the mirrors from the FKs.
-                    household.save()
-
-            totals["child units reparented"] += (
-                GeographicUnit.objects
-                .filter(parent=placeholder)
-                .update(parent=twin)
-            )
-            totals["operator scopes rewritten"] += (
-                OperatorScope.objects
-                .filter(scope_level=level, scope_code=placeholder.code)
-                .update(scope_code=twin.code)
-            )
-
-            placeholder.status = GeographicUnit.Status.RETIRED
-            placeholder.effective_to = timezone.localdate() - timedelta(days=1)
-            placeholder.save(update_fields=["status", "effective_to"])
-            totals["units retired"] += 1
-
-            emit(
-                "geo_unit.merged",
-                "GeographicUnit",
-                str(placeholder.pk),
-                actor=actor,
-                actor_kind="user",
-                reason=(
-                    f"padded county-code duplicate of {twin.level} "
-                    f"{twin.code} ({twin.name}); retired and merged"
-                ),
-                field_changes={
-                    "code": [placeholder.code, twin.code],
-                    "status": ["active", "retired"],
-                },
-            )
-
-        for household_id, field_changes in changes.items():
-            emit(
-                "household.geography_corrected",
-                "Household",
-                household_id,
-                actor=actor,
-                actor_kind="user",
-                reason=(
-                    "geography repointed from a fabricated padded "
-                    "county-code unit to the UBOS frame"
-                ),
-                field_changes=field_changes,
-            )
-        totals["households repointed"] = len(changes)
-        return totals
+def _reason(source, target) -> str:
+    return (
+        f"padded county-code duplicate of {target.level} {target.code} "
+        f"({target.name}); retired and merged"
+    )

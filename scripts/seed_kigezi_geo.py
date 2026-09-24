@@ -2,13 +2,30 @@
 
 Creates the minimal GeographicUnit chain that lets the user's actual
 Kobo submission promote into a Household — Western → Kigezi → district
-412 → county 412.02 → sub-county 412.02.05 → parish 412.02.05.01 → a
-fabricated village row keyed by the village name.
+412 → Rujumbura County → Nyakagyeme → Kabwoma → a fabricated village
+row keyed by the village name.
 
-This is a stopgap until the real UBOS workbook is supplied to
-scripts/load_ubos_geography.py. Both loaders use the same code
-conventions so they can coexist; idempotent — re-running this is a
-no-op once rows are present.
+## This chain used to be one level too high
+
+The original stopgap guessed the ladder from a single Kobo submission
+before the UBOS workbook existed, and put every rung one level up:
+
+    seeded                                  actually
+    county     412.02       Nyakagyeme      sub_county 412.2.05
+    sub_county 412.02.05    Kabwoma         parish     412.2.05.01
+    parish     412.02.05.01 Kabwoma Parish  — nothing; a repeat
+
+Nyakagyeme is a sub-county of Rujumbura County; Kabwoma is a parish of
+Nyakagyeme. Households captured there carried a county that does not
+exist and never named Rujumbura at all. Repaired by
+`manage.py fix_kigezi_seed_levels`; the chain below is the real one,
+so re-running this can no longer recreate the shift.
+
+The workbook has since been supplied, so this script is only useful for
+bootstrapping a database that has not had it loaded. It refuses to
+invent anything the frame already covers: every rung is looked up
+first, and a village is the only row it will create outright (the UBOS
+frame carries no village rows at all).
 
 Usage:
     .venv/bin/python scripts/seed_kigezi_geo.py
@@ -42,10 +59,10 @@ CHAIN = [
     ("region",     "R-WESTERN",                       "Western",          None),
     ("sub_region", "SR-KIGEZI-WESTERN",               "Kigezi",           "R-WESTERN"),
     ("district",   "412",                             "Rukungiri",        "SR-KIGEZI-WESTERN"),
-    ("county",     "412.02",                          "Nyakagyeme",       "412"),
-    ("sub_county", "412.02.05",                       "Kabwoma",          "412.02"),
-    ("parish",     "412.02.05.01",                    "Kabwoma Parish",   "412.02.05"),
-    ("village",    "412.02.05.01.AKELLO-VILLAGE",     "Akello Village",   "412.02.05.01"),
+    ("county",     "412.2",                           "Rujumbura County", "412"),
+    ("sub_county", "412.2.05",                        "Nyakagyeme",       "412.2"),
+    ("parish",     "412.2.05.01",                     "Kabwoma",          "412.2.05"),
+    ("village",    "412.2.05.01.AKELLO-VILLAGE",      "Akello Village",   "412.2.05.01"),
 ]
 
 
