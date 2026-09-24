@@ -451,9 +451,14 @@ EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=True)
 EMAIL_HOST_USER = _email_host_user
 EMAIL_HOST_PASSWORD = _email_host_password
 EMAIL_TIMEOUT = env.int("EMAIL_TIMEOUT", default=30)
+# The mailbox the registry sends as. It must be one the relay at
+# EMAIL_HOST will authenticate — comms.quasar.ug rejects any client it
+# has not authenticated, for local and external recipients alike:
+#   554 5.7.1 <unknown[...]>: Client host rejected: Access denied
+# so EMAIL_HOST_USER / EMAIL_HOST_PASSWORD must name this mailbox.
 DEFAULT_FROM_EMAIL = env(
     "DEFAULT_FROM_EMAIL",
-    default="NSR MIS <admin@quasar.ug>",
+    default="NSR MIS <johnson@quasar.ug>",
 )
 SERVER_EMAIL = env(
     "SERVER_EMAIL",

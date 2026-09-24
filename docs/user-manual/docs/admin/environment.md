@@ -64,11 +64,11 @@ The system sends transactional email for PMT sign-off, DSA signing, Programme si
 | `EMAIL_HOST` | `comms.quasar.ug` | The quasar.ug relay (same one the rental_project uses) |
 | `EMAIL_PORT` | `587` | STARTTLS port |
 | `EMAIL_USE_TLS` | `True` | |
-| `EMAIL_HOST_USER` | (empty) | Set to `admin@quasar.ug` in prod |
+| `EMAIL_HOST_USER` | (empty) | Set to `johnson@quasar.ug` in prod. **Until it is set the backend falls back to console and nothing is delivered** — see notifications.md |
 | `EMAIL_HOST_PASSWORD` | (empty) | KMS-managed in prod. **Never commit this to git** — `.env` is gitignored; `.env.example` carries only the placeholder. |
 | `EMAIL_TIMEOUT` | `30` | seconds |
-| `DEFAULT_FROM_EMAIL` | `NSR MIS <admin@quasar.ug>` | Used as the `From:` header when callers don't override |
-| `SERVER_EMAIL` | `admin@quasar.ug` | Used by Django for error mails to ADMINS |
+| `DEFAULT_FROM_EMAIL` | `NSR MIS <johnson@quasar.ug>` | Used as the `From:` header when callers don't override |
+| `SERVER_EMAIL` | `johnson@quasar.ug` | Used by Django for error mails to ADMINS |
 | `DPO_EMAIL` | (empty) | DPO inbox for chain-break alerts (`apps.security.tasks.verify_audit_chain_task`). Leave empty in dev to disable alerts. |
 | `SLACK_WEBHOOK_URL` | (empty) | Parallel chain-break channel. Independent of email. |
 

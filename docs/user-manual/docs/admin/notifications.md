@@ -39,13 +39,51 @@ The DocuSign envelope for DSA step 1 is sent by DocuSign itself when `PARTNERS_D
 
 Recipient handling: lists are deduped, blank/None entries are dropped, whitespace is stripped. Multiple roles that happen to resolve to the same email get one mail.
 
+## Nothing is delivered until the mailbox is authenticated
+
+`comms.quasar.ug` rejects any client it has not authenticated — local
+recipients as well as external ones:
+
+```
+MAIL FROM -> 250 2.1.0 Ok
+RCPT TO   -> 554 5.7.1 <unknown[154.72.195.66]>: Client host rejected: Access denied
+```
+
+`default_email_backend()` switches to SMTP the moment `EMAIL_HOST_USER`
+**or** `EMAIL_HOST_PASSWORD` is set, and falls back to the console
+backend otherwise. The console backend accepts every message and
+prints it, so `send_mail` succeeds and the notification is audited as
+sent. Production ran that way for months with eighteen notifications
+recorded as delivered and none of them sent.
+
+To deliver, put the mailbox credentials in the production `.env`:
+
+```
+EMAIL_HOST_USER=johnson@quasar.ug
+EMAIL_HOST_PASSWORD=<the mailbox password>
+```
+
+then restart web + worker + beat. Nothing else changes — `EMAIL_HOST`
+is already `comms.quasar.ug:587` with STARTTLS.
+
+Two checks confirm the state rather than assuming it:
+
+- `security.W007` warns on every management command and in the deploy
+  output while a non-DEBUG deployment is on a discarding backend.
+- Each `notification.sent` audit row carries `delivered` and `backend`,
+  so "sent" is verifiable after the fact.
+
+The relay also sees this host as `unknown[154.72.195.66]` — there is no
+reverse DNS for it. Authentication fixes the rejection; the missing
+PTR record may still cost deliverability with strict receivers.
+
 ## Operational gotchas
 
 ### Production password rotation
 
 The SMTP password lives in the secrets manager (or local `.env`, gitignored). To rotate:
 
-1. Generate a new password on the `comms.quasar.ug` mailserver for `admin@quasar.ug`.
+1. Generate a new password on the `comms.quasar.ug` mailserver for `johnson@quasar.ug`.
 2. Update the secret in the secrets manager.
 3. Restart the web + celery workers (Django reads env at boot).
 4. Smoke-test from the Django shell:
