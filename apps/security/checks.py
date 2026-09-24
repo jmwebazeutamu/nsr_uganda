@@ -215,3 +215,39 @@ def check_access_purposes_are_known(app_configs, **kwargs):
              "vocabulary beside the consent one.",
         id="security.E006",
     )]
+
+
+@register()
+def check_email_backend_delivers_in_production(app_configs, **kwargs):
+    """Warn when a non-DEBUG deployment cannot actually send mail.
+
+    Production ran for months on the console backend. `send_mail`
+    returns success for it, so eighteen notifications — DSA signing
+    invitations, password resets, a grievance assignment — were audited
+    as sent while every one of them was written to the container's
+    stdout. Nothing failed, so nothing surfaced.
+
+    A warning rather than an error: a deployment may legitimately run
+    without mail (a DR standby, a smoke environment), and a check that
+    blocks `migrate` would be worse than the problem. But it now says
+    so on every management command and in every deploy's output.
+    """
+    from django.conf import settings
+
+    from apps.security.notifications import delivers_mail
+
+    if settings.DEBUG or delivers_mail():
+        return []
+    return [Warning(
+        f"EMAIL_BACKEND is {settings.EMAIL_BACKEND}, which discards mail, "
+        "but DEBUG is False. Notifications will be audited as sent and "
+        "will not be delivered.",
+        hint=(
+            "The backend is chosen by nsr_mis.email_settings."
+            "default_email_backend(), which switches to SMTP once "
+            "EMAIL_HOST_USER or EMAIL_HOST_PASSWORD is set. Set them in "
+            "the environment, or set EMAIL_BACKEND explicitly to silence "
+            "this deliberately."
+        ),
+        id="security.W007",
+    )]

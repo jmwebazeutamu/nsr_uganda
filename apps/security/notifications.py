@@ -36,6 +36,24 @@ from apps.security.audit import emit as emit_audit
 
 logger = logging.getLogger(__name__)
 
+# Backends that accept a message and do not deliver it. `send_mail`
+# returns 1 for all of them, so every caller — and the audit event —
+# read "sent" while nothing left the building. Production ran on the
+# console backend for months with eighteen notifications recorded as
+# delivered; DSA signing and password resets among them.
+NON_DELIVERING_BACKENDS = (
+    "django.core.mail.backends.console.EmailBackend",
+    "django.core.mail.backends.dummy.EmailBackend",
+    "django.core.mail.backends.filebased.EmailBackend",
+    "django.core.mail.backends.locmem.EmailBackend",
+)
+
+
+def delivers_mail(backend: str | None = None) -> bool:
+    """True if the configured backend actually puts mail on the wire."""
+    backend = backend or getattr(settings, "EMAIL_BACKEND", "")
+    return backend not in NON_DELIVERING_BACKENDS
+
 
 def _normalise_recipients(to: str | Iterable[str] | None) -> list[str]:
     if not to:
@@ -127,6 +145,18 @@ def send_notification(
         )
         return {"sent": False, "recipients": recipients, "error": str(exc)}
 
+    backend = getattr(settings, "EMAIL_BACKEND", "")
+    delivered = delivers_mail(backend)
+    if not delivered:
+        # Say so, every time. A backend that discards mail is a
+        # configuration state, not an error, so it must not raise — but
+        # it must never again be indistinguishable from delivery.
+        logger.warning(
+            "notification NOT DELIVERED (%s/%s → %s): EMAIL_BACKEND is %s, "
+            "which discards mail. Set EMAIL_HOST_USER / EMAIL_HOST_PASSWORD "
+            "for real delivery.",
+            entity_type, entity_id, recipients, backend,
+        )
     emit_audit(
         audit_action, entity_type, entity_id,
         actor=audit_actor, actor_kind="system",
@@ -134,6 +164,12 @@ def send_notification(
         field_changes={
             "subject": subject,
             "recipients": recipients,
+            # The two facts that make "sent" checkable after the event.
+            "delivered": delivered,
+            "backend": backend,
         },
     )
-    return {"sent": True, "recipients": recipients, "error": ""}
+    return {
+        "sent": True, "delivered": delivered, "backend": backend,
+        "recipients": recipients, "error": "",
+    }
