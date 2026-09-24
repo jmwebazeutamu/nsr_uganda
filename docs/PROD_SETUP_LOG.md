@@ -1753,3 +1753,57 @@ test still expects "outside DSA scope". Left for whoever is mid-edit.
 - Five Data Explorer matviews remain unbuilt, named in `UNBUILT_MATVIEWS`.
 - 17 pending duplicate pairs; the Kato pair first.
 - The tier-3 weights DRAFT is still not authored.
+
+---
+
+## 2026-09-24 — deploy f94c618 → 687e5d2 (household Location card)
+
+Reported from the screen: a household's Overview names Village, Parish,
+District and Sub-region — **no county, no sub-county**, no region.
+
+The API was never the problem. `HouseholdSerializer` has served
+`region_name`, `sub_region_name`, `district_name`, `county_name`,
+`sub_county_name`, `parish_name` and `village_name` all along. The
+Location card hand-listed four rows and the view-model mapper
+hand-picked four keys, so three rungs came over the wire and were
+dropped on the floor.
+
+Both now derive from the shared ladder: the mapper walks
+`GEO_LEVEL_CODES`, the card renders one row per `GEO_LEVELS` entry,
+finest first. Adding a rung to the ladder adds it to the screen.
+
+**Verified in the deployed bundle:**
+
+```
+household bundle: GEO_LEVELS x 1 | GEO_LEVEL_CODES x 1
+household bundle: hardcoded "Sub-region" row x 0
+ladder bundle labels: Region Sub-region District County Sub-county Parish Village
+```
+
+Two contract tests: the serializer exposes `<level>_name` and `<level>`
+for every rung the JSX ladder declares, and the Location card still
+derives its rows rather than listing them.
+
+### Finding — 47 UBOS units have no name
+
+Noticed while verifying, **not fixed**: some units carry `name = code`,
+so those rows will read "320.02" instead of a name.
+
+```
+ level      | units | name_is_code | pct
+ region     |     5 |            0 | 0.0
+ sub_region |    19 |            0 | 0.0
+ district   |   147 |            0 | 0.0
+ county     |   329 |           15 | 4.6
+ sub_county |  2225 |           16 | 0.7
+ parish     | 10872 |           16 | 0.1
+ village    |   374 |            0 | 0.0
+```
+
+47 of 13,971. This is reference data from the UBOS loader, not display
+logic — showing the code is more honest than hiding the rung, which is
+what the screen did before. Worth a loader pass.
+
+Suites: **2734 Python passed / 29 skipped; 857 JS passed / 5 skipped.**
+The one Python failure is the uncommitted DRS message change noted in
+the previous entry, still outstanding.
