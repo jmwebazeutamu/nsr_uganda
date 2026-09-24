@@ -74,6 +74,11 @@ const _grmApiToView = (g) => {
     closing_narrative: g.closing_narrative || "",
     closed_at: _grmFmtTime(g.closed_at),
     closed_by: g.closed_by || "",
+    // Dropped here until now, so `current.linked_change_request_id`
+    // was always undefined: the case panel never offered the link to
+    // an update that existed, and kept offering to open a NEW one —
+    // a second DRAFT on every click.
+    linked_change_request_id: g.linked_change_request_id || "",
   };
 };
 
@@ -125,6 +130,33 @@ const slaChip = (h, status) => {
 // a chronological list of {label, detail, at, tone} events from the
 // grievance fields + tasks state. Used inline instead of (or
 // alongside) the Audit drawer.
+// An audit row's action, in the words the chain uses. `action` is the
+// verb ("create" / "update"); `reason` carries what it was, because the
+// service layer writes it there ("assigned", "escalated: ...",
+// "resolved", "closed").
+const _grmAuditLabel = (e) => {
+  const reason = (e.reason || "").toLowerCase();
+  if (e.action === "create" && e.entity_type === "grievance") return "opened the grievance";
+  if (e.entity_type === "grievance.task") return e.action === "create" ? "added a task" : "moved a task";
+  if (e.entity_type === "grievance.comment") return "added a note";
+  if (reason.startsWith("assigned")) return "assigned it";
+  if (reason.startsWith("escalated")) return "escalated it";
+  if (reason.startsWith("resolved")) return "resolved it";
+  if (reason.startsWith("closed")) return "closed it";
+  if (e.action === "list_read" || e.action === "read") return "viewed it";
+  return e.action;
+};
+
+// Fallback detail when an event carries no reason — say what moved
+// rather than showing an empty line.
+const _grmFieldSummary = (changes) => {
+  if (!changes || typeof changes !== "object") return "";
+  return Object.entries(changes)
+    .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(" \u2192 ") : v}`)
+    .join(" · ");
+};
+
+
 const _grmTimelineFor = (g, tasks) => {
   if (!g) return [];
   const events = [];
@@ -224,6 +256,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
   const [commentDraft, setCommentDraft] = useStateGrm("");
   const [busy, setBusy] = useStateGrm(false);
   const [auditOpen, setAuditOpen] = useStateGrm(false);
+  const [auditRaw, setAuditRaw] = useStateGrm([]);
   const [toast, setToast] = useStateGrm("");
   // US-S21-003c — tasks for the currently-selected grievance, plus
   // role flag from the /me endpoint. Officer-status drives whether
@@ -468,6 +501,22 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
       .finally(() => { setBusy(false); setClosingTask(null); });
   };
 
+  // Load the chain when the drawer opens, and again if the operator
+  // switches case with it open. Not on selection alone: the chain is
+  // a click the operator asked for, not something to fetch for every
+  // row they arrow past.
+  useEffectGrm(() => {
+    if (!auditOpen || !selectedRow) { return; }
+    let live = true;
+    fetch(`/api/v1/grm/grievances/${selectedRow}/audit/`, {
+      credentials: "same-origin", headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => { if (live) setAuditRaw(data.results || data || []); })
+      .catch(() => { if (live) setAuditRaw([]); });
+    return () => { live = false; };
+  }, [auditOpen, selectedRow]);
+
   // Keep selectedRow valid when allRows changes (e.g., after a live
   // fetch replaces mock IDs).
   useEffectGrm(() => {
@@ -601,13 +650,23 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
       });
   };
 
-  const auditEvents = current ? [
-    { who: "Reporter",       action: "opened grievance",     detail: `Via ${current.reporter_phone ? 'parish channel · ' + current.reporter_phone : 'anonymous web form'}`, time: current.opened_at, audit: `A-2026-05-${current.id.slice(-2)}-001`, tone: "user" },
-    { who: "System GRM",     action: "computed SLA",         detail: `Tier ${GRM_TIERS[current.tier].short} window = ${GRM_TIERS[current.tier].sla_hours}h from open`, time: current.opened_at, audit: `A-2026-05-${current.id.slice(-2)}-002`, tone: "system" },
-    ...(current.assigned_to ? [{ who: "Supervisor", action: "assigned to",       detail: current.assigned_to, time: "12m later", audit: `A-2026-05-${current.id.slice(-2)}-003`, tone: "user" }] : []),
-    ...(current.status === "escalated" ? [{ who: "System GRM", action: "escalated tier", detail: "SLA breach auto-escalator (US-S7-001 pattern)", time: `${Math.abs(current.hours_to_breach)}h later`, audit: `A-2026-05-${current.id.slice(-2)}-004`, tone: "system" }] : []),
-    ...(current.status === "resolved" ? [{ who: "CDO",        action: "resolved with",     detail: "Linked UPD 01HXYUPD20260512EFAB · awaiting commit", time: "later", audit: `A-2026-05-${current.id.slice(-2)}-005`, tone: "user" }] : []),
-  ] : [];
+  // Real audit-chain events for this grievance.
+  //
+  // This block used to fabricate them from the CURRENT state: "Via
+  // parish channel" for any case with a phone, "Tier L2 window from
+  // open" on a case opened at L1, "System GRM escalated tier, SLA
+  // breach auto-escalator, 48h later" on an escalation a person had
+  // just performed by hand, and audit ids of the form
+  // A-2026-05-<last two chars of the grievance id>-001. None of it had
+  // happened. The chain is the record; it is read, not reconstructed.
+  const auditEvents = (auditRaw || []).map(e => ({
+    who: e.actor_id || "unknown",
+    action: _grmAuditLabel(e),
+    detail: e.reason || _grmFieldSummary(e.field_changes),
+    time: _grmFmtTime(e.occurred_at),
+    audit: (e.self_hash || e.id || "").slice(0, 12),
+    tone: e.actor_kind === "system" ? "system" : "user",
+  }));
 
   return (
     <WideShell wide={wide}>
@@ -1146,14 +1205,19 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
                       <Icon name="lock" size={13}/> Close grievance
                     </button>
                   )}
-                  {current.category === "data_correction" && current.status !== "closed" && (
+                  {/* "Open linked UPD" used to synthesise an id —
+                      "01HXYUPD" + the tail of the grievance id — and
+                      hand it to the Updates Queue, which then showed
+                      whatever unrelated CR that matched, or nothing.
+                      The DATA UPDATE block above navigates to the real
+                      linked_change_request_id and offers to open one
+                      when there is none, so this button had no job
+                      left but to be wrong. */}
+                  {current.category === "data_correction"
+                    && current.status !== "closed"
+                    && current.linked_change_request_id && (
                     <button className="btn" onClick={() => onNavigate?.(
-                      "upd",
-                      // The real linked_change_request_id comes from
-                      // Grievance.linked_change_request_id; the mock
-                      // doesn't carry it so we generate a stable
-                      // pseudo-id from the grievance id.
-                      { changeRequestId: `01HXYUPD${current.id.slice(-16)}` },
+                      "upd", { changeRequestId: current.linked_change_request_id },
                     )}>
                       <Icon name="edit" size={13}/> Open linked UPD
                     </button>

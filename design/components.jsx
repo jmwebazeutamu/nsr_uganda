@@ -570,7 +570,21 @@ const GeoTreePicker = ({ value, onChange }) => {
 /* ============================================================
    Audit panel drawer
    ============================================================ */
-const AuditDrawer = ({ open, onClose, events = [], title = "Audit chain" }) => (
+const AuditDrawer = ({ open, onClose, events = [], title = "Audit chain" }) => {
+  // The two selects used to be fixed option lists — "NSR Unit / CDO /
+  // System", "Created / Approved / Rejected / Update" — that filtered
+  // nothing, over events that were often fabricated anyway. Both lists
+  // are now built from the events in hand, and choosing one filters.
+  const [actor, setActor] = useState("");
+  const [act, setAct] = useState("");
+  useEffect(() => { if (!open) { setActor(""); setAct(""); } }, [open]);
+
+  const actors = [...new Set(events.map(e => e.who).filter(Boolean))].sort();
+  const actions = [...new Set(events.map(e => e.action).filter(Boolean))].sort();
+  const shown = events.filter(e =>
+    (!actor || e.who === actor) && (!act || e.action === act));
+
+  return (
   <>
     <div className={`drawer-backdrop ${open ? 'open' : ''}`} onClick={onClose}/>
     <aside className={`drawer ${open ? 'open' : ''}`} aria-hidden={!open}>
@@ -584,14 +598,31 @@ const AuditDrawer = ({ open, onClose, events = [], title = "Audit chain" }) => (
       <div className="drawer-body">
         <div className="drawer-filter">
           <div className="row gap-2">
-            <select className="field-select" style={{height:30}}><option>All actors</option><option>NSR Unit</option><option>CDO</option><option>System</option></select>
-            <select className="field-select" style={{height:30}}><option>All actions</option><option>Created</option><option>Approved</option><option>Rejected</option><option>Update</option></select>
+            <select className="field-select" style={{height:30}}
+                    aria-label="Filter by actor"
+                    value={actor} onChange={(e) => setActor(e.target.value)}>
+              <option value="">All actors</option>
+              {actors.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+            <select className="field-select" style={{height:30}}
+                    aria-label="Filter by action"
+                    value={act} onChange={(e) => setAct(e.target.value)}>
+              <option value="">All actions</option>
+              {actions.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
           </div>
         </div>
-        {events.map((e, i) => (
-          <div className="audit-row" key={i}>
+        {shown.length === 0 && (
+          <div style={{padding:24, textAlign:'center'}} className="t-cap muted">
+            {events.length === 0
+              ? "No audit events for this record."
+              : "No events match these filters."}
+          </div>
+        )}
+        {shown.map((e, i) => (
+          <div className="audit-row" key={e.audit || i}>
             <div className="audit-avatar" style={{ background: e.tone === 'system' ? 'var(--neutral-200)' : 'var(--primary-100)', color: e.tone === 'system' ? 'var(--neutral-700)' : 'var(--primary-900)' }}>
-              {e.who.split(' ').map(s => s[0]).slice(0,2).join('')}
+              {String(e.who || '?').split(' ').map(s => s[0]).slice(0,2).join('')}
             </div>
             <div>
               <div className="audit-action">{e.who} <span style={{fontWeight:400, color:'var(--neutral-700)'}}>{e.action}</span></div>
@@ -601,11 +632,15 @@ const AuditDrawer = ({ open, onClose, events = [], title = "Audit chain" }) => (
             <div className="audit-time">{e.time}</div>
           </div>
         ))}
-        <div style={{padding:24, textAlign:'center'}} className="t-cap">End of audit chain ({events.length} events)</div>
+        <div style={{padding:24, textAlign:'center'}} className="t-cap">
+          End of audit chain ({shown.length}
+          {shown.length !== events.length ? ` of ${events.length}` : ""} events)
+        </div>
       </div>
     </aside>
   </>
-);
+  );
+};
 
 /* ============================================================
    Toast

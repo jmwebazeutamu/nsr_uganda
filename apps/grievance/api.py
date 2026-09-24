@@ -408,6 +408,55 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
 
     @extend_schema(
         tags=["grm"],
+        summary="Read one grievance's audit chain",
+        description=(
+            "The events this case actually produced, oldest first: the "
+            "opening, assignments, escalations, resolution, closure, "
+            "every task transition, every note, and the linked UPD if "
+            "one was opened.\n\n"
+            "The console drawer could not assemble this itself. Task "
+            "and comment events are keyed by the task's or comment's "
+            "own id — the grievance id appears only inside "
+            "`field_changes` — so a client filtering "
+            "`/audit-events/?entity_id=<grievance>` gets the "
+            "grievance-level events and nothing else. Collecting the "
+            "rest client-side would also mean handing the console an "
+            "unscoped audit query. `get_object()` applies the same "
+            "visibility rule as every other detail route, so a user "
+            "who cannot see the case cannot read its chain."
+        ),
+        responses={200: OpenApiResponse(description="audit events, oldest first")},
+    )
+    @action(detail=True, methods=["get"], url_path="audit")
+    def audit(self, request, pk=None):
+        from django.db.models import Q
+
+        from apps.security.api import AuditEventSerializer
+        from apps.security.models import AuditEvent
+
+        grievance = self.get_object()
+        scope = Q(entity_type="grievance", entity_id=str(grievance.id))
+
+        task_ids = [str(i) for i in grievance.tasks.values_list("id", flat=True)]
+        if task_ids:
+            scope |= Q(entity_type="grievance.task", entity_id__in=task_ids)
+
+        comment_ids = [str(i) for i in grievance.comments.values_list("id", flat=True)]
+        if comment_ids:
+            scope |= Q(entity_type="grievance.comment", entity_id__in=comment_ids)
+
+        if grievance.linked_change_request_id:
+            scope |= Q(entity_type="change_request",
+                       entity_id=str(grievance.linked_change_request_id))
+
+        events = AuditEvent.objects.filter(scope).order_by("occurred_at", "id")
+        # Reading a case's history is a read of the case. Same verb the
+        # retrieve route uses, so the chain has one vocabulary for it.
+        self._emit_read(request, action="read", entity_id=str(grievance.id))
+        return Response(AuditEventSerializer(events, many=True).data)
+
+    @extend_schema(
+        tags=["grm"],
         summary="List grievances past their SLA deadline",
         description=("Returns open / in-progress / escalated grievances whose "
                      "sla_deadline is in the past. The queryset is role-scoped "

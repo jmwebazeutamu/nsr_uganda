@@ -761,11 +761,28 @@ button:focus-visible { outline: 0; box-shadow: var(--focus-ring); }
   border-left: 1px solid var(--neutral-300);
   z-index: 41;
   transform: translateX(110%);
-  transition: transform 0.18s ease;
+  transition: transform 0.18s ease, visibility 0s linear 0.18s;
   display: flex; flex-direction: column;
   box-shadow: -8px 0 24px rgba(0,0,0,0.06);
+  /* A closed drawer is translated 110% of its OWN width — 418px — and
+     .app-shell is wider than the viewport, so at around 1100px the
+     "off-screen" drawer sat over the case panel and swallowed every
+     click on it. Being invisible to the eye is not the same as being
+     out of the way. */
+  visibility: hidden;
+  pointer-events: none;
 }
-.drawer.open { transform: translateX(0); }
+.drawer.open {
+  transform: translateX(0);
+  visibility: visible;
+  pointer-events: auto;
+  /* No visibility delay on the way in — only on the way out. */
+  transition: transform 0.18s ease;
+}
+/* And stop the shell itself scrolling sideways at that width: the
+   drawer is positioned against it, so its overhang was extending the
+   scrollable area. */
+.app-shell { overflow-x: hidden; }
 .drawer-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: var(--space-4);

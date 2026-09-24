@@ -185,6 +185,13 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
   // hold tab uses the existing release affordance in the action bar.
   const [tab, setTab] = useStateUpd("pending");
   const TAB_STATUS = {
+    // A GRM-opened update lands as a DRAFT (open_change_request_for_
+    // grievance auto-submits only when asked, and the console asks
+    // for a draft). With no tab requesting `draft`, every update
+    // raised from a grievance was invisible here — the grievance said
+    // "Creates a DRAFT in the Updates Queue" and the queue had no
+    // place that showed one.
+    drafts:   "draft",
     pending:  "pending_approval",
     on_hold:  "on_hold",
     decided:  "committed,rejected",
@@ -496,7 +503,10 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
         slaDays: current.slaDays,
         slaCap: current.slaCap,
         submitter: current._raw.requester || "—",
-        reviewer: me?.username || "—",
+        // A request is assigned to a configured reviewer role, not to the
+        // person viewing this page. Show the persisted decision-maker once
+        // one exists; otherwise show the routed role from the API.
+        reviewer: current._raw.approver || current._raw.required_role || "Unassigned",
         reason: current._raw.requester_note || "",
         status: current._raw.status,
         household: current._raw.entity_id || "—",
@@ -554,6 +564,8 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
 
   const isSelfRequest = isLive && me?.username && me.username === current._raw.requester;
   const isOnHold = isLive && current._raw.status === "on_hold";
+  const allowedActions = isLive ? (current._raw.allowed_actions || {}) : {};
+  const actionState = (name) => allowedActions[name] || { allowed: !isLive, reason: "" };
 
   return (
     <div className="page" style={{paddingBottom:0, position:'relative'}}>
@@ -581,6 +593,7 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
         <div className="card-toolbar">
           <div style={{display:'flex', gap:4}}>
             {[
+              { id: "drafts", label: "Drafts" },
               { id: "pending", label: "Pending" },
               { id: "on_hold", label: "On hold" },
               { id: "decided", label: "Decided" },
@@ -608,7 +621,9 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
               ? <><strong>{selected.size}</strong> selected · cap 200 per batch</>
               : tab === "decided"
                 ? "Read-only history — actions disabled"
-                : "Click a row to open · tick to select for bulk"}
+                : tab === "drafts"
+                  ? "Not yet submitted — open a row to review and submit"
+                  : "Click a row to open · tick to select for bulk"}
           </span>
         </div>
         <div style={{maxHeight:240, overflowY:'auto'}}>
@@ -635,7 +650,7 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
             {/* SLA column repurposes as STATUS on the Decided tab —
                 an in-window/out-of-window chip is moot once the row
                 has been committed or rejected. */}
-            <div className="t-cap" style={{padding:'10px 12px'}}>{tab === "decided" ? "STATUS" : "SLA"}</div>
+            <div className="t-cap" style={{padding:'10px 12px'}}>{tab === "decided" ? "STATUS" : tab === "drafts" ? "CREATED" : "SLA"}</div>
             <div className="t-cap" style={{padding:'10px 12px'}}>SUBMITTER</div>
           </div>
           {queue.map(r => {
@@ -675,6 +690,10 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
                     <Chip tone={r._raw?.status === "committed" ? "data" : "danger"} size="sm">
                       {r._raw?.status || "—"}
                     </Chip>
+                  ) : tab === "drafts" ? (
+                    /* An SLA clock that has not started is not a
+                       "0d / 5d" — it is no clock. */
+                    <Chip size="sm">draft</Chip>
                   ) : (
                     <Chip tone={breach ? "danger" : "data"} size="sm">
                       {r.slaDays}d / {r.slaCap}d
@@ -980,23 +999,23 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
           </>
         }>
           {isOnHold ? (
-            <button className="btn btn-success" disabled={busy || (isSelfRequest && !selfApprove)} onClick={() => setModal('release')}>
+            <button className="btn btn-success" disabled={busy || !actionState("release").allowed}
+              title={actionState("release").reason} onClick={() => setModal('release')}>
               <Icon name="arrowUp" size={14}/> Release
             </button>
           ) : (
             <>
-              <button className="btn btn-danger" disabled={busy} onClick={() => setModal('reject')}>
+              <button className="btn btn-danger" disabled={busy || !actionState("reject").allowed}
+                title={actionState("reject").reason} onClick={() => setModal('reject')}>
                 <Icon name="xCircle" size={14}/> Reject
               </button>
-              <button className="btn btn-warn" disabled={busy} onClick={() => setModal('hold')}>
+              <button className="btn btn-warn" disabled={busy || !actionState("hold").allowed}
+                title={actionState("hold").reason} onClick={() => setModal('hold')}>
                 <Icon name="clock" size={14}/> Hold for info
               </button>
-              <button className="btn" disabled={busy} onClick={() => setModal('escalate')}>
-                <Icon name="arrowUp" size={14}/> Escalate
-              </button>
               <button className="btn btn-success"
-                disabled={busy || selfApprove || isSelfRequest}
-                title={isSelfRequest ? "You submitted this request — AC-UPD-NO-SELF-APPROVE blocks self-approval" : ""}
+                disabled={busy || !actionState("approve").allowed}
+                title={actionState("approve").reason}
                 onClick={() => setModal('approve')}>
                 <Icon name="check" size={14}/> Approve
               </button>
