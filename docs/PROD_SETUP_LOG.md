@@ -1922,3 +1922,110 @@ test was not updated. Updated to the committed phrasing.
 - Five Data Explorer matviews remain unbuilt.
 - 17 pending duplicate pairs; the Kato pair first.
 - The tier-3 weights DRAFT is still not authored.
+
+---
+
+## 2026-09-24 — deploy 7c5fb1c → 2f580d4 (GRM audit + fixes), and the Kigezi merge
+
+### Kigezi seed level shift — repaired
+
+`scripts/seed_kigezi_geo.py` guessed the ladder from one Kobo
+submission before the UBOS workbook existed, and put every rung one
+level too high. `manage.py fix_kigezi_seed_levels --apply --actor
+jmwebaze`:
+
+```
+county      412.02        Nyakagyeme      -> 412.2       Rujumbura County
+sub_county  412.02.05     Kabwoma         -> 412.2.05    Nyakagyeme
+parish      412.02.05.01  Kabwoma Parish  -> 412.2.05.01 Kabwoma
+
+units retired 3 · households repointed 2 · units reparented 4
+```
+
+The two households now read **Rujumbura County → Nyakagyeme → Kabwoma**.
+0 active placeholders, 0 households on retired units. Matviews
+refreshed; audit chain ok, 0 breaks, 100,669 rows.
+
+### GRM audit — what it found
+
+- **The assignee was invented.** The console offered four people who
+  had no accounts ("Adong Florence · CDO Tapac" and friends), and the
+  task modal a free-text username box. `no-fabricated-identities` did
+  not catch them: it matches NINs, +256 numbers and go.ug addresses,
+  and a bare personal name has none of those.
+- **The household was a ULID typed from memory**, unvalidated.
+- **Nothing connected a data-correction grievance to the Updates
+  Queue**, though the service has done it since US-S21.
+- **A grievance had nowhere to record work in progress** — intake
+  narrative, then resolution, nothing between.
+- **Closing a task explained nothing**, and a grievance cannot resolve
+  until every task is closed.
+- **Assignment was silent.**
+- **Modals cut text off** — no `min-width: 0`, so an unbreakable token
+  pushed content past the edge.
+
+All seven addressed; see the commit. Migration
+`grievance.0005_grievance_comments` applied.
+
+### Two findings on live data
+
+**Three grievances and six tasks are assigned to people who do not
+exist.** The grievances carry the console's invented names verbatim:
+
+```
+grievances: 'Adong Florence · CDO Tapac', 'Twikirize J. · District M&E',
+            'Adong Florence · CDO Tapac'
+tasks     : 'Inventore consequunt', 'Et quisquam qui dolo',
+            'Quisquam repudiandae', 'Aliquam quidem digni', 'Johnson' x2
+```
+
+These are live records with SLAs running, assigned to nobody. New
+assignments are refused, but these predate the check and need
+reassigning by hand. The lorem-ipsum task names suggest a seeding pass
+rather than real work.
+
+**Assignment emails are not being sent.** `EMAIL_BACKEND` resolves to
+the *console* backend — `default_email_backend()` falls back to it
+unless `EMAIL_HOST_USER` or `EMAIL_HOST_PASSWORD` is set, and neither
+is, though `EMAIL_HOST` is. So notifications are written to the web
+container's log and audited as sent. To actually deliver, SMTP
+credentials go in the prod `.env` (a secret — not committed, and not
+something to set without the owner's say-so).
+
+```
+EMAIL_BACKEND      django.core.mail.backends.console.EmailBackend
+DEFAULT_FROM_EMAIL NSR MIS <admin@quasar.ug>
+active users       6 (5 with an address)
+```
+
+### Verification
+
+```
+invented assignee refused: 'Adong Florence · CDO Tapac' is not an active MIS user
+comments table: present, 0 rows
+grievances: 10
+```
+
+Suites, with only these changes on main: **2806 passed, 29 skipped**
+(Python) and **863 passed, 5 skipped** (JS).
+
+### Main is red on work that is not mine
+
+- 7 choice-list / label-resolution tests fail **on main**, from
+  committed `choice_field_map` / `reference_data.services` changes.
+- 38 more fail in the working tree from uncommitted `apps/ddup` edits
+  (`services.py`, `config.py`, the two ddup test modules).
+
+Both verified as not mine by running this change alone against main in
+a clean worktree.
+
+### Open
+
+- Reassign the 3 grievances and 6 tasks pointing at non-existent users.
+- Set SMTP credentials if assignment emails should actually leave the
+  box.
+- `_pmtBandLabel` exists twice in the console with different behaviour
+  (title-case vs a curated map). Renamed the registry one to stop them
+  overwriting each other; the two band vocabularies should converge.
+- 17 pending duplicate pairs; the Kato pair first.
+- The tier-3 weights DRAFT is still not authored.
