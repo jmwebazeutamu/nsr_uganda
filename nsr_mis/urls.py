@@ -47,6 +47,24 @@ urlpatterns = [
     path("logout/", LogoutConfirmView.as_view(), name="logout"),
     path("profile/", profile, name="profile"),
     path("profile/password/", ProfilePasswordChangeView.as_view(), name="profile-password-change"),
+    # Account administrators issue links through apps.security.user_management.
+    # These are Django's canonical UID/token confirmation views: token
+    # validation and password-policy enforcement remain with Django rather
+    # than being duplicated in the security module.
+    path(
+        "reset/<uidb64>/<token>/",
+        auth_views.PasswordResetConfirmView.as_view(
+            template_name="registration/password_reset_confirm.html",
+        ),
+        name="password_reset_confirm",
+    ),
+    path(
+        "reset/complete/",
+        auth_views.PasswordResetCompleteView.as_view(
+            template_name="registration/password_reset_complete.html",
+        ),
+        name="password_reset_complete",
+    ),
     path("", home, name="home"),
     # The operator home also answers at /home/. On the deployed box the
     # public site owns "/" of the hostname and Apache path-routes the

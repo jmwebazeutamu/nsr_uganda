@@ -38,7 +38,7 @@ from apps.data_management.models import (
 )
 from apps.security.audit import emit as emit_audit
 
-from .field_catalog import field_meta
+from .field_catalog import category_model, field_meta
 from .models import ChangeRequest, ChangeStatus, ChangeType, EntityType, UpdRoutingRule
 from .routing import route
 
@@ -117,10 +117,36 @@ def _resolve_change_attr(root, key: str):
     meta = field_meta(category, field)
     if not meta:
         raise UpdError(f"unknown field {key!r}")
+    detail_model = category_model(category)
+    if detail_model is None:
+        raise UpdError(f"canonical model missing for {category!r}")
+    owner = root if meta["entity"] == "household" else root.household
+    expected_owner_model = Household if meta["entity"] == "household" else Member
+    if not isinstance(owner, expected_owner_model):
+        raise UpdError(f"{key!r} is not applicable to this change-request entity")
+
+    # The catalogue owns section -> model mapping; model metadata owns the
+    # model -> Household/Member relation.  Discovering both avoids a second,
+    # hand-maintained map in the approval path.
     try:
-        detail = getattr(root, category)
-    except Exception as e:  # noqa: BLE001
-        raise UpdError(f"missing detail record for {category!r}") from e
+        owner_relation = next(
+            relation for relation in detail_model._meta.fields
+            if relation.is_relation
+            and relation.remote_field.model is expected_owner_model
+        )
+    except StopIteration as exc:
+        raise UpdError(f"canonical owner relation missing for {category!r}") from exc
+
+    reverse_accessor = owner_relation.remote_field.get_accessor_name()
+    try:
+        detail = getattr(owner, reverse_accessor)
+    except detail_model.DoesNotExist:
+        # Historical records can predate detail entities. Create the one
+        # canonical row inside this approval transaction; its model derives
+        # the partition key from its owner.
+        detail, _ = detail_model.objects.get_or_create(
+            **{owner_relation.name: owner},
+        )
     return detail, field
 
 

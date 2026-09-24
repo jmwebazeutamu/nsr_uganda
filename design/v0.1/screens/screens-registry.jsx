@@ -89,6 +89,11 @@ const _registryPmtBandLabel = (code) => String(code || "")
   .replaceAll("_", " ")
   .replace(/\b\w/g, letter => letter.toUpperCase());
 
+// Choice-list metadata is the Reference Data SSOT. Keeping this small
+// projection separate makes the dropdown contract testable without creating
+// a local Male/Female option list.
+const _registryHeadSexOptions = (choiceMeta) => choiceMeta?.allLists?.sex || [];
+
 // Project a live Household payload (HouseholdSerializer shape) onto
 // the row shape the existing table render expects. Head is the
 // nested member with relationship_to_head === "01" (the "Head" code
@@ -142,6 +147,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
   const wide = useWideView(view === "members" ? "registry-members" : "registry");
 
   const [q, setQ] = useStateReg("");
+  const [registryId, setRegistryId] = useStateReg("");
   // sub-region picker is keyed by GeographicUnit.code (matches the
   // backend filter param exactly).
   const [subreg, setSubreg] = useStateReg("");
@@ -162,7 +168,8 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
 
   const _hhFilters = {
     q, sub_region: subreg, pmt_band: band, intake_source: intakeSrc, programme: prog,
-    head_sex: headSex, registered_from: registeredFrom, registered_to: registeredTo,
+    registry_id: registryId, head_sex: headSex,
+    registered_from: registeredFrom, registered_to: registeredTo,
   };
   // DRF is 1-indexed; expose the same `page` state on screen and add 1
   // when building the URL.
@@ -197,10 +204,10 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
   const pmtBandOptions = Object.keys(activePmtModel?.band_cutoffs || {});
   // The head-sex filter must use the Questionnaire/Reference Data
   // vocabulary, never a locally maintained list of values.
-  const [, , choiceLists] = useChoiceList
+  const [, choiceLists] = useChoiceList
     ? useChoiceList(["sex"])
-    : [[], {}, {}];
-  const headSexOptions = (choiceLists?.allLists?.sex) || [];
+    : [[], {}];
+  const headSexOptions = _registryHeadSexOptions(choiceLists);
   // Unfiltered tab counts (US-S11-032) — the hardcoded "12.1M" /
   // "48.1M" pills lied about the real registry size for any
   // pre-launch dev DB. Both endpoints respect ABAC scope so a
@@ -238,7 +245,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
   const subregs = (subregResp && subregResp.results) || subregResp || [];
 
   const reset = () => {
-    setQ(""); setSubreg(""); setBand(""); setIntakeSrc(""); setProg("");
+    setQ(""); setRegistryId(""); setSubreg(""); setBand(""); setIntakeSrc(""); setProg("");
     setHeadSex(""); setRegisteredFrom(""); setRegisteredTo(""); setPage(0);
   };
 
@@ -344,6 +351,12 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
             <Icon name="search" size={16} color="var(--neutral-500)"/>
             <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="Search by name, Registry ID, or parish…"/>
           </div>
+          <input
+            type="text" value={registryId}
+            onChange={(e) => { setRegistryId(e.target.value); setPage(0); }}
+            placeholder="Exact Registry ID"
+            className="field-input"
+            style={{height:34, width:'auto', minWidth:190}}/>
 
           <select className="field-select" style={{height:34, width:'auto', minWidth:140}} value={intakeSrc} onChange={(e) => { setIntakeSrc(e.target.value); setPage(0); }}>
             <option value="">Any intake source</option>
@@ -531,5 +544,5 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
 // been removed.
 Object.assign(window, {
   RegistryScreen, _buildHouseholdListUrl, _buildHouseholdAggregatesUrl,
-  _registryPmtBandLabel,
+  _registryPmtBandLabel, _registryHeadSexOptions,
 });

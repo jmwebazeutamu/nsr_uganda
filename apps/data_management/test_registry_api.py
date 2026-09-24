@@ -203,6 +203,14 @@ class TestHouseholdFilters:
             seeded_buganda["hh1"].id,
         }
 
+    def test_registry_id_filter_is_an_exact_canonical_household_lookup(self, api, seeded_buganda):
+        household = seeded_buganda["hh2"]
+        response = api.get(f"{URL_HOUSEHOLDS}?registry_id={household.id}")
+        assert {row["id"] for row in response.data["results"]} == {household.id}
+
+        aggregates = api.get(f"{URL_HH_AGGREGATES}?registry_id={household.id}")
+        assert aggregates.data["total"] == 1
+
     def test_registration_date_range_filters_household_created_at(
         self, api, seeded_buganda,
     ):

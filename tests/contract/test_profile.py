@@ -2,6 +2,9 @@
 
 import pytest
 from django.contrib.auth.models import Group
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 
 
 @pytest.fixture
@@ -86,6 +89,28 @@ class TestProfile:
 
         operator.refresh_from_db()
         assert operator.check_password("a-longer-safe-password-123")
+
+    def test_admin_reset_link_opens_and_changes_password(self, client, operator):
+        uid = urlsafe_base64_encode(force_bytes(operator.pk))
+        token = default_token_generator.make_token(operator)
+        url = f"/reset/{uid}/{token}/"
+
+        # Django consumes the token from the visible URL and redirects to a
+        # session-bound ``set-password`` URL before rendering the form.
+        # Follow that security-preserving redirect before posting the form.
+        opened = client.get(url, follow=True)
+        assert opened.status_code == 200
+        assert b"Set a new password" in opened.content
+
+        changed = client.post(opened.request["PATH_INFO"], {
+            "new_password1": "new-safe-password-123",
+            "new_password2": "new-safe-password-123",
+        })
+        assert changed.status_code == 302
+        assert changed["Location"] == "/reset/complete/"
+
+        operator.refresh_from_db()
+        assert operator.check_password("new-safe-password-123")
 
 
 class TestMastheadReturnsHome:

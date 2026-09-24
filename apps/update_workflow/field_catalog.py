@@ -281,6 +281,19 @@ def field_meta(category: str, field: str) -> dict | None:
     return None
 
 
+def category_model(category: str) -> type[models.Model] | None:
+    """Return a section's registered persistence model.
+
+    The field catalogue is the sole binding between a questionnaire section
+    and its detail model.  Approval uses this when a historical record has
+    no detail row, rather than duplicating the mapping in its service.
+    """
+    for section in CATALOG_MODELS:
+        if section["key"] == category:
+            return section["model"]
+    return None
+
+
 def is_pmt_relevant(category: str, field: str) -> bool:
     return bool((field_meta(category, field) or {}).get("pmt", False))
 

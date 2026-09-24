@@ -6,7 +6,7 @@ from datetime import date
 
 import pytest
 
-from apps.data_management.models import Household, HouseholdVersion, Member, MemberVersion
+from apps.data_management.models import Dwelling, Household, HouseholdVersion, Member, MemberVersion
 from apps.ingestion_hub.models import Connector, ConnectorRun, SourceSystem, SourceSystemKind, StageRecord
 from apps.reference_data.models import GeographicUnit
 from apps.security.models import AuditEvent
@@ -323,6 +323,24 @@ class TestHouseholdCommit:
         versions = HouseholdVersion.objects.filter(household=household)
         assert versions.count() == 1
         assert versions.first().address_narrative == "Plot 1A"
+
+    def test_dwelling_change_creates_missing_canonical_detail_row(self, household):
+        """Historical households may predate the Dwelling one-to-one row."""
+        assert not Dwelling.objects.filter(household=household).exists()
+        req = ChangeRequest.objects.create(
+            entity_type=EntityType.HOUSEHOLD, entity_id=household.id,
+            change_type=ChangeType.CORRECTION, pmt_relevant=True,
+            changes={"dwelling.roof_material": {"old": "", "new": "roof-code"}},
+            source_channel=SourceChannel.PARISH, requester="alice",
+        )
+
+        submit_change_request(req)
+        commit_change_request(req, approver="bob")
+
+        dwelling = Dwelling.objects.get(household=household)
+        assert dwelling.roof_material == "roof-code"
+        req.refresh_from_db()
+        assert req.status == ChangeStatus.COMMITTED
 
 
 # --- auto-commit path ------------------------------------------------------

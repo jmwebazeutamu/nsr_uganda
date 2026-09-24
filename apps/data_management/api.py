@@ -649,6 +649,12 @@ def _household_filters(qs, params):
             | Q(sub_county_code__iexact=q)
             | Q(parish_code__iexact=q),
         )
+    # Household.id is the Registry ID (ADR-0002). Keep this separate from
+    # the broad ``q`` search so an operator can deliberately perform an
+    # exact identifier lookup and the aggregates remain on the same slice.
+    registry_id = (params.get("registry_id") or "").strip()
+    if registry_id:
+        qs = qs.filter(pk=registry_id)
     sub_region = (params.get("sub_region") or "").strip()
     if sub_region:
         qs = qs.filter(sub_region_code=sub_region)
