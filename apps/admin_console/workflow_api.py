@@ -466,14 +466,17 @@ def ddup_version_detail(request, version_id: int):
         )
     body = request.data or {}
     if "config" in body:
+        from apps.ddup.config import DdupConfigurationError, validate_ddup_configuration
+        try:
+            validate_ddup_configuration(body["config"])
+        except DdupConfigurationError as exc:
+            return Response({"detail": str(exc)}, status=drf_status.HTTP_400_BAD_REQUEST)
         v.config = body["config"]
     if "threshold" in body:
-        # Threshold lives inside config['tier3']['auto_merge_threshold'].
-        cfg = dict(v.config or {})
-        tier3 = dict(cfg.get("tier3") or {})
-        tier3["auto_merge_threshold"] = float(body["threshold"])
-        cfg["tier3"] = tier3
-        v.config = cfg
+        return Response(
+            {"detail": "Thresholds are part of the approved DDUP model config; replace the draft config."},
+            status=drf_status.HTTP_400_BAD_REQUEST,
+        )
     v.save(update_fields=["config", "updated_at"])
     return Response(_ddup_version_row(v))
 
@@ -485,20 +488,46 @@ def ddup_version_clone(request, version_id: int):
         src = DdupModelVersion.objects.get(pk=version_id)
     except DdupModelVersion.DoesNotExist as e:
         raise Http404(f"DdupModelVersion {version_id}") from e
-    body = request.data or {}
-    delta = float(body.get("threshold_delta", 0.05))
-    reason = body.get("reason", "admin-console clone")
     from apps.ddup import services as ddup_services
     try:
-        draft = ddup_services.clone_with_threshold_delta(
-            src,
-            delta=delta,
-            actor=request.user.username,
-            reason=reason,
-        )
+        draft = ddup_services.clone_model_version(src, actor=request.user.username)
     except ddup_services.DdupApprovalError as e:
         return Response({"detail": str(e)}, status=drf_status.HTTP_409_CONFLICT)
     return Response(_ddup_version_row(draft), status=drf_status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+@permission_classes([IsAdminConsoleUser])
+def ddup_version_submit(request, version_id: str):
+    try:
+        version = DdupModelVersion.objects.get(pk=version_id)
+    except DdupModelVersion.DoesNotExist as exc:
+        raise Http404(f"DdupModelVersion {version_id}") from exc
+    from apps.ddup import services as ddup_services
+    try:
+        ddup_services.submit_model_version(version, actor=request.user.username)
+    except ddup_services.DdupApprovalError as exc:
+        return Response({"detail": str(exc)}, status=drf_status.HTTP_409_CONFLICT)
+    return Response(_ddup_version_row(version))
+
+
+@api_view(["POST"])
+@permission_classes([IsAdminConsoleUser])
+def ddup_version_approve(request, version_id: str):
+    try:
+        version = DdupModelVersion.objects.get(pk=version_id)
+    except DdupModelVersion.DoesNotExist as exc:
+        raise Http404(f"DdupModelVersion {version_id}") from exc
+    from apps.ddup import services as ddup_services
+    try:
+        ddup_services.activate_model_version(version, approver=request.user.username)
+    except ddup_services.DdupApprovalError as exc:
+        return Response({"detail": str(exc)}, status=drf_status.HTTP_409_CONFLICT)
+    emit_audit(
+        action="approve", entity_type="ddup_model_version", entity_id=str(version.id),
+        actor=request.user.username, field_changes={"version": version.version},
+    )
+    return Response(_ddup_version_row(version))
 
 
 def _pair_row(p: MatchPair, *, full: bool = False) -> dict:

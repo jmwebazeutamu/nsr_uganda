@@ -29,6 +29,7 @@ from apps.ddup.services import (
     reject_pair,
     reverse_merge_decision,
 )
+from apps.ddup.config import DdupConfigurationError, validate_ddup_configuration
 from apps.reference_data.models import GeographicUnit
 from apps.security.hashing import nin_hash
 from apps.security.models import AuditEvent
@@ -65,12 +66,18 @@ def active_model(db):
     v = DdupModelVersion.objects.create(
         version=1, description="tier1 NIN deterministic",
         config={
-            "tier1": {"member": "nin", "household": "head_nin+village"},
-            # Auto-merge is OFF unless the approved model version enables
-            # it (it soft-deletes a Member unattended). The tests in
-            # TestAutoMergeHighConfidence are about what happens once it
-            # is on, so this fixture turns it on deliberately.
-            "tier3": {"auto_merge_enabled": True},
+            "schema": "nsr.ddup.model.v1",
+            "tiers": {
+                "tier1": {
+                    "enabled": True,
+                    "method": "exact_hash",
+                    "fields": ["nin_hash"],
+                    "candidate_score": 1.0,
+                    "match_reason": "nin_hash_exact",
+                },
+                "tier2": {"enabled": False},
+                "tier3": {"enabled": False},
+            },
         },
         author="archer",
     )
@@ -83,6 +90,44 @@ def _hash(nin: str) -> bytes:
     # Use the canonical project hash so the DB-side rows match what
     # apps.ingestion_hub.services._discover_stage_candidates would compute.
     return nin_hash(nin)
+
+
+@pytest.mark.django_db
+class TestDdupConfigurationContract:
+    def test_weighted_tier_requires_registered_fields_and_explicit_policy(self):
+        config = {
+            "schema": "nsr.ddup.model.v1",
+            "tiers": {
+                "tier3": {
+                    "enabled": True,
+                    "method": "weighted_similarity",
+                    "fields": ["member.surname", "household.village"],
+                    "block_field": "household.village",
+                    "review_threshold": 0.9,
+                    "features": [
+                        {"field": "member.surname", "comparator": "jaro_winkler", "weight": 1.0},
+                    ],
+                },
+            },
+        }
+
+        validated = validate_ddup_configuration(config)
+
+        assert validated.tiers["tier3"]["review_threshold"] == 0.9
+
+    def test_unregistered_field_is_a_schema_dependency_not_a_runtime_fallback(self):
+        config = {
+            "schema": "nsr.ddup.model.v1",
+            "tiers": {
+                "tier1": {
+                    "enabled": True, "method": "exact_hash",
+                    "fields": ["member.not_in_dictionary"],
+                },
+            },
+        }
+
+        with pytest.raises(DdupConfigurationError, match="absent from the canonical registry"):
+            validate_ddup_configuration(config)
 
 
 # --- Model-version dual approval -------------------------------------------

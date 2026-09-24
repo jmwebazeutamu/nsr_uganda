@@ -10,6 +10,8 @@ References:
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 from django.db import transaction
 from django.utils import timezone
 
@@ -27,6 +29,7 @@ from .models import (
     PairStatus,
 )
 from .phone import to_e164
+from .config import DdupConfigurationError, validate_ddup_configuration
 
 # ---------------------------------------------------------------------------
 # Model version lifecycle
@@ -37,12 +40,60 @@ class DdupApprovalError(Exception):
 
 
 @transaction.atomic
+def submit_model_version(version: DdupModelVersion, *, actor: str) -> DdupModelVersion:
+    """Move a validated DDUP draft into the independent-approval queue."""
+    if version.status != ModelStatus.DRAFT:
+        raise DdupApprovalError(f"cannot submit from {version.status}")
+    try:
+        validate_ddup_configuration(version.config)
+    except DdupConfigurationError as exc:
+        raise DdupApprovalError(str(exc)) from exc
+    version.status = ModelStatus.PENDING_APPROVAL
+    version.save(update_fields=["status", "updated_at"])
+    _emit_audit(
+        "submit", "ddup_model_version", version.id, actor=actor,
+        field_changes={"version": version.version},
+    )
+    return version
+
+
+@transaction.atomic
+def clone_model_version(source: DdupModelVersion, *, actor: str) -> DdupModelVersion:
+    """Clone configuration verbatim into a draft for governed editing.
+
+    No threshold or weight is inferred, nudged, or supplied by this method.
+    The clone remains a draft until its edited configuration validates and a
+    different administrator approves it.
+    """
+    next_version = (
+        DdupModelVersion.objects.order_by("-version")
+        .values_list("version", flat=True).first() or 0
+    ) + 1
+    draft = DdupModelVersion.objects.create(
+        version=next_version,
+        description=f"Draft clone of DDUP v{source.version}",
+        config=deepcopy(source.config or {}),
+        status=ModelStatus.DRAFT,
+        author=actor,
+    )
+    _emit_audit(
+        "clone", "ddup_model_version", draft.id, actor=actor,
+        field_changes={"from_version": source.version, "to_version": draft.version},
+    )
+    return draft
+
+
+@transaction.atomic
 def activate_model_version(version: DdupModelVersion, *, approver: str) -> DdupModelVersion:
     """Per AC-DDUP-MODEL-VERSION: dual approval required, author != approver."""
     if version.status not in (ModelStatus.DRAFT, ModelStatus.PENDING_APPROVAL):
         raise DdupApprovalError(f"cannot activate from {version.status}")
     if not approver or approver == version.author:
         raise DdupApprovalError("approver must differ from author")
+    try:
+        validate_ddup_configuration(version.config)
+    except DdupConfigurationError as exc:
+        raise DdupApprovalError(str(exc)) from exc
     DdupModelVersion.objects.filter(status=ModelStatus.ACTIVE).update(status=ModelStatus.RETIRED)
     version.status = ModelStatus.ACTIVE
     version.approved_by = approver
@@ -52,7 +103,14 @@ def activate_model_version(version: DdupModelVersion, *, approver: str) -> DdupM
 
 
 def get_active_model_version() -> DdupModelVersion:
-    return DdupModelVersion.objects.get(status=ModelStatus.ACTIVE)
+    version = DdupModelVersion.objects.get(status=ModelStatus.ACTIVE)
+    try:
+        validate_ddup_configuration(version.config)
+    except DdupConfigurationError as exc:
+        raise DdupApprovalError(
+            f"active DDUP model v{version.version} is not deployable: {exc}",
+        ) from exc
+    return version
 
 
 # Policy ceiling for the auto-reverse rate. When a model version
@@ -199,17 +257,13 @@ def _record_pair(
 # id yet (the stage is not promoted). Both go through
 # members_sharing_nin_hash().
 
-TIER1_REASON = "nin"
-TIER1_SCORE = 1.0
-
-
-def members_sharing_nin_hash(nin_hash) -> list[str]:
+def members_sharing_nin_hash(nin_hash, *, member_field: str) -> list[str]:
     """Ids of live members carrying this nin_hash. The tier-1 predicate."""
     if not nin_hash:
         return []
     return list(
         Member.objects
-        .filter(nin_hash=nin_hash, is_deleted=False)
+        .filter(**{member_field: nin_hash, "is_deleted": False})
         .values_list("id", flat=True)
     )
 
@@ -223,12 +277,23 @@ def tier1_candidates_for_nin(nin: str | None) -> list[dict]:
     """
     if not nin:
         return []
+    model = get_active_model_version()
+    tier = validate_ddup_configuration(model.config).tiers.get("tier1")
+    if not tier or not tier.get("enabled"):
+        return []
+    if tier.get("method") != "exact_hash":
+        raise DdupApprovalError("tier1 must declare method=exact_hash")
+    member_field = tier["fields"][0]
+    if member_field != "nin_hash":
+        raise DdupApprovalError("tier1 exact_hash requires the registered nin_hash field")
     from apps.security.hashing import nin_hash as compute_nin_hash
 
     return [
-        {"member_id": member_id, "score": TIER1_SCORE,
-         "reason": f"tier1-{TIER1_REASON}-exact"}
-        for member_id in members_sharing_nin_hash(compute_nin_hash(nin))
+        {"member_id": member_id, "score": tier["candidate_score"],
+         "reason": tier["match_reason"]}
+        for member_id in members_sharing_nin_hash(
+            compute_nin_hash(nin), member_field=member_field,
+        )
     ]
 
 
@@ -242,11 +307,19 @@ def discover_nin_pairs(*, actor: str = "system") -> list[MatchPair]:
     Returns newly-created MatchPair rows (idempotent re-runs return []).
     """
     model = get_active_model_version()
+    tier = validate_ddup_configuration(model.config).tiers.get("tier1")
+    if not tier or not tier.get("enabled"):
+        return []
+    if tier.get("method") != "exact_hash":
+        raise DdupApprovalError("tier1 must declare method=exact_hash")
+    member_field = tier["fields"][0]
+    if member_field != "nin_hash":
+        raise DdupApprovalError("tier1 exact_hash requires the registered nin_hash field")
     nin_groups: dict[bytes, list[str]] = {}
     qs = (
         Member.objects
-        .filter(is_deleted=False, nin_hash__isnull=False)
-        .values_list("id", "nin_hash")
+        .filter(**{"is_deleted": False, f"{member_field}__isnull": False})
+        .values_list("id", member_field)
     )
     for member_id, nin_hash in qs:
         if not nin_hash:
@@ -263,7 +336,7 @@ def discover_nin_pairs(*, actor: str = "system") -> list[MatchPair]:
             for j in range(i + 1, len(ids)):
                 pair = _record_pair(
                     record_a_id=ids[i], record_b_id=ids[j],
-                    tier=1, match_reason="nin", model=model, actor=actor,
+                    tier=1, match_reason=tier["match_reason"], model=model, actor=actor,
                 )
                 if pair:
                     created.append(pair)
@@ -339,15 +412,26 @@ def discover_probabilistic_pairs(*, actor: str = "system") -> list[MatchPair]:
     )
 
     model = get_active_model_version()
-    cfg = (model.config or {}).get("tier3") or {}
-    weights = cfg.get("weights") or {
-        "surname": 0.30,
-        "first_name": 0.30,
-        "date_of_birth": 0.15,
-        "sex": 0.10,
-        "village": 0.15,
+    tier = validate_ddup_configuration(model.config).tiers.get("tier3")
+    if not tier or not tier.get("enabled"):
+        return []
+    if tier.get("method") != "weighted_similarity":
+        raise DdupApprovalError("tier3 must declare method=weighted_similarity")
+    threshold = tier["review_threshold"]
+    block_field = tier["block_field"]
+    features = tier["features"]
+    comparators = {
+        "jaro_winkler": jaro_winkler,
+        "birth_date_proximity": birth_date_proximity,
+        "exact": exact,
     }
-    threshold = cfg.get("threshold", 0.85)
+
+    def value(member, reference):
+        if reference.startswith("member."):
+            return getattr(member, reference.removeprefix("member."))
+        if reference.startswith("household."):
+            return getattr(member.household, reference.removeprefix("household."))
+        return getattr(member, reference)
 
     # Block by village to keep the comparison tractable.
     by_village: dict[str, list] = defaultdict(list)
@@ -361,7 +445,7 @@ def discover_probabilistic_pairs(*, actor: str = "system") -> list[MatchPair]:
         )
     )
     for m in qs:
-        by_village[m.household.village_id].append(m)
+        by_village[value(m, block_field)].append(m)
 
     created: list[MatchPair] = []
     for members in by_village.values():
@@ -372,20 +456,13 @@ def discover_probabilistic_pairs(*, actor: str = "system") -> list[MatchPair]:
             for j in range(i + 1, len(members)):
                 a, b = members[i], members[j]
                 scores = {
-                    "surname": jaro_winkler(a.surname or "", b.surname or ""),
-                    "first_name": jaro_winkler(
-                        a.first_name or "", b.first_name or "",
-                    ),
-                    "date_of_birth": birth_date_proximity(
-                        a.date_of_birth, b.date_of_birth,
-                    ),
-                    "sex": exact(a.sex, b.sex),
-                    "village": exact(
-                        a.household.village_id, b.household.village_id,
-                    ),
+                    feature["field"]: comparators[feature["comparator"]](
+                        value(a, feature["field"]), value(b, feature["field"]),
+                    )
+                    for feature in features
                 }
                 composite = composite_score(
-                    [(weights.get(k, 0.0), s) for k, s in scores.items()],
+                    [(feature["weight"], scores[feature["field"]]) for feature in features],
                 )
                 if composite < threshold:
                     continue

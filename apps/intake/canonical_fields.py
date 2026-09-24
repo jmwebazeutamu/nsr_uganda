@@ -361,6 +361,14 @@ DERIVED_FIELDS = {
     "member_index": "Line number",
     # Identity, held as a hash plus last four digits (never in full).
     "nin_last4": "NIN (last 4 digits)",
+    # DDUP compares the protected representation only.  It is never a
+    # questionnaire answer or display field, but it is a canonical system
+    # field and must be registered before a matching model can name it.
+    "nin_hash": "Protected NIN comparison value",
+    # Telephone comparisons use the existing telephone_1 answer after the
+    # canonical E.164 normalisation.  Register the derived value so a DDUP
+    # model has an explicit lineage rather than an implicit service rule.
+    "telephone_1_e164": "Normalised primary telephone comparison value",
     # Capture channel metadata.
     "deviceid": "Device",
     "end": "Interview ended",
@@ -371,4 +379,14 @@ DERIVED_FIELDS = {
     "gps_accuracy_m": "GPS accuracy (m)",
     # Repeat-row bookkeeping.
     "asset_counts": "Asset counts",
+}
+
+# Canonical system-derived fields that matching models may reference.  The
+# transform is metadata for the registry contract; DDUP resolves it through
+# the shared security/phone services and never retains the source value.
+DERIVED_FIELD_TRANSFORMS = {
+    "nin_hash": {"source_field": "nin", "transform": "security.nin_hash"},
+    "telephone_1_e164": {
+        "source_field": "telephone_1", "transform": "phone.e164",
+    },
 }

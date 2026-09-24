@@ -203,7 +203,9 @@ class TestTheDihUsesTheSharedTierOne:
         from apps.ddup.services import members_sharing_nin_hash
         from apps.ingestion_hub.services import _discover_stage_candidates
 
-        from_registry = set(members_sharing_nin_hash(twins[0].nin_hash))
+        from_registry = set(members_sharing_nin_hash(
+            twins[0].nin_hash, member_field="nin_hash",
+        ))
         assert from_registry == {twins[0].id, twins[1].id}
 
         payload = {"members": [{"nin": "CM90000000001X"}]}

@@ -20,7 +20,7 @@
 //   GET /api/v1/admin/workflow/ddup/queue-stats/
 //   GET /api/v1/admin/workflow/ddup/pairs/?status=pending
 
-const { useState: useStateDDUP, useMemo: useMemoDDUP } = React;
+const { useState: useStateDDUP, useMemo: useMemoDDUP, useEffect: useEffectDDUP } = React;
 
 // ────────────────────────────────────────────────────────────────
 // Mock fallback — kept only so the design preview at file:// keeps
@@ -45,23 +45,6 @@ const _DDUP_RECENT_PAIRS_MOCK = [];
 
 const _projectVersion = (r) => {
   if (!r) return null;
-  const cfg = r.config || {};
-  const tier3 = (cfg.tier3 && typeof cfg.tier3 === "object") ? cfg.tier3 : {};
-  // Tier-enabled flags. The live config typically only carries
-  // tier3.auto_merge_threshold; assume tier-1 always on (it's the
-  // deterministic baseline) and read tier2/tier3 explicitly when
-  // present.
-  const tier1 = cfg.tier1 !== undefined ? !!cfg.tier1 : true;
-  const tier2 = cfg.tier2 !== undefined ? !!cfg.tier2 : !!(cfg.tier2_phone_enabled);
-  const tier3On = cfg.tier3 !== undefined
-    ? (typeof cfg.tier3 === "boolean" ? cfg.tier3 : true)
-    : (r.threshold != null);
-  const tier3Fields = Array.isArray(tier3.fields)
-    ? tier3.fields
-    : (Array.isArray(cfg.tier3Fields) ? cfg.tier3Fields : []);
-  const threshold = r.threshold != null
-    ? Number(r.threshold)
-    : (tier3.auto_merge_threshold != null ? Number(tier3.auto_merge_threshold) : 0);
   return {
     id: r.id,
     version: r.version,
@@ -72,7 +55,7 @@ const _projectVersion = (r) => {
     approvedAt: r.approved_at ? String(r.approved_at).slice(0, 10) : null,
     effectiveFrom: r.effective_from ? String(r.effective_from).slice(0, 10) : null,
     updatedAt: r.created_at ? String(r.created_at).slice(0, 10) : null,
-    config: { autoMergeThreshold: threshold, tier1, tier2, tier3: tier3On, tier3Fields },
+    config: r.config || {},
     autoMergeCount: Number(r.auto_merge_count ?? 0),
     manualMergeCount: Number(r.manual_merge_count ?? 0),
     autoReverseRate: typeof r.auto_reverse_rate === "number" ? r.auto_reverse_rate : null,
@@ -170,16 +153,24 @@ const AdminDdupScreen = () => {
     return (active || DDUP_VERSIONS[0])?.id || null;
   }, [DDUP_VERSIONS]);
   const [selectedId, setSelectedId] = useStateDDUP(defaultId);
+  const [configDraft, setConfigDraft] = useStateDDUP("");
+  const [actionError, setActionError] = useStateDDUP("");
   const selected = DDUP_VERSIONS.find(v => v.id === selectedId)
     || DDUP_VERSIONS.find(v => v.id === defaultId)
     || DDUP_VERSIONS[0];
+  useEffectDDUP(() => {
+    if (!selected) return;
+    setConfigDraft(JSON.stringify(selected.config || {}, null, 2));
+    setActionError("");
+  }, [selected?.id]);
   // With no fixture underneath, an empty live list is now the normal
   // "nothing configured yet" case rather than an impossible one.
   if (!selected) {
     return <div className="page"><div className="t-cap muted" style={{ padding: 24 }}>No DDUP model versions available.</div></div>;
   }
   const cfg = selected.config || {};
-  const autoMergeThreshold = Number(cfg.autoMergeThreshold ?? 0);
+  const configuredTiers = Object.entries(cfg.tiers || {});
+  const autoMergeThreshold = DDUP_QUEUE_STATS.activeThreshold;
   const autoMergeCount = Number(selected.autoMergeCount ?? 0);
   const manualMergeCount = Number(selected.manualMergeCount ?? 0);
   // KPI "Active threshold" reads the live active version, not the
@@ -187,7 +178,7 @@ const AdminDdupScreen = () => {
   // threshold when the API hasn't responded.
   const activeThreshold = DDUP_QUEUE_STATS.activeThreshold != null
     ? DDUP_QUEUE_STATS.activeThreshold
-    : autoMergeThreshold;
+    : null;
   const activeVersionLabel = DDUP_QUEUE_STATS.activeVersion != null
     ? `v${DDUP_QUEUE_STATS.activeVersion}`
     : (DDUP_VERSIONS.find(v => v.status === "active")
@@ -207,16 +198,44 @@ const AdminDdupScreen = () => {
     ? undefined
     : "+34 today";
 
+  const csrf = () => (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/) || [])[1] || "";
+  const requestVersionAction = async (path, options = {}) => {
+    setActionError("");
+    const response = await fetch(path, {
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-CSRFToken": csrf() },
+      ...options,
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
+    window.location.reload();
+  };
+  const saveConfig = async () => {
+    try {
+      await requestVersionAction(`/api/v1/admin/workflow/ddup/versions/${encodeURIComponent(selected.id)}/`, {
+        method: "PATCH", body: JSON.stringify({ config: JSON.parse(configDraft) }),
+      });
+    } catch (error) { setActionError(String(error.message || error)); }
+  };
+  const cloneVersion = async () => {
+    try { await requestVersionAction(`/api/v1/admin/workflow/ddup/versions/${encodeURIComponent(selected.id)}/clone/`, { method: "POST", body: "{}" }); }
+    catch (error) { setActionError(String(error.message || error)); }
+  };
+  const submitVersion = async () => {
+    try { await requestVersionAction(`/api/v1/admin/workflow/ddup/versions/${encodeURIComponent(selected.id)}/submit/`, { method: "POST", body: "{}" }); }
+    catch (error) { setActionError(String(error.message || error)); }
+  };
+  const approveVersion = async () => {
+    try { await requestVersionAction(`/api/v1/admin/workflow/ddup/versions/${encodeURIComponent(selected.id)}/approve/`, { method: "POST", body: "{}" }); }
+    catch (error) { setActionError(String(error.message || error)); }
+  };
+
   return (
     <div className="page">
       <PageHeader
         eyebrow="ADMIN · WORKFLOW · DDUP"
         title="Deduplication & merge"
-        sub="3-tier match strategy — deterministic NIN, phone-Soundex, probabilistic composite. Auto-merge gates on the active model's confidence threshold."
-        right={<>
-          <button className="btn"><Icon name="download" size={14}/> Export decisions</button>
-          <button className="btn btn-primary"><Icon name="plus" size={14}/> New model version</button>
-        </>}
+        sub="Matching methods, fields, thresholds and automation are read from the approved DDUP model configuration."
       />
 
       <div className="grid grid-4">
@@ -229,8 +248,8 @@ const AdminDdupScreen = () => {
              value={DDUP_QUEUE_STATS.autoMergedToday.toLocaleString()}
              foot={`${DDUP_QUEUE_STATS.manualMergedToday.toLocaleString()} manual merges`}/>
         <KPI title="Active threshold"
-             value={Number(activeThreshold).toFixed(2)}
-             foot={`Score ≥ this → auto-merge · ${activeVersionLabel}`}/>
+             value={activeThreshold == null ? "—" : Number(activeThreshold).toFixed(2)}
+             foot={`Configured auto-merge policy · ${activeVersionLabel}`}/>
         <KPI title="Auto-reverse rate"
              value={refAutoReverseRate === null ? "—" : `${(refAutoReverseRate * 100).toFixed(2)}%`}
              foot="of auto-merges reversed within 30d window"
@@ -303,51 +322,46 @@ const AdminDdupScreen = () => {
                 </div>
                 <div className="row gap-2">
                   {selected.status === "draft" && <>
-                    <button className="btn"><Icon name="copy" size={13}/> Clone</button>
-                    <button className="btn btn-primary"><Icon name="upload" size={13}/> Submit for approval</button>
+                    <button className="btn" onClick={cloneVersion}><Icon name="copy" size={13}/> Clone</button>
+                    <button className="btn btn-primary" onClick={submitVersion}><Icon name="upload" size={13}/> Submit for approval</button>
                   </>}
-                  {selected.status === "active" && <button className="btn"><Icon name="copy" size={13}/> Clone as draft</button>}
+                  {selected.status === "pending_approval" && <button className="btn btn-primary" onClick={approveVersion}>Approve and activate</button>}
+                  {selected.status === "active" && <button className="btn" onClick={cloneVersion}><Icon name="copy" size={13}/> Clone as draft</button>}
                 </div>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', borderTop: '1px solid var(--neutral-200)' }}>
-                <Stat k="Auto-merge threshold" v={autoMergeThreshold.toFixed(2)} sub="composite score cut" first/>
+                <Stat k="Auto-merge threshold" v={autoMergeThreshold == null ? "—" : Number(autoMergeThreshold).toFixed(2)} sub="from active configuration" first/>
                 <Stat k="Auto-merges" v={autoMergeCount.toLocaleString()} sub="tier-3 confident"/>
                 <Stat k="Manual merges" v={manualMergeCount.toLocaleString()} sub="operator decisions"/>
                 <Stat k="Auto-reverse rate" v={typeof selected.autoReverseRate === "number" ? `${(selected.autoReverseRate*100).toFixed(2)}%` : '—'} sub="reversed within 30d window" last/>
               </div>
             </div>
 
+            {actionError && <div className="tint-danger mt-4" role="alert" style={{padding:12}}>{actionError}</div>}
+            {selected.status === "draft" && <div className="card mt-4" style={{padding:16}}>
+              <strong>DDUP model configuration</strong>
+              <div className="t-cap mt-1">References must be canonical Questionnaire or registered derived fields. Configuration is validated before it can be submitted.</div>
+              <textarea className="input t-mono" value={configDraft} onChange={e => setConfigDraft(e.target.value)} style={{width:"100%", minHeight:260, marginTop:12}} />
+              <button className="btn btn-primary mt-2" onClick={saveConfig}>Validate and save draft</button>
+            </div>}
+
             {/* Tier configuration */}
             <div className="card mt-4" style={{ padding: 0 }}>
               <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--neutral-200)' }}>
                 <strong>Tier configuration</strong>
-                <div className="t-cap">Each tier defines a match strategy. Composite score combines per-field similarity scores via the model weights.</div>
+                <div className="t-cap">Rendered directly from the selected DDUP configuration; no matching policy is assumed by this screen.</div>
               </div>
               <table className="tbl" style={{ boxShadow: 'none' }}>
                 <thead><tr><th>Tier</th><th>Strategy</th><th>Match basis</th><th>Threshold</th><th>Status</th></tr></thead>
                 <tbody>
-                  <tr>
-                    <td><Chip tone="data">Tier 1</Chip></td>
-                    <td className="t-bodysm">Deterministic</td>
-                    <td className="t-mono t-bodysm">NIN exact match · same village</td>
-                    <td className="t-mono">1.00</td>
-                    <td>{cfg.tier1 ? <Chip size="sm" tone="data">enabled</Chip> : <Chip size="sm">disabled</Chip>}</td>
-                  </tr>
-                  <tr>
-                    <td><Chip tone="update">Tier 2</Chip></td>
-                    <td className="t-bodysm">Deterministic-soft</td>
-                    <td className="t-mono t-bodysm">Phone match (Soundex-normalised) · name similarity ≥ 0.85</td>
-                    <td className="t-mono">0.85+</td>
-                    <td>{cfg.tier2 ? <Chip size="sm" tone="data">enabled</Chip> : <Chip size="sm">disabled</Chip>}</td>
-                  </tr>
-                  <tr>
-                    <td><Chip tone="quality">Tier 3</Chip></td>
-                    <td className="t-bodysm">Probabilistic composite</td>
-                    <td className="t-mono t-bodysm">{(Array.isArray(cfg.tier3Fields) && cfg.tier3Fields.length > 0) ? cfg.tier3Fields.join(' + ') : <span className="muted">—</span>}</td>
-                    <td className="t-mono">{autoMergeThreshold.toFixed(2)}+</td>
-                    <td>{cfg.tier3 ? <Chip size="sm" tone="data">enabled</Chip> : <Chip size="sm">disabled</Chip>}</td>
-                  </tr>
+                  {configuredTiers.length ? configuredTiers.map(([id, tier]) => <tr key={id}>
+                    <td><Chip tone="data">{id}</Chip></td>
+                    <td className="t-bodysm">{tier.method || "—"}</td>
+                    <td className="t-mono t-bodysm">{Array.isArray(tier.fields) ? tier.fields.join(" + ") : "—"}</td>
+                    <td className="t-mono">{tier.review_threshold ?? tier.auto_merge_threshold ?? "—"}</td>
+                    <td>{tier.enabled ? <Chip size="sm" tone="data">enabled</Chip> : <Chip size="sm">disabled</Chip>}</td>
+                  </tr>) : <tr><td colSpan="5" className="muted">No valid DDUP tier configuration is registered.</td></tr>}
                 </tbody>
               </table>
             </div>
