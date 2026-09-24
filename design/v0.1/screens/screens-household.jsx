@@ -97,6 +97,16 @@ const _hhApiToView = (h) => {
     // Use head's resolved sex_label so the chip shows "Male" / "Female",
     // not "M" / "F".
     sex: head.sex_label || head.sex || "—",
+    // The whole UBOS ladder, keyed by level, built from the shared
+    // GEO_LEVEL_CODES rather than listed here. The Location card used
+    // to name four rungs — village, parish, district, sub-region — and
+    // silently drop region, county and SUB-COUNTY, which the serializer
+    // has been sending all along. A household in Kasese showed no
+    // county at all.
+    geo: Object.fromEntries(GEO_LEVEL_CODES.map(level => [
+      level, h[`${level}_name`] || h[level] || "—",
+    ])),
+    // Named aliases kept for the header and the summary line.
     subreg:   h.sub_region_name || h.sub_region || "—",
     district: h.district_name   || h.district   || "—",
     parish:   h.parish_name     || h.parish     || "—",
@@ -723,11 +733,13 @@ const TabOverview = ({ h }) => (
         ["Captured by", h.capturedBy],
         ["Captured at", h.capturedAt],
       ]}/>
+      {/* Every rung, finest first — the order someone reads an address
+          in. Rows come from the shared ladder, so a level cannot be
+          left off the screen while the API is serving it. */}
       <KVCard title="Location" tint="data" rows={[
-        ["Village",     h.village],
-        ["Parish",      h.parish],
-        ["District",    h.district],
-        ["Sub-region",  h.subreg],
+        ...[...GEO_LEVELS].reverse().map(({ value, label }) => [
+          label, (h.geo || {})[value] || "—",
+        ]),
         ["GPS",         h.gps ? <span className="t-mono">{h.gps.lat.toFixed(6)}, {h.gps.lng.toFixed(6)}</span> : null],
         ["EA / HH #",   `${h.enumerationArea || "—"} · ${h.householdNumber || "—"}`],
       ]}/>

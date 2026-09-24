@@ -81,3 +81,47 @@ def test_the_console_declares_the_ladder_exactly_once():
         and re.search(r"^const GEO_LEVELS\s*=", path.read_text(), re.MULTILINE)
     ]
     assert not offenders, f"GEO_LEVELS redeclared in: {offenders}"
+
+
+# ---------------------------------------------------------------------------
+# The screens read what the API serves — for every rung, not four of them
+# ---------------------------------------------------------------------------
+
+def test_household_serializer_names_every_rung():
+    """`HouseholdSerializer` exposes `<level>_name` for the whole ladder.
+
+    It already did. The household detail screen's Location card did not
+    read them: it listed village, parish, district and sub-region and
+    silently dropped region, county and sub-county, so a household in
+    Kasese displayed no county at all. The card now renders from the
+    shared ladder, and this asserts the API side of that contract so a
+    new rung cannot be served-but-unshowable or shown-but-unserved.
+    """
+    from apps.data_management.api import HouseholdSerializer
+
+    declared = set(HouseholdSerializer().fields)
+    for level, _label in _jsx_ladder():
+        assert f"{level}_name" in declared, f"no {level}_name on the serializer"
+        assert level in declared, f"no {level} code field on the serializer"
+
+
+def test_the_location_card_renders_every_rung():
+    """The card builds its rows from GEO_LEVELS rather than a list.
+
+    Asserted by reading the source: the rows come from the shared
+    ladder, so adding a rung to the ladder adds it to the screen. A
+    hand-written row per level is what dropped county.
+    """
+    screen = pathlib.Path("design/v0.1/screens/screens-household.jsx").read_text()
+    card = screen[screen.index('<KVCard title="Location"'):]
+    card = card[:card.index("/>")]
+    assert "GEO_LEVELS" in card, (
+        "the Location card no longer derives its rows from the shared "
+        "ladder — a level will go missing from the screen again"
+    )
+    # And no level is hand-listed beside it.
+    for _level, label in _jsx_ladder():
+        assert f'"{label}"' not in card, (
+            f"{label} is hand-written into the Location card as well as "
+            "coming from the ladder"
+        )
