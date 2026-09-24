@@ -2114,3 +2114,109 @@ deliberate ones.
   behaviour; renamed apart, not converged.
 - 17 pending duplicate pairs; the Kato pair first.
 - The tier-3 weights DRAFT is still not authored.
+
+---
+
+## 2026-09-24 — demo grievances deleted; the email finding
+
+### Deleted, with the audit trail kept
+
+`manage.py delete_test_grievances --apply --actor jmwebaze`, after a
+dump to `pre-delete-demo-grievances-*.dump`:
+
+```
+delete 01KRXS6M58… [resolved] tasks=2 comments=1 desc='This is a test grievance, submitted by J'
+delete 01KRY9MMEN… [closed]   tasks=2 comments=1 desc='Quia ullam omnis ut'
+Deleted 2 grievance(s) and their tasks.
+```
+
+After:
+
+```
+grievances now: 8 | tasks: 2
+still on a phantom: []
+rows for the deleted ids: 0
+audit events about them, surviving: 8
+  delete event 01KRXS6M58… by jmwebaze | tasks recorded: 2
+  delete event 01KRY9MMEN… by jmwebaze | tasks recorded: 2
+```
+
+A `delete` AuditEvent was emitted **before** each removal carrying the
+status, assignee, description, household_id and task ids, so the chain
+records what was removed rather than an empty shell. The eight events
+already referencing those ids survive: AuditEvent points at entities by
+string id, not foreign key.
+
+No grievance is assigned to a phantom any more.
+
+### Email: nothing has ever been delivered
+
+Not a misconfiguration of the host — that was right all along.
+
+```
+EMAIL_HOST  comms.quasar.ug:587 STARTTLS      <- correct
+EMAIL_BACKEND  …console.EmailBackend          <- discards everything
+EMAIL_HOST_USER / PASSWORD  unset             <- the cause
+```
+
+`default_email_backend()` switches to SMTP only once one of the
+credentials is set, so it fell back to console. The console backend
+accepts every message and prints it, `send_mail` returns success, and
+the notification is audited as sent. **Eighteen notifications are
+recorded as delivered and none of them were sent** — DSA signing
+invitations, password resets, and today's grievance assignment among
+them.
+
+The relay requires authentication, for local recipients as well as
+external ones — the rejection names the client, not the address:
+
+```
+MAIL FROM johnson@quasar.ug -> 250 2.1.0 Ok
+RCPT johnson@quasar.ug      -> 554 5.7.1 <unknown[154.72.195.66]>: Client host rejected
+RCPT jmwebaze@gmail.com     -> 554 5.7.1  (the same)
+```
+
+**To deliver**, in the production `.env`:
+
+```
+EMAIL_HOST_USER=johnson@quasar.ug
+EMAIL_HOST_PASSWORD=<the mailbox password>
+```
+
+then restart web + worker + beat. Nothing else changes. Credentials are
+secrets and were not set from here.
+
+Sending identity is now `NSR MIS <johnson@quasar.ug>` (was
+`admin@quasar.ug`); `SERVER_EMAIL` follows it.
+
+### So it cannot go unnoticed again
+
+- `security.W007` warns on every management command and in the deploy
+  output while a non-DEBUG deployment is on a discarding backend. It is
+  already visible in the output above.
+- Every `notification.sent` audit row now carries `delivered` and
+  `backend`, so "sent" is checkable after the fact.
+- `send_notification` logs a warning each time a discarding backend
+  accepts a message.
+
+### Open
+
+- **SMTP credentials** — the one thing standing between the code and
+  delivered mail.
+- **No reverse DNS for 154.72.195.66.** The relay logs it as
+  `unknown[...]`. Authentication fixes the rejection; a missing PTR may
+  still cost deliverability with strict receivers. DNS change, not an
+  application one.
+- `opm-analyst` has no email address, so that account cannot be alerted.
+- The live grievance `01KRXTVG4X…` still carries two closed
+  placeholder tasks from the demo run. Annotated, left in place.
+
+### Not mine, failing in the working tree
+
+`tests/contract/test_nginx_routes_every_registry_url.py` fails on both
+nginx confs: the `reset/` URLs added to `nsr_mis/urls.py` (uncommitted,
+alongside the new `registration/password_reset_*.html` templates) are
+not routed to the registry container. **A password-reset link emailed
+to a user would 404 in production** while passing every Django
+test-client test — which is exactly what that contract test exists to
+catch. Needs a `location /reset/` block proxying to `nsr_registry`.
