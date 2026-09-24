@@ -99,3 +99,87 @@ def test_the_pickers_point_at_the_endpoints_they_mean():
     # user_search is a DRF @api_view, so the resolved callable is the
     # generated wrapper — the route's name is the stable identity.
     assert resolve(users).url_name == "users-search"
+
+
+# ---------------------------------------------------------------------------
+# The picker has to FIND things, not just reach an endpoint
+# ---------------------------------------------------------------------------
+
+@pytest.mark.django_db
+class TestHouseholdSearchFindsWhatOperatorsType:
+    """The endpoint resolving is half of it. `q` searched the head's
+    name, the Registry ID and the PARISH name only — so an operator
+    typing "Kampala", the district they actually know, got nothing.
+    """
+
+    @pytest.fixture
+    def household(self, django_user_model):
+        from datetime import date
+
+        from apps.data_management.models import Household, Member
+        from apps.reference_data.models import GeographicUnit
+
+        names = {
+            "region": "Central", "sub_region": "Kampala Central",
+            "district": "Kampala", "county": "Nakawa Division",
+            "sub_county": "Bukoto", "parish": "Kamwokya",
+            "village": "Kisenyi Cell",
+        }
+        nodes, parent = {}, None
+        for level in ("region", "sub_region", "district", "county",
+                      "sub_county", "parish", "village"):
+            nodes[level] = GeographicUnit.objects.create(
+                level=level, code=f"SRCH-{level.upper()}", name=names[level],
+                parent=parent, effective_from=date(2026, 1, 1),
+            )
+            parent = nodes[level]
+        hh = Household.objects.create(urban_rural="1", **nodes)
+        Member.objects.create(
+            household=hh, line_number=1, surname="Nakato",
+            first_name="Sarah", sex="2",
+        )
+        hh.head_member = hh.members.first()
+        hh.save()
+        return hh
+
+    def _search(self, django_user_model, term):
+        from rest_framework.test import APIClient
+        user = django_user_model.objects.create_user(
+            username=f"searcher-{abs(hash(term)) % 9999}", password="p",
+            is_superuser=True, is_staff=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+        r = client.get("/api/v1/data-management/households/", {"q": term})
+        assert r.status_code == 200, r.data
+        return r.data.get("results", r.data)
+
+    @pytest.mark.parametrize(
+        "term",
+        ["Nakato", "Sarah", "Kampala", "Bukoto", "Kamwokya", "Kisenyi"],
+    )
+    def test_every_name_an_operator_might_type_finds_it(
+        self, household, django_user_model, term,
+    ):
+        rows = self._search(django_user_model, term)
+        assert [r["id"] for r in rows] == [household.id], term
+
+    def test_the_registry_id_still_finds_it(self, household, django_user_model):
+        rows = self._search(django_user_model, household.id[:10])
+        assert [r["id"] for r in rows] == [household.id]
+
+    def test_a_geography_code_finds_it(self, household, django_user_model):
+        rows = self._search(django_user_model, "SRCH-DISTRICT")
+        assert [r["id"] for r in rows] == [household.id]
+
+    def test_the_result_says_who_the_household_is(
+        self, household, django_user_model,
+    ):
+        """A result set that can only show a ULID is searchable but
+        unreadable — which is what made intake ask for a typed ID."""
+        rows = self._search(django_user_model, "Nakato")
+        assert rows[0]["head_member_name"] == "Nakato Sarah"
+        assert rows[0]["district_name"] == "Kampala"
+
+    def test_an_unrelated_term_finds_nothing(self, household, django_user_model):
+        assert self._search(django_user_model, "Gulu") == []

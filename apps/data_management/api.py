@@ -635,7 +635,19 @@ def _household_filters(qs, params):
             Q(id__icontains=q)
             | Q(head_member__surname__icontains=q)
             | Q(head_member__first_name__icontains=q)
-            | Q(parish__name__icontains=q),
+            # The whole placename ladder, not just the parish. Somebody
+            # looking for a household types the place they know — the
+            # district, usually — and "Kampala" matched nothing while
+            # only parish names were searched. The denormalised code
+            # columns are matched too, so a Registry ID and a geography
+            # code both find the same record.
+            | Q(district__name__icontains=q)
+            | Q(sub_county__name__icontains=q)
+            | Q(parish__name__icontains=q)
+            | Q(village__name__icontains=q)
+            | Q(district_code__iexact=q)
+            | Q(sub_county_code__iexact=q)
+            | Q(parish_code__iexact=q),
         )
     sub_region = (params.get("sub_region") or "").strip()
     if sub_region:

@@ -170,7 +170,7 @@ const HouseholdPicker = ({ value, onChange, disabled, label = "Household" }) => 
   <SearchPicker
     endpoint={HOUSEHOLD_SEARCH_API}
     value={value} onChange={onChange} disabled={disabled} label={label}
-    placeholder="Search by Registry ID, head's name, or parish…"
+    placeholder="Search by head's name, district, parish, or Registry ID…"
     emptyHint="No household matches — check the spelling, or the record may be outside your area."
     renderRow={(h) => (
       <>
