@@ -79,6 +79,11 @@ INSTALLED_APPS = [
 # behind a flag so the rollout can stage. Read endpoints stay open
 # (they're harmless until partner rows exist).
 PARTNERS_MODULE_ENABLED = True
+
+# DIH operations policy. This is deployment configuration, not a UI or
+# workflow literal: use DIH_STUCK_RUN_TIMEOUT_HOURS to change the window
+# without releasing application code.
+DIH_STUCK_RUN_TIMEOUT_HOURS = env.int("DIH_STUCK_RUN_TIMEOUT_HOURS", default=6)
 # Open-CR evidence file storage (CR-modal slice 3). "file" by default
 # (dev convenience), "memory" in tests via conftest, "minio" once the
 # production bucket lands. Dir under repo root keeps dev sessions

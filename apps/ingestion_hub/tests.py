@@ -134,6 +134,68 @@ class TestProvisionalId:
         assert stage.raw_landing_id == landing.id
 
 
+class TestRawLandingComparison:
+    def test_stage_raw_landing_action_returns_immutable_source_and_audits_read(
+        self, connector, geo_codes, django_user_model,
+    ):
+        run = start_connector_run(connector)
+        raw_payload = {"source_household_id": "source-77", "roof": "2"}
+        landing = land_payload(run, raw_payload, source_reference="submission-77")
+        stage = stage_from_landing(
+            landing,
+            canonical_payload=_payload(geo_codes),
+        )
+        user = django_user_model.objects.create_user(
+            username="dih-reviewer", password="p", is_superuser=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        response = client.get(
+            f"/api/v1/dih/stage-records/{stage.id}/raw-landing/",
+        )
+
+        assert response.status_code == 200, response.content
+        assert response.data["id"] == landing.id
+        assert response.data["source_reference"] == "submission-77"
+        assert response.data["payload"] == raw_payload
+        assert AuditEvent.objects.filter(
+            action="dih.raw_landing.viewed",
+            entity_type="raw_landing",
+            entity_id=landing.id,
+        ).exists()
+
+    def test_raw_landing_action_includes_choice_code_to_label_trace(
+        self, connector, geo_codes, django_user_model,
+    ):
+        run = start_connector_run(connector)
+        landing = land_payload(run, {"source_household_id": "source-77"})
+        canonical_payload = _payload(geo_codes)
+        canonical_payload["housing"] = {"tenure": "2"}
+        stage = stage_from_landing(landing, canonical_payload=canonical_payload)
+        user = django_user_model.objects.create_user(
+            username="dih-trace-reviewer", password="p", is_superuser=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        response = client.get(
+            f"/api/v1/dih/stage-records/{stage.id}/raw-landing/",
+        )
+
+        assert response.status_code == 200, response.content
+        tenure = next(
+            item for item in response.data["choice_mappings"]
+            if item["canonical_path"] == "housing.tenure"
+        )
+        assert tenure == {
+            "canonical_path": "housing.tenure",
+            "choice_list": "dwelling_tenure",
+            "stored_value": "2",
+            "display_value": "Renting",
+        }
+
+
 # --- AC-DIH-PROMOTE-ATOMIC + AC-DIH-LINEAGE --------------------------------
 
 class TestPromoteAtomic:
@@ -673,7 +735,7 @@ class TestConnectorRunAdmin:
         fresh.refresh_from_db()
         assert stuck.status == ConnectorRunStatus.FAILED
         assert stuck.finished_at is not None
-        assert "stuck since" in stuck.note
+        assert "configured DIH run timeout" in stuck.note
         # Fresh run untouched.
         assert fresh.status == ConnectorRunStatus.RUNNING
         assert fresh.finished_at is None
@@ -1829,6 +1891,38 @@ class TestDeleteConnectorRun:
         assert "wait for it to finish" in resp.json()["detail"]
         # Run survives.
         assert ConnectorRun.objects.filter(id=run.id).exists()
+
+    def test_mark_stuck_updates_canonical_status_then_allows_delete(self, django_user_model):
+        from datetime import timedelta
+        from django.conf import settings
+        from django.utils import timezone
+
+        run = self._build_run(status=ConnectorRunStatus.RUNNING)
+        ConnectorRun.objects.filter(pk=run.pk).update(
+            started_at=timezone.now() - timedelta(
+                hours=settings.DIH_STUCK_RUN_TIMEOUT_HOURS + 1,
+            ),
+        )
+        user = self._in_group(django_user_model, "nsr_admin")
+        client = APIClient()
+        client.force_authenticate(user)
+
+        marked = client.post(
+            "/api/v1/dih/connector-runs/mark-stuck/",
+            {"ids": [run.id]}, format="json",
+        )
+        assert marked.status_code == 200, marked.content
+        assert marked.data["marked"] == [run.id]
+        run.refresh_from_db()
+        assert run.status == ConnectorRunStatus.FAILED
+        assert run.finished_at is not None
+        assert AuditEvent.objects.filter(
+            action="dih.connector.run_marked_failed", entity_id=run.id,
+        ).exists()
+
+        deleted = client.post(self._url(run), {"reason": "stale run cleanup"}, format="json")
+        assert deleted.status_code == 200, deleted.content
+        assert not ConnectorRun.objects.filter(pk=run.id).exists()
 
     def test_refuses_run_with_promoted_records(self, django_user_model):
         run = self._build_run(

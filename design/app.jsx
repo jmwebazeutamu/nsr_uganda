@@ -143,7 +143,6 @@ const NAV = [
   // partner's own DSA + programmes register.
   { id: "my-dsa",        label: "My DSA",        icon: "file" },
   { id: "my-programmes", label: "My programmes", icon: "book" },
-  { id: "receipt", label: "Receipt slip",  icon: "print" },
   { section: "PARTNERS" },
   { id: "partners", label: "Partners",     icon: "users",     screen: true },
   // Data Sharing Agreements lives under Admin → Partners & DSAs.

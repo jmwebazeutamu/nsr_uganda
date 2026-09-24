@@ -24,7 +24,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import re as _re
+from datetime import timedelta
 
+from django.conf import settings
 from django.db import models, transaction
 from django.db.models import F
 from django.utils import timezone
@@ -50,6 +52,7 @@ from apps.data_management.models import (
 )
 from apps.dqa.engine import evaluate_all as dqa_evaluate_all
 from apps.identity_verification.mock import NiraError, verify_nin
+from apps.reference_data.code_frames import resolve_geographic_unit
 from apps.reference_data.models import GeographicUnit
 from apps.security.audit import emit as emit_audit
 from apps.security.hashing import nin_hash as compute_nin_hash
@@ -653,12 +656,13 @@ def promote_stage_record(
             if level in _optional_levels:
                 return None
             raise DihError(f"canonical_payload.geographic.{level} required")
-        row = (
-            GeographicUnit.objects
-            .filter(level=level, code=code)
-            .order_by("-effective_from")
-            .first()
-        )
+        # Resolves across both county-code spellings — see
+        # apps/reference_data/code_frames.py. The UBOS workbook writes
+        # the county segment unpadded ("320.2"); the Kobo form sends it
+        # padded ("320.02"). Looking up only the literal code is what
+        # let geo_backfill fabricate a second row for a county that
+        # already existed, and attached households to the fabrication.
+        row = resolve_geographic_unit(level, code)
         if row is None:
             raise DihError(f"geographic unit {level}={code} not found")
         return row
@@ -2308,6 +2312,44 @@ def trigger_connector_pull(
 class DeleteError(DihError):
     """A ConnectorRun cannot be safely deleted from the current state
     (still running, or has produced promoted Households)."""
+
+
+def stuck_run_timeout() -> timedelta:
+    """Resolve the connector-run timeout from deployment configuration."""
+    return timedelta(hours=settings.DIH_STUCK_RUN_TIMEOUT_HOURS)
+
+
+@transaction.atomic
+def mark_stuck_runs_failed(
+    runs, *, actor: str,
+) -> dict:
+    """Fail selected, genuinely stale RUNNING runs in the canonical table."""
+    now = timezone.now()
+    cutoff = now - stuck_run_timeout()
+    marked, skipped = [], []
+    for run in runs.select_for_update():
+        if run.status != ConnectorRunStatus.RUNNING or run.started_at >= cutoff:
+            skipped.append(run.id)
+            continue
+        run.status = ConnectorRunStatus.FAILED
+        run.finished_at = now
+        run.note = (
+            (run.note + "\n" if run.note else "")
+            + f"Marked FAILED after exceeding the configured DIH run timeout; "
+            + f"started {run.started_at.isoformat()}."
+        )
+        run.save(update_fields=["status", "finished_at", "note"])
+        emit_audit(
+            "dih.connector.run_marked_failed", "connector_run", run.id,
+            actor=actor,
+            field_changes={"started_at": run.started_at.isoformat()},
+        )
+        marked.append(run.id)
+    return {
+        "marked": marked,
+        "skipped": skipped,
+        "stuck_threshold_hours": settings.DIH_STUCK_RUN_TIMEOUT_HOURS,
+    }
 
 
 @transaction.atomic

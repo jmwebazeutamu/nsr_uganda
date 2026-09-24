@@ -16,6 +16,7 @@ from apps.data_management.choice_field_map import (
     MEMBER_FIELDS,
     PAYLOAD_FIELDS,
     apply_payload_labels,
+    iter_payload_choice_values,
 )
 from apps.reference_data.services import (
     clear_resolver_cache,
@@ -59,6 +60,18 @@ class TestMapShape:
         for path in PAYLOAD_FIELDS:
             assert len(path) >= 1
 
+    def test_choice_trace_uses_the_same_canonical_paths_as_label_resolution(self):
+        payload = {
+            "housing": {"tenure": "2"},
+            "members": [{"sex": "M"}, {"sex": "F"}],
+        }
+
+        assert list(iter_payload_choice_values(payload)) == [
+            (("housing", "tenure"), "dwelling_tenure", "single", "2"),
+            (("members", "0", "sex"), "sex", "single", "M"),
+            (("members", "1", "sex"), "sex", "single", "F"),
+        ]
+
 
 @pytest.mark.django_db
 class TestApplyPayloadLabels:
@@ -98,6 +111,26 @@ class TestApplyPayloadLabels:
         assert h["assets_owned"] == ["Radio", "Mobile phone", "Bicycle"]
         # Non-coded keys pass through untouched.
         assert "rooms_total" not in h
+
+    def test_legacy_housing_codes_resolve_via_their_original_choice_lists(self):
+        payload = {
+            "housing": {
+                "tenure": "2", "roof_material": "1", "wall_material": "3",
+                "floor_material": "2", "cooking_fuel": "1",
+                "lighting_source": "3", "water_source": "2",
+                "toilet_type": "2", "waste_disposal": "3",
+                "livelihood_source": "3",
+            },
+        }
+        housing = apply_payload_labels(payload, resolve_label)["housing"]
+        assert housing == {
+            "tenure": "Renting", "roof_material": "Iron sheets",
+            "wall_material": "Wood", "floor_material": "Tiles",
+            "cooking_fuel": "Firewood", "lighting_source": "Generator",
+            "water_source": "Piped — public tap",
+            "toilet_type": "Flush — septic tank", "waste_disposal": "Buried",
+            "livelihood_source": "Livestock keeping",
+        }
 
     def test_missing_block_skipped(self):
         payload = {"agriculture": {"land_ownership": "4"}}

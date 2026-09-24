@@ -9,7 +9,7 @@ from apps.security.audit_views import AuditReadMixin
 
 from .constants import PMT_TRIGGER_MANUAL
 from .models import PMTModelVersion, PMTResult
-from .services import recompute_for_household
+from .services import get_active_model_version, recompute_for_household
 
 
 class PMTModelVersionSerializer(serializers.ModelSerializer):
@@ -35,6 +35,24 @@ class PMTModelVersionViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = PMTModelVersion.objects.all().order_by("-version")
     serializer_class = PMTModelVersionSerializer
     filterset_fields = ["status"]
+
+    @extend_schema(
+        tags=["pmt"], summary="Get the current active PMT model version",
+        responses={200: PMTModelVersionSerializer,
+                   404: OpenApiResponse(description="no ACTIVE PMT model")},
+    )
+    @action(detail=False, methods=["get"], url_path="current")
+    def current(self, request):
+        """Expose the model configuration that defines live PMT bands.
+
+        Consumers must obtain band values from ``band_cutoffs`` here rather
+        than maintaining a parallel list of poverty labels in the UI.
+        """
+        model = get_active_model_version()
+        if model is None:
+            return Response({"detail": "no active PMT model version"},
+                            status=status.HTTP_404_NOT_FOUND)
+        return Response(self.get_serializer(model).data)
 
 
 @extend_schema_view(

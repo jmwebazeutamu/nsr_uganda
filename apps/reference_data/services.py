@@ -59,25 +59,37 @@ def _options_map(list_id: str, language: str) -> dict[str, str]:
 
     Returns the union of English rows (always loaded as a fallback)
     and `language` rows (which override English when both exist).
-    Only status=ACTIVE options are included — deprecated options are
-    not returned, which matches the intake-time selectability rule
-    in ChoiceOption.status's docstring.
+    Active options take precedence. Deprecated options are included only
+    as a read-time fallback so historical questionnaire responses retain
+    their approved label after an option is retired. New capture controls
+    use ``resolve_options()``, which deliberately remains ACTIVE-only.
     """
     rows = (
         ChoiceOption.objects
         .filter(
             choice_list_id=list_id,
-            status=ChoiceOption.Status.ACTIVE,
+            status__in=[
+                ChoiceOption.Status.ACTIVE,
+                ChoiceOption.Status.DEPRECATED,
+            ],
         )
-        .values("code", "label", "language")
+        .values("code", "label", "language", "status")
     )
-    by_lang: dict[str, dict[str, str]] = {}
+    by_lang_status: dict[str, dict[str, dict[str, str]]] = {}
     for r in rows:
-        by_lang.setdefault(r["language"], {})[r["code"]] = r["label"]
-    primary = by_lang.get(language, {})
-    fallback = by_lang.get("en", {})
-    # Primary overrides fallback for any code present in both.
-    return {**fallback, **primary}
+        by_lang_status.setdefault(r["status"], {}).setdefault(
+            r["language"], {},
+        )[r["code"]] = r["label"]
+
+    def _labels(status: str) -> dict[str, str]:
+        by_lang = by_lang_status.get(status, {})
+        return {**by_lang.get("en", {}), **by_lang.get(language, {})}
+
+    # Merge deprecated first, then active, so an active code always wins.
+    return {
+        **_labels(ChoiceOption.Status.DEPRECATED),
+        **_labels(ChoiceOption.Status.ACTIVE),
+    }
 
 
 def clear_resolver_cache() -> None:

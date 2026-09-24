@@ -520,10 +520,24 @@ def _canonicalize_kobo_geo(raw: dict) -> dict:
       region:     "R-WESTERN"                     (R-{SLUG})
       sub_region: "SR-KIGEZI-WESTERN"             (SR-{SLUG}-{R_SLUG})
       district:   "412"                           (same)
-      county:     "412.02"                        (.-separated)
-      sub_county: "412.02.05"
-      parish:     "412.02.05.01"
+      county:     "412.2"                         (county segment is NOT
+                                                   zero-padded — the
+                                                   workbook's County_code
+                                                   is used verbatim)
+      sub_county: "412.2.05"                      (sub-county segment IS
+                                                   two-digit padded)
+      parish:     "412.2.05.01"
       village:    (not loaded today — UBOS source has no village rows)
+
+    NOTE the county segment: the form pads it, the workbook does not,
+    so the codes this function emits ("412.02...") and the codes the
+    loader writes ("412.2...") are different spellings of the same
+    place. They are reconciled at lookup time by
+    apps/reference_data/code_frames.resolve_geographic_unit, not here —
+    rewriting the code in this function would be wrong, because
+    "412.02" (Nyakagyeme) and "412.2" (Rujumbura County) are both real
+    and different. This docstring previously claimed the loader wrote
+    "412.02", and that claim is why nothing reconciled them.
 
     Village is fabricated from `{parish_code}.{slug(village_name)}`
     so the Household.village FK can be satisfied without requiring a

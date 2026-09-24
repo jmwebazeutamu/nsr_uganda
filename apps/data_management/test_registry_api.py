@@ -189,6 +189,37 @@ class TestHouseholdFilters:
         ids = {h["id"] for h in r.data["results"]}
         assert ids == {seeded_buganda["hh2"].id}
 
+    def test_pmt_band_filter_is_the_canonical_query_key(self, api, seeded_buganda):
+        band = seeded_buganda["hh2"].current_vulnerability_band
+        response = api.get(f"{URL_HOUSEHOLDS}?pmt_band={band}")
+        assert {row["id"] for row in response.data["results"]} == {
+            seeded_buganda["hh2"].id,
+        }
+
+    def test_head_sex_filter_uses_canonical_member_sex(self, api, seeded_buganda):
+        head_sex = seeded_buganda["hh1"].head_member.sex
+        response = api.get(f"{URL_HOUSEHOLDS}?head_sex={head_sex}")
+        assert {row["id"] for row in response.data["results"]} == {
+            seeded_buganda["hh1"].id,
+        }
+
+    def test_registration_date_range_filters_household_created_at(
+        self, api, seeded_buganda,
+    ):
+        Household.objects.filter(pk=seeded_buganda["hh1"].id).update(
+            created_at="2026-01-15T10:00:00Z",
+        )
+        Household.objects.filter(pk=seeded_buganda["hh2"].id).update(
+            created_at="2026-02-15T10:00:00Z",
+        )
+
+        response = api.get(
+            f"{URL_HOUSEHOLDS}?registered_from=2026-02-01&registered_to=2026-02-28",
+        )
+        assert {row["id"] for row in response.data["results"]} == {
+            seeded_buganda["hh2"].id,
+        }
+
     def test_intake_source_filter(self, api, seeded_buganda, seeded_karamoja):
         r = api.get(f"{URL_HOUSEHOLDS}?intake_source=Walk-in")
         ids = {h["id"] for h in r.data["results"]}
@@ -221,6 +252,11 @@ class TestHouseholdAggregates:
         r = api.get(f"{URL_HH_AGGREGATES}?sub_region=SR-KARAMOJA")
         assert r.data["total"] == 1
         assert r.data["registered"] == 1
+
+    def test_aggregates_honour_head_sex_filter(self, api, seeded_buganda):
+        head_sex = seeded_buganda["hh1"].head_member.sex
+        response = api.get(f"{URL_HH_AGGREGATES}?head_sex={head_sex}")
+        assert response.data["total"] == 1
 
 
 # ───────────────────────────────────────────────────────────────

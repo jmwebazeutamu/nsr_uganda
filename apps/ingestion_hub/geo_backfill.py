@@ -25,6 +25,7 @@ from datetime import date
 
 from django.db import transaction
 
+from apps.reference_data.code_frames import resolve_geographic_unit
 from apps.reference_data.models import GeographicUnit
 
 from .models import StageRecord
@@ -115,9 +116,12 @@ def backfill_missing_geo_from_stages(stage_qs=None) -> BackfillResult:
 
     for level in LEVEL_ORDER:
         for code, payload in targets[level].items():
-            existing = GeographicUnit.objects.filter(
-                level=level, code=code,
-            ).first()
+            # Resolve across both county-code spellings before deciding
+            # anything is missing. Matching only the literal code is how
+            # 47 placeholder rows came to exist for counties,
+            # sub-counties and parishes that were already in the frame
+            # under the UBOS spelling.
+            existing = resolve_geographic_unit(level, code)
             if existing is not None:
                 cache[(level, code)] = existing
                 skipped += 1

@@ -1,5 +1,3 @@
-from datetime import timedelta
-
 from django.contrib import admin, messages
 from django.utils import timezone
 from django.utils.html import format_html
@@ -18,11 +16,7 @@ from .models import (
     RawLanding,
     StageRecord,
 )
-
-# Runs sitting in RUNNING state beyond this are considered stuck —
-# Celery worker likely died mid-import. Operations runbook fires the
-# bulk "mark failed" admin action to clear them.
-STUCK_RUN_THRESHOLD = timedelta(hours=6)
+from .services import mark_stuck_runs_failed, stuck_run_timeout
 
 
 # SourceSystem registration lives in admin_credentials so the
@@ -81,10 +75,10 @@ class ConnectorRunAdmin(admin.ModelAdmin):
         color, label = tone
         # Stuck overlay — visible only on RUNNING rows past threshold.
         if (obj.status == ConnectorRunStatus.RUNNING
-                and (timezone.now() - obj.started_at) > STUCK_RUN_THRESHOLD):
+                and (timezone.now() - obj.started_at) > stuck_run_timeout()):
             return format_html(
                 '<span style="color:#b00;font-weight:600">{}</span>',
-                "STUCK > 6h",
+                f"STUCK > {int(stuck_run_timeout().total_seconds() // 3600)}h",
             )
         return format_html('<span style="color:{}">{}</span>', color, label)
 
@@ -113,26 +107,16 @@ class ConnectorRunAdmin(admin.ModelAdmin):
         reading the audit chain can see exactly how far the run got.
         finished_at gets set to now() so the duration display flips
         from the rolling 'running' indicator to a fixed h:m number."""
-        cutoff = timezone.now() - STUCK_RUN_THRESHOLD
-        target = queryset.filter(
-            status=ConnectorRunStatus.RUNNING, started_at__lt=cutoff,
+        result = mark_stuck_runs_failed(
+            queryset,
+            actor=(getattr(request.user, "username", "") or "").strip() or "admin",
         )
-        marked = 0
-        for run in target:
-            run.status = ConnectorRunStatus.FAILED
-            run.finished_at = timezone.now()
-            run.note = (
-                (run.note + "\n" if run.note else "")
-                + f"Admin marked as FAILED via bulk action — was stuck "
-                f"since {run.started_at.isoformat()}."
-            )
-            run.save(update_fields=["status", "finished_at", "note"])
-            marked += 1
-        skipped = queryset.count() - marked
+        marked = len(result["marked"])
+        skipped = len(result["skipped"])
         self.message_user(
             request,
             f"Marked {marked} stuck run(s) as FAILED; {skipped} skipped "
-            f"(either not RUNNING or under the {STUCK_RUN_THRESHOLD} threshold).",
+            f"(either not RUNNING or under the configured timeout).",
             level=messages.SUCCESS if marked else messages.WARNING,
         )
 

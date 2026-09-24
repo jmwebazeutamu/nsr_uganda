@@ -10,6 +10,8 @@ from apps.security.abac import HouseholdIdScopedQuerysetMixin, scope_q_for_field
 from apps.security.actor import actor_from_request
 from apps.security.audit import emit as emit_audit
 from apps.security.audit_views import AuditReadMixin
+from apps.data_management.choice_field_map import iter_payload_choice_values
+from apps.reference_data.services import resolve_label, resolve_labels
 
 from .models import (
     Connector,
@@ -27,6 +29,7 @@ from .services import (
     TriggerError,
     delete_connector_run,
     edit_stage_record,
+    mark_stuck_runs_failed,
     process_stage_record,
     promote_stage_record,
     quarantine_stage_record,
@@ -70,13 +73,19 @@ class ConnectorRunSerializer(serializers.ModelSerializer):
     connector_name = serializers.CharField(
         source="connector.name", read_only=True,
     )
+    stuck_threshold_hours = serializers.SerializerMethodField()
+
+    def get_stuck_threshold_hours(self, obj):
+        from django.conf import settings
+        return settings.DIH_STUCK_RUN_TIMEOUT_HOURS
 
     class Meta:
         model = ConnectorRun
         fields = ("id", "connector", "connector_name", "source_code",
                   "run_type", "started_at", "finished_at", "status",
                   "records_received", "records_landed", "records_staged",
-                  "records_promoted", "records_quarantined", "records_rejected", "note")
+                  "records_promoted", "records_quarantined", "records_rejected", "note",
+                  "stuck_threshold_hours")
 
 
 class StageRecordSerializer(serializers.ModelSerializer):
@@ -338,6 +347,12 @@ class DeleteRunRequestSerializer(serializers.Serializer):
     )
 
 
+class MarkStuckRunsRequestSerializer(serializers.Serializer):
+    ids = serializers.ListField(
+        child=serializers.CharField(max_length=26), min_length=1,
+    )
+
+
 class DeleteRunResponseSerializer(serializers.Serializer):
     """Cascade counts returned by POST /connector-runs/{id}/delete/."""
     deleted_run_id = serializers.CharField()
@@ -527,6 +542,25 @@ class ConnectorRunViewSet(viewsets.ReadOnlyModelViewSet):
 
     @extend_schema(
         tags=["dih"],
+        summary="Mark selected stale connector runs as failed",
+        request=MarkStuckRunsRequestSerializer,
+        responses={200: OpenApiResponse(description="marked/skipped ids and configured timeout")},
+    )
+    @action(
+        detail=False, methods=["post"], url_path="mark-stuck",
+        permission_classes=[IsDihTrigger],
+    )
+    def mark_stuck(self, request):
+        ser = MarkStuckRunsRequestSerializer(data=request.data)
+        ser.is_valid(raise_exception=True)
+        result = mark_stuck_runs_failed(
+            self.get_queryset().filter(id__in=ser.validated_data["ids"]),
+            actor=(getattr(request.user, "username", "") or "").strip() or "admin",
+        )
+        return Response(result)
+
+    @extend_schema(
+        tags=["dih"],
         summary="Delete a ConnectorRun + all dependents (US-S11-023)",
         description=(
             "Hard-delete a ConnectorRun and every dependent row "
@@ -631,6 +665,62 @@ class StageRecordViewSet(
             )
             qs = qs.filter(provisional_registry_id__in=hh_ids)
         return qs
+
+    @extend_schema(
+        tags=["dih"],
+        summary="Read the immutable raw landing for a staged record",
+        responses={
+            200: OpenApiResponse(description="RawLanding lineage and payload"),
+            404: OpenApiResponse(description="stage has no raw landing"),
+        },
+    )
+    @action(detail=True, methods=["get"], url_path="raw-landing")
+    def raw_landing(self, request, pk=None):
+        """Read the append-only Tier-1 payload linked to this stage row."""
+        stage = self.get_object()
+        landing = stage.raw_landing
+        if landing is None:
+            return Response(
+                {"detail": "This stage record has no raw landing."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        emit_audit(
+            "dih.raw_landing.viewed", "raw_landing", landing.id,
+            actor=actor_from_request(request),
+            field_changes={"stage_record_id": str(stage.id)},
+        )
+        # The canonical field map owns both the list name and multi/single
+        # semantics.  Resolve against the landing date so a historical
+        # comparison retains the label valid when this source submission was
+        # received, rather than silently using a newer code-frame version.
+        as_of = landing.received_at.date()
+        choice_mappings = []
+        for path, list_name, kind, stored_value in iter_payload_choice_values(
+            stage.canonical_payload,
+        ):
+            context = {
+                "stage_record_id": str(stage.id),
+                "canonical_path": ".".join(path),
+            }
+            label = (
+                resolve_labels(list_name, stored_value, as_of=as_of, context=context)
+                if kind == "multi"
+                else resolve_label(list_name, stored_value, as_of=as_of, context=context)
+            )
+            choice_mappings.append({
+                "canonical_path": ".".join(path),
+                "choice_list": list_name,
+                "stored_value": stored_value,
+                "display_value": label,
+            })
+        return Response({
+            "id": landing.id,
+            "connector_run": landing.connector_run_id,
+            "received_at": landing.received_at.isoformat(),
+            "source_reference": landing.source_reference,
+            "payload": landing.payload,
+            "choice_mappings": choice_mappings,
+        })
 
     @extend_schema(
         tags=["dih"],

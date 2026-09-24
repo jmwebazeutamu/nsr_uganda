@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, PageHeader, KPI, useApi, MembersListView,
+/* global React, Icon, Chip, PageHeader, KPI, useApi, useChoiceList, MembersListView,
    useWideView, WideViewButtons, WideShell, wideTableScrollStyle */
 // NSR MIS — Registry browse (US-005 / US-090 read-only registry view).
 //
@@ -79,6 +79,10 @@ const _buildHouseholdAggregatesUrl = (filters) => {
     : `${_HH_API_BASE}aggregates/`;
 };
 
+const _pmtBandLabel = (code) => String(code || "")
+  .replaceAll("_", " ")
+  .replace(/\b\w/g, letter => letter.toUpperCase());
+
 // Project a live Household payload (HouseholdSerializer shape) onto
 // the row shape the existing table render expects. Head is the
 // nested member with relationship_to_head === "01" (the "Head" code
@@ -136,6 +140,9 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
   // backend filter param exactly).
   const [subreg, setSubreg] = useStateReg("");
   const [band, setBand] = useStateReg("");
+  const [headSex, setHeadSex] = useStateReg("");
+  const [registeredFrom, setRegisteredFrom] = useStateReg("");
+  const [registeredTo, setRegisteredTo] = useStateReg("");
   const [intakeSrc, setIntakeSrc] = useStateReg("");
   const [prog, setProg] = useStateReg("");
   const [sortBy, setSortBy] = useStateReg("lastUpdate");
@@ -148,7 +155,8 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
   const pageSize = 12;
 
   const _hhFilters = {
-    q, sub_region: subreg, band, intake_source: intakeSrc, programme: prog,
+    q, sub_region: subreg, pmt_band: band, intake_source: intakeSrc, programme: prog,
+    head_sex: headSex, registered_from: registeredFrom, registered_to: registeredTo,
   };
   // DRF is 1-indexed; expose the same `page` state on screen and add 1
   // when building the URL.
@@ -177,6 +185,16 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
   const [listResp, listMeta] = useApi(listUrl);
   const [aggResp] = useApi(aggUrl);
   const [subregResp] = useApi(subregUrl);
+  // The current PMT model is the configuration SSOT for band codes.
+  // No band values or legacy quintile labels are maintained in this screen.
+  const [activePmtModel] = useApi("/api/v1/pmt/model-versions/current/");
+  const pmtBandOptions = Object.keys(activePmtModel?.band_cutoffs || {});
+  // The head-sex filter must use the Questionnaire/Reference Data
+  // vocabulary, never a locally maintained list of values.
+  const [, , choiceLists] = useChoiceList
+    ? useChoiceList(["sex"])
+    : [[], {}, {}];
+  const headSexOptions = (choiceLists?.allLists?.sex) || [];
   // Unfiltered tab counts (US-S11-032) — the hardcoded "12.1M" /
   // "48.1M" pills lied about the real registry size for any
   // pre-launch dev DB. Both endpoints respect ABAC scope so a
@@ -214,7 +232,8 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
   const subregs = (subregResp && subregResp.results) || subregResp || [];
 
   const reset = () => {
-    setQ(""); setSubreg(""); setBand(""); setIntakeSrc(""); setProg(""); setPage(0);
+    setQ(""); setSubreg(""); setBand(""); setIntakeSrc(""); setProg("");
+    setHeadSex(""); setRegisteredFrom(""); setRegisteredTo(""); setPage(0);
   };
 
   // KPIs read off the aggregates endpoint so they reflect the visible
@@ -331,9 +350,21 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
             <option value="">Any sub-region</option>
             {subregs.map(s => <option key={s.id || s.code} value={s.code}>{s.name}</option>)}
           </select>
+          <select className="field-select" style={{height:34, width:'auto', minWidth:150}} value={headSex} onChange={(e) => { setHeadSex(e.target.value); setPage(0); }}>
+            <option value="">Any head sex</option>
+            {headSexOptions.map(option => <option key={option.code} value={option.code}>{option.label}</option>)}
+          </select>
+          <label className="t-bodysm muted" style={{display:'flex', alignItems:'center', gap:6}}>
+            Registered from
+            <input type="date" className="field-input" value={registeredFrom} onChange={(e) => { setRegisteredFrom(e.target.value); setPage(0); }} />
+          </label>
+          <label className="t-bodysm muted" style={{display:'flex', alignItems:'center', gap:6}}>
+            to
+            <input type="date" className="field-input" value={registeredTo} onChange={(e) => { setRegisteredTo(e.target.value); setPage(0); }} />
+          </label>
           <select className="field-select" style={{height:34, width:'auto', minWidth:140}} value={band} onChange={(e) => { setBand(e.target.value); setPage(0); }}>
             <option value="">Any PMT band</option>
-            <option>Poorest 20%</option><option>Poorest 40%</option><option>Middle 40%</option><option>Top 20%</option>
+            {pmtBandOptions.map(code => <option key={code} value={code}>{_pmtBandLabel(code)}</option>)}
           </select>
           <input
             type="text" value={prog}
@@ -356,7 +387,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
       </div>
 
       {/* Active filter chips */}
-      {(intakeSrc || subreg || band || prog || q) && (
+      {(intakeSrc || subreg || band || prog || q || headSex || registeredFrom || registeredTo) && (
         <div className="row gap-2 mt-3" style={{flexWrap:'wrap'}}>
           <span className="t-cap">Active filters:</span>
           {q && <Chip size="sm">"{q}" <button onClick={() => setQ("")} style={{marginLeft:4, border:0, background:'transparent', cursor:'pointer'}}>×</button></Chip>}
@@ -364,7 +395,10 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
           {subreg && <Chip size="sm">{
             (subregs.find(s => s.code === subreg)?.name) || subreg
           }</Chip>}
-          {band && <Chip size="sm">{band}</Chip>}
+          {band && <Chip size="sm">{_pmtBandLabel(band)}</Chip>}
+          {headSex && <Chip size="sm">Head: {headSexOptions.find(option => option.code === headSex)?.label || headSex}</Chip>}
+          {registeredFrom && <Chip size="sm">Registered from {registeredFrom}</Chip>}
+          {registeredTo && <Chip size="sm">Registered to {registeredTo}</Chip>}
           {prog && <Chip size="sm" tone="programme">{prog}</Chip>}
         </div>
       )}
@@ -489,4 +523,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
 // into a mocked Change Request form; the prototype block (HH_DETAIL +
 // HouseholdScreen + 12 tab bodies + CR_TWEAK_DEFAULTS + helpers) has
 // been removed.
-Object.assign(window, { RegistryScreen });
+Object.assign(window, {
+  RegistryScreen, _buildHouseholdListUrl, _buildHouseholdAggregatesUrl,
+  _pmtBandLabel,
+});

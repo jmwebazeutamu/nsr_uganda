@@ -1,3 +1,5 @@
+from datetime import date
+
 from django.db.models import Q
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import serializers, viewsets
@@ -625,7 +627,26 @@ def _household_filters(qs, params):
     sub_region = (params.get("sub_region") or "").strip()
     if sub_region:
         qs = qs.filter(sub_region_code=sub_region)
-    band = (params.get("band") or "").strip()
+    head_sex = (params.get("head_sex") or "").strip()
+    if head_sex:
+        qs = qs.filter(head_member__sex=head_sex)
+    for param, lookup in (
+        ("registered_from", "created_at__date__gte"),
+        ("registered_to", "created_at__date__lte"),
+    ):
+        value = (params.get(param) or "").strip()
+        if not value:
+            continue
+        try:
+            qs = qs.filter(**{lookup: date.fromisoformat(value)})
+        except ValueError as error:
+            raise serializers.ValidationError({
+                param: "Use an ISO date (YYYY-MM-DD).",
+            }) from error
+    # ``pmt_band`` is the canonical query key. Retain ``band`` as a
+    # compatibility alias while consumers move away from legacy display
+    # labels; neither path owns a list of PMT values.
+    band = (params.get("pmt_band") or params.get("band") or "").strip()
     if band:
         qs = qs.filter(current_vulnerability_band=band)
     intake_source = (params.get("intake_source") or "").strip()
@@ -706,8 +727,9 @@ class HouseholdViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyMod
         description=(
             "Returns total / registered / provisional_pending / "
             "programme_enrolled counts honouring the same filter params "
-            "as the list endpoint (q, sub_region, band, intake_source, "
-            "programme). Note: `provisional_pending` is always 0 against "
+            "as the list endpoint (q, sub_region, pmt_band, intake_source, "
+            "programme, head_sex, registered_from, registered_to). Note: "
+            "`provisional_pending` is always 0 against "
             "this surface because pre-promotion records live in "
             "apps.ingestion_hub.StageRecord, not Household. The two-"
             "system count lands when the DIH-pending tile feature ships."

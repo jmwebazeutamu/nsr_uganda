@@ -449,6 +449,11 @@ const DIHScreen = () => {
   // mode of the wide view, so it can be maximised in place or popped to
   // a second monitor beside the queue.
   const [reviewOpen, setReviewOpen] = useStateDIH(false);
+  // Read-only lineage projection fetched only when the reviewer asks for
+  // it. RawLanding remains the append-only source of truth; this is only
+  // transient display state and is never persisted on StageRecord.
+  const [rawLanding, setRawLanding] = useStateDIH(null);
+  const [rawLandingError, setRawLandingError] = useStateDIH("");
   const [reviewDraft, setReviewDraft] = useStateDIH({});
   const [reviewSaving, setReviewSaving] = useStateDIH(false);
   const [bulkIdvOpen, setBulkIdvOpen] = useStateDIH(false);
@@ -669,6 +674,21 @@ const DIHScreen = () => {
     () => visibleRows.find(r => r.id === selectedRow) || rows.find(r => r.id === selectedRow),
     [visibleRows, rows, selectedRow],
   );
+  const openRawLanding = () => {
+    if (!current) return;
+    setRawLanding(null);
+    setRawLandingError("");
+    fetch(`/api/v1/dih/stage-records/${encodeURIComponent(current.id)}/raw-landing/`, {
+      credentials: "same-origin", headers: { Accept: "application/json" },
+    })
+      .then(async response => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
+        return body;
+      })
+      .then(setRawLanding)
+      .catch(error => setRawLandingError(String(error.message || error)));
+  };
   const selectedCandidate = useMemoDIH(() => {
     const candidates = current?._ddupCandidates || [];
     return candidates.find(c => c.member_id === selectedCandidateId) || candidates[0] || null;
@@ -1496,22 +1516,14 @@ const DIHScreen = () => {
                 canonical_payload. Nothing read them. They are now in
                 the detailed review, from the record. */}
             {current._payload && (
-              <div className="card" style={{marginTop:12, padding:14, borderLeft:'3px solid var(--accent-data)'}}>
-                <div className="row gap-3" style={{alignItems:'flex-start'}}>
-                  <Icon name="inbox" size={16} color="var(--accent-data)"/>
-                  <div style={{flex:1}}>
-                    <strong className="t-bodysm">Everything collected for this household</strong>
-                    <div className="t-bodysm muted" style={{marginTop:4, lineHeight:1.6}}>
-                      Housing, utilities, livelihood, per-member health,
-                      education and employment, food security, shocks and
-                      coping — as collected, nothing summarised away.
-                    </div>
-                  </div>
+              <div className="row gap-2" style={{marginTop:12, justifyContent:'flex-end'}}>
                   <button className="btn btn-sm btn-primary"
                     onClick={() => setReviewOpen(true)}>
                     <Icon name="search" size={13}/> Detailed review
                   </button>
-                </div>
+                  <button className="btn btn-sm" onClick={openRawLanding}>
+                    <Icon name="history" size={13}/> Compare raw landing
+                  </button>
               </div>
             )}
           </div>
@@ -1902,6 +1914,54 @@ const DIHScreen = () => {
           : auditEvents.length === 0
           ? "Audit · no events recorded for this record"
           : `Audit · ${current?.head || ""}`}/>
+
+      <Modal open={rawLanding !== null || Boolean(rawLandingError)}
+        onClose={() => { setRawLanding(null); setRawLandingError(""); }}
+        title="Raw landing compared with mapped stage data" width={1180}
+        footer={<button className="btn" onClick={() => { setRawLanding(null); setRawLandingError(""); }}>Close</button>}>
+        {rawLandingError ? (
+          <div className="t-bodysm" role="alert" style={{color:"var(--accent-danger)"}}>{rawLandingError}</div>
+        ) : rawLanding && (
+          <>
+            <div className="t-cap muted" style={{marginBottom:12}}>
+              Raw landing <span className="t-mono">{rawLanding.id}</span> · received {rawLanding.received_at || "—"} · source reference {rawLanding.source_reference || "—"}
+            </div>
+            <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:16}}>
+              <div>
+                <div className="t-cap" style={{fontWeight:700, marginBottom:6}}>RAW LANDING · TIER 1 · IMMUTABLE</div>
+                <pre className="card" style={{margin:0, padding:12, maxHeight:520, overflow:"auto", whiteSpace:"pre-wrap", fontSize:12}}>{JSON.stringify(rawLanding.payload || {}, null, 2)}</pre>
+              </div>
+              <div>
+                <div className="t-cap" style={{fontWeight:700, marginBottom:6}}>MAPPED STAGE DATA · TIER 2</div>
+                <pre className="card" style={{margin:0, padding:12, maxHeight:520, overflow:"auto", whiteSpace:"pre-wrap", fontSize:12}}>{JSON.stringify(current?._payload || {}, null, 2)}</pre>
+              </div>
+            </div>
+            <div style={{marginTop:18}}>
+              <div className="t-cap" style={{fontWeight:700, marginBottom:6}}>CHOICE MAPPING TRACE · CANONICAL SCHEMA REGISTRY</div>
+              <div className="t-bodysm muted" style={{marginBottom:8}}>
+                Each stored code is resolved through the authoritative ChoiceList effective when this landing was received. Use the raw landing above to compare the connector submission.
+              </div>
+              {(rawLanding.choice_mappings || []).length ? (
+                <div className="card" style={{padding:0, overflow:"auto", maxHeight:280}}>
+                  <table className="table" style={{margin:0, minWidth:760}}>
+                    <thead><tr><th>Canonical field</th><th>Choice list</th><th>Stored value</th><th>Display label</th></tr></thead>
+                    <tbody>{rawLanding.choice_mappings.map(mapping => (
+                      <tr key={`${mapping.canonical_path}:${mapping.choice_list}`}>
+                        <td className="t-mono">{mapping.canonical_path}</td>
+                        <td className="t-mono">{mapping.choice_list}</td>
+                        <td className="t-mono">{Array.isArray(mapping.stored_value) ? mapping.stored_value.join(" ") : String(mapping.stored_value)}</td>
+                        <td>{Array.isArray(mapping.display_value) ? mapping.display_value.join(", ") : mapping.display_value}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="t-bodysm muted">No coded questionnaire values were present in this staged record.</div>
+              )}
+            </div>
+          </>
+        )}
+      </Modal>
 
       <ReasonModal open={modal === 'promote'} title="Promote to Registered" intent="success"
         reasonOptions={reasonsPromote} recordLabel={current?.id || ""}

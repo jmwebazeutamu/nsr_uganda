@@ -79,8 +79,6 @@ const CONNECTOR_RUNS = [
   { id: "01CR2026051400004", connector: "wfp-scope-pull", status: "quarantined", started_h: 3.2,  duration: "47m",  landed: 89, staged: 14, promoted: 12, quarantined: 75, rejected: 2 },
 ];
 
-const STUCK_THRESHOLD_HOURS = 6;
-
 // ── Status helpers ─────────────────────────────────────────────────────
 const statusToneCR = {
   pending:     "neutral",
@@ -90,8 +88,10 @@ const statusToneCR = {
   quarantined: "quality",
 };
 
-const isStuck = (r) =>
-  r.status === "running" && r.started_h >= STUCK_THRESHOLD_HOURS;
+const isStuck = (r, timeoutHours) =>
+  Number.isFinite(timeoutHours)
+  && r.status === "running"
+  && r.started_h >= timeoutHours;
 
 // Format an ISO timestamp as "26 May 2026 · 22:10 EAT". EAT (UTC+3)
 // is the rendering timezone per CLAUDE.md "persist as UTC, render
@@ -163,6 +163,7 @@ const _runApiToRow = (r) => {
     rejected: r.records_rejected || 0,
     skippedDuplicate,
     note,
+    stuck_threshold_hours: Number(r.stuck_threshold_hours),
   };
 };
 
@@ -703,6 +704,9 @@ const ConnectorRunsTab = () => {
   // populate it with one row; bulk-delete passes the selection.
   const [deleteTargets, setDeleteTargets] = useStateAdmin([]);
   const [deleteSubmitting, setDeleteSubmitting] = useStateAdmin(false);
+  // The DIH deployment policy controls this timeout. The UI receives it
+  // with ConnectorRun rows and never carries its own parallel threshold.
+  const [stuckTimeoutHours, setStuckTimeoutHours] = useStateAdmin(null);
 
   // Live-fetch source systems from the DRF endpoint when the harness
   // runs on the same origin as the Django backend; otherwise we keep
@@ -746,7 +750,12 @@ const ConnectorRunsTab = () => {
     let cancelled = false;
     const controller = new AbortController();
     fetchRuns(controller.signal)
-      .then(rows => { if (rows && !cancelled) setRuns(rows); })
+      .then(rows => {
+        if (!rows || cancelled) return;
+        setRuns(rows);
+        const configured = rows.find(r => Number.isFinite(r.stuck_threshold_hours));
+        if (configured) setStuckTimeoutHours(configured.stuck_threshold_hours);
+      })
       .catch(() => {});
     return () => { cancelled = true; controller.abort(); };
   }, []);
@@ -761,7 +770,12 @@ const ConnectorRunsTab = () => {
     const controller = new AbortController();
     const id = setInterval(() => {
       fetchRuns(controller.signal)
-        .then(rows => { if (rows) setRuns(rows); })
+        .then(rows => {
+          if (!rows) return;
+          setRuns(rows);
+          const configured = rows.find(r => Number.isFinite(r.stuck_threshold_hours));
+          if (configured) setStuckTimeoutHours(configured.stuck_threshold_hours);
+        })
         .catch(() => {});
     }, 5000);
     return () => { clearInterval(id); controller.abort(); };
@@ -774,21 +788,42 @@ const ConnectorRunsTab = () => {
   };
 
   const stuckIds = useMemoAdmin(() => (
-    runs.filter(r => selection.has(r.id) && isStuck(r))
+    runs.filter(r => selection.has(r.id) && isStuck(r, stuckTimeoutHours))
         .map(r => r.id)
-  ), [selection, runs]);
+  ), [selection, runs, stuckTimeoutHours]);
 
   const fireBulk = () => {
-    if (stuckIds.length === 0) {
-      setToast("No selected rows are STUCK (RUNNING for ≥ 6h).");
+    if (!Number.isFinite(stuckTimeoutHours)) {
+      setToast("The DIH stuck-run timeout has not loaded from server configuration.");
       return;
     }
-    setToast(
-      `Marked ${stuckIds.length} stuck run(s) as FAILED. ` +
-      `Note appended: "stuck since…". ` +
-      `${selection.size - stuckIds.length} skipped (not stuck).`,
-    );
-    setSelection(new Set());
+    if (stuckIds.length === 0) {
+      setToast(`No selected rows are STUCK (RUNNING for at least ${stuckTimeoutHours}h).`);
+      return;
+    }
+    fetch("/api/v1/dih/connector-runs/mark-stuck/", {
+      method: "POST", credentials: "same-origin",
+      headers: {
+        Accept: "application/json", "Content-Type": "application/json",
+        "X-CSRFToken": _adminCsrfToken(),
+      },
+      body: JSON.stringify({ ids: stuckIds }),
+    })
+      .then(async response => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
+        return body;
+      })
+      .then(async result => {
+        setSelection(new Set(result.skipped || []));
+        const refreshed = await fetchRuns();
+        if (refreshed) setRuns(refreshed);
+        setToast(
+          `Marked ${(result.marked || []).length} stale run(s) as FAILED. ` +
+          `${(result.skipped || []).length} skipped. Select the failed run and delete it if it has no promoted records.`,
+        );
+      })
+      .catch(error => setToast(`Mark stuck failed: ${error.message || error}`));
   };
 
   const deleteRuns = (reason) => {
@@ -948,7 +983,7 @@ const ConnectorRunsTab = () => {
           {selection.size === 0 && (
             <>
               <span className="t-cap">
-                STUCK threshold: {STUCK_THRESHOLD_HOURS}h since start (US-S10-005)
+                STUCK timeout: {Number.isFinite(stuckTimeoutHours) ? `${stuckTimeoutHours}h` : "loading…"} since start
               </span>
               <button
                 className="btn primary"
@@ -986,7 +1021,7 @@ const ConnectorRunsTab = () => {
 
         {runs.map(r => {
           const sel = selection.has(r.id);
-          const stuck = isStuck(r);
+          const stuck = isStuck(r, stuckTimeoutHours);
           return (
             <div key={r.id}
                  style={{display:"grid", gridTemplateColumns:"32px 1fr 180px 130px 100px 90px 90px 90px 90px 40px",

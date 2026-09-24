@@ -47,6 +47,11 @@ class TestKnownCodes:
     def test_roof_material_code_from_bug_report(self):
         assert resolve_label("roof_material", "14") == "Concrete"
 
+    def test_deprecated_historical_code_keeps_its_registry_label(self):
+        # Deprecated values are not available to new captures, but existing
+        # Kobo questionnaires must never degrade to a numeric code on read.
+        assert resolve_label("roof_material", "1") == "Iron sheets"
+
     def test_relationship_zero_padded_code(self):
         # XLSForm convention: codes are strings, often zero-padded.
         # The resolver coerces non-strings via str(), but DOES NOT

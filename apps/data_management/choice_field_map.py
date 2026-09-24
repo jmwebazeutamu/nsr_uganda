@@ -167,18 +167,21 @@ EMPLOYMENT_FIELDS: dict[str, tuple[str, Kind]] = {
 
 PAYLOAD_FIELDS: dict[tuple[str, ...], tuple[str, Kind]] = {
     # Housing & Assets tab
-    ("housing", "tenure"): ("tenure", "single"),
+    # Legacy Kobo keys retain their original option-code domains. They are
+    # resolved through the canonical ChoiceLists that own those domains;
+    # do not substitute a later questionnaire field with a similar label.
+    ("housing", "tenure"): ("dwelling_tenure", "single"),
     ("housing", "dwelling_type"): ("dwelling_type", "single"),
     ("housing", "roof_material"): ("roof_material", "single"),
     ("housing", "wall_material"): ("wall_material", "single"),
     ("housing", "floor_material"): ("floor_material", "single"),
     ("housing", "cooking_fuel"): ("cooking_fuel", "single"),
-    ("housing", "lighting_source"): ("lighting_source", "single"),
-    ("housing", "water_source"): ("water_source", "single"),
-    ("housing", "toilet_type"): ("toilet_type", "single"),
+    ("housing", "lighting_source"): ("lighting_energy", "single"),
+    ("housing", "water_source"): ("drinking_water_source", "single"),
+    ("housing", "toilet_type"): ("toilet_facility", "single"),
     ("housing", "waste_disposal"): ("waste_disposal", "single"),
     ("housing", "share_toilet"): ("yes_no", "single"),
-    ("housing", "livelihood_source"): ("livelihood_source", "single"),
+    ("housing", "livelihood_source"): ("main_livelihood", "single"),
     ("housing", "assets_owned"): ("asset_type", "multi"),
     # Agriculture / Livelihoods
     ("agriculture", "crop_production"): ("ag_activity", "single"),
@@ -229,6 +232,52 @@ PAYLOAD_FIELDS: dict[tuple[str, ...], tuple[str, Kind]] = {
     # Top-level questionnaire yes/no flags
     ("shocks_coping", "shock_affected"): ("yes_no", "single"),
 }
+
+
+def iter_payload_choice_values(payload: dict):
+    """Yield coded values declared by the canonical payload field map.
+
+    This is deliberately driven by :data:`PAYLOAD_FIELDS`, rather than a
+    second list maintained by a DIH screen or connector.  Consumers that need
+    an explainable code-to-label trace can use the concrete JSON path together
+    with the ChoiceList name and storage kind returned here.
+    """
+    if not isinstance(payload, dict):
+        return
+    for pattern, (list_name, kind) in PAYLOAD_FIELDS.items():
+        yield from _iter_payload_choice_values(
+            payload, pattern, (), list_name, kind,
+        )
+
+
+def _iter_payload_choice_values(node, pattern, resolved_path, list_name, kind):
+    if not pattern:
+        return
+    head, *tail = pattern
+    if head == "*":
+        # Wildcards only occur after a named list-valued key in the canonical
+        # dictionary.  Keep each index in the concrete path so a reviewer can
+        # distinguish members without inventing a parallel member identifier.
+        if not isinstance(node, list):
+            return
+        for index, item in enumerate(node):
+            yield from _iter_payload_choice_values(
+                item, tuple(tail), (*resolved_path, str(index)), list_name, kind,
+            )
+        return
+    if not isinstance(node, dict):
+        return
+    if not tail:
+        value = node.get(head)
+        if value is not None and value != "":
+            yield (*resolved_path, head), list_name, kind, value
+        return
+    child = node.get(head)
+    if child is None:
+        return
+    yield from _iter_payload_choice_values(
+        child, tuple(tail), (*resolved_path, head), list_name, kind,
+    )
 
 
 def apply_payload_labels(payload, resolver, *, as_of=None, language: str = "en"):
