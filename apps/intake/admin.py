@@ -7,6 +7,7 @@ from django.urls import path
 from django.views.decorators.http import require_POST
 
 from .models import (
+    DataRequestFieldDefinition,
     FormConstraint,
     FormQuestion,
     FormSection,
@@ -937,6 +938,21 @@ class FormQuestionAdmin(_LockedByParentMixin, admin.ModelAdmin):
                 f"{v['rule']} in {v['where']}. If that's a real "
                 "value, replace it with a placeholder.",
             )
+
+
+@admin.register(DataRequestFieldDefinition)
+class DataRequestFieldDefinitionAdmin(admin.ModelAdmin):
+    """The governed SSOT for DRS field disclosure metadata."""
+
+    list_display = (
+        "registry_path", "label", "disclosure_group", "privacy_class",
+        "choice_list_ref", "is_active",
+    )
+    list_filter = ("is_active", "disclosure_group", "privacy_class")
+    search_fields = ("registry_path", "label", "source_model", "source_field")
+    raw_id_fields = ("question", "choice_list_ref")
+    readonly_fields = ("id", "created_at", "updated_at")
+    ordering = ("disclosure_group", "registry_path")
 
 
 @admin.register(Submission)

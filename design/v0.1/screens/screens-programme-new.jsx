@@ -52,50 +52,9 @@ const EXIT_TONE = {
   "99": "neutral",     // other
 };
 
-// PMT-band rough fraction of total HHs (for the wizard's live reach
-// estimate only; the actual eligibility is server-side and depends
-// on the household PMT score).
-const PMT_BAND_META = {
-  extreme_poverty: { label: "Extreme poverty", fraction: 0.10, note: "≤ 2.812 · 10%" },
-  poverty:         { label: "Poverty",         fraction: 0.10, note: "≤ 3.245 · 20%" },
-  vulnerable:      { label: "Vulnerable",      fraction: 0.10, note: "≤ 3.582 · 30%" },
-  not_poor:        { label: "Not poor",        fraction: 0.00, note: "≤ 7.219 · default excludes" },
-  poorest_20:      { label: "Extreme poverty", fraction: 0.10, note: "legacy code" },
-  poorest_40:      { label: "Poverty",         fraction: 0.10, note: "legacy code" },
-  middle_40:       { label: "Vulnerable",      fraction: 0.10, note: "legacy code" },
-  top_20:          { label: "Not poor",        fraction: 0.00, note: "legacy code" },
-};
-const PMT_BAND_ALIASES = {
-  extreme_poverty: "poorest_20",
-  "extreme poverty": "poorest_20",
-  "poorest 20%": "poorest_20",
-  poorest_20: "poorest_20",
-  poverty: "poorest_40",
-  "poorest 40%": "poorest_40",
-  poorest_40: "poorest_40",
-  vulnerable: "middle_40",
-  "middle 40%": "middle_40",
-  middle_40: "middle_40",
-  not_poor: "top_20",
-  "not poor": "top_20",
-  "top 20%": "top_20",
-  top_20: "top_20",
-};
-const normalizePmtBandCode = (value) => {
-  const raw = (value ?? "").toString().trim().toLowerCase();
-  return PMT_BAND_ALIASES[raw] || raw;
-};
-const pmtDisplayLabel = (code, fallback = code) => {
-  const normalized = normalizePmtBandCode(code);
-  return PMT_BAND_META[normalized]?.label || fallback;
-};
-const pmtFraction = (code) => Number(PMT_BAND_META[normalizePmtBandCode(code)]?.fraction || 0);
-
-// Composition flag → narrowing factor for the live reach estimate.
-const COMP_FACTOR = {
-  female_headed: 0.35, under_five: 0.55, elderly: 0.18,
-  pregnant: 0.06, disabled: 0.12, orphan: 0.08,
-};
+// PMT bands and composition flags remain opaque ChoiceOption codes in the
+// browser. Labels come from the active ChoiceList bundle; filtering and any
+// count are performed only by the server's canonical enrolment policy.
 
 // Disbursement cycle code → cycles-per-month factor.
 const CYCLE_FACTOR = {
@@ -261,27 +220,6 @@ const ProgrammeRegistrationScreen = ({ onBack }) => {
   const totalPerBenef = (data.amount_ugx || 0) * cyclesInPeriod;
   const totalBudget   = totalPerBenef * (data.cohort_target || 0);
 
-  /* ---- Estimated reach — wizard preview only ---- */
-  const estReach = useMemoProg(() => {
-    let base = 12100000;
-    if (data.pmt_bands.length) {
-      base *= data.pmt_bands.reduce((s, c) => s + pmtFraction(c), 0);
-    }
-    const geoFrac = allGeoUnits.length === 0
-      ? 0
-      : Math.min(1, data.geo_unit_ids.length / allGeoUnits.length);
-    base *= geoFrac;
-    if (data.unit_of_enrolment === "member") base *= 4;
-    for (const c of data.composition_flags) base *= (COMP_FACTOR[c] || 1);
-    if (
-      data.unit_of_enrolment === "member"
-      && (data.age_max - data.age_min) < 80
-    ) {
-      base *= (data.age_max - data.age_min + 1) / 100;
-    }
-    return Math.max(0, Math.round(base));
-  }, [data, allGeoUnits.length]);
-
   /* ---- Submit ---- */
   const submit = async () => {
     setSubmitting(true);
@@ -300,7 +238,7 @@ const ProgrammeRegistrationScreen = ({ onBack }) => {
         sex_filter:        data.sex_filter,
         age_min:           data.age_min,
         age_max:           data.age_max,
-        pmt_bands:         data.pmt_bands.map(normalizePmtBandCode),
+        pmt_bands:         data.pmt_bands,
         composition_flags: data.composition_flags,
         amount_ugx:        data.amount_ugx,
         disbursement_cycle: data.disbursement_cycle,
@@ -377,13 +315,13 @@ const ProgrammeRegistrationScreen = ({ onBack }) => {
       <div style={{display:"grid", gridTemplateColumns:"1fr 340px", gap:16}}>
         <div className="col gap-4">
           {step === "basics"       && <StepBasics       data={data} setD={setD} partners={partners} partner={partner} activeDsa={activeDsa} kindOpts={kindOpts}/>}
-          {step === "cohort"       && <StepCohort       data={data} setD={setD} toggleInArr={toggleInArr} unitOpts={unitOpts} pmtOpts={pmtOpts} sexOpts={sexOpts} compOpts={compOpts} estReach={estReach}/>}
+          {step === "cohort"       && <StepCohort       data={data} setD={setD} toggleInArr={toggleInArr} unitOpts={unitOpts} pmtOpts={pmtOpts} sexOpts={sexOpts} compOpts={compOpts}/>}
           {step === "disbursement" && <StepDisbursement data={data} setD={setD} cycleOpts={cycleOpts} cyclesInPeriod={cyclesInPeriod} totalPerBenef={totalPerBenef} totalBudget={totalBudget}/>}
           {step === "scope"        && <StepScopeGeo data={data} setD={setD} toggleInArr={toggleInArr} allGeoUnits={allGeoUnits} dsaGeoIds={dsaGeoIds} outOfScopeGeo={outOfScopeGeo} activeDsa={activeDsa} programmeScope={programmeScope}/>}
           {step === "lifecycle"    && <StepLifecycle   data={data} setD={setD} toggleInArr={toggleInArr} exitOpts={exitOpts} autoOpts={autoOpts} webhookOpts={webhookOpts}/>}
         </div>
 
-        <ProgPreview data={data} partner={partner} activeDsa={activeDsa} kindMeta={kindMeta} estReach={estReach} totalPerBenef={totalPerBenef} totalBudget={totalBudget} cyclesInPeriod={cyclesInPeriod} outOfScopeGeo={outOfScopeGeo} cycleOpts={cycleOpts} unitOpts={unitOpts} sexOpts={sexOpts} pmtOpts={pmtOpts} compOpts={compOpts} exitOpts={exitOpts} allGeoUnits={allGeoUnits}/>
+        <ProgPreview data={data} partner={partner} activeDsa={activeDsa} kindMeta={kindMeta} totalPerBenef={totalPerBenef} totalBudget={totalBudget} cyclesInPeriod={cyclesInPeriod} outOfScopeGeo={outOfScopeGeo} cycleOpts={cycleOpts} unitOpts={unitOpts} sexOpts={sexOpts} pmtOpts={pmtOpts} compOpts={compOpts} exitOpts={exitOpts} allGeoUnits={allGeoUnits}/>
       </div>
 
       {/* ACTION BAR */}
@@ -463,8 +401,6 @@ const ProgrammeRegistrationScreen = ({ onBack }) => {
             </ol>
           </div>
           <div className="row gap-3 t-cap" style={{borderTop:"1px dashed var(--neutral-300)", paddingTop:10}}>
-            <span><strong style={{color:"var(--neutral-900)"}}>{estReach.toLocaleString()}</strong> est. reach</span>
-            <span>·</span>
             <span><strong style={{color:"var(--neutral-900)"}}>UGX {Math.round(totalBudget/1000000).toLocaleString()}M</strong> {data.duration_months}-mo budget</span>
             <span>·</span>
             <span><strong style={{color:"var(--neutral-900)"}}>{data.geo_unit_ids.length}</strong> sub-regions</span>
@@ -590,7 +526,7 @@ const StepBasics = ({ data, setD, partners, partner, activeDsa, kindOpts }) => (
 /* ============================================================
    STEP 2 — Cohort & targeting
    ============================================================ */
-const StepCohort = ({ data, setD, toggleInArr, unitOpts, pmtOpts, sexOpts, compOpts, estReach }) => (
+const StepCohort = ({ data, setD, toggleInArr, unitOpts, pmtOpts, sexOpts, compOpts }) => (
   <div className="col gap-4">
 
     {/* Unit of enrolment */}
@@ -633,7 +569,6 @@ const StepCohort = ({ data, setD, toggleInArr, unitOpts, pmtOpts, sexOpts, compO
         <div className="row-wrap">
           {pmtOpts.map(b => {
             const on = data.pmt_bands.includes(b.code);
-            const meta = PMT_BAND_META[b.code] || {};
             return (
               <button key={b.code} onClick={() => toggleInArr("pmt_bands", b.code)} style={{
                 border:`1px solid ${on ? "var(--accent-eligibility)" : "var(--neutral-300)"}`,
@@ -641,9 +576,9 @@ const StepCohort = ({ data, setD, toggleInArr, unitOpts, pmtOpts, sexOpts, compO
                 color: on ? "var(--accent-eligibility)" : "var(--neutral-700)",
                 padding:"7px 13px", borderRadius:16, fontSize:13, fontWeight: on ? 600 : 500,
                 cursor:"pointer",
-              }} title={meta.note || b.label}>
+              }} title={b.label}>
                 {on && <Icon name="check" size={11} style={{marginRight:5, verticalAlign:"-1px"}}/>}
-                {pmtDisplayLabel(b.code, b.label)}
+                {b.label}
               </button>
             );
           })}
@@ -703,7 +638,7 @@ const StepCohort = ({ data, setD, toggleInArr, unitOpts, pmtOpts, sexOpts, compO
       </div>
     </div>
 
-    {/* Estimated reach + cohort target */}
+    {/* Cohort target */}
     <div className="card">
       <div className="card-header"><h3 className="t-h3" style={{margin:0}}>Cohort target</h3>
         <span className="t-cap">How many beneficiaries do you aim to enrol?</span>
@@ -711,9 +646,9 @@ const StepCohort = ({ data, setD, toggleInArr, unitOpts, pmtOpts, sexOpts, compO
       <div style={{padding:"18px 20px"}}>
         <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:18, alignItems:"center"}}>
           <div style={{padding:14, background:"var(--accent-eligibility-bg)", borderLeft:"3px solid var(--accent-eligibility)", borderRadius:4}}>
-            <div className="t-cap" style={{color:"var(--accent-eligibility)", fontWeight:600, letterSpacing:"0.06em"}}>NSR ELIGIBLE · LIVE ESTIMATE</div>
-            <div style={{fontSize:30, fontWeight:700, color:"var(--accent-eligibility)", marginTop:2, letterSpacing:"-0.01em", fontVariantNumeric:"tabular-nums"}}>{estReach.toLocaleString()}</div>
-            <div className="t-cap mt-1">{data.unit_of_enrolment === "member" ? "members" : data.unit_of_enrolment === "group" ? "potential groups" : "households"} match all filters</div>
+            <div className="t-cap" style={{color:"var(--accent-eligibility)", fontWeight:600, letterSpacing:"0.06em"}}>ELIGIBILITY VALIDATION</div>
+            <div className="t-bodysm" style={{marginTop:4, color:"var(--neutral-800)"}}>The server validates this configuration against the active DSA, saved geography, ChoiceLists, and current registry when the programme is activated.</div>
+            <div className="t-cap mt-1">No browser-side eligibility estimate is shown.</div>
           </div>
           <Field label="Target enrolment for this cohort" required hint="Caps the size of the first programme batch · doesn't have to equal NSR eligible">
             <div className="input-affix">
@@ -723,7 +658,6 @@ const StepCohort = ({ data, setD, toggleInArr, unitOpts, pmtOpts, sexOpts, compO
             </div>
           </Field>
         </div>
-        <CoverageBar target={data.cohort_target} pool={estReach}/>
       </div>
     </div>
   </div>
@@ -971,7 +905,7 @@ const StepLifecycle = ({ data, setD, toggleInArr, exitOpts, autoOpts, webhookOpt
 /* ============================================================
    PREVIEW RAIL
    ============================================================ */
-const ProgPreview = ({ data, partner, activeDsa, kindMeta, estReach, totalPerBenef, totalBudget, cyclesInPeriod, outOfScopeGeo, cycleOpts, unitOpts, sexOpts, pmtOpts, compOpts, exitOpts, allGeoUnits }) => {
+const ProgPreview = ({ data, partner, activeDsa, kindMeta, totalPerBenef, totalBudget, cyclesInPeriod, outOfScopeGeo, cycleOpts, unitOpts, sexOpts, pmtOpts, compOpts, exitOpts, allGeoUnits }) => {
   const label = (opts, code, fallback = "—") => (opts.find(o => o.code === code) || { label: fallback }).label;
   const cycleLabel = label(cycleOpts, data.disbursement_cycle);
   const unitLabel  = label(unitOpts, data.unit_of_enrolment);
@@ -1004,8 +938,8 @@ const ProgPreview = ({ data, partner, activeDsa, kindMeta, estReach, totalPerBen
         <PreviewCell label="DSA"        value={activeDsa ? <span className="t-mono" style={{fontSize:11.5}}>{activeDsa.reference.split("-").slice(0,3).join("-")}</span> : "—"} sub={activeDsa ? (activeDsa.status_label || activeDsa.status) : "none"}/>
         <PreviewCell label="Unit"       value={unitLabel} sub={data.unit_of_enrolment === "member" && data.sex_filter !== "any" ? `${sexLabel} · age ${data.age_min}-${data.age_max}` : "all"}/>
         <PreviewCell label="Cycle"      value={cycleLabel} sub={`${data.duration_months} months`}/>
-        <PreviewCell label="Eligible"   value={estReach.toLocaleString()} sub="match all filters"/>
-        <PreviewCell label="Cohort tgt" value={(data.cohort_target||0).toLocaleString()} sub={`${(data.cohort_target||0) > 0 && estReach > 0 ? Math.round(data.cohort_target/estReach*100) : 0}% of eligible`}/>
+        <PreviewCell label="Eligible"   value="Server validated" sub="after activation"/>
+        <PreviewCell label="Cohort tgt" value={(data.cohort_target||0).toLocaleString()} sub="planned enrolments"/>
         <PreviewCell label="Per benef." value={`UGX ${(totalPerBenef/1000).toLocaleString()}k`} sub={`${cyclesInPeriod} × ${((data.amount_ugx||0)/1000).toLocaleString()}k`}/>
         <PreviewCell label="Total budget" value={`UGX ${(totalBudget/1000000).toFixed(1)}M`} sub={`${data.duration_months}-mo`}/>
       </div>
@@ -1016,7 +950,7 @@ const ProgPreview = ({ data, partner, activeDsa, kindMeta, estReach, totalPerBen
         <div className="row-wrap">
           {data.pmt_bands.length === 0
             ? <span className="muted t-bodysm">none selected</span>
-            : data.pmt_bands.map(c => <Chip key={c} size="sm" tone="eligibility">{pmtDisplayLabel(c, label(pmtOpts, c, c))}</Chip>)}
+            : data.pmt_bands.map(c => <Chip key={c} size="sm" tone="eligibility">{label(pmtOpts, c, c)}</Chip>)}
         </div>
       </div>
 
@@ -1120,24 +1054,6 @@ const RangeBar = ({ min, max, valMin, valMax, onChange }) => {
 const rangeStyle = {
   position:"absolute", top:8, left:0, width:"100%", height:16, background:"transparent",
   pointerEvents:"none", WebkitAppearance:"none", appearance:"none",
-};
-
-const CoverageBar = ({ target, pool }) => {
-  if (pool <= 0) return <div className="t-cap mt-3">No eligible pool yet — adjust the filters above.</div>;
-  const pct = Math.min(100, (target / pool) * 100);
-  const over = target > pool;
-  return (
-    <div className="mt-4">
-      <div className="row gap-2" style={{justifyContent:"space-between", marginBottom:4}}>
-        <span className="t-cap">target coverage</span>
-        <span className="t-bodysm" style={{fontWeight:600, color: over ? "var(--accent-danger)" : "var(--accent-data)"}}>{pct.toFixed(1)}%</span>
-      </div>
-      <div style={{height:8, borderRadius:4, background:"var(--neutral-200)", overflow:"hidden"}}>
-        <div style={{height:"100%", width:pct+"%", background: over ? "var(--accent-danger)" : "var(--accent-data)"}}/>
-      </div>
-      {over && <div className="t-cap mt-2" style={{color:"var(--accent-danger)"}}>Cohort target exceeds the eligible pool — broaden filters or lower the target.</div>}
-    </div>
-  );
 };
 
 const BudgetCell = ({ label, value, sub, tone }) => (

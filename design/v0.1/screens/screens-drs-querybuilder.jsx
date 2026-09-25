@@ -52,97 +52,14 @@ const {
 // /api/v1/drs/requests/builder-schema/ via BuildStepV2's `fields`
 // prop. We thread it through the recursive tree via context so
 // QBRule + QBFieldPicker can resolve a rule's field by key and
-// list the available choices. The inline QB_FIELDS below is the
-// offline-preview fallback only.
+// list only choices that the server currently authorises.
 const QBFieldsContext = createContextQB(null);
 const useQBFields = () => useContextQB(QBFieldsContext);
 
-/* ----------------------------------------------------------------
-   Field catalogue (mirrors /api/v1/drs/requests/builder-schema/).
-   In production this comes from the schema response; left inline
-   here so the design preview is representative offline.
-   ---------------------------------------------------------------- */
-
-const QB_SUB_REGIONS = [
-  { code: "SR-BUGANDA-SOUTH", name: "Buganda South" },
-  { code: "SR-BUGANDA-NORTH", name: "Buganda North" },
-  { code: "SR-BUSOGA",        name: "Busoga" },
-  { code: "SR-BUNYORO",       name: "Bunyoro" },
-  { code: "SR-TORO",          name: "Tooro" },
-  { code: "SR-ANKOLE",        name: "Ankole" },
-  { code: "SR-KIGEZI",        name: "Kigezi" },
-  { code: "SR-ACHOLI",        name: "Acholi" },
-  { code: "SR-KARAMOJA",      name: "Karamoja" },
-];
-
-const QB_PROGRAMMES = [
-  { code: "OPM-PDM",     name: "Parish Development Model" },
-  { code: "OPM-NUSAF4",  name: "NUSAF 4" },
-  { code: "MGLSD-SCG",   name: "Senior Citizens' Grant" },
-  { code: "MGLSD-DRDIP", name: "DRDIP" },
-  { code: "MoH-eMTCT",   name: "eMTCT Vouchers" },
-];
-
-const QB_FIELDS = [
-  // Identifiers
-  { group: "Identifiers", key: "household.registry_id",       label: "Registry ID",        type: "text" },
-  { group: "Identifiers", key: "household.household_number",  label: "Household number",   type: "text" },
-
-  // Geography
-  { group: "Geography",   key: "household.sub_region_code",   label: "Sub-region",         type: "enum",  options: QB_SUB_REGIONS.map(s => ({value:s.code, label:s.name})) },
-  { group: "Geography",   key: "household.district_code",     label: "District",           type: "enum",  options: [
-      {value:"DST-WAKISO", label:"Wakiso"}, {value:"DST-MUKONO", label:"Mukono"},
-      {value:"DST-MOROTO", label:"Moroto"}, {value:"DST-GULU",   label:"Gulu"},
-      {value:"DST-ARUA",   label:"Arua"},   {value:"DST-KAMPALA",label:"Kampala"},
-    ]},
-  { group: "Geography",   key: "household.parish_name",       label: "Parish (name)",      type: "text" },
-  { group: "Geography",   key: "household.gps_lat",           label: "GPS latitude",       type: "number",
-    disabled: true, disabled_reason: "DSA clause 4.2.b — sensitive coordinate." },
-
-  // Programmes
-  { group: "Programmes",  key: "household.programme_codes",   label: "Programme enrolment", type: "enum-multi",
-    options: QB_PROGRAMMES.map(p => ({value:p.code, label:p.name})) },
-  { group: "Programmes",  key: "household.enrolment_status",  label: "Enrolment status",    type: "enum",
-    options: [
-      {value:"active",label:"Active"}, {value:"pending",label:"Pending"},
-      {value:"suspended",label:"Suspended"}, {value:"exited",label:"Exited"},
-    ]},
-
-  // PMT / vulnerability
-  { group: "PMT",         key: "household.pmt_score",         label: "PMT score",           type: "number" },
-  { group: "PMT",         key: "household.pmt_band",          label: "PMT band",            type: "enum",
-    options: ["Poorest 20%","Poorest 40%","Middle 40%","Wealthiest 20%"]
-      .map(v => ({value:v,label:v})) },
-  { group: "PMT",         key: "household.vulnerability_band",label: "Vulnerability band",  type: "enum",
-    options: ["Extremely vulnerable","Vulnerable","Resilient"].map(v => ({value:v,label:v})) },
-
-  // Household composition
-  { group: "Household",   key: "household.size",              label: "Household size",      type: "number" },
-  { group: "Household",   key: "household.dependency_ratio",  label: "Dependency ratio",    type: "number" },
-  { group: "Household",   key: "household.head_sex",          label: "Head sex",            type: "enum",
-    options: [{value:"F",label:"Female"},{value:"M",label:"Male"}] },
-  { group: "Household",   key: "household.head_age_band",     label: "Head age band",       type: "enum",
-    options: ["18–29","30–39","40–49","50–59","60+"].map(v => ({value:v,label:v})) },
-  { group: "Household",   key: "household.head_education",    label: "Head education",      type: "enum",
-    options: ["None","Primary","Secondary","Tertiary"].map(v => ({value:v,label:v})) },
-  { group: "Household",   key: "household.head_disability_flag", label: "Head has disability", type: "bool" },
-
-  // Housing
-  { group: "Housing",     key: "household.roof_material",     label: "Roof material",       type: "enum",
-    options: ["Iron sheets","Thatch","Tiles","Concrete","Other"].map(v => ({value:v,label:v})) },
-  { group: "Housing",     key: "household.walls_material",    label: "Walls material",      type: "enum",
-    options: ["Brick","Mud","Wood","Iron sheets","Other"].map(v => ({value:v,label:v})) },
-  { group: "Housing",     key: "household.toilet_type",       label: "Toilet type",         type: "enum",
-    options: ["Flush","VIP latrine","Pit latrine","None"].map(v => ({value:v,label:v})) },
-  { group: "Housing",     key: "household.water_source",      label: "Water source",        type: "enum",
-    options: ["Piped","Borehole","Protected spring","Open source"].map(v => ({value:v,label:v})) },
-
-  // Temporal
-  { group: "Temporal",    key: "household.captured_date",     label: "Captured date",       type: "date" },
-  { group: "Temporal",    key: "household.updated_at",        label: "Last updated",        type: "date" },
-];
-
-const QB_FIELD_BY_KEY = QB_FIELDS.reduce((a,f) => (a[f.key]=f, a), {});
+// There is deliberately no browser fallback.  If this list is empty, the
+// wizard must wait for the server schema rather than applying stale fixtures.
+const QB_FIELDS = [];
+const QB_FIELD_BY_KEY = {};
 
 /* Operator lists per type. Labels are user-facing; `id` is what
    ships in the JSON payload. */
@@ -208,10 +125,10 @@ let _qbSeq = 0;
 const qbId = () => `n${++_qbSeq}`;
 
 // `catalogue` is the live FIELD_CATALOGUE from /builder-schema/.
-// Falls back to the inline QB_FIELDS so offline preview still works.
 const qbNewRule = (field, catalogue) => {
-  const list = (catalogue && catalogue.length > 0) ? catalogue : QB_FIELDS;
+  const list = Array.isArray(catalogue) ? catalogue : [];
   const f = field || list.find(x => !x.disabled) || list[0];
+  if (!f) return null;
   const ops = QB_OPS[f.type] || QB_OPS.text;
   const op = ops[0].id;
   return { id: qbId(), kind: "rule", field: f.key, op, value: defaultValue(f, op) };
@@ -774,57 +691,10 @@ const QBGroup = ({ node, depth, onChange, onRemove, isRoot }) => {
   );
 };
 
-/* ----------------------------------------------------------------
-   Recipes / quick-start presets
-   ---------------------------------------------------------------- */
-const QB_RECIPES = [
-  {
-    id: "blank", label: "Blank query", icon: "file",
-    note: "Start with one rule on Sub-region.",
-    build: () => ({ id: qbId(), kind:"group", combinator:"AND",
-      rules: [qbNewRule(QB_FIELD_BY_KEY["household.sub_region_code"])] }),
-  },
-  {
-    id: "karamoja-poorest", label: "Karamoja · poorest 40%", icon: "target",
-    note: "Households in Karamoja sub-region with PMT band Poorest 40% or Poorest 20%.",
-    build: () => ({
-      id: qbId(), kind:"group", combinator:"AND",
-      rules: [
-        { id: qbId(), kind:"rule", field:"household.sub_region_code", op:"eq", value:"SR-KARAMOJA" },
-        { id: qbId(), kind:"rule", field:"household.pmt_band", op:"in", value:["Poorest 20%","Poorest 40%"] },
-      ],
-    }),
-  },
-  {
-    id: "women-headed-pdm", label: "Women-headed · PDM enrolled", icon: "users",
-    note: "Active PDM enrolees with female household head.",
-    build: () => ({
-      id: qbId(), kind:"group", combinator:"AND",
-      rules: [
-        { id: qbId(), kind:"rule", field:"household.head_sex", op:"eq", value:"F" },
-        { id: qbId(), kind:"rule", field:"household.programme_codes", op:"any", value:["OPM-PDM"] },
-        { id: qbId(), kind:"rule", field:"household.enrolment_status", op:"eq", value:"active" },
-      ],
-    }),
-  },
-  {
-    id: "elderly-or-disability", label: "Elderly head OR disability", icon: "shield",
-    note: "Head 60+ OR household head has a registered disability.",
-    build: () => ({
-      id: qbId(), kind:"group", combinator:"AND",
-      rules: [
-        { id: qbId(), kind:"rule", field:"household.sub_region_code", op:"in",
-          value:["SR-ACHOLI","SR-KARAMOJA","SR-BUSOGA"] },
-        { id: qbId(), kind:"group", combinator:"OR",
-          rules: [
-            { id: qbId(), kind:"rule", field:"household.head_age_band", op:"eq", value:"60+" },
-            { id: qbId(), kind:"rule", field:"household.head_disability_flag", op:"true", value:null },
-          ],
-        },
-      ],
-    }),
-  },
-];
+// Query templates are deliberately empty until they have a persisted,
+// schema-bound server contract. A browser template cannot safely carry
+// geography, PMT, programme, or demographic values.
+const QB_RECIPES = [];
 
 /* ----------------------------------------------------------------
    Build Step — top-level
@@ -833,17 +703,15 @@ const BuildStepV2 = ({
   tree, onChange, maxRows, onMaxRows,
   fields,
   recipes = QB_RECIPES,
-  showSQL = true, dsaReference = "DSA-OPM-PDM-2026",
+  showSQL = true, dsaReference = "",
   // `effectiveDsa` carries the actual partner + dates + budget the
-  // wizard bound to on Step 1. Older mounts (offline preview, the
+  // wizard bound to on Step 1. Older mounts (standalone preview, the
   // standalone querybuilder demo) pass nothing here, so the card
   // gracefully degrades to a "no DSA bound" placeholder rather than
-  // the hardcoded OPM-PDM mock it used to ship.
+  // a hardcoded agreement reference.
   effectiveDsa = null,
 }) => {
-  // Resolve the active catalogue: prefer the live `fields` prop
-  // (US-S27-013 — comes from /builder-schema/), fall back to the
-  // inline QB_FIELDS for offline preview. The byKey map is shared
+  // Resolve the active catalogue supplied by the live schema. The byKey map is shared
   // via React context so every QBRule / QBFieldPicker can resolve
   // a rule's field without prop-drilling.
   //
@@ -856,7 +724,7 @@ const BuildStepV2 = ({
   // may be undefined for a tick — fall back to {} so the picker
   // simply doesn't cascade rather than crashing.
   const ctx = useMemoQB(() => {
-    const list = (fields && fields.length > 0) ? fields : QB_FIELDS;
+    const list = Array.isArray(fields) ? fields : [];
     const byKey = list.reduce((a, f) => (a[f.key] = f, a), {});
     const pins = (typeof window !== "undefined" && window._buildPinMap)
       ? window._buildPinMap(tree)

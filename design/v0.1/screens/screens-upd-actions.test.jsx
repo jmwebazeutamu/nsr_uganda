@@ -19,4 +19,23 @@ describe("UPD reviewer action contract", () => {
     expect(source).toContain("current._raw.approver || current._raw.required_role");
     expect(source).not.toContain("reviewer: me?.username");
   });
+
+  it("does not offer an unwired unchanged-fields control", () => {
+    expect(source).not.toContain("Show unchanged fields");
+    expect(source).not.toContain("const [showAll, setShowAll]");
+    expect(source).toContain('"fields"} changed');
+  });
+
+  it("uses a responsive request-context layout rather than five narrow columns", () => {
+    expect(source).toContain("flexWrap:'wrap'");
+    expect(source).toContain("EVIDENCE PROVIDED");
+    expect(source).toContain("ASSIGNMENT");
+    expect(source).not.toContain("gridTemplateColumns:'1.4fr 1fr 1fr 1fr 1fr'");
+  });
+
+  it("keeps long evidence within its own request-context column", () => {
+    expect(source).toContain("maxWidth:'100%'");
+    expect(source).toContain("whiteSpace:'normal'");
+    expect(source).toContain("overflowWrap:'anywhere'");
+  });
 });

@@ -1481,10 +1481,9 @@ const DRSWizard = ({ role = "operator", onExit, draftId = "" } = {}) => {
   // `disabled: true` flags on out-of-scope fields); operator roles
   // see the full catalogue with everything enabled. The response
   // also carries `dsa_id` so the wizard can POST a real
-  // DataRequest at submit time. When the fetch fails (file://
-  // preview, unauthenticated session) the wizard falls back to
-  // the hardcoded FIELDS mock for design-time rendering only.
+  // DataRequest at submit time. There is no browser fallback.
   const [schema, setSchema] = useStateDRS(null);
+  const [schemaError, setSchemaError] = useStateDRS("");
   React.useEffect(() => {
     let cancelled = false;
     fetch("/api/v1/drs/requests/builder-schema/", {
@@ -1495,13 +1494,16 @@ const DRSWizard = ({ role = "operator", onExit, draftId = "" } = {}) => {
       .then(data => {
         if (cancelled) return;
         setSchema(data);
+        setSchemaError("");
         // Pre-pick the first delivery method the schema offers so
         // the partner doesn't see a blank picker.
         if ((data.delivery_methods || []).length > 0) {
           setDeliveryMethod(data.delivery_methods[0].id);
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        if (!cancelled) setSchemaError(`Could not load the server field catalogue (${err}).`);
+      });
     return () => { cancelled = true; };
   }, []);
 
@@ -1876,7 +1878,9 @@ const DRSWizard = ({ role = "operator", onExit, draftId = "" } = {}) => {
           ? <div className="card" style={{padding:24}}>
               <div className="t-cap muted">
                 {builderFields.length === 0
-                  ? <>Loading field catalogue from <span className="t-mono">/api/v1/drs/requests/builder-schema/</span> · make sure you're logged in via <span className="t-mono">/admin/</span>.</>
+                  ? schemaError
+                    ? <span style={{color:'var(--accent-danger)'}}>{schemaError} Sign in again and retry; no local field or choice fallback is used.</span>
+                    : <>Loading field catalogue from <span className="t-mono">/api/v1/drs/requests/builder-schema/</span> · make sure you're logged in via <span className="t-mono">/admin/</span>.</>
                   : "Initialising query tree…"}
               </div>
             </div>

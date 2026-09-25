@@ -292,6 +292,59 @@ class FormQuestion(models.Model):
         return f"{self.section.code}.{self.name} ({self.type})"
 
 
+class DataRequestFieldDefinition(models.Model):
+    """Canonical disclosure-schema entry for a requestable registry field.
+
+    A questionnaire question describes what is collected; a data request also
+    needs the persisted registry binding and the DSA disclosure classification
+    which governs what may be released.  Keeping that binding here prevents
+    DRS, partner DSAs and ChoiceList rendering from each maintaining a private
+    field catalogue.  ``question`` is nullable because registry identifiers
+    and calculated fields are system-produced rather than questionnaire
+    questions.
+    """
+
+    id = ULIDField(primary_key=True)
+    registry_path = models.CharField(max_length=192, unique=True)
+    label = models.CharField(max_length=256)
+    data_type = models.CharField(max_length=24)
+    disclosure_group = models.CharField(max_length=128)
+    privacy_class = models.CharField(max_length=64, blank=True)
+    source_model = models.CharField(max_length=128, blank=True)
+    source_field = models.CharField(max_length=128, blank=True)
+    question = models.ForeignKey(
+        FormQuestion,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="data_request_definitions",
+    )
+    choice_list_ref = models.ForeignKey(
+        "reference_data.ChoiceList",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="data_request_definitions",
+    )
+    options_source = models.CharField(max_length=256, blank=True)
+    requires_special_scope = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Data request field definition"
+        verbose_name_plural = "Data request field definitions"
+        ordering = ("disclosure_group", "registry_path")
+        indexes = [
+            models.Index(fields=["is_active", "disclosure_group"]),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.registry_path} [{self.disclosure_group}]"
+
+
 class FormSkipLogic(models.Model):
     """Structured skip-logic record (US-117).
 

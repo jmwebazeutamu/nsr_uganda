@@ -146,9 +146,9 @@ def render_bundle(req: DataRequest) -> tuple[bytes, int]:
     # `allowed_fields` is the legacy-shaped list the projection helpers
     # below consume; build it from FIELD_CATALOGUE filtered by group.
     if field_groups:
-        from .builder_schema import FIELD_CATALOGUE
+        from .builder_schema import field_catalogue
         allowed_fields = [
-            cat["key"] for cat in FIELD_CATALOGUE
+            cat["key"] for cat in field_catalogue()
             if cat["key"].partition(".")[0] in field_groups
             or cat["group"] in field_groups
         ]

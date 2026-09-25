@@ -6,8 +6,8 @@ every role, with `disabled` + `disabled_reason` flagged per-field
 based on the user's active DSA (for partner roles) or never (for
 operator roles).
 
-This module is the source of truth the React DRS wizard reads from
-(/api/v1/drs/builder-schema/). Both the operator-side DRSScreen and
+The canonical ``intake.DataRequestFieldDefinition`` registry is the source
+of truth the React DRS wizard reads from (/api/v1/drs/builder-schema/). Both the operator-side DRSScreen and
 the partner-side PartnerDRSScreen consume the same response —
 client-side rendering of the disabled state is uniform; only the
 flag values differ by role.
@@ -37,7 +37,9 @@ from apps.partners.models import DataSharingAgreement
 # apps/data_management/models.py. Reflects real model columns —
 # adding a field here requires the model column to actually exist
 # on the persisted row.
-FIELD_CATALOGUE: list[dict[str, Any]] = [
+# Historical source used only by intake migration 0012.  It is not read by
+# the DRS service at runtime; active definitions live in the Data Dictionary.
+_BOOTSTRAP_FIELD_CATALOGUE: list[dict[str, Any]] = [
     # ---- Household: identifiers + geography ------------------------------
     {"group": "Identifiers", "key": "household.id",
      "label": "Registry ID",       "sensitivity": "Public",   "type": "text"},
@@ -358,9 +360,56 @@ _REQUIRES_SPECIAL_SCOPE = {
 }
 
 
-for _entry in FIELD_CATALOGUE:
+for _entry in _BOOTSTRAP_FIELD_CATALOGUE:
     if _entry["key"] in _REQUIRES_SPECIAL_SCOPE:
         _entry.setdefault("requires_special_scope", True)
+
+
+def bootstrap_catalogue_for_migration() -> list[dict[str, Any]]:
+    """Historical migration bridge for the pre-registry DRS catalogue.
+
+    ``intake.0012`` consumes this once to preserve the approved disclosure
+    policy in the canonical Data Dictionary.  Runtime callers must use
+    :func:`field_catalogue`, which reads those persisted definitions.
+    """
+    return [dict(entry) for entry in _BOOTSTRAP_FIELD_CATALOGUE]
+
+
+def field_catalogue() -> list[dict[str, Any]]:
+    """Active DRS field definitions from the canonical Data Dictionary.
+
+    The ChoiceList link is resolved from the same definition as the question,
+    so option values are never embedded in the DRS API.  A missing or retired
+    choice list leaves the field unavailable rather than falling back to a
+    client or server lookup list.
+    """
+    from apps.intake.models import DataRequestFieldDefinition
+
+    definitions = (
+        DataRequestFieldDefinition.objects.filter(is_active=True)
+        .select_related("question", "choice_list_ref")
+        .order_by("disclosure_group", "registry_path")
+    )
+    fields: list[dict[str, Any]] = []
+    for definition in definitions:
+        question = definition.question
+        choice_list = definition.choice_list_ref or getattr(question, "choice_list_ref", None)
+        item: dict[str, Any] = {
+            "group": definition.disclosure_group,
+            "key": definition.registry_path,
+            "label": question.label if question is not None else definition.label,
+            "sensitivity": definition.privacy_class,
+            "type": definition.data_type,
+        }
+        if choice_list is not None:
+            item["options_source"] = f"choice_list?name={choice_list.list_name}"
+            item["type"] = "enum-multi" if getattr(question, "type", "") == "select_multiple" else "enum"
+        elif definition.options_source:
+            item["options_source"] = definition.options_source
+        if definition.requires_special_scope:
+            item["requires_special_scope"] = True
+        fields.append(item)
+    return fields
 
 # Filter operators a partner / operator can use to constrain rows.
 # Same for every role; the values they can compare against depend
@@ -495,6 +544,7 @@ def build_schema(user) -> dict[str, Any]:
     by ABAC on the underlying viewsets and the audit chain. The
     builder schema gives them the full field catalogue.
     """
+    catalogue = field_catalogue()
     dsa = _active_partner_dsa(user)
     is_partner = dsa is not None
     # ADR-0013: read allowed field groups from the canonical field_scope.
@@ -502,7 +552,7 @@ def build_schema(user) -> dict[str, Any]:
     if is_partner:
         groups = {k for k, v in (dsa.field_scope or {}).items() if v}
         allowed_fields = set()
-        for cat in FIELD_CATALOGUE:
+        for cat in catalogue:
             group_root = cat["key"].partition(".")[0]
             if group_root in groups or cat["group"] in groups:
                 allowed_fields.add(cat["key"])
@@ -510,7 +560,7 @@ def build_schema(user) -> dict[str, Any]:
         allowed_fields = None
 
     fields = []
-    for entry in FIELD_CATALOGUE:
+    for entry in catalogue:
         # Copy so we don't mutate the module-level catalogue.
         item = dict(entry)
         if is_partner and allowed_fields is not None and entry["key"] not in allowed_fields:

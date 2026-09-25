@@ -2,9 +2,10 @@
 
 A Data Sharing Agreement grants a partner access by **group** —
 `{"Identifiers": true, "PMT": true}` — while a data request names
-**field paths**, `household.sub_region_code`. `builder_schema
-.FIELD_CATALOGUE` is the only maintained mapping between the two, so
-the groups are derived from it here rather than listed again.
+**field paths**, `household.sub_region_code`. The canonical Questionnaire
+Data Dictionary's `DataRequestFieldDefinition` records are the maintained
+mapping between the two, so the groups are derived from them here rather
+than listed again.
 
 They were listed again. Three times, and the three disagreed:
 
@@ -25,19 +26,15 @@ the end-to-end DRS test's failure, in production form.
 What this module is NOT
 -----------------------
 It is not a second field dictionary. The fields, their labels, their
-types and their sensitivity all come from FIELD_CATALOGUE; this only
+types and their sensitivity all come from the Data Dictionary; this only
 names the groups that catalogue already uses, and attaches the
 operator-facing description of each.
 
 Open schema dependency
 ----------------------
-The disclosure group is a real concept with no home in the
-Questionnaire Authoring dictionary — that dictionary's `section` is a
-questionnaire section (Identification, Roster, Health), which is a
-different axis from "what may a partner receive". Until the Schema
-Registry carries a disclosure classification, FIELD_CATALOGUE is the
-registry for it, and this module is how everything else reads it.
-See the note in ADR-0040.
+The disclosure group is a legal classification distinct from a
+questionnaire section. It is stored beside the field's canonical registry
+binding in `DataRequestFieldDefinition`, never inferred from form layout.
 """
 
 from __future__ import annotations
@@ -79,10 +76,10 @@ LEGACY_ALIASES: dict[str, tuple[str, ...]] = {
 
 def canonical_groups() -> list[str]:
     """Every group the catalogue uses, in catalogue order."""
-    from .builder_schema import FIELD_CATALOGUE
+    from .builder_schema import field_catalogue
 
     seen: list[str] = []
-    for field in FIELD_CATALOGUE:
+    for field in field_catalogue():
         group = field.get("group")
         if group and group not in seen:
             seen.append(group)
@@ -92,18 +89,18 @@ def canonical_groups() -> list[str]:
 def group_for_key(key: str) -> str | None:
     """The group a field path belongs to, or None if the catalogue
     does not carry that path."""
-    from .builder_schema import FIELD_CATALOGUE
+    from .builder_schema import field_catalogue
 
-    for field in FIELD_CATALOGUE:
+    for field in field_catalogue():
         if field.get("key") == key:
             return field.get("group")
     return None
 
 
 def keys_in_group(group: str) -> list[str]:
-    from .builder_schema import FIELD_CATALOGUE
+    from .builder_schema import field_catalogue
 
-    return [f["key"] for f in FIELD_CATALOGUE if f.get("group") == group]
+    return [f["key"] for f in field_catalogue() if f.get("group") == group]
 
 
 def catalogue() -> list[dict[str, Any]]:
@@ -113,11 +110,11 @@ def catalogue() -> list[dict[str, Any]]:
     entry carries the field count, because "Geography (11 fields)" is
     the difference between an informed grant and a guess.
     """
-    from .builder_schema import FIELD_CATALOGUE
+    from .builder_schema import field_catalogue
 
     counts: dict[str, int] = {}
     entities: dict[str, set[str]] = {}
-    for field in FIELD_CATALOGUE:
+    for field in field_catalogue():
         group = field.get("group")
         if not group:
             continue

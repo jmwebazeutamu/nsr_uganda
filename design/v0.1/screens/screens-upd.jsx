@@ -149,7 +149,6 @@ const mockBulkResponse = (rows, action) => {
 
 // UPD fixture removed — the detail view reads the live change request.
 const UPDScreen = ({ changeRequestId, onNavigate }) => {
-  const [showAll, setShowAll] = useStateUpd(false);
   const [auditOpen, setAuditOpen] = useStateUpd(false);
   const [modal, setModal] = useStateUpd(null);
   const [toast, setToast] = useStateUpd("");
@@ -414,8 +413,10 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
         };
       })
     : [];   // no fabricated diff: an empty table, and the banner below says why
-  const visible = showAll ? diffSource : diffSource.filter(d => !d.unchanged);
-  const grouped = visible.reduce((acc, r) => {
+  // The canonical change-request contract carries only proposed changes.
+  // It has no snapshot of every untouched field, so a "show unchanged"
+  // switch would promise a view the server cannot truthfully provide.
+  const grouped = diffSource.reduce((acc, r) => {
     (acc[r.section] = acc[r.section] || []).push(r); return acc;
   }, {});
 
@@ -767,48 +768,50 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
         )}
       </div>
 
-      {/* Header strip */}
-      <div className="card" style={{padding:'16px 20px', display:'grid', gridTemplateColumns:'1.4fr 1fr 1fr 1fr 1fr', gap:24, marginBottom:16, alignItems:'center'}}>
-        <div>
-          <div className="t-cap">CHANGE TYPE</div>
-          <div className="row gap-2"><Chip tone="update">{headerVM.change_type}</Chip></div>
-          <div className="t-bodysm muted mt-2">{headerVM.reason || (isLive ? "(no requester note)" : "")}</div>
-        </div>
-        <div>
-          <div className="t-cap">PMT IMPACT</div>
-          {headerVM.pmt_relevant
-            ? <Chip tone="eligibility"><Icon name="target" size={11}/> pmt_relevant</Chip>
-            : <Chip tone="neutral" size="sm">not PMT-relevant</Chip>}
-          <div className="t-bodysm muted mt-2">{headerVM.pmt_relevant ? "Recompute previewed →" : "No PMT recompute"}</div>
-        </div>
-        <div>
-          <div className="t-cap">EVIDENCE</div>
+      {/* Request context. Flex wrapping keeps this readable at narrower
+          console widths without inventing a second, mobile-only data shape. */}
+      <div className="card" style={{padding:'18px 20px', display:'flex', flexWrap:'wrap', gap:24, marginBottom:16, alignItems:'stretch'}}>
+        <section style={{flex:'1 1 260px', minWidth:0, paddingRight:24, borderRight:'1px solid var(--neutral-200)'}}>
+          <div className="t-cap">CHANGE REQUEST</div>
+          <div className="row gap-2 mt-1"><Chip tone="update">{headerVM.change_type}</Chip></div>
+          <div className="t-bodysm muted mt-2" style={{lineHeight:1.45}}>{headerVM.reason || (isLive ? "(no requester note)" : "")}</div>
+        </section>
+        <section style={{flex:'2 1 360px', minWidth:0}}>
+          <div className="t-cap">EVIDENCE PROVIDED</div>
           <div className="row-wrap mt-1">
             {headerVM.evidence.length > 0
               ? headerVM.evidence.map((e, i) => (
-                  <Chip key={i} size="sm" tone="programme">
+                  <Chip key={i} size="sm" tone="programme" style={{
+                    height:'auto', minHeight:18, maxWidth:'100%', padding:'3px 6px',
+                    whiteSpace:'normal', overflowWrap:'anywhere', alignItems:'flex-start',
+                  }}>
                     {typeof e === "string" ? e : (e.label || e.kind || JSON.stringify(e))}
                   </Chip>
                 ))
-              : <span className="t-bodysm muted">{isLive ? "—" : ""}</span>}
+              : <span className="t-bodysm muted">{isLive ? "No evidence attached" : ""}</span>}
           </div>
-        </div>
-        <div>
-          <div className="t-cap">SLA</div>
-          <div className="row gap-2">
-            <Chip tone={headerVM.slaDays > headerVM.slaCap ? "danger" : "data"}>
+        </section>
+        <section style={{flex:'1 1 280px', minWidth:0, paddingLeft:24, borderLeft:'1px solid var(--neutral-200)', display:'grid', gridTemplateColumns:'1fr 1fr', gap:'14px 20px', alignContent:'start'}}>
+          <div>
+            <div className="t-cap">PMT IMPACT</div>
+            {headerVM.pmt_relevant
+              ? <Chip tone="eligibility" size="sm"><Icon name="target" size={11}/> pmt_relevant</Chip>
+              : <Chip tone="neutral" size="sm">not PMT-relevant</Chip>}
+            <div className="t-cap mt-1">{headerVM.pmt_relevant ? "Preview queued" : "No recompute"}</div>
+          </div>
+          <div>
+            <div className="t-cap">SLA</div>
+            <Chip tone={headerVM.slaDays > headerVM.slaCap ? "danger" : "data"} size="sm">
               <Icon name="clock" size={11}/> {headerVM.slaDays}d / {headerVM.slaCap}d
             </Chip>
+            <div className="t-cap mt-1">{headerVM.slaDays > headerVM.slaCap ? "Past SLA" : "Within window"}</div>
           </div>
-          <div className="t-bodysm muted mt-1">
-            {headerVM.slaDays > headerVM.slaCap ? "Past SLA" : "Within window"}
+          <div style={{gridColumn:'1 / -1', paddingTop:10, borderTop:'1px solid var(--neutral-200)'}}>
+            <div className="t-cap">ASSIGNMENT</div>
+            <div className="t-bodysm" style={{fontWeight:500}}>Submitted by {headerVM.submitter}</div>
+            <div className="t-cap">Reviewer · {headerVM.reviewer}</div>
           </div>
-        </div>
-        <div>
-          <div className="t-cap">PEOPLE</div>
-          <div className="t-bodysm" style={{fontWeight:500}}>Submitted: {headerVM.submitter}</div>
-          <div className="t-cap">Reviewer: {headerVM.reviewer}</div>
-        </div>
+        </section>
       </div>
 
       {/* Diff + PMT preview */}
@@ -816,12 +819,10 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
         <div className="card">
           <div className="card-toolbar">
             <strong className="t-bodysm">Before / after diff</strong>
-            <span className="t-cap">{visible.length} fields shown · {diffSource.length} total</span>
+            <span className="t-cap">
+              {diffSource.length} {diffSource.length === 1 ? "field" : "fields"} changed
+            </span>
             <div style={{flex:1}}/>
-            <label className="row gap-2" style={{fontSize:13}}>
-              <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)}/>
-              Show unchanged fields
-            </label>
           </div>
           <div>
             {/* header */}

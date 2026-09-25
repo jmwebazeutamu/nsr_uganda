@@ -46,8 +46,8 @@ def make_dsa(*, partner, reference: str, allowed_scopes: dict | None = None,
 
     # Field group derivation follows the production builder catalogue. Test
     # fixtures must not retain a second prefix-based field-group vocabulary.
-    from apps.data_requests.builder_schema import FIELD_CATALOGUE
-    group_by_key = {entry["key"]: entry["group"] for entry in FIELD_CATALOGUE}
+    from apps.data_requests.builder_schema import field_catalogue
+    group_by_key = {entry["key"]: entry["group"] for entry in field_catalogue()}
     field_scope: dict[str, bool] = {}
     for f in scopes.get("fields") or []:
         group = group_by_key.get(f, f if "." not in f else f.partition(".")[0])

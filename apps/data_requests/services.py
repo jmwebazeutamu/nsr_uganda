@@ -71,9 +71,9 @@ def _requested_field_groups(fields) -> set[str]:
     mapping between those concepts, so validation consumes it rather than
     treating a model prefix as a second field-group vocabulary.
     """
-    from .builder_schema import FIELD_CATALOGUE
+    from .builder_schema import field_catalogue
 
-    group_by_key = {field["key"]: field["group"] for field in FIELD_CATALOGUE}
+    group_by_key = {field["key"]: field["group"] for field in field_catalogue()}
     return {group_by_key.get(str(field), str(field).partition(".")[0]) for field in fields}
 
 

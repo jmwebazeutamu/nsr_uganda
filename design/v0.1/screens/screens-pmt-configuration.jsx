@@ -18,47 +18,9 @@ const {
   useRef: useRefPCfg,
 } = React;
 
-/* ============================================================
-   Sample data — mirrors PMTModelVersion shape; replace with API
-   ============================================================ */
-// PCFG_VERSIONS removed — this screen reads /api/v1/admin/pmt/versions/.
-
-
-// Full 25-variable list of the active v1 model (and stub for v2 draft)
-const PCFG_VARIABLES_V1 = [
-  { name: "member_count",                 weight: -0.077, transform: "identity",        group: "Composition" },
-  { name: "share_children_under_15",      weight: -0.117, transform: "identity",        group: "Composition" },
-  { name: "head_is_female",               weight: +0.038, transform: "present_as_one",  group: "Head" },
-  { name: "head_edu_completed_primary",   weight: +0.099, transform: "present_as_one",  group: "Education" },
-  { name: "head_edu_secondary",           weight: +0.154, transform: "present_as_one",  group: "Education" },
-  { name: "head_edu_tertiary",            weight: +0.312, transform: "present_as_one",  group: "Education" },
-  { name: "floor_tiles_terrazzo",         weight: +0.326, transform: "present_as_one",  group: "Dwelling" },
-  { name: "floor_cement_or_brick",        weight: +0.130, transform: "present_as_one",  group: "Dwelling" },
-  { name: "roof_metal_or_tile",           weight: +0.138, transform: "present_as_one",  group: "Dwelling" },
-  { name: "wall_uncovered_adobe",         weight: +0.052, transform: "present_as_one",  group: "Dwelling" },
-  { name: "wall_stone_lime_cement",       weight: +0.099, transform: "present_as_one",  group: "Dwelling" },
-  { name: "wall_other_finished",          weight: +0.050, transform: "present_as_one",  group: "Dwelling" },
-  { name: "rooms_per_capita",             weight: +0.292, transform: "identity",        group: "Dwelling" },
-  { name: "electricity_for_lighting",     weight: +0.112, transform: "present_as_one",  group: "Utilities" },
-  { name: "piped_water_to_premises",      weight: +0.075, transform: "present_as_one",  group: "Utilities" },
-  { name: "lighting_kerosene",            weight: -0.034, transform: "present_as_one",  group: "Utilities" },
-  { name: "open_defecation",              weight: -0.128, transform: "present_as_one",  group: "Sanitation" },
-  { name: "owns_car_or_van",              weight: +0.294, transform: "present_as_one",  group: "Assets" },
-  { name: "owns_television",              weight: +0.228, transform: "present_as_one",  group: "Assets" },
-  { name: "owns_motorcycle",              weight: +0.213, transform: "present_as_one",  group: "Assets" },
-  { name: "any_cellphone",                weight: +0.185, transform: "present_as_one",  group: "Assets" },
-  { name: "owns_refrigerator",            weight: +0.157, transform: "present_as_one",  group: "Assets" },
-  { name: "owns_computer",                weight: +0.141, transform: "present_as_one",  group: "Assets" },
-  { name: "owns_radio",                   weight: +0.107, transform: "present_as_one",  group: "Assets" },
-  { name: "is_renting",                   weight: +0.108, transform: "present_as_one",  group: "Tenure" },
-];
-
-const PCFG_TRANSFORMS = [
-  { id: "identity",       label: "identity",       desc: "Pass-through — multiply value × weight" },
-  { id: "present_as_one", label: "present_as_one", desc: "Binary — 1 if present, 0 otherwise" },
-  { id: "log1p",          label: "log1p",          desc: "log(1 + value) — for asset counts" },
-  { id: "zscore",         label: "zscore",         desc: "Standardised to dataset mean / σ" },
-];
+// PMT variables, transforms and weights are supplied only by the versioned
+// PMTModelVersion API.  An unavailable/empty response is rendered as such;
+// the console must never substitute a sample calibration as live policy.
 
 const STATUS_TONE = {
   draft: "quality",
@@ -219,11 +181,7 @@ const PmtConfigurationScreen = ({ onBack }) => {
     () => versions.find(v => v.id === selectedId) || versions[0] || null,
     [selectedId, versions]
   );
-  const variables = !selected ? [] : (selected.variables && selected.variables.length)
-    ? selected.variables
-    : selected.version === 1 ? PCFG_VARIABLES_V1
-      : selected.version === 2 ? PCFG_VARIABLES_V1
-      : PCFG_VARIABLES_V1.slice(0, 22);
+  const variables = Array.isArray(selected?.variables) ? selected.variables : [];
 
   const filteredVariables = useMemoPCfg(() => {
     const q = varSearch.trim().toLowerCase();

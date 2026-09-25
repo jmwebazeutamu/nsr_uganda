@@ -19,81 +19,6 @@
 
 const { useState: useStatePD } = React;
 
-const _PMT_FRACTION = {
-  extreme_poverty: 0.10,
-  poverty:         0.10,
-  vulnerable:      0.10,
-  not_poor:        0.00,
-  poorest_20:      0.10,
-  poorest_40:      0.10,
-  middle_40:       0.10,
-  top_20:          0.00,
-};
-
-const _PMT_BAND_LABEL = {
-  extreme_poverty: "Extreme poverty",
-  poverty: "Poverty",
-  vulnerable: "Vulnerable",
-  not_poor: "Not poor",
-  poorest_20: "Extreme poverty",
-  poorest_40: "Poverty",
-  middle_40: "Vulnerable",
-  top_20: "Not poor",
-};
-
-const _PMT_BAND_NOTE = {
-  extreme_poverty: "≤ 2.812 · 10%",
-  poverty: "≤ 3.245 · 20%",
-  vulnerable: "≤ 3.582 · 30%",
-  not_poor: "≤ 7.219 · default excludes",
-  poorest_20: "legacy code",
-  poorest_40: "legacy code",
-  middle_40: "legacy code",
-  top_20: "legacy code",
-};
-
-const _PMT_BAND_ALIASES = {
-  extreme_poverty: "poorest_20",
-  "extreme poverty": "poorest_20",
-  "poorest 20%": "poorest_20",
-  poorest_20: "poorest_20",
-  poverty: "poorest_40",
-  "poorest 40%": "poorest_40",
-  poorest_40: "poorest_40",
-  vulnerable: "middle_40",
-  "middle 40%": "middle_40",
-  middle_40: "middle_40",
-  not_poor: "top_20",
-  "not poor": "top_20",
-  "top 20%": "top_20",
-  top_20: "top_20",
-};
-
-const _normalizePmtBandCode = (value) => {
-  const raw = (value ?? "").toString().trim().toLowerCase();
-  return _PMT_BAND_ALIASES[raw] || raw;
-};
-
-const _normalizePmtBands = (bands) => (
-  Array.isArray(bands)
-    ? bands.map(_normalizePmtBandCode).filter(Boolean)
-    : []
-);
-
-const _pmtBandLabel = (code, fallback = code) => {
-  const normalized = _normalizePmtBandCode(code);
-  return _PMT_BAND_LABEL[normalized] || fallback;
-};
-
-const _COMP_FRACTION = {
-  female_headed: 0.35,
-  under_five: 0.55,
-  elderly: 0.18,
-  pregnant: 0.06,
-  disabled: 0.12,
-  orphan: 0.08,
-};
-
 // Same status-code → label translation as the list view.
 const _PD_STATUS_LABEL = {
   draft:             "Draft",
@@ -181,7 +106,7 @@ const _projectProgrammeDetail = (programme, signoffs) => {
   m.endDate = programme.end_date
     || (programme.duration_months ? `${programme.duration_months}mo from start` : "—");
   m.cohortTarget = programme.cohort_target || 0;
-  m.enrolled = programme.beneficiary_estimate || 0;
+  m.enrolled = programme.enrolment_count || 0;
   m.perCycleUgx = programme.amount_ugx || 0;
   m.dsa = programme.dsa_reference || "—";
   m.webhookUrl = programme.webhook_url || "";
@@ -189,7 +114,7 @@ const _projectProgrammeDetail = (programme, signoffs) => {
     ? "wh_•••••••••••• (rotate via /webhook/rotate-secret/)"
     : "—";
   m.eligibility = {
-    pmtBands: _normalizePmtBands(programme.pmt_bands || []),
+    pmtBands: Array.isArray(programme.pmt_bands) ? programme.pmt_bands : [],
     sex: programme.sex_filter_label || programme.sex_filter || "any",
     sexCode: programme.sex_filter || "any",
     ageBand: (programme.age_min != null && programme.age_max != null)
@@ -317,8 +242,8 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
   const [progResp, progMeta] = useApi(
     programmeId ? `/api/v1/programmes/${programmeId}/` : null,
   );
-  const [registryAggResp, registryAggMeta] = useApi(
-    "/api/v1/data-management/households/aggregates/",
+  const [eligibleResp, eligibleMeta] = useApi(
+    programmeId ? `/api/v1/ref/enrolments/eligible-households/?programme=${programmeId}&page_size=1` : null,
   );
   const [signoffResp, signoffMeta] = useApi(
     programmeId ? `/api/v1/programmes/${programmeId}/signoffs/` : null,
@@ -331,17 +256,11 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
       setProgrammeView(progResp);
     }
   }, [progResp, programmeView]);
-  React.useEffect(() => {
-    if (!registryAggMeta.refresh) return undefined;
-    const id = window.setInterval(() => registryAggMeta.refresh(), 60000);
-    return () => window.clearInterval(id);
-  }, [registryAggMeta.refresh]);
   const programmeRecord = programmeView || progResp;
   const p = _projectProgrammeDetail(
     programmeRecord,
     (signoffResp && signoffResp.items) || [],
   );
-  const registryTotal = Number(registryAggResp?.total || registryAggResp?.registered || 0);
   const isDraft = p.statusCode === "draft";
   const pct = Math.round((p.enrolled / Math.max(p.cohortTarget, 1)) * 100);
 
@@ -505,7 +424,7 @@ const ProgrammeDetailScreen = ({ programmeId, onBack, onOpenPartner, onOpenHouse
 
       <div className="card" style={{borderTopLeftRadius:0, borderTopRightRadius:0, padding:0, marginTop:0}}>
         {tab === "over"  && <PdOverview p={p}/>}
-        {tab === "elig"  && <PdEligibility p={p} registryTotal={registryTotal} registryLoading={registryAggMeta.loading}/>}
+        {tab === "elig"  && <PdEligibility p={p} eligibleResp={eligibleResp} eligibleMeta={eligibleMeta}/>}
         {tab === "sched" && <PdSchedule p={p}/>}
         {tab === "geo"   && <PdGeography p={p}/>}
         {tab === "enr"   && <PdEnrolment p={p} onOpenHousehold={onOpenHousehold}/>}
@@ -643,7 +562,7 @@ const EditProgrammeModal = ({ open, programme, onClose, onSaved, onError }) => {
     setAgeMax(programme.age_max ?? "");
     setCohortTarget(programme.cohort_target ?? "");
     setBeneficiaryEstimate(programme.beneficiary_estimate ?? "");
-    setPmtBandsCsv(_listToCsv(_normalizePmtBands(programme.pmt_bands)));
+    setPmtBandsCsv(_listToCsv(programme.pmt_bands));
     setCompositionFlagsCsv(_listToCsv(programme.composition_flags));
     setAmountUgx(programme.amount_ugx ?? "");
     setDisbursementCycle(programme.disbursement_cycle || "");
@@ -675,7 +594,7 @@ const EditProgrammeModal = ({ open, programme, onClose, onSaved, onError }) => {
         beneficiary_estimate: beneficiaryEstimate === "" ? undefined : parseInt(beneficiaryEstimate, 10),
         age_min: ageMin === "" ? undefined : parseInt(ageMin, 10),
         age_max: ageMax === "" ? undefined : parseInt(ageMax, 10),
-        pmt_bands: _csvToList(pmtBandsCsv).map(_normalizePmtBandCode),
+        pmt_bands: _csvToList(pmtBandsCsv),
         composition_flags: _csvToList(compositionFlagsCsv),
         amount_ugx: amountUgx === "" ? undefined : parseInt(amountUgx, 10),
         disbursement_cycle: disbursementCycle.trim(),
@@ -1211,39 +1130,9 @@ const PdOverview = ({ p }) => (
   </div>
 );
 
-const _estimateEligibleHouseholds = (p, registryTotal) => {
-  const total = Number(registryTotal || 0);
-  if (!total) return 0;
-
-  let factor = 1;
-  const bands = Array.isArray(p.eligibility?.pmtBands) ? p.eligibility.pmtBands : [];
-  if (bands.length) {
-    const bandFactor = bands.reduce((sum, band) => sum + (Number(_PMT_FRACTION[_normalizePmtBandCode(band)]) || 0), 0);
-    factor *= Math.min(1, bandFactor || 0);
-  }
-
-  const sex = (p.eligibility?.sexCode || "any").toString();
-  if (sex === "1" || sex === "2") {
-    factor *= 0.5;
-  }
-
-  const minAge = Number(p.eligibility?.ageMin);
-  const maxAge = Number(p.eligibility?.ageMax);
-  if (Number.isFinite(minAge) && Number.isFinite(maxAge) && maxAge >= minAge) {
-    factor *= Math.min(1, Math.max(0.05, ((maxAge - minAge + 1) / 100)));
-  }
-
-  const flags = Array.isArray(p.eligibility?.compositionFlags) ? p.eligibility.compositionFlags : [];
-  if (flags.length) {
-    const flagFactor = flags.reduce((acc, flag) => acc * (Number(_COMP_FRACTION[flag]) || 1), 1);
-    factor *= Math.min(1, flagFactor);
-  }
-
-  return Math.max(0, Math.min(total, Math.round(total * factor)));
-};
-
-const PdEligibility = ({ p, registryTotal, registryLoading }) => {
-  const eligible = _estimateEligibleHouseholds(p, registryTotal);
+const PdEligibility = ({ p, eligibleResp, eligibleMeta }) => {
+  const eligibleCount = Number(eligibleResp?.count);
+  const eligibilityUnavailable = eligibleMeta.error || !Number.isFinite(eligibleCount);
 
   return (
   <div>
@@ -1260,8 +1149,8 @@ const PdEligibility = ({ p, registryTotal, registryLoading }) => {
             {p.eligibility.pmtBands.length === 0
               ? <span className="muted">None selected</span>
               : p.eligibility.pmtBands.map((b) => (
-                  <Chip key={b} size="sm" tone="eligibility" title={_PMT_BAND_NOTE[b] || b}>
-                    {_pmtBandLabel(b, b)}
+                  <Chip key={b} size="sm" tone="eligibility" title={b}>
+                    {b}
                   </Chip>
                 ))}
           </div>
@@ -1300,18 +1189,20 @@ const PdEligibility = ({ p, registryTotal, registryLoading }) => {
             <div className="t-cap">Updates from the Social Registry total.</div>
           </div>
           <div style={{padding:16}}>
-            <div className="t-cap">Estimated households matching the current rules</div>
+            <div className="t-cap">Households matching the current server policy</div>
             <div style={{fontSize:28, lineHeight:'34px', fontWeight:700, marginTop:4, color:'var(--neutral-900)'}}>
-              {registryLoading ? "Loading…" : num(eligible)}
+              {eligibleMeta.loading ? "Loading…" : eligibilityUnavailable ? "Unavailable" : num(eligibleCount)}
             </div>
             <div className="t-cap mt-1">
-              Based on current programme rules and the live registry total of {registryLoading ? "…" : num(registryTotal)} households.
+              {eligibilityUnavailable
+                ? "The current configuration cannot yet be evaluated. Resolve the listed eligibility/schema dependency before enrolment."
+                : "Resolved by the canonical programme, DSA, ChoiceList and household policy."}
             </div>
             <div className="t-cap mt-2">
               PMT bands:
               {" "}
               {p.eligibility.pmtBands.length
-                ? p.eligibility.pmtBands.map((b) => _pmtBandLabel(b, b)).join(" · ")
+                ? p.eligibility.pmtBands.join(" · ")
                 : "none"}
             </div>
           </div>
