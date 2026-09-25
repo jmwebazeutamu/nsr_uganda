@@ -102,6 +102,12 @@ class ProgrammeEnrolment(models.Model):
 
     class Meta:
         verbose_name = "Programme enrolment"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["programme", "household"],
+                name="programme_enrolment_unique_household",
+            ),
+        ]
         indexes = [
             models.Index(fields=["programme", "household"]),
             models.Index(fields=["status", "effective_date"]),

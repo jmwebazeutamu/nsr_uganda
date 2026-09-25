@@ -7,6 +7,7 @@ from apps.data_management.models import Household
 from apps.data_management.serializer_labels import attach_label_methodfields
 from apps.partners.models import Programme
 from apps.security.abac import ScopedQuerysetMixin
+from apps.security.abac import scope_q_for_field
 from apps.security.actor import actor_from_request
 from apps.security.audit_views import AuditReadMixin
 
@@ -20,6 +21,11 @@ from .services import (
     reject_referral,
     send_referral,
     send_referral_webhook,
+)
+from .direct_enrolment import (
+    EnrolmentEligibilityError,
+    eligible_household_rows,
+    enrol_households_directly,
 )
 
 
@@ -54,11 +60,18 @@ attach_label_methodfields(ReferralSerializer, MODEL_FIELDS["Referral"])
 class EnrolmentSerializer(serializers.ModelSerializer):
     programme_code = serializers.CharField(source="programme.code", read_only=True)
     programme_name = serializers.CharField(source="programme.name", read_only=True)
+    household_head_name = serializers.SerializerMethodField()
+    household_sub_region_name = serializers.CharField(source="household.sub_region.name", read_only=True)
+    household_district_name = serializers.CharField(source="household.district.name", read_only=True)
+
+    def get_household_head_name(self, enrolment):
+        head = enrolment.household.head_member
+        return f"{head.surname} {head.first_name}".strip() if head else ""
 
     class Meta:
         model = ProgrammeEnrolment
         fields = ("id", "programme", "programme_code", "programme_name",
-                  "household", "referral",
+                  "household", "household_head_name", "household_sub_region_name", "household_district_name", "referral",
                   "status", "status_label",
                   "effective_date", "exit_reason", "payment_metadata",
                   "created_at", "updated_at")
@@ -106,6 +119,39 @@ class _EnrolReq(serializers.Serializer):
     payment_metadata = serializers.JSONField(required=False)
 
 
+class _DirectEnrolmentRequest(serializers.Serializer):
+    programme_id = serializers.CharField()
+    household_ids = serializers.ListField(
+        child=serializers.CharField(), allow_empty=False,
+    )
+    effective_date = serializers.DateField(required=False)
+
+
+class _EligibleHouseholdSerializer(serializers.ModelSerializer):
+    head_name = serializers.SerializerMethodField()
+    region_code = serializers.CharField(read_only=True)
+    sub_region_code = serializers.CharField(read_only=True)
+    district_code = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Household
+        fields = (
+            "id", "head_name", "current_pmt_score", "current_vulnerability_band",
+            "region_code", "sub_region_code", "district_code",
+        )
+
+    def get_head_name(self, household):
+        head = household.head_member
+        return f"{head.surname} {head.first_name}".strip() if head else ""
+
+
+def _eligibility_error_response(exc: EnrolmentEligibilityError):
+    return Response(
+        {"detail": str(exc), "code": exc.code, "schema_dependencies": exc.dependencies},
+        status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+    )
+
+
 # NOTE: The legacy `ProgrammeViewSet` (at /api/v1/ref/programmes/)
 # was removed in US-S26-005. Programme reads now go through the
 # canonical /api/v1/programmes/ endpoint on the partners app.
@@ -124,7 +170,21 @@ class ReferralViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyMode
     scope_field_path = "household__sub_region_code"
     queryset = Referral.objects.all().order_by("-sent_at")
     serializer_class = ReferralSerializer
-    filterset_fields = ["status", "programme", "household"]
+
+    def get_queryset(self):
+        """Apply canonical referral filters after inherited ABAC scope.
+
+        ``django-filter`` is not installed, so ``filterset_fields`` would
+        accept ``?household=`` while silently returning every visible row.
+        The household detail is a single-household projection and must be
+        filtered by the server before its results are serialised.
+        """
+        qs = super().get_queryset()
+        for field in ("status", "programme", "household"):
+            value = self.request.query_params.get(field)
+            if value:
+                qs = qs.filter(**{field: value})
+        return qs
 
     @extend_schema(tags=["ref"], summary="Send a new referral", request=_SendReq,
                    responses={200: ReferralSerializer})
@@ -203,9 +263,82 @@ class ProgrammeEnrolmentViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.Re
     access_purpose = "REFERRAL"
     audit_entity_type = "programme_enrolment"
     scope_field_path = "household__sub_region_code"
-    queryset = ProgrammeEnrolment.objects.all().order_by("-effective_date")
+    queryset = ProgrammeEnrolment.objects.select_related(
+        "programme", "household", "household__head_member",
+        "household__sub_region", "household__district",
+    ).order_by("-effective_date")
     serializer_class = EnrolmentSerializer
-    filterset_fields = ["status", "programme", "household"]
+
+    def get_queryset(self):
+        """Apply canonical enrolment filters after inherited ABAC scope.
+
+        This prevents an absent optional DRF filter dependency from turning
+        the household relationship endpoint into an unfiltered roster.
+        """
+        qs = super().get_queryset()
+        for field in ("status", "programme", "household"):
+            value = self.request.query_params.get(field)
+            if value:
+                qs = qs.filter(**{field: value})
+        return qs
+
+    @extend_schema(
+        tags=["ref"], summary="List canonically eligible households for a programme",
+        responses={200: _EligibleHouseholdSerializer(many=True)},
+    )
+    @action(detail=False, methods=["get"], url_path="eligible-households")
+    def eligible_households(self, request):
+        programme_id = request.query_params.get("programme")
+        if not programme_id:
+            return Response({"detail": "programme query parameter is required."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            programme = Programme.objects.select_related("dsa").get(pk=programme_id)
+        except Programme.DoesNotExist:
+            return Response({"detail": "Programme not found."}, status=status.HTTP_404_NOT_FOUND)
+        try:
+            households = eligible_household_rows(programme)
+            # Eligibility does not widen an operator's normal geographic view.
+            households = households.filter(scope_q_for_field(request.user, "sub_region_code"))
+        except EnrolmentEligibilityError as exc:
+            return _eligibility_error_response(exc)
+        page = self.paginate_queryset(households)
+        serializer = _EligibleHouseholdSerializer(page if page is not None else households, many=True)
+        return self.get_paginated_response(serializer.data) if page is not None else Response(serializer.data)
+
+    @extend_schema(
+        tags=["ref"], summary="Directly enrol selected eligible households",
+        request=_DirectEnrolmentRequest, responses={201: EnrolmentSerializer},
+    )
+    @action(detail=False, methods=["post"], url_path="enrol-direct")
+    def enrol_direct(self, request):
+        data = _DirectEnrolmentRequest(data=request.data)
+        data.is_valid(raise_exception=True)
+        try:
+            programme = Programme.objects.select_related("dsa").get(pk=data.validated_data["programme_id"])
+        except Programme.DoesNotExist:
+            return Response({"detail": "Programme not found."}, status=status.HTTP_404_NOT_FOUND)
+        household_ids = data.validated_data["household_ids"]
+        # Check the requested rows against ABAC before the transactional
+        # policy check, so IDs outside the actor's scope cannot be enrolled.
+        visible_ids = set(
+            Household.objects.filter(id__in=household_ids)
+            .filter(scope_q_for_field(request.user, "sub_region_code"))
+            .values_list("id", flat=True),
+        )
+        if {str(value) for value in household_ids} != {str(value) for value in visible_ids}:
+            return Response(
+                {"detail": "One or more selected households are outside your geographic scope.", "code": "abac_scope"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        try:
+            created = enrol_households_directly(
+                programme=programme, household_ids=household_ids,
+                actor=actor_from_request(request),
+                effective_date=data.validated_data.get("effective_date"),
+            )
+        except EnrolmentEligibilityError as exc:
+            return _eligibility_error_response(exc)
+        return Response(EnrolmentSerializer(created, many=True).data, status=status.HTTP_201_CREATED)
 
     @extend_schema(tags=["ref"], summary="Exit an enrolment",
                    request=_RejectReq, responses={200: EnrolmentSerializer})

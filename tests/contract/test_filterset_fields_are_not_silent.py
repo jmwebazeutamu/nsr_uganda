@@ -81,8 +81,6 @@ KNOWN_SILENT = {
     "apps.pmt.api.PMTModelVersionViewSet",
     "apps.pmt.api.PMTResultViewSet",
     "apps.reference_data.api.ChoiceListViewSet",
-    "apps.referral.api.ProgrammeEnrolmentViewSet",
-    "apps.referral.api.ReferralViewSet",
     "apps.security.api.OperatorScopeViewSet",
     "apps.update_workflow.api.ChangeRequestViewSet",
 }

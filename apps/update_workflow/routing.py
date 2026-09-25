@@ -76,11 +76,9 @@ def route_label(change_type: str, *, pmt_relevant: bool) -> str:
     defined (the legacy ADDITION / REMOVAL / VITAL_EVENT /
     PROGRAMME_STATE / RECERTIFICATION rows have no spec label).
     """
-    spec = ROUTE_LABEL.get((change_type, pmt_relevant))
-    if spec is not None:
-        return spec
-    role, _ = DEFAULT_MATRIX[(change_type, pmt_relevant)]
-    return role
+    role, _ = route(change_type, pmt_relevant=pmt_relevant)
+    from apps.security.roles import BY_CODE
+    return BY_CODE.get(role, None).label if role in BY_CODE else role
 
 
 def route(change_type: str, *, pmt_relevant: bool) -> tuple[str, timedelta]:
@@ -97,7 +95,10 @@ def route(change_type: str, *, pmt_relevant: bool) -> tuple[str, timedelta]:
         .only("required_role", "sla_hours")
         .first()
     )
-    if rule is not None:
-        return rule.required_role, timedelta(hours=rule.sla_hours)
-    role, hours = DEFAULT_MATRIX[(change_type, pmt_relevant)]
-    return role, timedelta(hours=hours)
+    if rule is None:
+        from .services import UpdError
+        raise UpdError(
+            "Missing active UPD routing configuration for "
+            f"change_type={change_type!r}, pmt_relevant={pmt_relevant!r}"
+        )
+    return rule.required_role, timedelta(hours=rule.sla_hours)

@@ -4,6 +4,7 @@ import json
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -16,6 +17,7 @@ from apps.security.models import AuditEvent
 
 from .field_catalog import CATEGORIES, field_keys_by_category, field_meta
 from .field_catalog import is_pmt_relevant as _catalog_is_pmt_relevant
+from .authorization import allowed_actions, assert_action_allowed
 from .models import ChangeRequest, ChangeStatus, ChangeType, EntityType, SourceChannel
 from .routing import route_label
 from .services import (
@@ -258,6 +260,7 @@ class ChangeRequestSerializer(serializers.ModelSerializer):
     household_id = serializers.SerializerMethodField()
     changes = serializers.SerializerMethodField()
     display_changes = serializers.SerializerMethodField()
+    allowed_actions = serializers.SerializerMethodField()
 
     class Meta:
         model = ChangeRequest
@@ -267,6 +270,7 @@ class ChangeRequestSerializer(serializers.ModelSerializer):
             "changes", "display_changes", "evidence",
             "source_channel", "requester", "requester_note",
             "status", "required_role", "sla_deadline",
+            "allowed_actions",
             "approver", "decided_at", "decision_reason",
             "pmt_preview",
             "created_at", "updated_at",
@@ -337,6 +341,12 @@ class ChangeRequestSerializer(serializers.ModelSerializer):
                 .first()
             )
         return None
+
+    def get_allowed_actions(self, obj):
+        request = self.context.get("request")
+        if request is None:
+            return {}
+        return allowed_actions(request.user, obj)
 
 
 class _CurrentValuesRequest(serializers.Serializer):
@@ -723,6 +733,7 @@ class ChangeRequestViewSet(
         ser = _ActorReason(data=request.data)
         ser.is_valid(raise_exception=True)
         req = self.get_object()
+        assert_action_allowed(request.user, req, "approve")
         try:
             commit_change_request(req, approver=actor_from_request(request))
         except UpdError as e:
@@ -742,6 +753,7 @@ class ChangeRequestViewSet(
         ser.is_valid(raise_exception=True)
         reason = ser.validated_data.get("reason", "")
         req = self.get_object()
+        assert_action_allowed(request.user, req, "reject")
         try:
             reject_change_request(req, approver=actor_from_request(request), reason=reason)
         except UpdError as e:
@@ -763,6 +775,7 @@ class ChangeRequestViewSet(
         ser.is_valid(raise_exception=True)
         reason = ser.validated_data.get("reason", "")
         req = self.get_object()
+        assert_action_allowed(request.user, req, "hold")
         try:
             hold_change_request(req, approver=actor_from_request(request), reason=reason)
         except UpdError as e:
@@ -782,6 +795,7 @@ class ChangeRequestViewSet(
         ser.is_valid(raise_exception=True)
         reason = ser.validated_data.get("reason", "")
         req = self.get_object()
+        assert_action_allowed(request.user, req, "release")
         try:
             release_change_request(req, approver=actor_from_request(request), reason=reason)
         except UpdError as e:
@@ -994,9 +1008,13 @@ class ChangeRequestViewSet(
         results = {"acted": [], "skipped": []}
         for req in qs:
             try:
+                action_name = action_fn.__name__
+                if action_name == "escalate":
+                    action_name = "hold"
+                assert_action_allowed(request.user, req, action_name)
                 action_fn(req, actor=actor, reason=reason)
                 results["acted"].append(req.id)
-            except UpdError as e:
+            except (UpdError, PermissionDenied) as e:
                 results["skipped"].append({"id": req.id, "reason": str(e)})
         # Rows requested but not in the queryset (out of scope / not
         # found) report as not_found so the caller can distinguish
@@ -1015,9 +1033,9 @@ class ChangeRequestViewSet(
     )
     @action(detail=False, methods=["post"], url_path="bulk-approve")
     def bulk_approve(self, request):
-        def _commit(req, *, actor, reason):
+        def approve(req, *, actor, reason):
             commit_change_request(req, approver=actor)
-        return self._bulk_act(request, _commit)
+        return self._bulk_act(request, approve)
 
     @extend_schema(
         tags=["upd"],
@@ -1029,9 +1047,9 @@ class ChangeRequestViewSet(
     )
     @action(detail=False, methods=["post"], url_path="bulk-reject")
     def bulk_reject(self, request):
-        def _reject(req, *, actor, reason):
+        def reject(req, *, actor, reason):
             reject_change_request(req, approver=actor, reason=reason)
-        return self._bulk_act(request, _reject, requires_reason=True)
+        return self._bulk_act(request, reject, requires_reason=True)
 
     @extend_schema(
         tags=["upd"],
@@ -1043,14 +1061,14 @@ class ChangeRequestViewSet(
     )
     @action(detail=False, methods=["post"], url_path="bulk-escalate")
     def bulk_escalate(self, request):
-        def _escalate(req, *, actor, reason):
+        def escalate(req, *, actor, reason):
             # escalate_change_request doesn't take actor/reason — the
             # service hard-codes "sla-auto-escalator" as the actor in
             # the audit emit. Bulk-action callers acknowledge that the
             # row was acted on but the audit attribution remains the
             # auto-escalator identity (operations runbook convention).
             escalate_change_request(req)
-        return self._bulk_act(request, _escalate)
+        return self._bulk_act(request, escalate)
 
 
 # --- US-S28-CATALOG — field catalog endpoint --------------------------------

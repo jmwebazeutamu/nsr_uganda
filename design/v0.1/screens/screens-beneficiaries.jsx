@@ -27,6 +27,8 @@
 
 const { useState: useStateBen, useMemo: useMemoBen } = React;
 
+const _benCsrf = () => (document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/) || [])[1] || "";
+
 const BEN_COLUMNS = [
   { id: "enrolment", label: "Enrolment" },
   { id: "beneficiary", label: "Beneficiary" },
@@ -202,6 +204,7 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
   const [sortBy, setSortBy]       = useStateBen("recent");
   const [page, setPage]           = useStateBen(0);
   const [toast, setToast]         = useStateBen("");
+  const [enrolOpen, setEnrolOpen] = useStateBen(false);
   const [columnsOpen, setColumnsOpen] = useStateBen(false);
   const [hiddenColumns, setHiddenColumns] = useStateBen(() => {
     try { return new Set(JSON.parse(localStorage.getItem("nsr.beneficiaries.columns.hidden") || "[]")); }
@@ -345,9 +348,14 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
           <button className="btn" onClick={exportCsv}><Icon name="download" size={14}/> Export CSV</button>
           <button className="btn" onClick={() => setToast("Import enrolment list is routed through the Programmes API import job once enabled.")}><Icon name="arrowUp" size={14}/> Import enrolment list</button>
           <button className="btn" onClick={onNewProgramme}><Icon name="book" size={14}/> Add programme</button>
-          <button className="btn btn-primary" onClick={() => setToast("Enrolment endpoint lands with OI-S25-4 (Sprint 26).")}><Icon name="plus" size={14}/> Enrol household</button>
+          <button className="btn btn-primary" onClick={() => setEnrolOpen(true)}><Icon name="plus" size={14}/> Enrol household</button>
         </>}
       />
+
+      {enrolOpen && <DirectEnrolmentPanel programmes={livePartnerProgrammes}
+        onClose={() => setEnrolOpen(false)}
+        onComplete={(count) => { setEnrolOpen(false); setToast(`Enrolled ${count} household(s).`); beneficiariesMeta.refresh?.(); }}
+      />}
 
       {/* Status banner — render only while the first fetch is in flight
           or when the server reported an error. Once data is back this
@@ -681,6 +689,43 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
     </div>
     </WideShell>
   );
+};
+
+const DirectEnrolmentPanel = ({ programmes, onClose, onComplete }) => {
+  const [programmeId, setProgrammeId] = useStateBen("");
+  const [selected, setSelected] = useStateBen([]);
+  const [query, setQuery] = useStateBen("");
+  const [error, setError] = useStateBen("");
+  const [saving, setSaving] = useStateBen(false);
+  const [eligibleResp, eligibleMeta] = useApi(
+    programmeId ? `/api/v1/ref/enrolments/eligible-households/?programme=${encodeURIComponent(programmeId)}&page_size=200` : null,
+  );
+  const eligible = (eligibleResp && eligibleResp.results) || [];
+  const visible = eligible.filter(h => `${h.id} ${h.head_name} ${h.region_code} ${h.sub_region_code} ${h.district_code}`.toLowerCase().includes(query.toLowerCase()));
+  const toggle = (id) => setSelected(current => current.includes(id) ? current.filter(value => value !== id) : [...current, id]);
+  const submit = async () => {
+    setSaving(true); setError("");
+    const response = await fetch("/api/v1/ref/enrolments/enrol-direct/", {
+      method:"POST", credentials:"same-origin",
+      headers:{"Content-Type":"application/json", "X-CSRFToken":_benCsrf(), Accept:"application/json"},
+      body: JSON.stringify({programme_id:programmeId, household_ids:selected}),
+    });
+    const body = await response.json().catch(() => ({}));
+    setSaving(false);
+    if (!response.ok) { setError(body.detail || `HTTP ${response.status}`); return; }
+    onComplete(body.length);
+  };
+  return <div className="card mt-3" style={{padding:16}}>
+    <div className="row" style={{justifyContent:"space-between"}}><strong>Enrol eligible households</strong><button className="btn btn-sm" onClick={onClose}>Close</button></div>
+    <p className="t-bodysm muted">The server applies the active DSA, saved programme geography and executable programme criteria before this list is returned. It validates the selection again on enrolment.</p>
+    <select value={programmeId} onChange={e => { setProgrammeId(e.target.value); setSelected([]); setError(""); }} style={{width:"100%"}}><option value="">Select an active programme…</option>{programmes.map(p => <option key={p.id} value={p.id}>{p.code || p.name} · {p.name}</option>)}</select>
+    {programmeId && <><input className="mt-2" value={query} onChange={e => setQuery(e.target.value)} placeholder="Filter eligible households by ID, head or location" style={{width:"100%"}} />
+      {eligibleMeta.loading && <p className="t-bodysm muted">Resolving eligible households…</p>}
+      {(eligibleMeta.error || error) && <p className="t-bodysm" style={{color:"var(--accent-danger)"}}>{error || eligibleMeta.error}</p>}
+      {!eligibleMeta.loading && !eligibleMeta.error && <div style={{maxHeight:260, overflow:"auto", marginTop:10}}>{visible.map(h => <label key={h.id} className="row gap-2" style={{padding:"8px 4px", borderBottom:"1px solid var(--neutral-200)"}}><input type="checkbox" checked={selected.includes(h.id)} onChange={() => toggle(h.id)}/><span><strong>{h.head_name || "No designated head"}</strong> <span className="t-cap">{h.id}</span><br/><span className="t-cap">{[h.region_code, h.sub_region_code, h.district_code].filter(Boolean).join(" · ")}</span></span></label>)}{visible.length === 0 && <p className="t-bodysm muted">No eligible households match.</p>}</div>}
+      <div className="row mt-2" style={{justifyContent:"flex-end", gap:8}}><span className="t-cap">{selected.length} selected</span><button className="btn btn-primary" disabled={!selected.length || saving} onClick={submit}>{saving ? "Enrolling…" : "Enrol selected"}</button></div>
+    </>}
+  </div>;
 };
 
 /* ============================================================

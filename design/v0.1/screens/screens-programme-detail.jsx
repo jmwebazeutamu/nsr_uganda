@@ -1414,11 +1414,22 @@ const PdGeography = ({ p }) => {
   );
 };
 
-const PdEnrolment = ({ p, onOpenHousehold }) => (
+const PdEnrolment = ({ p, onOpenHousehold }) => {
+  // The programme page reads the same persisted ProgrammeEnrolment rows as
+  // Beneficiaries and the household Programmes tab; it must not project a
+  // separate fixture roster.
+  const [enrolmentsResp, enrolmentsMeta] = useApi(
+    p.id ? `/api/v1/ref/enrolments/?programme=${encodeURIComponent(p.id)}&page_size=100` : null,
+  );
+  const enrolments = (enrolmentsResp && enrolmentsResp.results) || [];
+  const active = enrolments.filter(row => row.status === "active");
+  const exited = enrolments.filter(row => row.status === "exited");
+  return (
   <div>
     <PD_TabHeader title="Enrolment"
-      sub={`${num(p.enrolled)} currently active · ${num(p.exited)} exits to date. Click any row to open the household record.`}
+      sub={`${num(active.length)} currently active · ${num(exited.length)} exits to date. Click any row to open the household record.`}
       action={<button className="btn btn-sm"><Icon name="download" size={13}/> Export full roster</button>}/>
+    {enrolmentsMeta?.error && <div className="t-bodysm muted" style={{padding:"12px 20px"}}>Couldn’t load enrolments: {enrolmentsMeta.error}</div>}
     <div style={{padding:20, display:'grid', gridTemplateColumns:'1fr 1fr', gap:16}}>
       <div className="card" style={{padding:0, boxShadow:'none', border:'1px solid var(--neutral-200)'}}>
         <div style={{padding:'12px 16px', borderBottom:'1px solid var(--neutral-200)', display:'flex', alignItems:'center', justifyContent:'space-between'}}>
@@ -1428,14 +1439,15 @@ const PdEnrolment = ({ p, onOpenHousehold }) => (
         <table className="tbl" style={{boxShadow:'none'}}>
           <thead><tr><th>Household</th><th>Head</th><th>Sub-region</th><th>Enrolled</th></tr></thead>
           <tbody>
-            {p.enrolment.recentEnrolled.map(r => (
-              <tr key={r.id} style={{cursor:'pointer'}} onClick={() => onOpenHousehold?.(r.id)}>
-                <td className="col-id">{r.id.slice(0, 16)}…</td>
-                <td>{r.head}</td>
-                <td className="t-bodysm">{r.subreg} · {r.district}</td>
-                <td className="t-cap" style={{whiteSpace:'nowrap'}}>{r.enrolledAt}</td>
+            {active.slice(0, 5).map(r => (
+              <tr key={r.id} style={{cursor:'pointer'}} onClick={() => onOpenHousehold?.(r.household)}>
+                <td className="col-id">{String(r.household).slice(0, 16)}…</td>
+                <td>{r.household_head_name || "—"}</td>
+                <td className="t-bodysm">{[r.household_sub_region_name, r.household_district_name].filter(Boolean).join(" · ") || "—"}</td>
+                <td className="t-cap" style={{whiteSpace:'nowrap'}}>{r.effective_date || "—"}</td>
               </tr>
             ))}
+            {!enrolmentsMeta?.loading && active.length === 0 && <tr><td colSpan="4" className="muted">No active enrolments.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -1447,20 +1459,22 @@ const PdEnrolment = ({ p, onOpenHousehold }) => (
         <table className="tbl" style={{boxShadow:'none'}}>
           <thead><tr><th>Household</th><th>Head</th><th>Reason</th><th>Exited</th></tr></thead>
           <tbody>
-            {p.enrolment.recentExits.map(r => (
-              <tr key={r.id} style={{cursor:'pointer'}} onClick={() => onOpenHousehold?.(r.id)}>
-                <td className="col-id">{r.id.slice(0, 16)}…</td>
-                <td>{r.head}</td>
-                <td className="t-bodysm">{r.reason}</td>
-                <td className="t-cap" style={{whiteSpace:'nowrap'}}>{r.exitedAt}</td>
+            {exited.slice(0, 3).map(r => (
+              <tr key={r.id} style={{cursor:'pointer'}} onClick={() => onOpenHousehold?.(r.household)}>
+                <td className="col-id">{String(r.household).slice(0, 16)}…</td>
+                <td>{r.household_head_name || "—"}</td>
+                <td className="t-bodysm">{r.exit_reason || "—"}</td>
+                <td className="t-cap" style={{whiteSpace:'nowrap'}}>{r.updated_at || "—"}</td>
               </tr>
             ))}
+            {!enrolmentsMeta?.loading && exited.length === 0 && <tr><td colSpan="4" className="muted">No exits recorded.</td></tr>}
           </tbody>
         </table>
       </div>
     </div>
   </div>
-);
+  );
+};
 
 const PdLifecycle = ({ p }) => (
   <div>

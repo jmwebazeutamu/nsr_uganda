@@ -1036,55 +1036,47 @@ const TabGrievances = ({ h, live, onFileGrievance }) => {
   );
 };
 
-// US-S14-003: Programmes tab live wiring. Fans out to two
-// endpoints — enrolments (the source of truth) + referrals (the
-// pipeline view) — and stitches both into one table. The `household`
-// filter was added to both viewsets' filterset_fields as part of
-// this same ticket.
+// Programme membership is read from the canonical ProgrammeEnrolment
+// relationship. Referrals are upstream workflow records, not evidence that
+// this household is enrolled, so they do not appear on this tab.
 const TabProgrammes = ({ h, live }) => {
   const [enrolments, setEnrolments] = useStateHH(null);
-  const [referrals, setReferrals] = useStateHH(null);
   const [err, setErr] = useStateHH(null);
   useEffectHH(() => {
     if (!live || !h.rid) return undefined;
     let cancelled = false;
     const opts = { credentials: "same-origin", headers: { Accept: "application/json" } };
-    Promise.all([
-      fetch(`/api/v1/ref/enrolments/?household=${encodeURIComponent(h.rid)}&page_size=100`, opts)
-        .then(r => r.ok ? r.json() : Promise.reject(`enrolments HTTP ${r.status}`)),
-      fetch(`/api/v1/ref/referrals/?household=${encodeURIComponent(h.rid)}&page_size=100`, opts)
-        .then(r => r.ok ? r.json() : Promise.reject(`referrals HTTP ${r.status}`)),
-    ])
-      .then(([e, r]) => {
+    fetch(`/api/v1/ref/enrolments/?household=${encodeURIComponent(h.rid)}&page_size=100`, opts)
+      .then(r => r.ok ? r.json() : Promise.reject(`enrolments HTTP ${r.status}`))
+      .then(e => {
         if (cancelled) return;
         setEnrolments((e.results || e).slice());
-        setReferrals((r.results || r).slice());
       })
       .catch(e => !cancelled && setErr(String(e)));
     return () => { cancelled = true; };
   }, [live, h.rid]);
 
-  const total = (enrolments?.length || 0) + (referrals?.length || 0);
+  const total = enrolments?.length || 0;
 
   return (
     <div>
       <TabHeader title="Programmes"
-        sub="Active enrolments and outstanding referrals under partner programmes (PDM, NUSAF, etc.)."
-        action={<button className="btn btn-sm"><Icon name="plus" size={13}/> Add referral</button>}/>
+        sub="Programmes this household is enrolled in."
+      />
       {err && <div className="muted t-bodysm" style={{padding:"16px 20px"}}>Couldn't load: {err}</div>}
-      {live && (!enrolments || !referrals) && !err && (
+      {live && !enrolments && !err && (
         <div className="muted t-bodysm" style={{padding:"16px 20px"}}>Loading…</div>
       )}
       {live && total === 0 && !err && (
         <div className="muted t-bodysm" style={{padding:"16px 20px"}}>
-          No programme enrolments or referrals on file for this household.
+          This household is not enrolled in any programme.
         </div>
       )}
       {total > 0 && (
         <table className="tbl">
           <thead><tr>
             <th>Programme</th><th>Type</th><th>Status</th><th>Effective</th>
-            <th>Referral / Enrolment ID</th>
+            <th>Enrolment ID</th>
           </tr></thead>
           <tbody>
             <>
@@ -1101,21 +1093,6 @@ const TabProgrammes = ({ h, live }) => {
                   </Chip></td>
                   <td className="t-cap">{(e.effective_date || "").slice(0, 10) || "—"}</td>
                   <td className="col-id">{e.id}</td>
-                </tr>
-              ))}
-              {(referrals || []).map(r => (
-                <tr key={`r-${r.id}`}>
-                  <td>
-                    <div style={{fontWeight:600}}>{r.programme_code || r.programme}</div>
-                    {r.programme_name && <div className="t-bodysm muted">{r.programme_name}</div>}
-                  </td>
-                  <td><Chip size="sm" tone="update">Referral</Chip></td>
-                  <td><Chip size="sm" tone={r.status === "accepted" ? "data"
-                                            : r.status === "rejected" ? "danger" : "update"}>
-                    {r.status}
-                  </Chip></td>
-                  <td className="t-cap">{(r.sent_at || "").slice(0, 10) || "—"}</td>
-                  <td className="col-id">{r.id}</td>
                 </tr>
               ))}
             </>

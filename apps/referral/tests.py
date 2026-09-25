@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from rest_framework.test import APIClient
 
 from apps.data_management.models import Household
-from apps.partners.models import Partner, Programme
+from apps.partners.models import DataSharingAgreement, Partner, Programme
 from apps.reference_data.models import GeographicUnit
-from apps.referral.models import Referral
+from apps.referral.models import ProgrammeEnrolment, Referral
 from apps.referral.services import (
     ENROL_ACTIVE,
     ENROL_EXITED,
@@ -193,3 +194,125 @@ class TestApi:
         assert Referral.objects.filter(pk=r.data["id"]).exists()
         # Webhook stub recorded a delivery id.
         assert r.data["last_delivery_id"]
+
+    def test_household_filters_return_only_that_households_rows(
+        self, household, programme, geo, django_user_model,
+    ):
+        """A household projection must not receive another household's rows."""
+        other_household = Household.objects.create(
+            region=geo["r"], sub_region=geo["sr"], district=geo["d"],
+            county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
+            village=geo["v"], urban_rural="2",
+        )
+        referral = send_referral(
+            programme=programme, household=household, actor="op-1",
+        )
+        other_referral = send_referral(
+            programme=programme, household=other_household, actor="op-1",
+        )
+        accept_referral(referral, actor="programme-1")
+        accept_referral(other_referral, actor="programme-1")
+        enrolment = enrol_household(referral, actor="programme-1")
+        other_enrolment = enrol_household(other_referral, actor="programme-1")
+
+        user = django_user_model.objects.create_user(
+            username="household-reader", password="p", is_superuser=True,
+            is_staff=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        enrolments = client.get("/api/v1/ref/enrolments/", {
+            "household": household.id,
+        })
+        assert enrolments.status_code == 200, enrolments.content
+        enrolment_ids = {row["id"] for row in enrolments.data["results"]}
+        assert enrolment_ids == {str(enrolment.id)}
+        assert str(other_enrolment.id) not in enrolment_ids
+
+        referrals = client.get("/api/v1/ref/referrals/", {
+            "household": household.id,
+        })
+        assert referrals.status_code == 200, referrals.content
+        assert {row["id"] for row in referrals.data["results"]} == {str(referral.id)}
+
+    def test_direct_enrolment_uses_active_dsa_programme_geography_and_atomic_selection(
+        self, household, programme, geo, django_user_model,
+    ):
+        """Direct enrolment can only create the canonical scoped rows."""
+        dsa = DataSharingAgreement.objects.create(
+            partner=programme.partner, reference="DSA-REF-DIRECT", version=1,
+            status="active", effective_from=date(2026, 1, 1),
+            entities_scope={"household": True}, field_scope={},
+        )
+        dsa.geographic_scope.add(geo["r"])
+        programme.dsa = dsa
+        programme.unit_of_enrolment = "household"
+        programme.geographic_units.add(geo["r"])
+        programme.save(update_fields=["dsa", "unit_of_enrolment"])
+
+        outside_region = GeographicUnit.objects.create(
+            level="region", code="REF-OUTSIDE", name="Outside",
+            effective_from=date(2026, 1, 1),
+        )
+        outside_household = Household.objects.create(
+            region=outside_region, sub_region=geo["sr"], district=geo["d"],
+            county=geo["c"], sub_county=geo["sc"], parish=geo["p"],
+            village=geo["v"], urban_rural="2",
+        )
+        user = django_user_model.objects.create_user(
+            username="direct-enroller", password="p", is_superuser=True,
+            is_staff=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        eligible = client.get("/api/v1/ref/enrolments/eligible-households/", {
+            "programme": programme.id,
+        })
+        assert eligible.status_code == 200, eligible.data
+        assert {row["id"] for row in eligible.data["results"]} == {str(household.id)}
+
+        refused = client.post("/api/v1/ref/enrolments/enrol-direct/", {
+            "programme_id": programme.id,
+            "household_ids": [household.id, outside_household.id],
+        }, format="json")
+        assert refused.status_code == 422, refused.data
+        assert ProgrammeEnrolment.objects.count() == 0
+
+        created = client.post("/api/v1/ref/enrolments/enrol-direct/", {
+            "programme_id": programme.id,
+            "household_ids": [household.id],
+        }, format="json")
+        assert created.status_code == 201, created.data
+        assert ProgrammeEnrolment.objects.filter(
+            programme=programme, household=household,
+        ).exists()
+
+    def test_direct_enrolment_fails_closed_for_unmapped_choice_rules(
+        self, household, programme, geo, django_user_model,
+    ):
+        dsa = DataSharingAgreement.objects.create(
+            partner=programme.partner, reference="DSA-REF-SCHEMA", version=1,
+            status="active", effective_from=date(2026, 1, 1),
+            entities_scope={"household": True}, field_scope={},
+        )
+        dsa.geographic_scope.add(geo["r"])
+        programme.dsa = dsa
+        programme.unit_of_enrolment = "household"
+        programme.pmt_bands = ["poorest_20"]
+        programme.geographic_units.add(geo["r"])
+        programme.save(update_fields=["dsa", "unit_of_enrolment", "pmt_bands"])
+        user = django_user_model.objects.create_user(
+            username="schema-enroller", password="p", is_superuser=True,
+            is_staff=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        response = client.get("/api/v1/ref/enrolments/eligible-households/", {
+            "programme": programme.id,
+        })
+        assert response.status_code == 422
+        assert response.data["code"] == "schema_dependency"
+        assert "programme_pmt_band" in response.data["schema_dependencies"][0]

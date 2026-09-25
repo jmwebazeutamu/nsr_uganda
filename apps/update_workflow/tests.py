@@ -30,6 +30,65 @@ from apps.update_workflow.services import (
     submit_change_request,
 )
 
+
+class TestReviewAuthorisation:
+    """Review rights are derived from the persisted routing role and the
+    security catalogue; the browser's button state cannot bypass this."""
+
+    def test_realm_routing_role_resolves_through_role_catalogue(
+        self, db, member, django_user_model,
+    ):
+        from django.contrib.auth.models import Group
+        from apps.update_workflow.authorization import allowed_actions
+
+        reviewer = django_user_model.objects.create_user(username="me-reviewer")
+        reviewer.groups.add(Group.objects.get(name="m_and_e_officer"))
+        request = _draft(member, requester="another-operator")
+        request.required_role = "DISTRICT_M_AND_E"
+        request.status = ChangeStatus.PENDING_APPROVAL
+        request.save(update_fields=["required_role", "status"])
+
+        assert allowed_actions(reviewer, request)["approve"]["allowed"] is True
+
+    def test_wrong_role_and_requester_are_both_denied(
+        self, db, member, django_user_model,
+    ):
+        from django.contrib.auth.models import Group
+        from apps.update_workflow.authorization import allowed_actions
+
+        reviewer = django_user_model.objects.create_user(username="not-the-cdo")
+        reviewer.groups.add(Group.objects.get(name="supervisor"))
+        request = _draft(member, requester="not-the-cdo")
+        request.required_role = "cdo"
+        request.status = ChangeStatus.PENDING_APPROVAL
+        request.save(update_fields=["required_role", "status"])
+
+        denied = allowed_actions(reviewer, request)
+        assert denied["approve"]["allowed"] is False
+        assert "cannot review their own" in denied["approve"]["reason"]
+
+    def test_endpoint_returns_403_when_session_role_is_not_assigned(
+        self, db, member, django_user_model,
+    ):
+        from django.contrib.auth.models import Group
+        from rest_framework.test import APIClient
+        from apps.security.models import OperatorScope, ScopeLevel
+
+        reviewer = django_user_model.objects.create_user(username="supervisor-user")
+        reviewer.groups.add(Group.objects.get(name="supervisor"))
+        OperatorScope.objects.create(user=reviewer, scope_level=ScopeLevel.NATIONAL)
+        request = _draft(member, requester="field-user")
+        submit_change_request(request)
+        request.required_role = "cdo"
+        request.save(update_fields=["required_role"])
+        client = APIClient()
+        client.force_authenticate(user=reviewer)
+
+        response = client.post(f"/api/v1/upd/change-requests/{request.id}/approve/", {}, format="json")
+        assert response.status_code == 403
+        request.refresh_from_db()
+        assert request.status == ChangeStatus.PENDING_APPROVAL
+
 # --- Fixtures ---------------------------------------------------------------
 
 @pytest.fixture
@@ -880,7 +939,7 @@ class TestHoldReleaseEndpoints:
             data={"reason": "x"},
             format="json",
         )
-        assert r.status_code == 400
+        assert r.status_code == 403
         assert "NO-SELF-APPROVE" in r.data["detail"]
 
     def test_release_endpoint_reopens(self, db, member, api_client):

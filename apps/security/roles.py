@@ -122,7 +122,8 @@ ROLES: tuple[Role, ...] = (
        NATIONAL, notes="Pre-existing group; gates reference-data admin."),
     _r("EXPLORER", "Data Analyst", _READ_OUT, NATIONAL,
        notes="Pre-existing group; gates the Data Explorer surface."),
-    _r("m_and_e_officer", "M&E Officer", _READ_OUT, DISTRICT,
+    _r("m_and_e_officer", "M&E Officer",
+       (DATA_VIEW, DATA_EXPORT, DATA_DOWNLOAD, DATA_APPROVE), DISTRICT,
        adr0006="DISTRICT_M_AND_E"),
     _r("GRM Officer", "Grievance Officer", _CAPTURE_EDIT, NATIONAL,
        notes="Pre-existing group. GRM visibility is group-gated, not "
