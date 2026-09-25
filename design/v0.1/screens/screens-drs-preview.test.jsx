@@ -55,7 +55,7 @@ describe("_localDsaScopeIssues", () => {
   const dsa = {
     scope: {
       field_scope_restricted: true,
-      field_groups: ["household"],
+      field_groups: ["Identifiers"],
       geographic_units: [{ level: "region", code: "R-WESTERN", name: "Western" }],
     },
   };
@@ -65,10 +65,10 @@ describe("_localDsaScopeIssues", () => {
       kind: "group", rules: [{
         kind: "rule", field: "household.region_code", value: "R-CENTRAL",
       }],
-    });
+    }, [{ key: "household.id", group: "Identifiers" }, { key: "member.name", group: "Members" }]);
 
     expect(issues).toEqual([
-      { dimension: "fields", requested: ["member"], allowed: ["household"] },
+      { dimension: "fields", requested: ["Members"], allowed: ["Identifiers"] },
       {
         dimension: "geography", level: "region",
         requested: ["R-CENTRAL"], allowed: ["R-WESTERN"],
@@ -81,7 +81,7 @@ describe("_localDsaScopeIssues", () => {
       kind: "group", rules: [{
         kind: "rule", field: "household.region_code", value: "R-WESTERN",
       }],
-    })).toEqual([]);
+    }, [{ key: "household.id", group: "Identifiers" }])).toEqual([]);
   });
 });
 

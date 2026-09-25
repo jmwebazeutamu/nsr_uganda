@@ -120,9 +120,9 @@ const FS_SENS  = ["Public", "Internal", "Personal", "Sensitive"];
    selection. DSA-blocked keys are filtered out automatically. */
 const FS_PACKS = [
   { id:"minimum",    label:"Minimum reporting", icon:"filter",
-    note:"5 fields · what most M&E dashboards need.",
-    fields:["household.registry_id","household.sub_region_code","household.district_code",
-            "household.size","household.pmt_band"] },
+    note:"Canonical registry, geography and vulnerability fields.",
+    fields:["household.id","household.region_code","household.district_code",
+            "household.current_pmt_score","household.current_vulnerability_band"] },
   { id:"geography",  label:"Geography rollup",  icon:"mapPin",
     note:"Where households live · public + internal codes.",
     fields:["household.registry_id","household.sub_region_code","household.district_code",

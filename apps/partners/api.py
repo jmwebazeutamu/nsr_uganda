@@ -48,6 +48,11 @@ from .models import (
 )
 from apps.reference_data.models import GeographicUnit
 from .services import scope as scope_service
+from .services.programme_scope import (
+    ProgrammeGeographyScopeError,
+    programme_geography_contract,
+    validated_programme_geography,
+)
 from .services import signature as signature_service
 from .services.activity import for_partner as activity_for_partner
 
@@ -466,6 +471,23 @@ class ProgrammeSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         attrs = super().validate(attrs)
         partner = attrs.get("partner") or getattr(self.instance, "partner", None)
+        dsa = attrs.get("dsa") or getattr(self.instance, "dsa", None)
+        geography_changed = self.instance is None or "dsa" in attrs or "geographic_units" in attrs
+        if dsa is not None:
+            if partner is not None and dsa.partner_id != partner.id:
+                raise serializers.ValidationError({
+                    "dsa": "Programme DSA must belong to the selected partner.",
+                })
+            if geography_changed:
+                requested_units = attrs.get("geographic_units")
+                if requested_units is None and self.instance is not None:
+                    requested_units = self.instance.geographic_units.all()
+                try:
+                    attrs["geographic_units"] = validated_programme_geography(
+                        dsa, requested_units,
+                    )
+                except ProgrammeGeographyScopeError as exc:
+                    raise serializers.ValidationError({"geographic_units": str(exc)}) from exc
         code = (attrs.get("code") or "").strip()
         if partner and code:
             qs = Programme.objects.filter(partner=partner, code=code)
@@ -520,13 +542,7 @@ class DsaSerializer(serializers.ModelSerializer):
         companion avoids every consumer independently resolving IDs and
         prevents the Partner detail from silently dropping valid scope.
         """
-        return [
-            {
-                "id": str(unit.id), "code": unit.code,
-                "name": unit.name, "level": unit.level,
-            }
-            for unit in dsa.geographic_scope.all()
-        ]
+        return programme_geography_contract(dsa)["units"]
 
     def validate_geographic_scope(self, units):
         """New DSAs can only be scoped to currently usable UBOS units."""
@@ -677,6 +693,12 @@ class DsaViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
             cutoff = date.today() + timedelta(days=n)
             qs = qs.filter(effective_to__isnull=False, effective_to__lte=cutoff)
         return qs
+
+    @action(detail=True, methods=["get"], url_path="programme-geography")
+    def programme_geography(self, request, pk=None):
+        """Canonical geographic contract for Programme Registration."""
+        dsa = self.get_object()
+        return Response(programme_geography_contract(dsa))
 
     def partial_update(self, request, *args, **kwargs):
         # Per ADR-0016 §"Decision 2", an active DSA is a signed legal

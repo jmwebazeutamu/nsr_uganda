@@ -151,12 +151,6 @@ const ProgrammeRegistrationScreen = ({ onBack }) => {
   const [partnersResp] = useApi("/api/v1/partners/?status=active");
   const partners = (partnersResp && partnersResp.results) || [];
 
-  const [geoResp] = useApi("/api/v1/reference-data/geographic-units/");
-  const allGeoUnits = useMemoProg(
-    () => ((geoResp && geoResp.results) || []).filter(g => g.level === "sub_region"),
-    [geoResp],
-  );
-
   /* ---- Local state ---- */
   const [step, setStep] = useStateProg("basics");
   const [submitOpen, setSubmitOpen] = useStateProg(false);
@@ -236,13 +230,24 @@ const ProgrammeRegistrationScreen = ({ onBack }) => {
   );
   const activeDsa = ((dsaResp && dsaResp.results) || [])[0] || null;
 
-  // Sub-region IDs the DSA permits. Empty array = no allowlist yet.
-  const dsaGeoIds = useMemoProg(() => {
-    if (!activeDsa) return [];
-    // geographic_scope is a list of GeographicUnit IDs per the
-    // canonical DsaSerializer (ADR-0013 / Sprint 24).
-    return activeDsa.geographic_scope || [];
-  }, [activeDsa]);
+  // The DSA API resolves its canonical UBOS roots (region, sub-region,
+  // district, etc.). Programme Registration never re-derives scope by
+  // intersecting a particular level with raw DSA IDs.
+  const [programmeScopeResp] = useApi(
+    activeDsa ? `/api/v1/dsas/${activeDsa.id}/programme-geography/` : null,
+    { skip: !activeDsa },
+  );
+  const programmeScope = programmeScopeResp || null;
+  const allGeoUnits = programmeScope?.units || [];
+  const dsaGeoIds = allGeoUnits.map(unit => unit.id);
+
+  // A geographically limited DSA explicitly inherits its legal roots when
+  // the operator reaches the wizard. The server applies the same rule, so a
+  // delayed browser response cannot create an empty/national programme.
+  useEffectProg(() => {
+    if (!programmeScope?.requires_programme_scope || data.geo_unit_ids.length) return;
+    setD("geo_unit_ids", dsaGeoIds);
+  }, [programmeScope?.dsa_id, programmeScope?.requires_programme_scope, dsaGeoIds.join(",")]);
 
   // Out-of-scope geo: anything the user picked that isn't in the DSA.
   const outOfScopeGeo = data.geo_unit_ids.filter(g => !dsaGeoIds.includes(g));
@@ -374,7 +379,7 @@ const ProgrammeRegistrationScreen = ({ onBack }) => {
           {step === "basics"       && <StepBasics       data={data} setD={setD} partners={partners} partner={partner} activeDsa={activeDsa} kindOpts={kindOpts}/>}
           {step === "cohort"       && <StepCohort       data={data} setD={setD} toggleInArr={toggleInArr} unitOpts={unitOpts} pmtOpts={pmtOpts} sexOpts={sexOpts} compOpts={compOpts} estReach={estReach}/>}
           {step === "disbursement" && <StepDisbursement data={data} setD={setD} cycleOpts={cycleOpts} cyclesInPeriod={cyclesInPeriod} totalPerBenef={totalPerBenef} totalBudget={totalBudget}/>}
-          {step === "scope"        && <StepScopeGeo    data={data} setD={setD} toggleInArr={toggleInArr} allGeoUnits={allGeoUnits} dsaGeoIds={dsaGeoIds} outOfScopeGeo={outOfScopeGeo} activeDsa={activeDsa}/>}
+          {step === "scope"        && <StepScopeGeo data={data} setD={setD} toggleInArr={toggleInArr} allGeoUnits={allGeoUnits} dsaGeoIds={dsaGeoIds} outOfScopeGeo={outOfScopeGeo} activeDsa={activeDsa} programmeScope={programmeScope}/>}
           {step === "lifecycle"    && <StepLifecycle   data={data} setD={setD} toggleInArr={toggleInArr} exitOpts={exitOpts} autoOpts={autoOpts} webhookOpts={webhookOpts}/>}
         </div>
 
@@ -394,6 +399,9 @@ const ProgrammeRegistrationScreen = ({ onBack }) => {
         if (!data.partner_id) missing.push("partner");
         if (!data.name)       missing.push("name");
         if (!data.kind)       missing.push("programme kind");
+        const dsaGeoRequired = programmeScope?.requires_programme_scope;
+        if (dsaGeoRequired && data.geo_unit_ids.length === 0) missing.push("DSA geographic scope");
+        if (outOfScopeGeo.length) missing.push("in-scope geography");
         const submitBlocked = missing.length > 0;
         const tip = submitBlocked
           ? `Missing: ${missing.join(", ")}. Go back to Step 1 (Basics) to set ${missing.length === 1 ? "it" : "them"}.`
@@ -783,7 +791,7 @@ const StepDisbursement = ({ data, setD, cycleOpts, cyclesInPeriod, totalPerBenef
 /* ============================================================
    STEP 4 — Geographic scope
    ============================================================ */
-const StepScopeGeo = ({ data, toggleInArr, allGeoUnits, dsaGeoIds, outOfScopeGeo, activeDsa }) => {
+const StepScopeGeo = ({ data, toggleInArr, allGeoUnits, dsaGeoIds, outOfScopeGeo, activeDsa, programmeScope }) => {
   const idToUnit = useMemoProg(() => {
     const m = {};
     for (const g of allGeoUnits) m[g.id] = g;
@@ -805,8 +813,12 @@ const StepScopeGeo = ({ data, toggleInArr, allGeoUnits, dsaGeoIds, outOfScopeGeo
           <Icon name="shield" size={13} color="var(--accent-update)"/>
           <span className="t-bodysm">
             <span className="muted">DSA cap · </span>
-            {activeDsa
-              ? <><strong className="t-mono">{activeDsa.reference}</strong> allows <strong>{dsaUnits.length}</strong> sub-region{dsaUnits.length===1?'':'s'}:</>
+            {activeDsa && !programmeScope
+              ? <><strong className="t-mono">{activeDsa.reference}</strong> geography is loading from the DSA contract…</>
+              : activeDsa && programmeScope?.is_national
+                ? <><strong className="t-mono">{activeDsa.reference}</strong> permits national geography.</>
+              : activeDsa
+              ? <><strong className="t-mono">{activeDsa.reference}</strong> allows <strong>{dsaUnits.length}</strong> geographic unit{dsaUnits.length===1?'':'s'}:</>
               : <span className="muted">No active DSA — pick a partner with an active DSA first.</span>}
           </span>
           <div className="row-wrap">
@@ -816,7 +828,11 @@ const StepScopeGeo = ({ data, toggleInArr, allGeoUnits, dsaGeoIds, outOfScopeGeo
       </div>
 
       <div style={{padding:"18px 20px"}}>
-        <div className="row-wrap">
+        {activeDsa && programmeScope?.requires_programme_scope && dsaUnits.length === 0 ? (
+          <div className="tint-danger" style={{padding:12, borderLeft:"3px solid var(--accent-danger)"}}>
+            DSA geography could not be resolved. Programme creation is blocked until the active DSA has valid UBOS geographic units.
+          </div>
+        ) : <div className="row-wrap">
           {allGeoUnits.map(g => {
             const on = data.geo_unit_ids.includes(g.id);
             const inDsa = dsaGeoIds.includes(g.id);
@@ -837,7 +853,7 @@ const StepScopeGeo = ({ data, toggleInArr, allGeoUnits, dsaGeoIds, outOfScopeGeo
               </button>
             );
           })}
-        </div>
+        </div>}
 
         {outOfScopeGeo.length > 0 && (
           <div className="mt-4" style={{padding:"12px 14px", background:"var(--accent-danger-bg)", borderLeft:"3px solid var(--accent-danger)", borderRadius:4}}>
@@ -851,10 +867,10 @@ const StepScopeGeo = ({ data, toggleInArr, allGeoUnits, dsaGeoIds, outOfScopeGeo
     {/* Sub-county / district nudge */}
     <div className="card">
       <div className="card-header"><h3 className="t-h3" style={{margin:0}}>District / sub-county refinement</h3>
-        <span className="t-cap">Optional · default is all districts within the selected sub-regions</span>
+        <span className="t-cap">Optional · the programme persists the selected canonical DSA units</span>
       </div>
       <div style={{padding:"18px 20px"}}>
-        <div className="row gap-2"><Chip size="sm" tone="programme">all districts</Chip><span className="muted t-bodysm">in {data.geo_unit_ids.length || 0} sub-region{data.geo_unit_ids.length===1?'':'s'}</span></div>
+        <div className="row gap-2"><Chip size="sm" tone="programme">DSA inheritance</Chip><span className="muted t-bodysm">{data.geo_unit_ids.length || 0} selected geographic unit{data.geo_unit_ids.length===1?'':'s'}</span></div>
         <div className="mt-3"><button className="btn btn-sm"><Icon name="mapPin" size={13}/> Refine by district</button> <span className="muted t-bodysm" style={{marginLeft:6}}>open the geographic tree picker</span></div>
       </div>
     </div>

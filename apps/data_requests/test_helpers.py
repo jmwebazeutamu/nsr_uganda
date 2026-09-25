@@ -44,10 +44,13 @@ def make_dsa(*, partner, reference: str, allowed_scopes: dict | None = None,
 
     scopes = allowed_scopes or {}
 
-    # Field group derivation: legacy 'household.id', 'member.name' → group keys.
+    # Field group derivation follows the production builder catalogue. Test
+    # fixtures must not retain a second prefix-based field-group vocabulary.
+    from apps.data_requests.builder_schema import FIELD_CATALOGUE
+    group_by_key = {entry["key"]: entry["group"] for entry in FIELD_CATALOGUE}
     field_scope: dict[str, bool] = {}
     for f in scopes.get("fields") or []:
-        group, _, _ = (f or "").partition(".")
+        group = group_by_key.get(f, f if "." not in f else f.partition(".")[0])
         if group:
             field_scope[group] = True
 

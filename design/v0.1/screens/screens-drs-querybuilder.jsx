@@ -250,13 +250,6 @@ const qbCountRules = (node) => {
   return node.rules.reduce((a,r) => a + qbCountRules(r), 0);
 };
 
-const qbEstimateFromTotal = (total, tree) => {
-  const ruleCount = qbCountRules(tree);
-  if (!total || ruleCount === 0) return total || 0;
-  const factor = Math.pow(0.38, Math.min(ruleCount, 8));
-  return Math.max(120, Math.round(total * factor));
-};
-
 /* Compile to a SQL-ish preview string */
 const qbToSQL = (node, indent = 0) => {
   const pad = "  ".repeat(indent);
@@ -898,32 +891,13 @@ const BuildStepV2 = ({
               return r.json();
             })();
         if (cancelled) return;
-        setEstimate(data);
-        setEstimateSource("server");
+        setEstimate(data.estimate_available === false ? null : data);
+        setEstimateSource(data.estimate_available === false ? "error" : "server");
         return;
       } catch (err) {
-        try {
-          const r = await fetch("/api/v1/data-management/households/aggregates/", {
-            credentials: "same-origin",
-            headers: { Accept: "application/json" },
-          });
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          const agg = await r.json();
-          const total = Number(agg?.total || 0);
-          if (cancelled) return;
-          setEstimate({
-            registry_total: total,
-            estimated_matches: qbEstimateFromTotal(total, tree),
-            estimated_pct: total ? Number((qbEstimateFromTotal(total, tree) / total * 100).toFixed(2)) : 0,
-            rule_count: qbCountRules(tree),
-            source: "fallback",
-          });
-          setEstimateSource("fallback");
-        } catch {
-          if (!cancelled) {
-            setEstimate(null);
-            setEstimateSource("error");
-          }
+        if (!cancelled) {
+          setEstimate(null);
+          setEstimateSource("error");
         }
       }
     }, 180);
@@ -1049,15 +1023,15 @@ WHERE ${sql.replace(/^\(\n  /, "").replace(/\n\)$/, "").replace(/\n  /g, "\n  ")
 
       {/* Right rail */}
       <div className="col gap-3">
-        {/* Estimated match card — live server estimate with offline fallback. */}
+        {/* Estimated match card — returned only by the canonical server endpoint. */}
         <div className="card" style={{borderTop:"3px solid var(--accent-data)"}}>
           <div style={{padding:16}}>
             <div className="row gap-2" style={{alignItems:"center", justifyContent:"space-between"}}>
               <div className="t-cap" style={{color:"var(--accent-data)", fontWeight:600}}>
                 <Icon name="target" size={11}/> ESTIMATED MATCHES
               </div>
-              <Chip size="sm" tone={estimateSource === "server" ? "data" : estimateSource === "fallback" ? "update" : "neutral"}>
-                {estimateSource === "server" ? "live" : estimateSource === "fallback" ? "fallback" : "loading"}
+              <Chip size="sm" tone={estimateSource === "server" ? "data" : "neutral"}>
+                {estimateSource === "server" ? "live" : "unavailable"}
               </Chip>
             </div>
             <div className="t-num" style={{
@@ -1082,9 +1056,7 @@ WHERE ${sql.replace(/^\(\n  /, "").replace(/\n\)$/, "").replace(/\n  /g, "\n  ")
             <div className="t-cap mt-3" style={{color:"var(--neutral-600)"}}>
               {estimateSource === "server"
                 ? "Live estimate returned by the DRS backend from the current criteria tree."
-                : estimateSource === "fallback"
-                  ? "Backend count endpoint was unavailable; using live registry totals with the same server-side estimate model."
-                  : "The backend estimate refreshes as you edit the criteria tree."}
+                : "Estimate unavailable — retry after the registry service is available."}
             </div>
           </div>
         </div>

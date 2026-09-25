@@ -14,7 +14,7 @@
 //   Updates         → change_requests WHERE status = pending_approval
 //   Duplicates      → match_pairs WHERE status = pending
 //   Grievances      → grievances WHERE status NOT IN (closed, resolved)
-//   Data Requests   → drs_requests WHERE status = submitted
+//   Data Requests   → all drs_requests visible in the operator inbox
 //   My requests     → drs_requests/mine WHERE status = submitted
 //   Captures        → local-draft count (no API yet); stays on the
 //                     hardcoded fallback until the intake endpoint
@@ -108,10 +108,10 @@ const _FETCHERS = [
   },
   {
     id: "drs",
-    // DRS uses ?status=submitted on the chip; the same filter on the
-    // endpoint gives us the badge in one row.
+    // The DRS inbox opens on "All". Count the same server collection,
+    // rather than a status-filtered subset that can disagree with its list.
     fetch: () =>
-      _getJson("/api/v1/drs/requests/?status=submitted&page_size=1")
+      _getJson("/api/v1/drs/requests/?page_size=1")
         .then(_countOf),
   },
   {

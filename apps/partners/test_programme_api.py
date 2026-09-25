@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
-from apps.partners.models import Partner, Programme
+from apps.partners.models import DataSharingAgreement, Partner, Programme
+from apps.partners.services.programme_scope import programme_geography_contract
+from apps.reference_data.models import GeographicUnit
 from apps.reference_data.services import clear_resolver_cache
 from apps.security.models import AuditEvent
 
@@ -40,6 +44,72 @@ def partner(db):
 
 @pytest.mark.django_db
 class TestProgrammeCreate:
+    def _dsa(self, partner, reference="DSA-TEST", *, units=()):
+        dsa = DataSharingAgreement.objects.create(
+            partner=partner, reference=reference, version=1, status="active",
+            effective_from=date(2026, 1, 1), effective_to=date(2030, 12, 31),
+            field_scope={}, entities_scope={}, sensitive_data_handling="none",
+            retention_days=180, breach_sla_hours=72,
+        )
+        dsa.geographic_scope.set(units)
+        return dsa
+
+    def _unit(self, level, code, name, parent=None):
+        return GeographicUnit.objects.create(
+            level=level, code=code, name=name, parent=parent,
+            effective_from=date(2026, 1, 1),
+        )
+
+    def test_limited_dsa_geography_is_inherited_and_persisted(self, api, partner):
+        c, _ = api
+        western = self._unit("region", "R-WESTERN", "Western")
+        dsa = self._dsa(partner, units=[western])
+
+        contract = c.get(f"/api/v1/dsas/{dsa.id}/programme-geography/")
+        assert contract.status_code == 200
+        assert contract.data["is_national"] is False
+        assert contract.data["units"] == [{
+            "id": str(western.id), "code": "R-WESTERN",
+            "name": "Western", "level": "region",
+        }]
+
+        created = c.post(URL_LIST, {
+            "partner": partner.id, "dsa": dsa.id, "name": "Western programme",
+            "kind": "cash_transfer",
+        }, format="json")
+        assert created.status_code == 201, created.data
+        programme = Programme.objects.get(id=created.data["id"])
+        assert list(programme.geographic_units.values_list("code", flat=True)) == ["R-WESTERN"]
+
+    def test_rejects_programme_geography_outside_dsa(self, api, partner):
+        c, _ = api
+        western = self._unit("region", "R-WESTERN", "Western")
+        western_sub_region = self._unit("sub_region", "SR-WESTERN", "Western sub-region", western)
+        central = self._unit("region", "R-CENTRAL", "Central")
+        dsa = self._dsa(partner, units=[western])
+        descendant = c.post(URL_LIST, {
+            "partner": partner.id, "dsa": dsa.id, "name": "Western sub-region programme",
+            "kind": "cash_transfer", "geographic_units": [western_sub_region.id],
+        }, format="json")
+        assert descendant.status_code == 201, descendant.data
+        response = c.post(URL_LIST, {
+            "partner": partner.id, "dsa": dsa.id, "name": "Outside scope",
+            "kind": "cash_transfer", "geographic_units": [central.id],
+        }, format="json")
+        assert response.status_code == 400
+        assert "outside DSA" in str(response.data["geographic_units"])
+        assert "Western" in str(response.data["geographic_units"])
+
+    def test_national_region_sub_region_and_district_contracts(self, api, partner):
+        national = self._dsa(partner, "DSA-NATIONAL")
+        region = self._unit("region", "R-WEST", "West")
+        sub_region = self._unit("sub_region", "SR-WEST", "West sub-region", region)
+        district = self._unit("district", "DST-WEST", "West district", sub_region)
+        assert programme_geography_contract(national)["is_national"] is True
+        assert programme_geography_contract(self._dsa(partner, "DSA-REGION", units=[region]))["units"][0]["level"] == "region"
+        assert programme_geography_contract(self._dsa(partner, "DSA-SUBREGION", units=[sub_region]))["units"][0]["level"] == "sub_region"
+        assert programme_geography_contract(self._dsa(partner, "DSA-DISTRICT", units=[district]))["units"][0]["level"] == "district"
+
     def test_create_emits_audit_and_returns_cleartext_secret(self, api, partner):
         c, _ = api
         payload = {

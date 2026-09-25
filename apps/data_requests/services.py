@@ -62,6 +62,21 @@ def _allowed_field_groups(dsa: DataSharingAgreement) -> set[str] | None:
     return {k for k, v in fs.items() if v}
 
 
+def _requested_field_groups(fields) -> set[str]:
+    """Resolve selected field keys to the DSA's canonical clause groups.
+
+    ``field_scope`` stores the legal group labels (for example
+    ``Identifiers``), while request payloads store registry field paths (for
+    example ``household.id``). The builder catalogue is the only maintained
+    mapping between those concepts, so validation consumes it rather than
+    treating a model prefix as a second field-group vocabulary.
+    """
+    from .builder_schema import FIELD_CATALOGUE
+
+    group_by_key = {field["key"]: field["group"] for field in FIELD_CATALOGUE}
+    return {group_by_key.get(str(field), str(field).partition(".")[0]) for field in fields}
+
+
 def _allowed_geo_codes(
     dsa: DataSharingAgreement, level: str,
 ) -> set[str] | None:
@@ -197,8 +212,7 @@ def validate_against_dsa(
     wanted_fields = payload.get("fields")
     allowed_fields = _allowed_field_groups(dsa)
     if wanted_fields and allowed_fields is not None:
-        # Map legacy 'household.id', 'member.name' style → group names.
-        groups = {(f or "").partition(".")[0] for f in wanted_fields}
+        groups = _requested_field_groups(wanted_fields)
         extras = groups - allowed_fields
         if extras:
             _violation(

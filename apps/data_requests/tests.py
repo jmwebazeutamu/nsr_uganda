@@ -58,6 +58,14 @@ def draft_request(active_dsa):
 
 
 class TestValidateAgainstDsa:
+    def test_registry_id_uses_its_canonical_identifiers_clause(self, partner):
+        dsa = make_dsa(
+            partner=partner, reference="DSA-IDENTIFIERS", status="active",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={"fields": ["Identifiers"]},
+        )
+        validate_against_dsa({"fields": ["household.id"]}, dsa)
+
     def test_subset_payload_passes(self, active_dsa):
         validate_against_dsa(
             {"fields": ["household.id"], "sub_region_codes": ["SR-BUGANDA"]},
@@ -97,12 +105,12 @@ class TestValidateAgainstDsa:
                 "region_codes": ["R-CENTRAL"],
             }, dsa)
 
-        assert "fields=['household', 'member']" in str(error.value)
+        assert "fields=['Identifiers', 'member']" in str(error.value)
         assert "region_codes=['R-CENTRAL']" in str(error.value)
         assert error.value.scope_violations == [
             {
                 "dimension": "fields", "key": "fields",
-                "requested": ["household", "member"], "allowed": ["pmt"],
+                "requested": ["Identifiers", "member"], "allowed": ["pmt"],
             },
             {
                 "dimension": "geography", "key": "region_codes",
@@ -333,6 +341,78 @@ class TestExpire:
 
 
 class TestApi:
+    def test_opm_uses_only_its_canonical_active_dsa_and_accepts_western_registry_id(
+        self, db, django_user_model,
+    ):
+        opm = make_partner(code="OPM", name="Office of the Prime Minister")
+        canonical = make_dsa(
+            partner=opm, reference="DSA-OPM-2026-001", status="active",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={"fields": ["Identifiers"]},
+        )
+        western = GeographicUnit.objects.create(
+            level="region", code="R-WESTERN", name="Western",
+            effective_from=date(2026, 1, 1),
+        )
+        canonical.geographic_scope.add(western)
+        legacy = make_dsa(
+            partner=opm, reference="NUFI-1-TEST", status="suspended",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+            allowed_scopes={"fields": ["Identifiers"]},
+        )
+        request = DataRequest.objects.create(
+            dsa=canonical, requester="opm-requester", request_payload={
+                "fields": ["household.id"], "region_codes": ["R-WESTERN"],
+                "max_rows": 1000,
+            },
+        )
+        submit_data_request(request)
+        assert request.status == RequestStatus.SUBMITTED
+
+        user = django_user_model.objects.create_user(
+            username="opm-operator", password="p", is_superuser=True, is_staff=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+        schema = client.get("/api/v1/drs/requests/builder-schema/").data
+        opm_refs = [d["reference"] for d in schema["available_dsas"] if d["partner_code"] == "OPM"]
+        assert opm_refs == [canonical.reference]
+        assert legacy.reference not in opm_refs
+
+    def test_list_status_filter_and_unfiltered_total_use_same_queryset(
+        self, db, django_user_model, active_dsa,
+    ):
+        user = django_user_model.objects.create_user(
+            username="drs-list", password="p", is_superuser=True, is_staff=True,
+        )
+        DataRequest.objects.create(dsa=active_dsa, requester="a", status=RequestStatus.SUBMITTED)
+        DataRequest.objects.create(dsa=active_dsa, requester="b", status=RequestStatus.DELIVERED)
+        client = APIClient()
+        client.force_authenticate(user=user)
+
+        assert client.get("/api/v1/drs/requests/?page_size=1").data["count"] == 2
+        submitted = client.get("/api/v1/drs/requests/?status=submitted&page_size=1")
+        assert submitted.data["count"] == 1
+        assert submitted.data["results"][0]["status"] == RequestStatus.SUBMITTED
+
+    def test_delivery_metadata_is_persisted_and_returned(
+        self, db, django_user_model, active_dsa,
+    ):
+        user = django_user_model.objects.create_user(
+            username="drs-metadata", password="p", is_superuser=True, is_staff=True,
+        )
+        client = APIClient()
+        client.force_authenticate(user=user)
+        payload = {
+            "fields": ["household.id"],
+            "metadata": {"entity": "household", "delivery_method": "portal_download"},
+        }
+        created = client.post("/api/v1/drs/requests/", data={
+            "dsa": active_dsa.id, "request_payload": payload,
+        }, format="json")
+        assert created.status_code == 201, created.data
+        assert created.data["request_payload"]["metadata"] == payload["metadata"]
+
     def test_draft_can_be_saved_resumed_and_discarded(self, db, django_user_model, active_dsa):
         user = django_user_model.objects.create_user(
             username="draft-owner", password="p", is_superuser=True, is_staff=True,
@@ -413,9 +493,8 @@ class TestApi:
         req_id = r.data["id"]
         r = c.post(f"/api/v1/drs/requests/{req_id}/submit/")
         assert r.status_code == 400
-        # Per ADR-0013 the validator gates at group level; the offender
-        # is the `member` group, not the specific field name.
-        assert "member" in r.data["detail"]
+        # The response uses the canonical catalogue group, not a model prefix.
+        assert "Members" in r.data["detail"]
         assert r.data["scope_violations"][0]["dimension"] == "fields"
 
 
@@ -471,11 +550,11 @@ class TestEstimateMatches:
         assert r.data["registry_total"] == household_total
         assert r.data["estimated_matches"] == household_total
         assert r.data["estimated_pct"] == 100.0
-        assert r.data["rule_count"] == 0
+        assert r.data["estimate_available"] is True
         assert r.data["max_rows"] == 2500
         assert r.data["source"] == "server"
 
-    def test_estimate_uses_live_total_and_rule_count(self, operator_client, household_total):
+    def test_estimate_executes_the_same_canonical_query_for_each_step(self, operator_client, household_total):
         r = operator_client.post(
             "/api/v1/drs/requests/estimate/",
             data={
@@ -497,9 +576,9 @@ class TestEstimateMatches:
         )
         assert r.status_code == 200, r.data
         assert r.data["registry_total"] == household_total
-        assert r.data["rule_count"] == 1
-        assert r.data["estimated_matches"] == 152
-        assert r.data["estimated_pct"] == 38.0
+        assert r.data["estimate_available"] is True
+        assert r.data["estimated_matches"] == household_total
+        assert r.data["estimated_pct"] == 100.0
         assert r.data["max_rows"] == 5000
         assert r.data["source"] == "server"
 
@@ -1832,7 +1911,7 @@ class TestBuilderSchema:
         response = operator_client.get("/api/v1/drs/requests/builder-schema/")
         entry = next(d for d in response.data["available_dsas"] if d["id"] == dsa.id)
         assert entry["scope"]["field_scope_restricted"] is True
-        assert entry["scope"]["field_groups"] == ["household", "member"]
+        assert entry["scope"]["field_groups"] == ["Geography", "Identifiers", "Members"]
         assert entry["scope"]["entities"] == []
         assert entry["scope"]["sensitive_data_handling"] == "none"
         assert entry["scope"]["geographic_units"] == [{

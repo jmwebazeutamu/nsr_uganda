@@ -210,7 +210,7 @@ const OperatorDRSList = ({ onNewRequest, onNavigate, onResumeDraft, dsaId = "" }
   const [liveRequests, setLiveRequests] = useStateDRS(null);
   const [dataSource, setDataSource] = useStateDRS("mock");
   const [reloadKey, setReloadKey] = useStateDRS(0);
-  const [statusFilter, setStatusFilter] = useStateDRS(dsaId ? "all" : "submitted");
+  const [statusFilter, setStatusFilter] = useStateDRS("all");
   const [selectedRow, setSelectedRow] = useStateDRS(null);
   const [approveOpen, setApproveOpen] = useStateDRS(false);
   const [rejectOpen, setRejectOpen] = useStateDRS(false);
@@ -627,6 +627,18 @@ const OperatorDRSList = ({ onNewRequest, onNavigate, onResumeDraft, dsaId = "" }
                   </>
                 )}
 
+                {current.request_payload.metadata && (
+                  <>
+                    <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>REQUEST METADATA</div>
+                    <div style={{display:"grid", gridTemplateColumns:"100px 1fr", rowGap:4}} className="t-bodysm">
+                      <div className="muted">Entity</div>
+                      <div>{current.request_payload.metadata.entity || "—"}</div>
+                      <div className="muted">Delivery</div>
+                      <div className="t-mono">{current.request_payload.metadata.delivery_method || "—"}</div>
+                    </div>
+                  </>
+                )}
+
                 {/* Data sample — opens the same masked preview the
                     partner saw at submit time. Helps the approver
                     assess shape & sensitivity before deciding. The
@@ -836,25 +848,8 @@ const _drsQueryHash = (tree, selected) => {
   return h.toString(16).padStart(8, "0");
 };
 
-// Heuristic estimate — same shape BuildStepV2 uses on Step 2.
-// Each rule cuts ~62% of the cohort (capped at 8 rules). 0 rules =
-// the full registry size. This remains the offline fallback when the
-// live estimate endpoint is unavailable.
-const _DRS_REGISTRY_TOTAL = 12_089_442;
-const _drsEstimateMatched = (tree) => {
-  // qbCountRules expects a node — guard for null up front so the
-  // estimator survives a yet-uninitialised tree (or a PreviewStep
-  // rendered before Step 2 has fired).
-  if (!tree || typeof window?.qbCountRules !== "function") {
-    return _DRS_REGISTRY_TOTAL;
-  }
-  const count = window.qbCountRules(tree);
-  if (count === 0) return _DRS_REGISTRY_TOTAL;
-  return Math.max(120, Math.round(
-    _DRS_REGISTRY_TOTAL * Math.pow(0.38, Math.min(count, 8)),
-  ));
-};
-
+// Estimates are returned by the canonical DRS endpoint. There is no
+// browser-side fallback because an invented denominator is misleading.
 const _drsFetchLiveEstimate = async (tree) => {
   const payload = { criteria: tree || null };
   const api = typeof window !== "undefined" ? window.nsrApi : null;
@@ -874,28 +869,8 @@ const _drsFetchLiveEstimate = async (tree) => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           return r.json();
         })();
-    return { ...data, source: "server" };
-  } catch {
-    try {
-      const r = await fetch("/api/v1/data-management/households/aggregates/", {
-        credentials: "same-origin",
-        headers: { Accept: "application/json" },
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const agg = await r.json();
-      const total = Number(agg?.total || 0);
-      const matched = _drsEstimateMatched(tree);
-      return {
-        registry_total: total,
-        estimated_matches: matched,
-        estimated_pct: total ? Number((matched / total * 100).toFixed(2)) : 0,
-        rule_count: typeof window?.qbCountRules === "function" ? window.qbCountRules(tree) : 0,
-        source: "fallback",
-      };
-    } catch {
-      return null;
-    }
-  }
+    return data.estimate_available === false ? null : { ...data, source: "server" };
+  } catch { return null; }
 };
 const _PREVIEW_ULIDS = [
   "01HXY7K3B2N9PVQE4M6FZRWS18", "01HXZ9MR4N8P2QFB7K6FZRWS33",
@@ -1383,14 +1358,15 @@ const DRSScreen = ({ role = "operator", onExit, onNavigate, onResumeDraft, dsaId
 // Mirrors the canonical DSA scope checks closely enough to prevent an
 // avoidable submit. The server validates again at transition time because
 // a DSA can change while this browser tab is open.
-const _localDsaScopeIssues = (dsa, selectedFields, tree) => {
+const _localDsaScopeIssues = (dsa, selectedFields, tree, fieldCatalogue = []) => {
   const scope = dsa?.scope;
   if (!scope) return [];
   const issues = [];
   const fieldGroups = new Set(scope.field_groups || []);
   if (scope.field_scope_restricted) {
+    const groupByKey = new Map(fieldCatalogue.map(field => [field.key, field.group]));
     const requested = [...new Set((selectedFields || []).map(
-      field => String(field || "").split(".")[0],
+      field => groupByKey.get(field) || String(field || "").split(".")[0],
     ))];
     const outside = requested.filter(group => !fieldGroups.has(group));
     if (outside.length) issues.push({
@@ -1640,8 +1616,8 @@ const DRSWizard = ({ role = "operator", onExit, draftId = "" } = {}) => {
   );
 
   const liveScopeIssues = React.useMemo(
-    () => _localDsaScopeIssues(effectiveDsa, selectedFields, tree),
-    [effectiveDsa, selectedFields, tree],
+    () => _localDsaScopeIssues(effectiveDsa, selectedFields, tree, builderFields),
+    [effectiveDsa, selectedFields, tree, builderFields],
   );
 
   // Initialise the tree once the catalogue is ready. The first
@@ -1747,14 +1723,16 @@ const DRSWizard = ({ role = "operator", onExit, draftId = "" } = {}) => {
     if (maxRows && Number(maxRows) > 0) {
       payload.max_rows = Number(maxRows);
     }
-    // entity + deliveryMethod aren't on validate_against_dsa's
-    // contract today (entity is inferred from field prefix;
-    // delivery method awaits DRS-O-02). They travel via the
-    // top-level DataRequest.requester_note column so the operator
-    // can see what the partner intended at review time.
+    // Request metadata is persisted with the canonical request JSON,
+    // alongside its fields and criteria. It is deliberately not encoded in
+    // requester_note: notes are human prose and cannot be relied on by the
+    // delivery or audit workflow.
+    payload.metadata = {
+      entity,
+      delivery_method: deliveryMethod || null,
+    };
     const noteBits = [];
     if (entity) noteBits.push(`entity=${entity}`);
-    if (deliveryMethod) noteBits.push(`delivery=${deliveryMethod}`);
     const requesterNote = noteBits.join(" · ");
     try {
       const savingExistingDraft = Boolean(draftId && loadedDraft.current === draftId);
@@ -2056,7 +2034,7 @@ const DRSWizard = ({ role = "operator", onExit, draftId = "" } = {}) => {
               {deliveryMethod
                 ? <span className="t-mono">{deliveryMethod}</span>
                 : <span className="muted">(none selected)</span>}
-              <span className="t-cap"> · travels via requester_note until DRS-O-02</span>
+              <span className="t-cap"> · saved with the request metadata</span>
             </div>
           </div>
           <div className="t-cap muted" style={{marginTop:8}}>
@@ -2384,14 +2362,9 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
   // "a4e9d2f1…b7c3" no matter what the operator built; approvers
   // couldn't fingerprint different requests apart. Now both update
   // every time `tree` / `selected` changes.
-  const matched = estimate ? Number(estimate.estimated_matches || 0) : _drsEstimateMatched(tree);
-  const matchedPct = estimate
-    ? Number(estimate.estimated_pct || 0)
-    : (() => {
-        const total = estimate?.registry_total || _DRS_REGISTRY_TOTAL;
-        return total ? (matched / total) * 100 : 0;
-      })();
-  const registryTotal = estimate ? Number(estimate.registry_total || 0) : _DRS_REGISTRY_TOTAL;
+  const matched = estimate ? Number(estimate.estimated_matches || 0) : null;
+  const matchedPct = estimate ? Number(estimate.estimated_pct || 0) : null;
+  const registryTotal = estimate ? Number(estimate.registry_total || 0) : null;
   const queryHash = _drsQueryHash(tree, selected);
 
   return (
@@ -2400,12 +2373,12 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
         <div>
           <div className="row gap-2" style={{alignItems:'center'}}>
             <span className="t-cap">ESTIMATED ROWS</span>
-            <Chip size="sm" tone={estimateSource === "server" ? "data" : estimateSource === "fallback" ? "update" : "neutral"}>
-              {estimateSource === "server" ? "live" : estimateSource === "fallback" ? "fallback" : "loading"}
+            <Chip size="sm" tone={estimateSource === "server" ? "data" : "neutral"}>
+              {estimateSource === "server" ? "live" : "unavailable"}
             </Chip>
           </div>
-          <div className="t-num" style={{fontSize:24, fontWeight:700, letterSpacing:'-0.01em', color:'var(--neutral-700)'}}>~{matched.toLocaleString()}</div>
-          <div className="t-cap">of {registryTotal.toLocaleString()} households ({matchedPct.toFixed(2)}%) · final count at delivery</div>
+          <div className="t-num" style={{fontSize:24, fontWeight:700, letterSpacing:'-0.01em', color:'var(--neutral-700)'}}>{matched === null ? "—" : `~${matched.toLocaleString()}`}</div>
+          <div className="t-cap">{registryTotal === null ? "Estimate unavailable — retry before submitting" : `of ${registryTotal.toLocaleString()} households (${matchedPct.toFixed(2)}%) · final count at delivery`}</div>
         </div>
         <div style={{width:1, height:48, background:'var(--neutral-200)'}}/>
         <div>
@@ -2450,9 +2423,7 @@ const PreviewStep = ({ selected, catalogueByKey = {}, tree = null }) => {
             {personalCount > 0 && <>{personalCount} Personal phone column{personalCount === 1 ? "" : "s"} last-4 only · </>}
             {estimateSource === "server"
               ? "estimates refresh from the live DRS backend as you add filters"
-              : estimateSource === "fallback"
-                ? "backend estimate unavailable; using live registry totals with the same heuristic"
-                : "estimating against the live registry as the query changes"}
+              : "estimate unavailable; retry when the registry service is available"}
           </span>
         </div>
         <div style={{overflowX:'auto'}}>
@@ -2559,9 +2530,9 @@ const DeliveryStep = ({ methods, value, onChange, effectiveDsa = null }) => {
    Step 6 — Submit
    ============================================================ */
 // US-S27-013 — summary card walks the captured criteria tree.
-// Purpose / retention / recipient inputs on the left remain
-// presentational; the DRS submit endpoint doesn't persist them
-// yet (the DPO review surface lands in a follow-up slice).
+// Purpose, retention and recipient controls are intentionally not offered
+// until their canonical DPO contract exists. Displaying editable controls
+// that cannot be persisted would misrepresent the record of the request.
 const SubmitStep = ({
   onSubmit, entity, selected,
   tree, catalogueByKey,
@@ -2581,15 +2552,12 @@ const SubmitStep = ({
   return (
     <div style={{display:'grid', gridTemplateColumns:'1fr 360px', gap:16}}>
       <div className="card">
-        <div className="card-header"><h3 className="t-h3" style={{margin:0}}>Purpose, retention, recipients</h3></div>
+        <div className="card-header"><h3 className="t-h3" style={{margin:0}}>Request metadata</h3></div>
         <div style={{padding:16}}>
-          <Field label="Purpose of use" hint="DPO-facing note; not yet persisted by the DRS submit endpoint.">
-            <textarea className="field-textarea" rows={3} placeholder="State the legal basis and use case in your own words. The DPO will review on the operator side."/>
-          </Field>
-          <div className="t-cap muted" style={{marginTop:8}}>
-            Purpose / retention pledge / recipient list controls are
-            placeholders — the DRS submit endpoint will accept them in
-            a follow-up slice (the DPO review surface).
+          <div className="t-bodysm muted">
+            Purpose, retention pledge and recipient-list capture are not
+            available until their DPO-owned request contract is published.
+            The selected delivery method is saved as request metadata now.
           </div>
         </div>
       </div>
@@ -2645,7 +2613,7 @@ Object.assign(window, {
   _inferImplicitGeoPins, _buildGeoPathsForRows, _GEO_CHAIN,
   _choiceListNameFor, _enrichFieldsWithOptions, _resolveOptionsForSchema,
   _OPTIONS_SOURCE_URL,
-  _drsQueryHash, _drsEstimateMatched, _DRS_REGISTRY_TOTAL,
+  _drsQueryHash,
   // Criteria walker + natural-language helpers — exposed so the
   // partner detail rail (screens-partner-drs.jsx) can render the
   // same WHERE-clause translation the operator sees.

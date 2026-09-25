@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from django.http import HttpResponse
+from django.db.models import Q
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
@@ -127,29 +128,72 @@ class _EstimateRequest(serializers.Serializer):
     )
 
 
-def _count_criteria_rules(node) -> int:
-    if not node or not isinstance(node, dict):
-        return 0
-    if node.get("kind") == "rule":
-        return 1
-    return sum(_count_criteria_rules(child) for child in (node.get("rules") or []))
+def _household_criterion(node) -> Q | None:
+    """Compile a builder criterion using only canonical Household columns.
+
+    An estimate must be derived from the same registry relation for every
+    wizard step.  We deliberately return ``None`` for a catalogue key that
+    cannot yet be executed against Household rather than manufacture a
+    heuristic figure.  Nested questionnaire entities need their own
+    canonical query compiler before they can be estimated.
+    """
+    if not isinstance(node, dict):
+        return Q()
+    if node.get("kind") != "rule":
+        children = [_household_criterion(child) for child in node.get("rules") or []]
+        if any(child is None for child in children):
+            return None
+        if not children:
+            return Q()
+        combined = children[0]
+        connector = node.get("combinator", "AND").upper()
+        for child in children[1:]:
+            combined = (combined | child) if connector == "OR" else (combined & child)
+        return combined
+
+    key = str(node.get("field") or "")
+    if not key.startswith("household."):
+        return None
+    field_name = key.removeprefix("household.")
+    if field_name not in {field.name for field in Household._meta.concrete_fields}:
+        return None
+    op = node.get("op") or "eq"
+    value = node.get("value")
+    values = value if isinstance(value, list) else [value]
+    if op == "eq":
+        return Q(**{field_name: value})
+    if op == "neq":
+        return ~Q(**{field_name: value})
+    if op == "in":
+        return Q(**{f"{field_name}__in": values})
+    if op == "not_in":
+        return ~Q(**{f"{field_name}__in": values})
+    if op == "is_null":
+        return Q(**{f"{field_name}__isnull": True})
+    if op == "not_null":
+        return Q(**{f"{field_name}__isnull": False})
+    if op == "between" and isinstance(value, list) and len(value) == 2:
+        return Q(**{f"{field_name}__range": value})
+    if op == "starts_with":
+        return Q(**{f"{field_name}__startswith": value})
+    return None
 
 
-def _estimate_match_count(criteria) -> dict[str, int]:
-    registry_total = Household.objects.filter(is_deleted=False).count()
-    rule_count = _count_criteria_rules(criteria)
-    if rule_count <= 0:
+def _estimate_match_count(criteria) -> dict[str, int | bool | str]:
+    base = Household.objects.filter(is_deleted=False)
+    registry_total = base.count()
+    criterion = _household_criterion(criteria)
+    if criterion is None:
         return {
             "registry_total": registry_total,
-            "estimated_matches": registry_total,
-            "rule_count": 0,
+            "estimated_matches": 0,
+            "estimate_available": False,
+            "reason": "One or more criteria cannot yet be executed against the canonical Household model.",
         }
-    factor = 0.38 ** min(rule_count, 8)
-    estimated_matches = max(120, round(registry_total * factor))
     return {
         "registry_total": registry_total,
-        "estimated_matches": estimated_matches,
-        "rule_count": rule_count,
+        "estimated_matches": base.filter(criterion).count(),
+        "estimate_available": True,
     }
 
 
@@ -197,6 +241,12 @@ class DataRequestViewSet(
         on DataRequest and must work in every deployment.
         """
         qs = super().get_queryset()
+        # Explicitly apply the filter used by both the list chips and sidebar
+        # counts.  Relying on an optional django-filter backend meant a
+        # ``?status=submitted`` count could silently include every status.
+        request_status = (self.request.query_params.get("status") or "").strip()
+        if request_status:
+            qs = qs.filter(status=request_status)
         dsa_id = (self.request.query_params.get("dsa") or "").strip()
         if dsa_id:
             qs = qs.filter(dsa_id=dsa_id)
@@ -365,7 +415,8 @@ class DataRequestViewSet(
             "registry_total": registry_total,
             "estimated_matches": estimated_matches,
             "estimated_pct": round(pct, 2),
-            "rule_count": data["rule_count"],
+            "estimate_available": data["estimate_available"],
+            "reason": data.get("reason", ""),
             "max_rows": capped,
             "source": "server",
         })
