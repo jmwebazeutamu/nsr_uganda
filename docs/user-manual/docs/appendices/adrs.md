@@ -25,6 +25,22 @@ The full text of each ADR lives at `/docs/adr/`. This page is the index, with a 
 | ADR-0018 | Repeat groups as child tables | DAT, INT |
 | ADR-0019 | Sensitive health encryption | DAT, SEC |
 | ADR-0020 | FIES / FCS computed columns | DAT, PMT |
+| ADR-0021 | Chatbot Assistant module | Chatbot |
+| ADR-0022 | DQA rule expression language | DAT-DQA |
+| ADR-0023 | Data Explorer module (+ Appendix A: cell-reconstruction risk probe) | DATA-EXP |
+| ADR-0024 | Consent Management module | SEC |
+| ADR-0025 | PMT features as a JSON DSL on `PMTModelVersion` | PMT |
+| ADR-0026 | Multi-level ABAC geographic-scope enforcement | SEC, DAT |
+| ADR-0027 | Single-host Docker deployment for dev/staging | Ops |
+| ADR-0028 | One role catalogue — US-063, ADR-0006 and the Django Groups | SEC |
+| ADR-0029 | Serialising audit-chain appends | SEC |
+| ADR-0030 | A wide view for the console's list screens | Console |
+| ADR-0031 | Consent starts unset, and one SMS is transactional | SEC, Consent |
+| ADR-0032 | One code frame per choice list (UBOS 2024) | REF-DATA |
+| ADR-0033 | One household contact number, and what happens when it is empty | DAT |
+| ADR-0034 | Stage the instrument, not just the records — UBOS field waves | INT, DIH |
+| ADR-0035 | The GRM tier ladder is configuration, and it decides who may hold a case | GRM, SEC |
+| ADR-0036 | A closed grievance is read-only | GRM |
 
 ## When to write a new ADR
 

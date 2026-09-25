@@ -52,7 +52,14 @@ markdown_extensions:
       anchor_linenums: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        # Workflow diagrams are authored as Mermaid inside the Markdown
+        # rather than exported images, so a diagram cannot drift from
+        # the page it explains without the diff showing it.
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - pymdownx.tasklist:
