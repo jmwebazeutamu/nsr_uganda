@@ -33,7 +33,31 @@ COPY static ./static
 RUN node scripts/build_console.mjs
 
 # ---------------------------------------------------------------------
-# Stage 2 — the application image.
+# Stage 2 — build the user manual.
+#
+# /manual/ is served by nsr_mis.views.manual from
+# docs/user-manual/site/, which is MkDocs build output and is
+# gitignored. Until now nothing built it in the image, so production
+# answered every /manual/ URL with "Manual not built" — the manual has
+# only ever existed on whichever machine last ran mkdocs by hand.
+#
+# Same shape as the console stage above: the build tool stays behind,
+# only the rendered HTML crosses into the runtime image. mkdocs and
+# mkdocs-material are pinned because an unpinned docs toolchain is a
+# build that starts failing on a day nobody changed anything.
+# ---------------------------------------------------------------------
+FROM python:3.12-slim AS manual-build
+
+WORKDIR /build
+RUN pip install --no-cache-dir mkdocs==1.6.1 mkdocs-material==9.7.7
+
+COPY docs/user-manual ./docs/user-manual
+# --strict so a broken cross-link fails the build rather than shipping
+# a manual with dead links in it.
+RUN cd docs/user-manual && mkdocs build --strict
+
+# ---------------------------------------------------------------------
+# Stage 3 — the application image.
 # ---------------------------------------------------------------------
 FROM python:3.12-slim
 
@@ -66,6 +90,10 @@ COPY static ./static
 # The compiled console, from stage 1. Nothing else crosses over: the JSX
 # sources, Babel and node all stay behind in the build stage.
 COPY --from=console-build /build/static/console ./static/console
+# The rendered manual, from stage 2. mkdocs, mkdocs-material and the
+# Markdown sources all stay behind in that stage; only the HTML the
+# view actually serves crosses over.
+COPY --from=manual-build /build/docs/user-manual/site ./docs/user-manual/site
 # Web-service entrypoint (migrate + collectstatic). Only the `web` service
 # uses it; worker/beat run celery directly. See compose.prod.yml.
 COPY infrastructure/docker/web-entrypoint.sh /usr/local/bin/web-entrypoint.sh

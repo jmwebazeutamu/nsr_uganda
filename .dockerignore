@@ -41,7 +41,17 @@ Thumbs.db
 # compiled output, is COPYd from the build stage. Excluding it here is
 # what made /console/ 404 in production, because the view fell back to
 # serving files that were not in the image.
+# Exclude the docs tree — the .docx specs, the ERD PDF and the backlog
+# are large and the image has no use for them. But KEEP the user
+# manual's SOURCES: the `manual-build` stage renders them, and only the
+# rendered site/ crosses into the runtime image.
+#
+# Same trap the console fell into, two lines above: excluding a source
+# tree the build needs is how a view ends up serving nothing in
+# production while working perfectly on the machine that built it.
 docs
+!docs/user-manual
+docs/user-manual/site
 tests
 .claude
 # Exclude the heavy infra subdirs but KEEP infrastructure/docker/ — the
