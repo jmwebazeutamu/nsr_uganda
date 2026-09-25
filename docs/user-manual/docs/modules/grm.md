@@ -13,6 +13,47 @@ and closed. From then on it is read-only.
 
 ---
 
+## The case number
+
+Every grievance carries two identifiers, and they are for different
+readers.
+
+| | Example | For |
+|---|---|---|
+| **Reference** | `GRM-7K4P-2QX9` | people — say it, write it, quote it |
+| **Id** | `01M3AT4JSSXFYG02CXC8S6K20X` | the system — URLs, the audit chain, links from other modules |
+
+The reference is what you give a citizen. Eight characters in two
+groups, from an alphabet with **no I, L, O or U** — so there is no I/1
+or O/0 to mishear.
+
+**Type it however it reaches you.** The search box on the workbench
+accepts all of these and finds the same case:
+
+```
+GRM-7K4P-2QX9      grm-7k4p-2qx9      GRM7K4P2QX9
+7K4P-2QX9          7k4p2qx9           GRM 7K4P 2QX9
+```
+
+It also forgives the two mistakes people actually make copying eight
+characters off a slip: **O read as zero**, and **I or l written for
+one**. `GRM-OK4P-2QI9` finds `GRM-0K4P-2Q19`.
+
+!!! note "A number you were told is not a way past your scope"
+    Searching filters the cases you can already see. If the reference
+    belongs to a case outside your area, the search returns nothing —
+    the same as if it did not exist.
+
+!!! warning "The reference never changes"
+    It is assigned once when the case is opened. Escalation, resolution
+    and closure do not touch it, because a number quoted to a citizen
+    has to keep meaning that case.
+
+See [ADR-0037](../appendices/adrs.md) for why it is random rather than
+a running number.
+
+---
+
 ## The case lifecycle
 
 ```mermaid
@@ -364,7 +405,7 @@ Tick rows, then Assign, Escalate or Close.
 
 | Endpoint | Verb | Purpose |
 |---|---|---|
-| `/api/v1/grm/grievances/` | GET, POST | List (`?active=true`, `?status=`, `?tier=`), create |
+| `/api/v1/grm/grievances/` | GET, POST | List (`?q=` case number, `?active=true`, `?status=`, `?tier=`), create |
 | `/api/v1/grm/grievances/{id}/` | GET | Read, with `allowed_actions` |
 | `/api/v1/grm/grievances/{id}/assign/` | POST | Assign — role and scope checked |
 | `/api/v1/grm/grievances/{id}/assignable/` | GET | Who may carry it (`?q=`, `?for_tier=`) |
@@ -390,7 +431,7 @@ Tick rows, then Assign, Escalate or Close.
 
 | Entity | What |
 |---|---|
-| `Grievance` | the case |
+| `Grievance` | the case — `id` is the ULID key, `reference` the number people use |
 | `GrievanceTask` | a piece of work on it |
 | `GrievanceComment` | one note in the thread |
 | `GrmTierRule` | the ladder: tier → role, SLA hours |
@@ -399,6 +440,7 @@ Tick rows, then Assign, Escalate or Close.
 
 - **ADR-0035** — the tier ladder is configuration, and it decides who may hold a case
 - **ADR-0036** — a closed grievance is read-only
+- **ADR-0037** — a grievance carries a case number people can use
 - ADR-0026 — ABAC multi-level scope (the scope half of assignment)
 - ADR-0028 — role catalogue (where `required_role` comes from)
 - ADR-0029 — the audit chain is append-only

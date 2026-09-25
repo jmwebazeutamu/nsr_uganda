@@ -1,13 +1,15 @@
 """Routing matrix per SAD §4.4.4.
 
-UPD-O-01 closure: the matrix is now operations-editable through
-apps.update_workflow.models.UpdRoutingRule. The DEFAULT_MATRIX below
-is the fallback used when no active row exists for a
-(change_type, pmt_relevant) tuple — deleting every row cannot break
-the system, the SAD defaults take over.
+UPD-O-01 closure: the matrix is operations-editable through
+apps.update_workflow.models.UpdRoutingRule, and that table is now the
+only source. `route()` raises when a (change_type, pmt_relevant) pair
+has no active row rather than falling back, so routing policy cannot be
+changed by a code release.
 
-The fallback also serves as the seed source for the data migration
-that populates the table on first deploy (migration 0003).
+DEFAULT_MATRIX is kept as the SEED SOURCE and as the record of what
+each combination was set to originally — migrations 0004 and 0006 read
+it. It is not consulted at runtime. A change here changes nothing until
+a migration or an operator puts it in the table.
 """
 
 from __future__ import annotations
@@ -72,13 +74,25 @@ ROUTE_LABEL: dict[tuple[str, bool], str] = {
 def route_label(change_type: str, *, pmt_relevant: bool) -> str:
     """Operator-facing reviewer label for the (change_type, pmt) pair.
 
-    Falls back to the canonical role name when no spec label is
-    defined (the legacy ADDITION / REMOVAL / VITAL_EVENT /
-    PROGRAMME_STATE / RECERTIFICATION rows have no spec label).
+    ROUTE_LABEL first: it is the spec's own wording, and some of it
+    says something the role code cannot. "CDO + receiving CDO" on an
+    address move names TWO reviewers — a household moving between
+    districts needs both — and there is no single role code for that.
+
+    This stopped consulting ROUTE_LABEL and returned the role instead,
+    so the bundle endpoint echoed `cdo_receiving` at operators where it
+    had said "CDO + receiving CDO". Deployed on 25 September before it
+    was caught.
+
+    Falls back to the role's catalogue label, then to the bare code:
+    the legacy ADDITION / REMOVAL / VITAL_EVENT / PROGRAMME_STATE /
+    RECERTIFICATION rows have no spec label, and `parish_chief` is what
+    they have always shown.
     """
+    if (change_type, pmt_relevant) in ROUTE_LABEL:
+        return ROUTE_LABEL[(change_type, pmt_relevant)]
     role, _ = route(change_type, pmt_relevant=pmt_relevant)
-    from apps.security.roles import BY_CODE
-    return BY_CODE.get(role, None).label if role in BY_CODE else role
+    return role
 
 
 def route(change_type: str, *, pmt_relevant: bool) -> tuple[str, timedelta]:

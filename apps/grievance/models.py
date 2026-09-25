@@ -71,6 +71,18 @@ class TaskStatus(models.TextChoices):
 class Grievance(models.Model):
     id = ULIDField(primary_key=True)
 
+    #: The case number people use — "GRM-7K4P-2QX9".
+    #:
+    #: The ULID above stays the key and stays in the URLs. It is simply
+    #: not something a Parish Chief can read back to a citizen over the
+    #: phone: 26 characters, no grouping, and nothing in the string to
+    #: tell you when a character has been dropped.
+    #:
+    #: Blank only for a row mid-creation; assign() fills it in save().
+    #: See apps/grievance/reference.py for why it is random rather than
+    #: a running number.
+    reference = models.CharField(max_length=16, unique=True, blank=True)
+
     category = models.CharField(max_length=32, choices=Category.choices)
     sub_category = models.CharField(max_length=64, blank=True)
     description = models.TextField()
@@ -160,8 +172,17 @@ class Grievance(models.Model):
             models.Index(fields=["sla_deadline"]),
         ]
 
+    def save(self, *args, **kwargs):
+        if not self.reference:
+            from .reference import assign
+            self.reference = assign(self)
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None:
+                kwargs["update_fields"] = [*update_fields, "reference"]
+        super().save(*args, **kwargs)
+
     def __str__(self) -> str:
-        return f"Grievance {self.id} [{self.tier}/{self.status}]"
+        return f"Grievance {self.reference or self.id} [{self.tier}/{self.status}]"
 
 
 class CommentKind(models.TextChoices):

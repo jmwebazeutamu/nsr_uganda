@@ -67,6 +67,11 @@ const _grmApiToView = (g) => {
   }
   return {
     id: g.id,
+    // The case number people use. The id stays the key and stays in
+    // the URLs; it is simply not something anyone can read back over
+    // a phone. Falls back to the id for a row from a client that
+    // predates the field.
+    reference: g.reference || g.id,
     category: g.category,
     tier: g.tier,
     status: g.status,
@@ -256,6 +261,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
   // not which five, so there is nothing to act on. Same shape as the
   // UPD workbench's bulk panel (screens-upd.jsx) rather than a second
   // way of saying the same thing.
+  const [caseSearch, setCaseSearch] = useStateGrm("");
   const [bulkResult, setBulkResult] = useStateGrm(null);
   const [caseDrawer, setCaseDrawer] = useStateGrm(false);
   const [auditOpen, setAuditOpen] = useStateGrm(false);
@@ -342,6 +348,35 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
       setDataSource("live");
     })
     .catch(() => { setDataSource("offline"); });
+  };
+
+  // Look a case up by the number somebody read out.
+  //
+  // Server-side, because the normalisation is server-side: it is the
+  // same code the reference was generated with, and a second copy of
+  // "O means 0" in JavaScript is how the two come to disagree.
+  const findByReference = () => {
+    const q = caseSearch.trim();
+    if (!q) return;
+    setBusy(true);
+    fetch(`/api/v1/grm/grievances/?q=${encodeURIComponent(q)}&page_size=50`, {
+      credentials: "same-origin", headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        const list = (data.results || data || []).map(_grmApiToView);
+        if (list.length === 0) {
+          setToast(`No case matches "${q}".`);
+          return;
+        }
+        setAllRows(list);
+        setDataSource("live");
+        setQuickFilter(null);
+        setSelectedRow(list[0].id);
+        if (list.length === 1) setCaseDrawer(true);
+      })
+      .catch(() => setToast("Could not search — the API is unreachable."))
+      .finally(() => setBusy(false));
   };
 
   useEffectGrm(() => { refresh(); /* eslint-disable-line */ }, []);
@@ -531,8 +566,8 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
 
   const exportCsv = () => {
     _grmDownloadCsv("grievances.csv", [
-      ["id", "category", "tier", "status", "household_id", "member_id", "reporter", "relationship", "assigned_to", "opened_at", "hours_to_breach"],
-      ...rows.map(r => [r.id, GRM_CATEGORIES[r.category] || r.category, GRM_TIERS[r.tier]?.label || r.tier, GRM_STATUSES[r.status]?.label || r.status, r.household_id, r.member_id, r.reporter_name, r.relationship, r.assigned_to, r.opened_at, r.hours_to_breach ?? ""]),
+      ["reference", "id", "category", "tier", "status", "household_id", "member_id", "reporter", "relationship", "assigned_to", "opened_at", "hours_to_breach"],
+      ...rows.map(r => [r.reference, r.id, GRM_CATEGORIES[r.category] || r.category, GRM_TIERS[r.tier]?.label || r.tier, GRM_STATUSES[r.status]?.label || r.status, r.household_id, r.member_id, r.reporter_name, r.relationship, r.assigned_to, r.opened_at, r.hours_to_breach ?? ""]),
     ]);
     setToast(`Exported ${rows.length} grievance row(s).`);
   };
@@ -597,6 +632,12 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
   // What a confirmed action will actually touch. One definition, read
   // by fire() and by every dialog's record list, so the dialog cannot
   // name one case while the action changes twelve.
+  // What the dialogs SHOW. fire() posts to ids; a person confirming an
+  // action needs the number they would read off a slip.
+  const targetRefs = (ids) => ids.map(
+    id => (allRows.find(r => r.id === id) || {}).reference || id,
+  );
+
   const targetIds = selection.size > 0
     ? [...selection]
     : current ? [current.id] : [];
@@ -764,7 +805,16 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
             </div>
             <div style={{padding:16}}>
               <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:6}}>ID</div>
-              <div className="t-mono" style={{fontSize:12}}>{current.id}</div>
+              <div className="t-mono" style={{fontSize:15, fontWeight:600,
+                                              color:"var(--primary-900)"}}>
+                {current.reference}
+              </div>
+              {/* The ULID is still the record's identity and still what
+                  a URL and every audit row carry, so it stays visible —
+                  quietly, under the number people actually use. */}
+              <div className="t-mono muted" style={{fontSize:10.5, marginTop:2}}>
+                {current.id}
+              </div>
 
               <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>TIER + SLA</div>
               <div className="row gap-2">
@@ -1248,8 +1298,31 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         </>}
       />
 
-      {/* Quick-filter bar */}
+      {/* Find a case by its number.
+          The number a citizen quotes is the whole reason the reference
+          exists, so there has to be somewhere to type it. Matching is
+          done server-side, where the same normalisation runs: dashes
+          and spaces optional, prefix optional, and O read as 0, I and
+          l as 1 — the mistakes people make copying eight characters
+          off a slip. */}
       <div className="card" style={{padding:"14px 20px", marginBottom:16}}>
+        <div className="row gap-2" style={{marginBottom:12}}>
+          <Icon name="search" size={14}/>
+          <input className="field-text" type="text"
+                 style={{flex:1, maxWidth:320, padding:"6px 8px"}}
+                 placeholder="Case number — GRM-7K4P-2QX9"
+                 value={caseSearch}
+                 onChange={(e) => setCaseSearch(e.target.value)}
+                 onKeyDown={(e) => { if (e.key === "Enter") findByReference(); }}/>
+          <button className="btn" disabled={busy || !caseSearch.trim()}
+                  onClick={findByReference}>Find</button>
+          {caseSearch && (
+            <button className="btn ghost"
+                    onClick={() => { setCaseSearch(""); refresh(); }}>
+              <Icon name="x" size={13}/> Clear
+            </button>
+          )}
+        </div>
         <div className="row gap-3" style={{flexWrap:"wrap"}}>
           <span className="t-cap" style={{fontWeight:600}}>QUICK FILTERS</span>
           {QUICK_FILTERS_GRM.map(f => {
@@ -1370,6 +1443,9 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
                   <input type="checkbox" checked={sel} onChange={() => {}}/>
                 </div>
                 <div style={{padding:"12px 16px"}}>
+                  <div className="t-mono" style={{fontSize:12, fontWeight:600, color:"var(--primary-900)"}}>
+                    {r.reference}
+                  </div>
                   <div style={{fontSize:13, fontWeight:500, color:"var(--neutral-900)"}}>
                     {GRM_CATEGORIES[r.category]}
                     {r.household_id && <span className="t-mono muted" style={{marginLeft:8, fontSize:11}}>· hh {r.household_id.slice(0,12)}…</span>}
@@ -1430,7 +1506,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
                       <button type="button" className="link-btn t-mono"
                               style={{padding:0, fontSize:12}}
                               onClick={() => { setSelectedRow(f.id); setCaseDrawer(true); }}>
-                        {f.id}
+                        {targetRefs([f.id])[0]}
                       </button>
                       {" — "}{f.detail}
                     </li>
@@ -1482,7 +1558,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         intent="update"
         confirmLabel="Escalate"
         notice={bulkNotice("escalate")}
-        recordLabels={targetIds}
+        recordLabels={targetRefs(targetIds)}
         reasonOptions={reasonsEscalate}
         onClose={() => setModal(null)}
         onConfirm={({ reason, note }) => fire("escalate", {
@@ -1494,7 +1570,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         title="Resolve grievance"
         intent="success"
         confirmLabel="Resolve"
-        recordLabels={targetIds}
+        recordLabels={targetRefs(targetIds)}
         reasonOptions={reasonsResolve}
         onClose={() => setModal(null)}
         onConfirm={({ reason, note }) => fire("resolve", {
@@ -1506,7 +1582,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         title={selection.size > 1 ? `Close ${selection.size} grievances` : "Close grievance"}
         confirmLabel={selection.size > 1 ? `Close ${selection.size} grievances` : "Close grievance"}
         notice={bulkNotice("close")}
-        recordLabels={targetIds}
+        recordLabels={targetRefs(targetIds)}
         reasonOptions={reasonsClose}
         onClose={() => setModal(null)}
         onConfirm={({ reason, note }) => fire("close", {
@@ -1579,7 +1655,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
             border:"1px solid var(--neutral-200)", borderRadius:4,
             background:"var(--neutral-50)", color:"var(--neutral-900)",
           }}>
-            {targetIds.map(id => <li key={id} style={{padding:"1px 0"}}>{id}</li>)}
+            {targetRefs(targetIds).map(ref => <li key={ref} style={{padding:"1px 0"}}>{ref}</li>)}
           </ul>
         )}
         {/* This was a <select> of four invented people — "Adong
@@ -1631,7 +1707,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         } : null}
         initial={initialGrievance || null}
         onOpened={(g) => {
-          setToast(`Grievance ${g.id.slice(0, 8)}… opened.`);
+          setToast(`Grievance ${g.reference || g.id} opened.`);
           refresh().then(() => setSelectedRow(g.id));
         }}/>
 
@@ -1640,7 +1716,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
       <Modal
         width={560}
         open={modal === "add_task"}
-        title={current ? `Add task to ${current.id.slice(0, 12)}…` : "Add task"}
+        title={current ? `Add task to ${current.reference}` : "Add task"}
         onClose={() => setModal(null)}
         footer={<>
           <button className="btn" onClick={() => setModal(null)}>Cancel</button>

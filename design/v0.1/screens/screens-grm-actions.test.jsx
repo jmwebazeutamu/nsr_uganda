@@ -105,7 +105,11 @@ describe("a bulk dialog names what it will change", () => {
     // with twelve rows ticked. That is not vague — it names the wrong
     // thing, and the operator confirms it.
     expect(grm).not.toContain("recordLabel={current?.id}");
-    expect((grm.match(/recordLabels=\{targetIds\}/g) || [])).toHaveLength(3);
+    // Listed as CASE NUMBERS, not ULIDs: a confirmation dialog naming
+    // twelve records is only useful if the operator can match them
+    // against what is on the slip in front of them.
+    expect((grm.match(/recordLabels=\{targetRefs\(targetIds\)\}/g) || []))
+      .toHaveLength(3);
   });
 
   it("computes the target list once, where fire() reads it", () => {

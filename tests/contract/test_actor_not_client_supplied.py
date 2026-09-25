@@ -95,7 +95,12 @@ class TestActorCannotBeSpoofed:
             format="json",
         )
 
-        assert r.status_code == 400, (
+        # 403, not 400. Separation of duties is a permission question,
+        # and apps/update_workflow/authorization.py answers it as one
+        # regardless of the workflow state — a state precondition is
+        # still the service layer's 400. This asserted 400 because that
+        # is what the check returned when it lived in the service.
+        assert r.status_code == 403, (
             "a requester approved their own change request by supplying a "
             f"different actor in the body (got {r.status_code})"
         )

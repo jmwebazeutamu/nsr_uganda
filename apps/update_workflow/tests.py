@@ -498,15 +498,40 @@ class TestAutoCommit:
 
 
 class TestRoutingMatrixViaRefData:
-    """UPD-O-01: routing matrix is operations-editable via
-    UpdRoutingRule. route() prefers the active DB row; if none exists
-    it falls back to the hardcoded DEFAULT_MATRIX so deleting all rows
-    cannot break the system."""
+    """UPD-O-01: the routing matrix is operations-editable via
+    UpdRoutingRule, and that table is the only source. route() raises
+    when a combination has no active row rather than falling back to a
+    constant, so routing policy cannot be changed by a code release."""
 
-    def test_seed_migration_populated_defaults(self, db):
+    def test_every_combination_has_an_active_row(self, db):
+        """Counted as completeness, not as a number.
+
+        This asserted 12 — what migration 0004 happened to seed. Then
+        0005 added four change types and a PMT-relevant life event, and
+        nothing seeded them; the count was still 12 and the test still
+        passed, while nine combinations had no row at all. That did not
+        matter while route() fell back to DEFAULT_MATRIX. When the
+        fallback was removed it became nine ways to raise at capture,
+        and production ran with the gap until migration 0006.
+
+        A magic number cannot notice a missing row. This can.
+        """
         from apps.update_workflow.models import UpdRoutingRule
-        # Migration 0004 seeded 12 rows (6 change_types x 2 pmt_relevant).
-        assert UpdRoutingRule.objects.filter(is_active=True).count() == 12
+        from apps.update_workflow.routing import DEFAULT_MATRIX
+
+        have = {
+            (r.change_type, r.pmt_relevant)
+            for r in UpdRoutingRule.objects.filter(is_active=True)
+        }
+        need = {(ct, pmt) for ct in ChangeType.values for pmt in (True, False)}
+        assert need - have == set(), (
+            f"no active routing row for {sorted(need - have)} — route() "
+            "raises for these, which is a refusal at capture"
+        )
+        assert need - set(DEFAULT_MATRIX) == set(), (
+            "DEFAULT_MATRIX is the seed source for these migrations; a "
+            "change type missing from it cannot be seeded"
+        )
 
     def test_db_row_overrides_default(self, db):
         from datetime import timedelta
@@ -524,21 +549,28 @@ class TestRoutingMatrixViaRefData:
         assert role == "cdo"
         assert window == timedelta(hours=96)
 
-    def test_fallback_when_no_active_row(self, db):
-        from datetime import timedelta
+    def test_no_active_row_refuses_rather_than_guessing(self, db):
+        """There used to be a fallback to DEFAULT_MATRIX here, so that
+        deleting every row could not break the system. It was removed
+        deliberately: a fallback means a code release can change
+        routing policy, and it means a half-configured table looks
+        fine while the constant quietly answers for it.
+
+        The cost is that an unconfigured combination refuses. That is
+        the intended behaviour and this is the record of it.
+        """
+        import pytest
 
         from apps.update_workflow.models import UpdRoutingRule
         from apps.update_workflow.routing import route
+        from apps.update_workflow.services import UpdError
 
-        # Soft-delete (deactivate) the seeded row for CORRECTION/PMT=True.
         UpdRoutingRule.objects.filter(
             change_type=ChangeType.CORRECTION, pmt_relevant=True,
         ).update(is_active=False)
 
-        # Fallback to DEFAULT_MATRIX kicks in.
-        role, window = route(ChangeType.CORRECTION, pmt_relevant=True)
-        assert role == "cdo"
-        assert window == timedelta(hours=48)
+        with pytest.raises(UpdError, match="Missing active UPD routing"):
+            route(ChangeType.CORRECTION, pmt_relevant=True)
 
     def test_unique_active_constraint_per_tuple(self, db):
         """Cannot have two active rules for the same
@@ -1025,10 +1057,13 @@ class TestRoutingMatrixExtensions:
             assert route_label(ct, pmt_relevant=False) == "CDO (parish)"
             assert route_label(ct, pmt_relevant=True)  == "District M&E"
 
-    def test_route_label_falls_back_to_role_for_legacy(self):
+    def test_route_label_falls_back_to_role_for_legacy(self, db):
+        """ADDITION has no spec label, so the role answers.
+
+        Needs the database: the fallback path reads the routing table
+        now that route() no longer consults a constant.
+        """
         from apps.update_workflow.routing import route_label
-        # ADDITION isn't in the spec matrix; falls back to the
-        # canonical role name from DEFAULT_MATRIX.
         assert route_label(ChangeType.ADDITION, pmt_relevant=False) == "parish_chief"
 
 

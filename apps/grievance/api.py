@@ -60,7 +60,7 @@ class GrievanceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Grievance
         fields = (
-            "id", "category", "sub_category", "description",
+            "id", "reference", "category", "sub_category", "description",
             "household_id", "member_id",
             "reporter_name", "reporter_phone", "reporter_relationship",
             "tier", "status", "assigned_to",
@@ -72,7 +72,7 @@ class GrievanceSerializer(serializers.ModelSerializer):
             "created_at", "updated_at",
         )
         read_only_fields = (
-            "id", "status", "opened_at", "sla_deadline",
+            "id", "reference", "status", "opened_at", "sla_deadline",
             "resolved_at", "resolved_by", "closed_at", "closed_by",
             "closing_narrative", "created_at", "updated_at",
             "tier_started_at", "sla_breach_flagged_at", "allowed_actions",
@@ -194,6 +194,18 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
         # empty workbench beside a dashboard tile reading 5.
         qs = visible_grievances(self.request.user, super().get_queryset())
 
+        # Everything below narrows a LIST. On a detail route it can
+        # only ever remove the record being asked for, which surfaces
+        # as a 404 that reads like a permission problem.
+        #
+        # That has now happened twice with different params: `?tier=`
+        # meant "cases at this tier" here and "candidates for this
+        # tier" on /assignable/, and `?q=` means "find this case" here
+        # and "narrow these people" there. Renaming each one as it bit
+        # was treating the instances; this ends the class.
+        if self.kwargs.get("pk"):
+            return qs
+
         # Apply per-field query-param filters. Each is opt-in — empty
         # string or missing leaves the queryset alone.
         #
@@ -216,10 +228,34 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
             statuses = [v.strip() for v in status_param.split(",") if v.strip()]
             if statuses:
                 qs = qs.filter(status__in=statuses)
-        for field in ("tier", "category", "assigned_to", "household_id"):
+        for field in ("tier", "category", "assigned_to", "household_id",
+                      "reference"):
             value = self.request.query_params.get(field)
             if value:
                 qs = qs.filter(**{field: value})
+
+        # `?q=` — what an operator types into the search box.
+        #
+        # Usually a case reference read off a slip or over the phone,
+        # so it is normalised before matching: upper-cased, dashes and
+        # spaces dropped, prefix optional, and Crockford's confusable
+        # characters resolved (O for 0, I or l for 1). Falls through to
+        # a plain contains-match on the reference and the ULID, so a
+        # partial is still useful.
+        q = (self.request.query_params.get("q") or "").strip()
+        if q:
+            from django.db.models import Q
+
+            from .reference import normalise
+
+            exact = normalise(q)
+            if exact:
+                qs = qs.filter(reference=exact)
+            else:
+                bare = q.upper().replace(" ", "")
+                qs = qs.filter(
+                    Q(reference__icontains=bare) | Q(id__icontains=bare),
+                )
 
         # US-S15-003 — optional ?sub_region_code= drill-down for the
         # home queue panel. household_id is a CharField on Grievance,
