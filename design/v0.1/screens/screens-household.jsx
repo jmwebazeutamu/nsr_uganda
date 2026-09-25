@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, KPI, PageHeader, Modal, Toast */
+/* global React, Icon, Chip, KPI, PageHeader, Modal, Toast, OpenGrievanceModal */
 // NSR MIS — Household detail (US-005, US-090)
 //
 // Visual design from the claude.ai/design redesign deposited at
@@ -183,22 +183,9 @@ const _hhCsrf = () => {
 // lives in the full-page change-request screen
 // (design/v0.1/screens/change-request/), which carries its own
 // field catalog + change-type vocabulary + routing matrix.
-const _GRM_CATEGORIES = [
-  { value: "data_correction",  label: "Data correction" },
-  { value: "exclusion_error",  label: "Wrongly excluded" },
-  { value: "inclusion_error",  label: "Wrongly included" },
-  { value: "programme_issue",  label: "Programme issue" },
-  { value: "operator_conduct", label: "Operator conduct" },
-  { value: "other",            label: "Other" },
-];
-
-const _GRM_TIERS = [
-  { value: "l1_parish_chief", label: "L1 — Parish Chief" },
-  { value: "l2_cdo",          label: "L2 — CDO" },
-  { value: "l3_district",     label: "L3 — District" },
-  { value: "l4_nsr_unit",     label: "L4 — NSR Unit" },
-];
-
+// _GRM_CATEGORIES and _GRM_TIERS are gone: they were a second
+// spelling of the workbench's vocabulary, with different labels
+// for the same codes. See v0.1/data/grm-vocabulary.jsx.
 
 // Tab definitions match the redesign's IDs + count badges.
 const HH_TABS = [
@@ -233,16 +220,12 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
   const [toast, setToast] = useStateHH("");
   const [busy, setBusy] = useStateHH(false);
   const [lastCreated, setLastCreated] = useStateHH(null);
-  const [grmForm, setGrmForm] = useStateHH({
-    category: "data_correction",
-    tier: "l1_parish_chief",
-    description: "",
-    member_id: "",
-    reporter_name: "",
-    reporter_phone: "",
-    reporter_relationship: "",
-  });
-  const [formErr, setFormErr] = useStateHH("");
+  // The grievance form itself lives in OpenGrievanceModal
+  // (v0.1/components/open-grievance.jsx). This screen used to carry
+  // its own — with its own copy of the category and tier vocabularies,
+  // under different labels — so the same grievance read differently
+  // depending on which screen raised it.
+  const [grmInitial, setGrmInitial] = useStateHH(null);
 
   useEffectHH(() => {
     if (!householdId) return undefined;
@@ -308,57 +291,13 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
 
   const openGrievance = () => {
     if (!h) return;
-    setGrmForm({
-      category: "data_correction",
-      tier: "l1_parish_chief",
-      description: "",
-      member_id: "",
+    setGrmInitial({
+      household_id: h.rid,
       reporter_name: h.head || "",
       reporter_phone: h.phone && h.phone !== "—" ? h.phone : "",
       reporter_relationship: "Self · head",
     });
-    setFormErr("");
     setModal("grm");
-  };
-
-  const submitOpenGrievance = () => {
-    if (!h) return;
-    if (!grmForm.description) {
-      setFormErr("Description is required.");
-      return;
-    }
-    setBusy(true);
-    setFormErr("");
-    fetch("/api/v1/grm/grievances/", {
-      method: "POST", credentials: "same-origin",
-      headers: {
-        "Content-Type": "application/json",
-        "X-CSRFToken": _hhCsrf(),
-        Accept: "application/json",
-      },
-      body: JSON.stringify({
-        category: grmForm.category,
-        tier: grmForm.tier,
-        description: grmForm.description,
-        household_id: h.rid,
-        member_id: grmForm.member_id || "",
-        reporter_name: grmForm.reporter_name,
-        reporter_phone: grmForm.reporter_phone,
-        reporter_relationship: grmForm.reporter_relationship,
-      }),
-    })
-      .then(async r => {
-        if (r.status === 201) return r.json();
-        const j = await r.json().catch(() => ({}));
-        throw new Error(j.detail || JSON.stringify(j) || `HTTP ${r.status}`);
-      })
-      .then(grievance => {
-        setLastCreated({ kind: "grm", id: grievance.id });
-        setToast(`Grievance ${grievance.id.slice(0, 12)}… opened.`);
-        setModal(null);
-      })
-      .catch(e => setFormErr(String(e.message || e)))
-      .finally(() => setBusy(false));
   };
 
   if (dataSource === "none") {
@@ -522,113 +461,23 @@ const _HouseholdScreenInner = ({ householdId, onNavigate }) => {
         Audit chain available under the Audit tab.
       </div>
 
-      {/* US-S22-002 — Open Grievance modal */}
-      <Modal open={modal === "grm"} onClose={() => !busy && setModal(null)}
-        title="Open a grievance"
-        width={560}
-        footer={
-          <>
-            <button className="btn" disabled={busy} onClick={() => setModal(null)}>Cancel</button>
-            <button className="btn btn-success" disabled={busy} onClick={submitOpenGrievance}>
-              {busy ? "Opening…" : "Open grievance"}
-            </button>
-          </>
-        }>
-        <div className="col gap-3">
-          <div className="t-bodysm muted">
-            Creates a grievance pinned to this household. SLA and tier
-            routing are stamped server-side from the SAD §4.5 matrix.
-          </div>
-
-          {/* Say which household, by name. The grievance screen asks
-              "is this about a household?" and makes you search for one;
-              raised from here the answer is already yes, and showing it
-              is how the operator knows they will not be asked. */}
-          <div style={{
-            padding: "8px 10px", borderRadius: 6,
-            border: "1px solid var(--neutral-200)", background: "var(--neutral-50)",
-          }}>
-            <div className="t-cap" style={{fontWeight:600}}>ABOUT THIS HOUSEHOLD</div>
-            <div className="t-bodysm">{h.head}</div>
-            <div className="t-cap muted">
-              {[(h.geo || {}).village, (h.geo || {}).parish, (h.geo || {}).district]
-                .filter(v => v && v !== "—").join(" · ")}
-            </div>
-            <div className="t-mono muted" style={{fontSize:11}}>{h.rid}</div>
-          </div>
-
-          <div className="row gap-3">
-            <label style={{flex:1}}>
-              <div className="t-cap">Category</div>
-              <select value={grmForm.category}
-                onChange={(e) => setGrmForm({...grmForm, category: e.target.value})}>
-                {_GRM_CATEGORIES.map(o => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </label>
-            <label style={{flex:1}}>
-              <div className="t-cap">Tier</div>
-              <select value={grmForm.tier}
-                onChange={(e) => setGrmForm({...grmForm, tier: e.target.value})}>
-                {_GRM_TIERS.map(o => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <label>
-            <div className="t-cap">Member (optional)</div>
-            <select value={grmForm.member_id}
-              onChange={(e) => setGrmForm({...grmForm, member_id: e.target.value})}>
-              <option value="">— Household-level grievance —</option>
-              {(h?.members || []).map(m => (
-                <option key={m.id} value={m.id}>
-                  Line {m.line} · {m.name}{m.rel === "Head" ? " (head)" : ""}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            <div className="t-cap">Description *</div>
-            <textarea rows={3} value={grmForm.description}
-              onChange={(e) => setGrmForm({...grmForm, description: e.target.value})}
-              placeholder="Describe the complaint in the operator's own words."/>
-          </label>
-
-          <div className="row gap-3">
-            <label style={{flex:1}}>
-              <div className="t-cap">Reporter name</div>
-              <input type="text" value={grmForm.reporter_name}
-                onChange={(e) => setGrmForm({...grmForm, reporter_name: e.target.value})}
-                placeholder="Who is reporting"/>
-            </label>
-            <label style={{flex:1}}>
-              <div className="t-cap">Reporter phone</div>
-              <input type="text" value={grmForm.reporter_phone}
-                onChange={(e) => setGrmForm({...grmForm, reporter_phone: e.target.value})}
-                placeholder="+256…"/>
-            </label>
-          </div>
-
-          <label>
-            <div className="t-cap">Relationship</div>
-            <input type="text" value={grmForm.reporter_relationship}
-              onChange={(e) => setGrmForm({...grmForm, reporter_relationship: e.target.value})}
-              placeholder="e.g., Self · head; Daughter; Neighbour"/>
-          </label>
-
-          {formErr && (
-            <div className="t-bodysm" style={{color:"var(--accent-danger)",
-              padding:"8px 10px", background:"var(--neutral-50)",
-              border:"1px solid var(--accent-danger)", borderRadius:6}}>
-              {formErr}
-            </div>
-          )}
-        </div>
-      </Modal>
+      {/* US-S22-002 — one shared dialog, with the roster in it. Both
+          screens now raise a grievance the same way; the household is
+          locked because the operator is raising it FROM this record. */}
+      <OpenGrievanceModal
+        open={modal === "grm"}
+        onClose={() => setModal(null)}
+        household={h ? {
+          id: h.rid,
+          label: h.head,
+          sub: [(h.geo || {}).village, (h.geo || {}).parish, (h.geo || {}).district]
+            .filter(v => v && v !== "—").join(" · "),
+        } : null}
+        initial={grmInitial}
+        onOpened={(g) => {
+          setLastCreated({ kind: "grm", id: g.id });
+          setToast(`Grievance ${g.id.slice(0, 12)}… opened.`);
+        }}/>
 
       {/* Post-submit toast with one-click jump to the new grievance. */}
       {toast && (

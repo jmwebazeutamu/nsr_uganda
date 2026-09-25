@@ -13,17 +13,20 @@
 //                     records in idv_pending and quality_failed.
 //   Updates         → change_requests WHERE status = pending_approval
 //   Duplicates      → match_pairs WHERE status = pending
-//   Grievances      → grievances WHERE status NOT IN (closed, resolved)
+//   Grievances      → grievances ?active=true — the server's own
+//                     ACTIVE_GRIEVANCE_STATUSES, not a fourth copy of
+//                     "not closed and not resolved"
 //   Data Requests   → all drs_requests visible in the operator inbox
 //   My requests     → drs_requests/mine WHERE status = submitted
 //   Captures        → local-draft count (no API yet); stays on the
 //                     hardcoded fallback until the intake endpoint
 //                     lands.
 //
-// We use page_size=1 wherever the API supports a server-side filter,
-// reading data.count from DRF's pagination wrapper. For grievances
-// the screen does its filter client-side, so we mirror that here
-// (no status filter on the endpoint yet — see apps/grievance/api.py).
+// We use page_size=1 everywhere and read data.count from DRF's
+// pagination wrapper, so a badge never depends on how many rows came
+// back. Grievances was the exception — it fetched 200 and counted them
+// here — and it was wrong twice over: capped at 200, and holding its
+// own idea of which statuses are still work.
 //
 // If a request fails the badge is HIDDEN. It is never replaced with a
 // fixture value: a fabricated "342" next to DIH review is worse than no
@@ -94,17 +97,14 @@ const _FETCHERS = [
   },
   {
     id: "grm",
-    // No server-side status filter yet — fetch the active page and
-    // filter client-side to match the screen's title-chip logic
-    // (status not in closed/resolved).
+    // `?active=true` is the server's own definition of "still
+    // somebody's work" (ACTIVE_GRIEVANCE_STATUSES). This used to fetch
+    // 200 rows and filter them here — which both capped the badge at
+    // 200 and made this a third definition of "open", beside the
+    // dashboard tile's and the workbench's.
     fetch: () =>
-      _getJson("/api/v1/grm/grievances/?page_size=200").then((data) => {
-        const rows = (data && (data.results || data)) || [];
-        if (!Array.isArray(rows)) return null;
-        return rows.filter(
-          (r) => r.status !== "closed" && r.status !== "resolved"
-        ).length;
-      }),
+      _getJson("/api/v1/grm/grievances/?active=true&page_size=1")
+        .then(_countOf),
   },
   {
     id: "drs",
@@ -126,6 +126,25 @@ const _FETCHERS = [
 // that a freshly-approved DIH record disappears from the badge while
 // the operator is still looking at the screen.
 const REFRESH_MS = 60_000;
+
+// Screens announce that they changed something; the sidebar listens.
+//
+// A minute is a long time to look at a badge you have just made wrong.
+// An operator who closed the last open grievance saw "1" next to
+// Grievances until the timer came round, and the obvious reading of
+// that is that the close did not take.
+//
+// A listener set rather than a prop threaded from the shell through
+// every screen: the screens are loaded as classic scripts into one
+// global scope, and a prop per screen is how five screens end up with
+// four spellings of the same callback.
+const _navCountListeners = new Set();
+
+const navCountsChanged = () => {
+  _navCountListeners.forEach((fn) => {
+    try { fn(); } catch (_) { /* a bad listener must not stop the rest */ }
+  });
+};
 
 const useNavCounts = () => {
   const [counts, setCounts] = _navUseState(NAV_COUNT_INITIAL);
@@ -150,11 +169,16 @@ const useNavCounts = () => {
   _navUseEffect(() => {
     refresh();
     const t = setInterval(refresh, REFRESH_MS);
-    return () => clearInterval(t);
+    _navCountListeners.add(refresh);
+    return () => {
+      clearInterval(t);
+      _navCountListeners.delete(refresh);
+    };
   }, [refresh]);
 
   return [counts, { refresh }];
 };
 
 window.useNavCounts = useNavCounts;
+window.navCountsChanged = navCountsChanged;
 window.NAV_COUNT_INITIAL = NAV_COUNT_INITIAL;

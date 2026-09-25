@@ -115,15 +115,19 @@ def _count_change_requests(user, *, region: str | None = None) -> int:
 def _count_open_grievances(
     user, *, tier: str | None = None, region: str | None = None,
 ) -> int:
-    from apps.grievance.models import Grievance, GrievanceStatus
+    from apps.grievance.models import ACTIVE_GRIEVANCE_STATUSES, Grievance
     from apps.grievance.visibility import visible_grievances
 
     # The same rule the workbench list uses. These two disagreed: the
     # tile counted through _scoped_household_ids (national scope -> all)
     # while the list asked whether you were a superuser or in the "GRM
     # Officer" group. One screen, two numbers.
-    base = visible_grievances(user, Grievance.objects.all()).exclude(
-        status__in=[GrievanceStatus.RESOLVED, GrievanceStatus.CLOSED],
+    #
+    # And the same definition of "open" the badge and the workbench use
+    # — it was spelled out here as an exclude, there as a filter, and a
+    # third time in the browser.
+    base = visible_grievances(user, Grievance.objects.all()).filter(
+        status__in=ACTIVE_GRIEVANCE_STATUSES,
     )
     if tier:
         base = base.filter(tier=tier)

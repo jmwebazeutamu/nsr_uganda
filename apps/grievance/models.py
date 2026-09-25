@@ -41,6 +41,21 @@ class GrievanceStatus(models.TextChoices):
     CLOSED = "closed"
 
 
+#: The statuses that mean the case is still somebody's work.
+#:
+#: Three places counted this and each spelled it out for itself: the
+#: dashboard tile excluded RESOLVED and CLOSED, the workbench title
+#: chip filtered the rows it had in the browser, and the sidebar badge
+#: fetched 200 rows and filtered those. Three definitions of one idea,
+#: and the badge's also capped at 200. This is the definition; adding a
+#: sixth status is now one edit rather than a hunt.
+ACTIVE_GRIEVANCE_STATUSES = (
+    GrievanceStatus.OPEN,
+    GrievanceStatus.IN_PROGRESS,
+    GrievanceStatus.ESCALATED,
+)
+
+
 class TaskStatus(models.TextChoices):
     """US-S21-003 — GrievanceTask lifecycle. A task is a unit of
     follow-up work assigned to one operator. A grievance can carry

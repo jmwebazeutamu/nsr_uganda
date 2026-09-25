@@ -196,8 +196,27 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
 
         # Apply per-field query-param filters. Each is opt-in — empty
         # string or missing leaves the queryset alone.
-        for field in ("status", "tier", "category",
-                      "assigned_to", "household_id"):
+        #
+        # `status` takes a comma-separated list, as UPD's does. The
+        # sidebar badge wants "everything not closed or resolved" and
+        # had no way to ask: it fetched 200 rows and filtered them in
+        # the browser, which both capped the count at 200 and put a
+        # third definition of "active" beside the workbench's and the
+        # dashboard's.
+        # `?active=true` is the one definition of "still somebody's
+        # work" (ACTIVE_GRIEVANCE_STATUSES), so the sidebar badge, the
+        # dashboard tile and the workbench cannot each hold their own.
+        active = self.request.query_params.get("active")
+        if active is not None and str(active).lower() in ("1", "true", "yes"):
+            from .models import ACTIVE_GRIEVANCE_STATUSES
+            qs = qs.filter(status__in=ACTIVE_GRIEVANCE_STATUSES)
+
+        status_param = self.request.query_params.get("status")
+        if status_param:
+            statuses = [v.strip() for v in status_param.split(",") if v.strip()]
+            if statuses:
+                qs = qs.filter(status__in=statuses)
+        for field in ("tier", "category", "assigned_to", "household_id"):
             value = self.request.query_params.get(field)
             if value:
                 qs = qs.filter(**{field: value})
