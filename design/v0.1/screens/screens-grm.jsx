@@ -157,66 +157,62 @@ const _grmFieldSummary = (changes) => {
 };
 
 
-const _grmTimelineFor = (g, tasks) => {
-  if (!g) return [];
-  const events = [];
-  events.push({
-    label: "Opened",
-    detail: g.reporter_name ? `Reporter: ${g.reporter_name}` : "Anonymous channel",
-    at: g.opened_at, tone: "data",
-  });
-  if (g.assigned_to) {
-    events.push({
-      label: `Assigned to ${g.assigned_to}`,
-      at: g.opened_at, tone: "user",
-    });
-  }
-  if (g.status === "escalated") {
-    events.push({
-      label: `Escalated to ${GRM_TIERS[g.tier]?.short || g.tier}`,
-      detail: "Tier reset · SLA window restarted",
-      at: "—", tone: "update",
-    });
-  }
-  for (const t of (tasks || [])) {
-    events.push({
-      label: `Task created: ${t.title}`,
-      detail: `assigned to ${t.assigned_to}`,
-      at: _grmFmtTime(t.created_at), tone: "data",
-    });
-    if (t.status === "in_progress") {
-      events.push({
-        label: `Task started: ${t.title}`,
-        at: _grmFmtTime(t.updated_at), tone: "update",
-      });
-    }
-    if (t.closed_at) {
-      events.push({
-        label: `Task closed: ${t.title}`,
-        detail: t.closed_by ? `by ${t.closed_by}` : "",
-        at: _grmFmtTime(t.closed_at), tone: "eligibility",
-      });
-    }
-  }
-  if (g.status === "resolved" || g.status === "closed") {
-    events.push({
-      label: "Resolved",
-      detail: g.narrative ? g.narrative.slice(0, 60) : "",
-      at: "—", tone: "eligibility",
-    });
-  }
-  if (g.status === "closed") {
-    events.push({ label: "Closed", at: "—", tone: "neutral" });
-  }
-  return events;
+// The case timeline, read from the audit chain.
+//
+// This used to be reconstructed from the grievance's CURRENT state,
+// which meant it was wrong in three separate ways at once. "Assigned
+// to X" was stamped with `opened_at` — the time the case was RAISED,
+// not the time it was handed over. Escalated, Resolved and Closed
+// carried the literal string "—" where a timestamp belongs, because
+// the row it was reading from does not record when those happened.
+// And an escalation was annotated "Tier reset · SLA window restarted"
+// whether or not that is what occurred.
+//
+// The order was the order this function happened to push things in,
+// so a task created before an assignment appeared after it.
+//
+// The chain has all of it, with times, in the order it happened.
+const _grmTimelineTone = (e) => {
+  const reason = (e.reason || "").toLowerCase();
+  if (e.entity_type === "grievance.task") return "data";
+  if (e.entity_type === "grievance.comment") return "neutral";
+  if (e.entity_type === "change_request") return "update";
+  if (reason.startsWith("escalated")) return "update";
+  if (reason.startsWith("resolved") || reason.startsWith("closed")) return "eligibility";
+  if (reason.startsWith("assigned")) return "user";
+  return "data";
 };
 
+const _grmTimelineFor = (auditRows) => (auditRows || [])
+  // Reads are access, not case history. They belong in the audit
+  // drawer, which shows the chain unfiltered; a timeline of who
+  // glanced at the case tells the handler nothing about the case.
+  .filter(e => e.action !== "read" && e.action !== "list_read")
+  .map(e => ({
+    label: `${_grmAuditLabel(e)} — ${e.actor_id || "unknown"}`,
+    detail: e.reason || _grmFieldSummary(e.field_changes),
+    at: _grmFmtTime(e.occurred_at),
+    tone: _grmTimelineTone(e),
+  }));
 
+
+// Quick filters. Each predicate takes the row AND the signed-in
+// username, because two of these say "me" and one of them used to mean
+// nothing of the sort: "Assigned to me" tested `assigned_to !== ""`,
+// which is assigned to ANYONE. On a queue where most cases have an
+// owner it matched nearly all of them, and the count on the chip —
+// computed from the same predicate — agreed with the wrong list, so
+// the two numbers never disagreed in a way that would show it up.
+//
+// An empty `me` (no session, or the file:// preview) matches nothing
+// rather than everything: with no one signed in, no case is mine.
 const QUICK_FILTERS_GRM = [
   { id: "breach",    label: "Past SLA (any tier)",       icon: "alert",      tone: "danger",  predicate: r => r.hours_to_breach < 0 && r.status !== "resolved" && r.status !== "closed" },
   { id: "open_l1",   label: "Open L1 — Parish Chief",    icon: "users",      tone: "data",    predicate: r => r.tier === "l1_parish_chief" && r.status === "open" },
-  { id: "escalated", label: "Escalated — needs me",      icon: "arrowUp",    tone: "update",  predicate: r => r.status === "escalated" },
-  { id: "mine",      label: "Assigned to me",            icon: "user",       tone: "programme", predicate: r => r.assigned_to !== "" && r.status !== "closed" },
+  // Was "Escalated — needs me", which it never checked. It is every
+  // escalated case; the label now says that.
+  { id: "escalated", label: "Escalated",                 icon: "arrowUp",    tone: "update",  predicate: r => r.status === "escalated" },
+  { id: "mine",      label: "Assigned to me",            icon: "user",       tone: "programme", predicate: (r, me) => Boolean(me) && r.assigned_to === me && r.status !== "closed" },
 ];
 
 const GRMScreen = ({ onNavigate, initialGrievance = null,
@@ -258,6 +254,10 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
   const [caseDrawer, setCaseDrawer] = useStateGrm(false);
   const [auditOpen, setAuditOpen] = useStateGrm(false);
   const [auditRaw, setAuditRaw] = useStateGrm([]);
+  const [auditLoading, setAuditLoading] = useStateGrm(false);
+  // Bumped after any action, so the timeline shows what just happened
+  // rather than the case's history as of when it was selected.
+  const [auditReloadKey, setAuditReloadKey] = useStateGrm(0);
   const [toast, setToast] = useStateGrm("");
   // US-S21-003c — tasks for the currently-selected grievance, plus
   // role flag from the /me endpoint. Officer-status drives whether
@@ -395,7 +395,11 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         const j = await r.json().catch(() => ({ detail: r.status }));
         throw new Error(j.detail || `HTTP ${r.status}`);
       })
-      .then(() => { setCommentDraft(""); refreshComments(current.id); })
+      .then(() => {
+        setCommentDraft("");
+        refreshComments(current.id);
+        setAuditReloadKey(k => k + 1);
+      })
       .catch(e => setToast(`Comment failed: ${e.message}`))
       .finally(() => setBusy(false));
   };
@@ -470,6 +474,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         setToast(`Task assigned to ${taskForm.assigned_to}.`);
         setModal(null);
         setTaskForm({ title: "", description: "", assigned_to: "" });
+        setAuditReloadKey(k => k + 1);
         return refreshTasks(current.id);
       })
       .catch(e => setToast(`Add task failed: ${e.message}`))
@@ -495,6 +500,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
       })
       .then(() => {
         refreshTasks(current?.id);
+        setAuditReloadKey(k => k + 1);
         // A closing note lands on the grievance thread, so refresh it.
         if (new_status === "closed") refreshComments(current?.id);
       })
@@ -508,21 +514,32 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
     if (!wide.isWide) setCaseDrawer(false);
   }, [wide.isWide]);
 
-  // Load the chain when the drawer opens, and again if the operator
-  // switches case with it open. Not on selection alone: the chain is
-  // a click the operator asked for, not something to fetch for every
-  // row they arrow past.
+  // Load the chain whenever a case is selected.
+  //
+  // It was gated on the audit drawer being open, because the chain is
+  // a click the operator asked for rather than something to fetch for
+  // every row they arrow past. Then the case panel's timeline started
+  // reading the same events (P3.14), and the timeline is always on
+  // screen — so the fetch moved alongside the tasks and comments the
+  // panel already loads per case, and the drawer reads what is
+  // already there. One request, two consumers.
+  //
+  // The server-side read event is deduped per case per window, so
+  // clicking back and forth does not write a row each time, while a
+  // different case is always a different read.
   useEffectGrm(() => {
-    if (!auditOpen || !selectedRow) { return; }
+    if (!selectedRow) { setAuditRaw([]); return; }
     let live = true;
+    setAuditLoading(true);
     fetch(`/api/v1/grm/grievances/${selectedRow}/audit/`, {
       credentials: "same-origin", headers: { Accept: "application/json" },
     })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(data => { if (live) setAuditRaw(data.results || data || []); })
-      .catch(() => { if (live) setAuditRaw([]); });
+      .catch(() => { if (live) setAuditRaw([]); })
+      .finally(() => { if (live) setAuditLoading(false); });
     return () => { live = false; };
-  }, [auditOpen, selectedRow]);
+  }, [selectedRow, auditReloadKey]);
 
   // Keep selectedRow valid when allRows changes (e.g., after a live
   // fetch replaces mock IDs).
@@ -535,8 +552,8 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
   const rows = useMemoGrm(() => {
     if (!quickFilter) return allRows;
     const def = QUICK_FILTERS_GRM.find(f => f.id === quickFilter);
-    return def ? allRows.filter(def.predicate) : allRows;
-  }, [allRows, quickFilter]);
+    return def ? allRows.filter(r => def.predicate(r, me.username)) : allRows;
+  }, [allRows, quickFilter, me.username]);
 
   const exportCsv = () => {
     _grmDownloadCsv("grievances.csv", [
@@ -647,6 +664,8 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
             failures.slice(0, 2).map(f => f.detail).join(" · "),
           );
         }
+        // The action just wrote to the chain; the timeline reads it.
+        setAuditReloadKey(k => k + 1);
         return refresh();
       })
       .finally(() => {
@@ -689,6 +708,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
   // just performed by hand, and audit ids of the form
   // A-2026-05-<last two chars of the grievance id>-001. None of it had
   // happened. The chain is the record; it is read, not reconstructed.
+  const timeline = _grmTimelineFor(auditRaw);
   const auditEvents = (auditRaw || []).map(e => ({
     who: e.actor_id || "unknown",
     action: _grmAuditLabel(e),
@@ -1019,7 +1039,13 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
                   <Icon name="history" size={11}/> TIMELINE
                 </div>
                 <ul style={{margin: 0, padding: 0, listStyle: "none", borderLeft: "2px solid var(--neutral-200)"}}>
-                  {_grmTimelineFor(current, tasks).map((ev, i) => (
+                  {timeline.length === 0 && (
+                    <li className="t-cap muted" style={{padding:"6px 0 6px 14px"}}>
+                      {auditLoading ? "Loading the case history…"
+                                    : "No recorded events for this case yet."}
+                    </li>
+                  )}
+                  {timeline.map((ev, i) => (
                     <li key={i} style={{padding: "6px 0 6px 14px", position: "relative"}}>
                       <span style={{
                         position: "absolute", left: -5, top: 10,
@@ -1137,7 +1163,9 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         <div className="row gap-3" style={{flexWrap:"wrap"}}>
           <span className="t-cap" style={{fontWeight:600}}>QUICK FILTERS</span>
           {QUICK_FILTERS_GRM.map(f => {
-            const count = allRows.filter(f.predicate).length;
+            // The same predicate the list uses, so the chip cannot
+            // count one thing and open another.
+            const count = allRows.filter(r => f.predicate(r, me.username)).length;
             const active = quickFilter === f.id;
             return (
               <button

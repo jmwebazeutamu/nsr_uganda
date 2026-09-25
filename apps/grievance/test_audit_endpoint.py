@@ -217,3 +217,121 @@ class TestItIsBehindTheSameVisibilityRule:
             actor_id="watcher", action="read", entity_type="grievance",
             entity_id=str(worked_case["grievance"].id),
         ).exists(), "a read of the case history left no trace"
+
+
+class TestReadingTheChainDoesNotFloodIt:
+    """QA P3.14's side effect.
+
+    The case panel's timeline reads this endpoint, and the panel is
+    always on screen — so it fires whenever the operator selects a row,
+    including when they click back to a case they were just looking at.
+    Unchecked, that is the badge-poller problem again: on this database
+    a 30-second sidebar poll had turned 91% of the audit chain into one
+    browser tab counting things.
+
+    Deduped per case per window, so a different case is always a
+    different read, and the first read of each is always written.
+    """
+
+    def _reads(self, grievance):
+        from apps.security.models import AuditEvent
+
+        return AuditEvent.objects.filter(
+            action="read", entity_type="grievance",
+            entity_id=str(grievance.id),
+        ).count()
+
+    def test_returning_to_the_same_case_is_one_visit(
+        self, worked_case, django_user_model,
+    ):
+        user = _admin(django_user_model, "clicker")
+        g = worked_case["grievance"]
+        for _ in range(4):
+            _chain(user, g)
+        assert self._reads(g) == 1
+
+    def test_the_first_read_is_always_recorded(
+        self, worked_case, django_user_model,
+    ):
+        user = _admin(django_user_model, "first-look")
+        _chain(user, worked_case["grievance"])
+        assert self._reads(worked_case["grievance"]) == 1
+
+    def test_a_different_case_is_a_different_read(
+        self, worked_case, django_user_model,
+    ):
+        other = open_grievance(
+            category="exclusion_error", description="another",
+            household_id=_household("SEP").id, actor="someone",
+        )
+        user = _admin(django_user_model, "two-cases")
+
+        _chain(user, worked_case["grievance"])
+        _chain(user, other)
+
+        assert self._reads(worked_case["grievance"]) == 1
+        assert self._reads(other) == 1
+
+    def test_a_different_operator_is_a_different_read(
+        self, worked_case, django_user_model,
+    ):
+        g = worked_case["grievance"]
+        _chain(_admin(django_user_model, "watcher-a"), g)
+        _chain(_admin(django_user_model, "watcher-b"), g)
+        assert self._reads(g) == 2
+
+    def test_outside_the_window_it_is_recorded_again(
+        self, worked_case, django_user_model, settings,
+    ):
+        """The window is shrunk rather than the rows aged: AuditEvent
+        is append-only by database trigger, so a test cannot rewrite an
+        occurred_at — which is the property that makes the chain worth
+        having."""
+        settings.AUDIT_LIST_READ_DEDUPE_SECONDS = 0
+        user = _admin(django_user_model, "later")
+        g = worked_case["grievance"]
+
+        _chain(user, g)
+        _chain(user, g)
+
+        assert self._reads(g) == 2
+
+    def test_opening_the_record_itself_is_still_never_deduped(
+        self, worked_case, django_user_model,
+    ):
+        """The retrieve route is a deliberate act, not a side effect of
+        moving down a queue. It keeps its own behaviour."""
+        from apps.security.models import AuditEvent
+
+        user = _admin(django_user_model, "opener")
+        g = worked_case["grievance"]
+        client = _client(user)
+        client.get(f"/api/v1/grm/grievances/{g.id}/")
+        client.get(f"/api/v1/grm/grievances/{g.id}/")
+
+        assert AuditEvent.objects.filter(
+            action="read", entity_type="grievance", entity_id=str(g.id),
+            actor_id="opener",
+        ).count() == 2
+
+    def test_opening_a_case_and_reading_its_chain_is_one_visit(
+        self, worked_case, django_user_model,
+    ):
+        """Both routes record "this person read this case", so the
+        second collapses into the first. Worth pinning because it is
+        the behaviour someone would otherwise read as a lost event: the
+        console does both when a row is selected, and one visit is one
+        row."""
+        from apps.security.models import AuditEvent
+
+        user = _admin(django_user_model, "one-visit")
+        g = worked_case["grievance"]
+        client = _client(user)
+
+        client.get(f"/api/v1/grm/grievances/{g.id}/")
+        client.get(f"/api/v1/grm/grievances/{g.id}/audit/")
+
+        assert AuditEvent.objects.filter(
+            action="read", entity_type="grievance", entity_id=str(g.id),
+            actor_id="one-visit",
+        ).count() == 1

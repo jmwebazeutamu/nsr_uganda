@@ -52,10 +52,25 @@ describe("the audit drawer shows the real chain", () => {
     expect(grm).not.toMatch(pattern);
   });
 
-  it("only asks for the chain when the drawer is open", () => {
-    // Fetching per selected row would put a request behind every
-    // arrow-key press down the queue, and each one writes a read event.
-    expect(grm).toContain("if (!auditOpen || !selectedRow)");
+  it("fetches the chain once and serves both readers from it", () => {
+    // This was gated on the drawer being open, so a request only went
+    // out when the operator asked for one. Then the case panel's
+    // timeline started reading the same events (P3.14) and it is
+    // always on screen, so the fetch moved to selection — beside the
+    // tasks and comments the panel already loads per case — and the
+    // drawer reads what is there. Two fetch paths for one set of
+    // events would be the thing to avoid, not two readers of one.
+    expect((grm.match(/\/audit\/`/g) || [])).toHaveLength(1);
+    expect(grm).toContain("const timeline = _grmTimelineFor(auditRaw);");
+    expect(grm).toContain("events={auditEvents}");
+  });
+
+  it("re-reads the chain after an action writes to it", () => {
+    // Otherwise the timeline shows the case's history as of when the
+    // row was selected, and the escalation you just performed is
+    // missing from the list of what happened.
+    expect((grm.match(/setAuditReloadKey\(k => k \+ 1\)/g) || []).length)
+      .toBeGreaterThanOrEqual(4);
   });
 });
 

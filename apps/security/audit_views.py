@@ -103,14 +103,25 @@ def _is_plain_list_request(request) -> bool:
     )
 
 
-def _is_repeat_list_read(*, actor: str, entity_type: str, reason: str) -> bool:
-    """True when this exact list read was already recorded recently.
+def _is_repeat_read(
+    *, action: str, actor: str, entity_type: str, reason: str,
+    entity_id: str | None = None,
+) -> bool:
+    """True when this exact read was already recorded recently.
 
-    Matched on actor + entity_type + reason, and `reason` carries the
-    request's filters — so a poller repeating one URL collapses, while
-    an operator changing a filter is a different read and is recorded.
-    The first call in each window is always written, so the access
-    itself is never invisible.
+    Matched on actor + entity_type + reason (+ entity_id for a
+    single-record read), and `reason` carries the request's filters —
+    so a poller repeating one URL collapses, while an operator changing
+    a filter is a different read and is recorded. The first call in
+    each window is always written, so the access itself is never
+    invisible.
+
+    `action` is a parameter because the same problem arrived a second
+    time. The list dedupe was written when a badge poller turned 91% of
+    the chain into one browser tab counting things; the GRM case panel
+    then began reading one grievance's audit chain every time the
+    operator moved down the queue. Same shape, same window, so the same
+    rule rather than a second one beside it.
     """
     from datetime import timedelta
 
@@ -119,13 +130,24 @@ def _is_repeat_list_read(*, actor: str, entity_type: str, reason: str) -> bool:
     from apps.security.models import AuditEvent
 
     since = timezone.now() - timedelta(seconds=_dedupe_window_seconds())
-    return AuditEvent.objects.filter(
-        action="list_read",
+    qs = AuditEvent.objects.filter(
+        action=action,
         actor_id=actor,
         entity_type=entity_type,
         reason=reason,
         occurred_at__gte=since,
-    ).exists()
+    )
+    if entity_id is not None:
+        qs = qs.filter(entity_id=entity_id)
+    return qs.exists()
+
+
+def _is_repeat_list_read(*, actor: str, entity_type: str, reason: str) -> bool:
+    """Back-compat name for the list case."""
+    return _is_repeat_read(
+        action="list_read", actor=actor, entity_type=entity_type,
+        reason=reason,
+    )
 
 
 class AuditReadMixin:
@@ -164,7 +186,13 @@ class AuditReadMixin:
             )
         return response
 
-    def _emit_read(self, request, *, action: str, entity_id: str) -> None:
+    def _emit_read(self, request, *, action: str, entity_id: str,
+                   dedupe: bool = False) -> None:
+        """`dedupe=True` collapses a repeat read of the SAME record by
+        the same actor inside the window — for a surface the operator
+        re-enters as they move around, rather than one they visit once.
+        Different records are always different reads, so moving down a
+        queue still leaves one row per case."""
         user = getattr(request, "user", None)
         actor = (
             getattr(user, "username", "") or "anonymous"
@@ -174,19 +202,24 @@ class AuditReadMixin:
 
         reason = _build_reason(request)
         purpose = resolve_purpose(request, self)
+        entity_type = self.audit_entity_type or getattr(self, "basename", "unknown")
+        # The STORED form — emit folds the purpose into reason, so
+        # matching the pre-fold value matches nothing.
+        stored = stored_reason(reason, purpose)
         if action == "list_read" and _is_plain_list_request(request) \
-                and _is_repeat_list_read(
-            actor=actor,
-            entity_type=self.audit_entity_type or getattr(self, "basename", "unknown"),
-            # The STORED form — emit folds the purpose into reason, so
-            # matching the pre-fold value matches nothing.
-            reason=stored_reason(reason, purpose),
+                and _is_repeat_read(
+            action=action, actor=actor, entity_type=entity_type, reason=stored,
+        ):
+            return
+        if dedupe and action != "list_read" and _is_repeat_read(
+            action=action, actor=actor, entity_type=entity_type,
+            reason=stored, entity_id=entity_id,
         ):
             return
 
         emit(
             action=action,
-            entity_type=self.audit_entity_type or getattr(self, "basename", "unknown"),
+            entity_type=entity_type,
             entity_id=entity_id,
             actor=actor,
             actor_kind="user",

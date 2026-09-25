@@ -509,7 +509,13 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
         events = AuditEvent.objects.filter(scope).order_by("occurred_at", "id")
         # Reading a case's history is a read of the case. Same verb the
         # retrieve route uses, so the chain has one vocabulary for it.
-        self._emit_read(request, action="read", entity_id=str(grievance.id))
+        #
+        # Deduped, because the case panel fetches this whenever the
+        # operator selects a row and they move back and forth. A
+        # different case is a different read and is always recorded;
+        # returning to the same one inside the window is one visit.
+        self._emit_read(request, action="read", entity_id=str(grievance.id),
+                        dedupe=True)
         return Response(AuditEventSerializer(events, many=True).data)
 
     @extend_schema(
