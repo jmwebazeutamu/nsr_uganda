@@ -2546,3 +2546,83 @@ None is a production risk. The one that was is closed by 0006.
   and test ordering rather than the module.
 - **Production had been two commits behind `origin/main`** before this
   deploy, as well as behind the feature branch.
+
+---
+
+## 2026-09-25 — deploys e63a7a7 and 96b0344 (case numbers, route_label)
+
+Two deploys in one sitting, because the first answer to "these numbers
+are hard to use" was the wrong one.
+
+### e63a7a7 — route_label, and a random case reference
+
+`route_label()` had stopped consulting ROUTE_LABEL and returned the
+role code, so the Updates bundle endpoint echoed `cdo_receiving` at
+operators where it had said "CDO + receiving CDO". That map is not
+decoration: on an address move it names two reviewers, because a
+household moving between districts needs both, and no single role code
+says so. Restored.
+
+Three routing tests fixed as their intent rather than their
+assertions. One of them had asserted that the seed produced **12**
+rows — the number migration 0004 happened to write. When 0005 added
+four change types and seeded none of them, the count was still 12 and
+the test still passed while nine combinations had no row at all. It now
+asserts completeness, and immediately found a tenth: `life_event/False`
+had never been seeded on a fresh database. Migration 0007 backfills
+whatever is missing from DEFAULT_MATRIX rather than listing rows.
+
+Also shipped `Grievance.reference` as random Crockford base32,
+`GRM-7K4P-2QX9`.
+
+### 96b0344 — the case number people asked for
+
+The random reference lasted under an hour. The registry owner asked for
+`GRM-2026-0001`: a year and a running count, restarting each January.
+
+That names the real user — a complainant, not an operator — who has to
+keep a number and repeat it weeks later. It also contradicts CLAUDE.md,
+which forbids sequential externally-visible identifiers. CLAUDE.md is
+amended to name this one field as the exception, with ADR-0038 stating
+the cost: the number is guessable, and two of them disclose volume.
+
+Guessing is not a way in — `?q=` filters what `visible_grievances`
+already scoped, and the detail route applies the same rule, so a
+reference nobody gave you returns an empty list and a 404. That is the
+whole mitigation and it is pinned by tests. The residual exposure is
+volume, and the DPO should know it is now inferable.
+
+**Verified on prod:**
+
+```
+GRM-2026-0001  2026-05-18  in_progress
+GRM-2026-0002  2026-05-18  closed
+...
+GRM-2026-0008  2026-05-18  open
+sequence: [(2026, 8)]
+
+route_label address_move: 'CDO + receiving CDO'
+route_label correction  : 'CDO (parish)'
+```
+
+The eight live grievances were renumbered in the order they were
+opened. Safe only because it was immediate: none had been given to
+anyone. **After this there is no renumbering** — a reference is a
+promise that a number keeps meaning the same case.
+
+Backups: `pre-deploy-20260925T040333Z.dump` and
+`pre-deploy-20260925T041527Z.dump`, 11M each.
+
+`tests/contract` is green — 400 passing — for the first time this week,
+the last red one being an actor-spoofing test that asserted 400 for a
+separation-of-duties refusal the new authorization module deliberately
+answers as 403.
+
+### Open
+
+- **The data_explorer 503s** still stand: 35 contract tests that pass in
+  isolation and fail in a full run, pointing at matview population and
+  test ordering rather than the module. Unchanged by today.
+- **ChangeRequest, DataRequest and Referral** have the same
+  unreadable-identifier problem. Each is its own decision about what its
+  users actually quote; none is done.
