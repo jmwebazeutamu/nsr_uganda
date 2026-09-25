@@ -9,6 +9,8 @@ The recompute is wired to two events:
 
 from __future__ import annotations
 
+import logging
+
 from django.db import transaction
 from django.utils import timezone
 
@@ -18,6 +20,8 @@ from apps.security.notifications import send_notification
 
 from .constants import PMT_TRIGGER_MANUAL
 from .engine import PMTConfigurationError, compute_pmt, derive_band
+
+log = logging.getLogger(__name__)
 from .models import ModelStatus, PMTModelVersion, PMTResult
 
 
@@ -26,12 +30,36 @@ class PMTApprovalError(Exception):
 
 
 def _validate_band_configuration(version: PMTModelVersion) -> None:
-    """Ensure an approved model can classify without a code fallback.
+    """Ensure an approved model DECLARES a band policy.
 
-    Calling ``derive_band`` against a neutral score exercises exactly the
-    persisted policy path used by scoring. This keeps activation and runtime
-    classification on one contract without duplicating band rules here.
+    Declares, not "can already apply". The two differ for a percentile
+    model and the distinction is the whole of this function.
+
+    A percentile model's thresholds are empirical: computed from the
+    scored population by `tasks.recompute_band_thresholds`, which only
+    considers ACTIVE models. So a new version cannot have thresholds
+    before it is activated, and requiring them here made every
+    percentile model impossible to activate — the same cold-start
+    deadlock as promotion, one level up.
+
+    What activation can and must check is that the policy exists to be
+    computed from: the declared percentile ranks. A model with no
+    `band_cutoffs` has nothing for the threshold job to work towards
+    and would score a population it can never classify.
+
+    A fixed-threshold model is different — its cutoffs ARE the policy,
+    applied directly — so it is still exercised through `derive_band`,
+    which is the same contract scoring uses.
     """
+    if version.band_strategy == "percentile":
+        if not (version.band_cutoffs or {}):
+            raise PMTApprovalError(
+                f"PMT model v{version.version} uses percentile bands but "
+                "declares no band_cutoffs — there are no percentile ranks "
+                "for the threshold job to compute against.",
+            )
+        return
+
     try:
         derive_band(0.0, version)
     except PMTConfigurationError as exc:
@@ -510,7 +538,37 @@ def recompute_for_household(
         actor=actor,
     )
 
-    score, band, snapshot = compute_pmt(household, model)
+    # A model that cannot classify yet must not stop a household
+    # entering the registry.
+    #
+    # `promote_stage_record` calls this unguarded inside its atomic
+    # block, so a raise here rolls the promotion back. On a registry
+    # with no scores the active percentile model has no empirical
+    # thresholds, so every promotion failed — and because promotion
+    # failed, no score was ever written, so the nightly job never had
+    # anything to compute thresholds from. The registry could not take
+    # its first household.
+    #
+    # Unscored is a state the caller already tolerates: this function
+    # returns None when there is no active model at all. Missing band
+    # policy is the same situation — PMT cannot answer yet — and is
+    # reported rather than swallowed. The nightly job bootstraps the
+    # thresholds (see apps/pmt/tasks._bootstrap_scores) and the next
+    # recompute bands the household.
+    try:
+        score, band, snapshot = compute_pmt(household, model)
+    except PMTConfigurationError as exc:
+        emit_audit(
+            "recompute_skipped", "pmt", household.id, actor=actor,
+            actor_kind="system",
+            reason=f"PMT model v{model.version} cannot classify yet: {exc}",
+        )
+        log.warning(
+            "recompute_for_household: household %s promoted unscored — %s",
+            household.id, exc,
+        )
+        return None
+
     result = PMTResult.objects.create(
         household=household, model_version=model,
         score=score, band=band,

@@ -336,12 +336,38 @@ def _household_features(household) -> dict:
     }
 
 
+def compute_score(household, model_version: PMTModelVersion) -> tuple[float, dict]:
+    """Score a household without classifying it.
+
+    Returns (score, inputs_snapshot). Scoring depends only on the
+    model's variables and intercept; banding depends on population
+    thresholds that may not exist yet. Keeping them separable is what
+    lets the threshold job bootstrap: it needs scores, and until it has
+    run there is no way to band, so a function that insists on doing
+    both cannot be used to escape that.
+
+    See `compute_pmt` for the combined call every ordinary caller
+    wants.
+    """
+    score, _band_unused, snapshot = _compute(household, model_version, band=False)
+    return score, snapshot
+
+
 def compute_pmt(household, model_version: PMTModelVersion) -> tuple[float, str, dict]:
+    """Score and classify. See `_compute` for the shared body."""
+    return _compute(household, model_version, band=True)
+
+
+def _compute(household, model_version: PMTModelVersion, *, band: bool):
     """Apply the model to a Household instance.
 
     Returns (score, band, inputs_snapshot) where inputs_snapshot logs
     each variable's raw value + transformed contribution for later
     audit.
+
+    Raises PMTConfigurationError when the model cannot classify —
+    callers that must not fail on that (promotion) catch it; see
+    `services.recompute_for_household`.
 
     Variable shape dispatch (ADR-0025): each row in
     `model_version.variables` is either
@@ -404,5 +430,6 @@ def compute_pmt(household, model_version: PMTModelVersion) -> tuple[float, str, 
     # derive_band now resolves the model_version's threshold rows
     # first and only falls back to fixed cutoffs when none exist —
     # the polymorphic dispatch keeps callers (here + tests) simple.
-    band = derive_band(score, model_version)
-    return score, band, snapshot
+    if not band:
+        return score, None, snapshot
+    return score, derive_band(score, model_version), snapshot

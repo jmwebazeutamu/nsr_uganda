@@ -87,17 +87,32 @@ def _recompute_for_model(
         .iterator(chunk_size=10000),
     )
     scores_f = [float(s) for s in scores]
+    if not scores_f:
+        # Bootstrap. No stored results does not mean no population.
+        #
+        # Thresholds are computed from scores; scores are written by
+        # `recompute_for_household`; and that cannot band a household
+        # until thresholds exist. A registry starting from empty was
+        # therefore stuck: every promotion went through unscored, and
+        # this job kept finding nothing to compute from.
+        #
+        # So score the promoted households here instead of waiting for
+        # rows that will never arrive. `compute_score` deliberately
+        # does not band — asking for a band is what the deadlock was.
+        scores_f = _bootstrap_scores(mv)
+
     sample_size = len(scores_f)
     if sample_size == 0:
         log.warning(
-            "recompute_band_thresholds: PMTModelVersion v%s has 0 "
-            "PMTResults; skipping (derive_band will fall back to "
-            "fixed cutoffs)", mv.version,
+            "recompute_band_thresholds: PMTModelVersion v%s has no scores "
+            "and no households to score; nothing to compute. derive_band "
+            "will raise until this has something to work from.",
+            mv.version,
         )
         emit_audit(
             "recompute_skipped", "pmt_model_version", str(mv.id),
             actor=actor, actor_kind="system",
-            reason=f"no PMTResults for v{mv.version}",
+            reason=f"no PMTResults and no scorable households for v{mv.version}",
         )
         return {}
 
@@ -139,6 +154,60 @@ def _recompute_for_model(
             },
         )
     return written
+
+
+
+def _bootstrap_scores(mv: PMTModelVersion) -> list[float]:
+    """Score the promoted population directly, for the first run.
+
+    Only reached when the model has no stored `PMTResult` rows at all.
+    That is the cold-start state: households have been promoted (they
+    are not blocked on PMT — see `services.recompute_for_household`)
+    but none could be banded, so none was stored.
+
+    Scores only. Banding is what this job is computing the inputs for,
+    and `compute_score` is separable from `compute_pmt` precisely so
+    this path cannot ask for the answer it is trying to produce.
+
+    A household the model cannot score at all is skipped rather than
+    failing the run: one malformed record must not keep the whole
+    registry unbanded.
+    """
+    from apps.data_management.models import Household
+
+    from .engine import compute_score
+
+    scores: list[float] = []
+    skipped = 0
+    households = (
+        Household.objects
+        .filter(is_deleted=False)
+        .select_related(
+            "dwelling", "utilities", "livelihood",
+            "food_security", "food_consumption",
+            "head_member",
+            "head_member__education", "head_member__employment",
+        )
+        .prefetch_related(
+            "members", "assets", "livestock", "crops",
+            "shocks", "coping_strategies",
+        )
+        .iterator(chunk_size=500)
+    )
+    for household in households:
+        try:
+            score, _snapshot = compute_score(household, mv)
+        except Exception:  # noqa: BLE001 — one bad row must not stop the sweep
+            skipped += 1
+            continue
+        scores.append(float(score))
+
+    log.info(
+        "recompute_band_thresholds: bootstrapped %s score(s) for v%s "
+        "directly from households (%s skipped); no stored PMTResults yet",
+        len(scores), mv.version, skipped,
+    )
+    return scores
 
 
 def _percentile(sorted_scores: list[float], rank: int) -> float:

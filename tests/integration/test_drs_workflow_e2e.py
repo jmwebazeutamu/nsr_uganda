@@ -31,7 +31,6 @@ from __future__ import annotations
 import hashlib
 from datetime import date
 
-from apps.data_requests.builder_schema import FIELD_CATALOGUE as _CATALOGUE
 
 import pytest
 from apps.data_management.models import Household
@@ -125,6 +124,12 @@ def partner_and_dsa(db, geo):
                         only references the household-side filters.
     monthly_row_budget: 5000 — well above the test's max_rows=50.
     """
+    # Imported inside the fixture: the catalogue is a database read of
+    # `intake.DataRequestFieldDefinition` now, not a module constant, so
+    # importing it at module scope binds nothing useful and reading it
+    # there would run a query at collection time.
+    from apps.data_requests.builder_schema import field_catalogue
+
     partner = make_partner(
         code="E2E-OPM", name="E2E Office of the Prime Minister",
     )
@@ -147,7 +152,7 @@ def partner_and_dsa(db, geo):
             # expressible because no catalogue group spans both entities,
             # which `test_dsa_field_groups.py` pins.
             "fields": [
-                f["key"] for f in _CATALOGUE
+                f["key"] for f in field_catalogue()
                 if str(f["key"]).startswith("household.")
             ],
             "sub_region_codes": ["SR-DRS-IN"],

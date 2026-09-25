@@ -218,6 +218,7 @@ class TestAudit:
         before = AuditEvent.objects.filter(
             entity_type="pmt_band_threshold",
         ).count()
+        assert before == 0, "fixture should start with no threshold events"
         recompute_band_thresholds(actor="test")
         rows = PMTBandThreshold.objects.filter(model_version=model_version)
         # One event per row, all with the right entity_type.
@@ -227,8 +228,14 @@ class TestAudit:
                 entity_type="pmt_band_threshold",
                 entity_id=str(row.id),
             ).count() == 1
+        # Scoped to this model. `recompute_band_thresholds` processes
+        # every ACTIVE model, and the seeded v1 now bootstraps its own
+        # thresholds from the households a test has created rather than
+        # being skipped for having no stored results — so a global
+        # count measures both models and says nothing about either.
         after = AuditEvent.objects.filter(
             entity_type="pmt_band_threshold",
+            entity_id__in=[str(r.id) for r in rows],
         ).count()
         assert after - before == rows.count()
 
