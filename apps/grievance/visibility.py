@@ -103,6 +103,10 @@ def visible_grievances(user, queryset=None):
 _ASSIGNABLE = ("open", "in_progress", "escalated")
 _ESCALATABLE = ("open", "in_progress", "escalated")
 _RESOLVABLE = ("open", "in_progress", "escalated")
+# create_task refuses RESOLVED and CLOSED, so a case accepts a task in
+# every other state. Listed here because the console was deriving it
+# from `status` itself, which is a second copy of this file.
+_TASKABLE = ("open", "in_progress", "escalated")
 
 
 def allowed_actions(grievance) -> list[str]:
@@ -116,6 +120,8 @@ def allowed_actions(grievance) -> list[str]:
     actions = ["comment"]  # a note is allowed in every state, including closed
     if status in _ASSIGNABLE:
         actions.append("assign")
+    if status in _TASKABLE:
+        actions.append("add_task")
     if status in _ESCALATABLE and grievance.tier != "l4_nsr_unit":
         actions.append("escalate")
     if status in _RESOLVABLE and not grievance.tasks.exclude(

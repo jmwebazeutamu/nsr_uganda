@@ -31,6 +31,42 @@ const show = (props) => render(
                onClose={() => {}} onConfirm={() => {}} {...props}/>,
 );
 
+describe("the record list", () => {
+  it("names every record the action will touch", () => {
+    show({ recordLabels: ["01AAA", "01BBB", "01CCC"] });
+    for (const id of ["01AAA", "01BBB", "01CCC"]) {
+      expect(screen.getByText(id)).toBeTruthy();
+    }
+  });
+
+  it("says how many, in words that match the count", () => {
+    show({ recordLabels: ["01AAA", "01BBB"] });
+    expect(screen.getByText("2 records")).toBeTruthy();
+    cleanup();
+    show({ recordLabels: ["01AAA"] });
+    expect(screen.getByText("1 record")).toBeTruthy();
+  });
+
+  it("scrolls rather than truncating a long selection", () => {
+    // "+ 188 more" would be the same defect again: the operator
+    // cannot check what they are about to change.
+    const ids = Array.from({ length: 40 }, (_, i) => `01ID${i}`);
+    show({ recordLabels: ids });
+    expect(screen.getAllByRole("listitem")).toHaveLength(40);
+    expect(screen.getByText("01ID39")).toBeTruthy();
+  });
+
+  it("falls back to the single label when no list is given", () => {
+    show({ recordLabel: "01SINGLE" });
+    expect(screen.getByText("01SINGLE")).toBeTruthy();
+  });
+
+  it("shows neither when there is nothing to name", () => {
+    show({ recordLabels: [] });
+    expect(screen.queryByText(/Action will be applied to/)).toBeNull();
+  });
+});
+
 describe("ReasonModal's confirm button", () => {
   it("uses the label the caller gives it", () => {
     show({ intent: "success", confirmLabel: "Resolve" });

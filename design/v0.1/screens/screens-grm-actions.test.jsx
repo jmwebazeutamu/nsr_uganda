@@ -97,3 +97,58 @@ describe("a confirm button says what it confirms", () => {
     expect(components).toContain("'Confirm approve'");
   });
 });
+
+
+describe("a bulk dialog names what it will change", () => {
+  it("passes the targeted ids, not the row open in the panel", () => {
+    // Every dialog said "Action will be applied to <current.id>" even
+    // with twelve rows ticked. That is not vague — it names the wrong
+    // thing, and the operator confirms it.
+    expect(grm).not.toContain("recordLabel={current?.id}");
+    expect((grm.match(/recordLabels=\{targetIds\}/g) || [])).toHaveLength(3);
+  });
+
+  it("computes the target list once, where fire() reads it", () => {
+    // A dialog that derived its own list could name a different set
+    // from the one the action touches, which is the bug in a new
+    // place.
+    expect(grm).toContain("const ids = opts.ids || targetIds;");
+    expect((grm.match(/const targetIds = /g) || [])).toHaveLength(1);
+  });
+
+  it("declares the target list above the function that reads it", () => {
+    // Babel-standalone rewrites const to var, so a forward reference
+    // reads undefined instead of throwing — the trap this file
+    // documents elsewhere.
+    expect(grm.indexOf("const targetIds = "))
+      .toBeLessThan(grm.indexOf("const fire = (kind"));
+  });
+});
+
+describe("the console offers only what the server would accept", () => {
+  it.each(["escalate", "close", "add_task", "open_change_request"])(
+    "gates %s on the server's answer", (action) => {
+      expect(grm).toContain(`_grmAllows(current, "${action}")`);
+    },
+  );
+
+  it("no longer reads the tier to decide whether escalation is possible", () => {
+    // L4 is the top of the ladder and the server says so.
+    expect(grm).not.toContain('current.tier !== "l4_nsr_unit"');
+  });
+
+  it("keeps the reason visible when open tasks are what block resolve", () => {
+    // Hiding it there would take away the only place that says why.
+    expect(grm).toContain("const heldByTasks = !allowed && openTasks > 0;");
+    expect(grm).toContain("open task(s)");
+  });
+
+  it("hides resolve outright when the case is past resolving", () => {
+    expect(grm).toContain("if (!allowed && !heldByTasks) return null;");
+  });
+
+  it("acts on the open case when opening an update from it", () => {
+    expect(grm).toContain('fire("open-change-request", {');
+    expect(grm).toMatch(/open-change-request", \{\s*\n?\s*ids: \[current\.id\]/);
+  });
+});

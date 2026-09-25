@@ -272,7 +272,13 @@ const Modal = ({ open, onClose, title, children, footer, width = 480 }) => {
 // and UPD's "Release from hold" offered to approve a release. Nothing
 // was being approved in either. Colour and copy are now separate
 // decisions, and every caller that is not an approval says what it is.
-const ReasonModal = ({ open, title, intent, onClose, onConfirm, reasonOptions, recordLabel, defaultNote = "", confirmLabel }) => {
+// `recordLabels` takes the ids the action will actually touch.
+//
+// Every dialog used to say "Action will be applied to <current.id>" —
+// the row open in the detail panel — even when twelve were ticked for
+// a bulk action. That is not vague, it names the wrong thing: the
+// operator reads one id, confirms, and twelve records change.
+const ReasonModal = ({ open, title, intent, onClose, onConfirm, reasonOptions, recordLabel, recordLabels, defaultNote = "", confirmLabel }) => {
   const [reason, setReason] = useState("");
   const [note, setNote] = useState(defaultNote);
   useEffect(() => { if (open) { setReason(""); setNote(defaultNote || ""); } }, [open, defaultNote]);
@@ -293,9 +299,27 @@ const ReasonModal = ({ open, title, intent, onClose, onConfirm, reasonOptions, r
       </>}
     >
       <div className="col gap-4">
-        {recordLabel && (
+        {Array.isArray(recordLabels) && recordLabels.length > 0 ? (
+          <div className="t-bodysm muted">
+            Action will be applied to{" "}
+            <strong style={{color:'var(--neutral-900)'}}>
+              {recordLabels.length} record{recordLabels.length === 1 ? "" : "s"}
+            </strong>
+            {/* Scrolls rather than truncates. A cap with "+ 188 more"
+                would be the same problem again: the operator cannot
+                check what they are about to change. */}
+            <ul className="t-mono" style={{
+              margin: '6px 0 0', padding: '6px 8px', listStyle: 'none',
+              maxHeight: 132, overflowY: 'auto', fontSize: 11.5,
+              border: '1px solid var(--neutral-200)', borderRadius: 4,
+              background: 'var(--neutral-50)', color: 'var(--neutral-900)',
+            }}>
+              {recordLabels.map(id => <li key={id} style={{padding:'1px 0'}}>{id}</li>)}
+            </ul>
+          </div>
+        ) : recordLabel ? (
           <div className="t-bodysm muted">Action will be applied to <span className="t-mono" style={{color:'var(--neutral-900)'}}>{recordLabel}</span></div>
-        )}
+        ) : null}
         <div className="field">
           <label className="field-label">Reason <span className="req">*</span></label>
           <select className="field-select" value={reason} onChange={(e) => setReason(e.target.value)}>

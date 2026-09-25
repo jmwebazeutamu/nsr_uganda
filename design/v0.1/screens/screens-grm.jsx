@@ -637,6 +637,13 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
   // Fire `kind` against every selected id (or `current` if no
   // selection). After all calls settle, refresh the roster, toast,
   // and clear the selection.
+  // What a confirmed action will actually touch. One definition, read
+  // by fire() and by every dialog's record list, so the dialog cannot
+  // name one case while the action changes twelve.
+  const targetIds = selection.size > 0
+    ? [...selection]
+    : current ? [current.id] : [];
+
   const fire = (kind, opts = {}) => {
     if (dataSource === "offline" || dataSource === "loading") {
       // No live API to write to. The action is acknowledged but NOT
@@ -657,10 +664,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
     // case in the panel: with rows ticked for a bulk action, falling
     // back to the selection would take one person's case and hand them
     // everything that happened to be ticked.
-    const ids = opts.ids
-      || (selection.size > 0
-        ? [...selection]
-        : current ? [current.id] : []);
+    const ids = opts.ids || targetIds;
     if (ids.length === 0) {
       setToast("No grievance selected.");
       setModal(null);
@@ -816,10 +820,12 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
                             onClick={() => onNavigate && onNavigate("upd", { changeRequestId: current.linked_change_request_id })}>
                       Open update {current.linked_change_request_id.slice(0, 12)}… in the Updates Queue
                     </button>
-                  ) : current.household_id ? (
+                  ) : _grmAllows(current, "open_change_request") ? (
                     <>
                       <button className="btn sm" disabled={busy}
-                              onClick={() => fire("open-change-request", { body: {} })}>
+                              onClick={() => fire("open-change-request", {
+                                ids: [current.id], body: {},
+                              })}>
                         Open an update from this grievance
                       </button>
                       <div className="t-cap muted" style={{marginTop:4}}>
@@ -983,7 +989,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
                     </Chip>
                   )}
                 </div>
-                {me.is_officer && current.status !== "resolved" && current.status !== "closed" && (
+                {me.is_officer && _grmAllows(current, "add_task") && (
                   <button className="btn" onClick={() => {
                             setTaskAssignee(null);
                             setTaskForm({title:"", description:"", assigned_to:""});
@@ -1126,26 +1132,40 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
                     <Icon name="users" size={13}/> Assign…
                   </button>
                 )}
-                {current.status !== "resolved" && current.status !== "closed" && current.tier !== "l4_nsr_unit" && (
+                {/* Was `status !== resolved && status !== closed &&
+                    tier !== l4_nsr_unit`, which is the server's rule
+                    copied out by hand — and a copy drifts. L4 is the
+                    top of the ladder, and the server says so. */}
+                {_grmAllows(current, "escalate") && (
                   <button className="btn" onClick={() => setModal("escalate")}>
                     <Icon name="arrowUp" size={13}/> Escalate one tier
                   </button>
                 )}
-                {current.status !== "resolved" && current.status !== "closed" && (() => {
-                  // US-S21-003 — resolve is gated by every task being closed.
+                {(() => {
+                  // Resolve is the one action with two reasons to be
+                  // unavailable, and they deserve different treatment.
+                  // The server withholds it both when the status
+                  // forbids it and when a task is still open
+                  // (US-S21-003); hiding it outright in the second
+                  // case would take away the only place that says
+                  // WHY. So: hidden when the case is past resolving,
+                  // shown and disabled with the count when it is the
+                  // open tasks holding it up.
                   const openTasks = tasks.filter(t => t.status !== "closed").length;
-                  const disabled = openTasks > 0 && (dataSource === "live" || dataSource === "live-empty");
+                  const allowed = _grmAllows(current, "resolve");
+                  const heldByTasks = !allowed && openTasks > 0;
+                  if (!allowed && !heldByTasks) return null;
                   return (
                     <button className="btn primary"
-                            disabled={disabled}
-                            title={disabled ? `${openTasks} task(s) still open — close them first` : undefined}
+                            disabled={!allowed}
+                            title={heldByTasks ? `${openTasks} task(s) still open — close them first` : undefined}
                             onClick={() => setModal("resolve")}>
                       <Icon name="check" size={13}/> Resolve with narrative
-                      {disabled && <span style={{fontSize: 11, opacity: 0.8}}> · {openTasks} open task(s)</span>}
+                      {heldByTasks && <span style={{fontSize: 11, opacity: 0.8}}> · {openTasks} open task(s)</span>}
                     </button>
                   );
                 })()}
-                {current.status === "resolved" && (
+                {_grmAllows(current, "close") && (
                   <button className="btn primary" onClick={() => setModal("close")}>
                     <Icon name="lock" size={13}/> Close grievance
                   </button>
@@ -1390,7 +1410,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         title="Escalate to next tier"
         intent="update"
         confirmLabel="Escalate"
-        recordLabel={current?.id}
+        recordLabels={targetIds}
         reasonOptions={reasonsEscalate}
         onClose={() => setModal(null)}
         onConfirm={({ reason, note }) => fire("escalate", {
@@ -1402,7 +1422,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         title="Resolve grievance"
         intent="success"
         confirmLabel="Resolve"
-        recordLabel={current?.id}
+        recordLabels={targetIds}
         reasonOptions={reasonsResolve}
         onClose={() => setModal(null)}
         onConfirm={({ reason, note }) => fire("resolve", {
@@ -1413,7 +1433,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         open={modal === "close"}
         title={selection.size > 1 ? `Close ${selection.size} grievances` : "Close grievance"}
         confirmLabel={selection.size > 1 ? `Close ${selection.size} grievances` : "Close grievance"}
-        recordLabel={current?.id}
+        recordLabels={targetIds}
         reasonOptions={reasonsClose}
         onClose={() => setModal(null)}
         onConfirm={({ reason, note }) => fire("close", {
