@@ -112,13 +112,53 @@ def test_closed_test_records_keep_their_assignee(records, owner):
         assert g.status == GrievanceStatus.CLOSED, gid
 
 
-def test_closed_test_records_gain_a_note_that_explains_them(records, owner):
+def test_test_records_gain_a_note_that_explains_them(records, owner):
+    """Wherever it lands, the explanation is attached to the record.
+
+    A closed grievance is read-only, its comment thread included, so
+    the annotation for a closed one goes to the audit chain — which is
+    append-only by design and is where "this is what this historical
+    row is" belongs. A record still open gets a comment, because that
+    is where whoever picks it up will look.
+    """
+    from apps.grievance.management.commands.remediate_phantom_assignees import (
+        ANNOTATE_ACTION,
+    )
+    from apps.grievance.models import GrievanceStatus
+    from apps.security.models import AuditEvent
+
     _run("--apply", "--actor", "ops")
 
     for gid in ANNOTATE_IDS:
-        body = Grievance.objects.get(id=gid).comments.last().body
-        assert "18 May 2026" in body
-        assert "Nothing is outstanding" in body
+        grievance = Grievance.objects.get(id=gid)
+        if grievance.status == GrievanceStatus.CLOSED:
+            event = AuditEvent.objects.filter(
+                action=ANNOTATE_ACTION, entity_id=str(gid),
+            ).first()
+            assert event is not None, "a closed record was left unexplained"
+            text = event.reason
+            assert grievance.comments.count() == 0, (
+                "the closed case's thread was written to"
+            )
+        else:
+            text = grievance.comments.last().body
+        assert "18 May 2026" in text
+        assert "Nothing is outstanding" in text
+
+
+def test_a_closed_record_is_not_written_to(records, owner):
+    """The rule this command has to work within."""
+    from apps.grievance.models import GrievanceStatus
+
+    _run("--apply", "--actor", "ops")
+
+    closed = [
+        g for g in Grievance.objects.filter(id__in=ANNOTATE_IDS)
+        if g.status == GrievanceStatus.CLOSED
+    ]
+    assert closed, "the fixture no longer covers a closed record"
+    for grievance in closed:
+        assert grievance.comments.count() == 0
 
 
 def test_rerunning_annotates_nothing_twice(records, owner):
@@ -128,11 +168,19 @@ def test_rerunning_annotates_nothing_twice(records, owner):
         for gid in ANNOTATE_IDS
     }
 
+    from apps.grievance.management.commands.remediate_phantom_assignees import (
+        ANNOTATE_ACTION,
+    )
+    from apps.security.models import AuditEvent
+
+    events = AuditEvent.objects.filter(action=ANNOTATE_ACTION).count()
+
     output = _run("--apply", "--actor", "ops")
 
     assert "already annotated" in output
     for gid, before in counts.items():
         assert Grievance.objects.get(id=gid).comments.count() == before
+    assert AuditEvent.objects.filter(action=ANNOTATE_ACTION).count() == events
 
 
 def test_a_record_already_on_a_real_user_is_left_alone(records, owner,

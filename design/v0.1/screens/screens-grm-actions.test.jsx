@@ -152,3 +152,34 @@ describe("the console offers only what the server would accept", () => {
     expect(grm).toMatch(/open-change-request", \{\s*\n?\s*ids: \[current\.id\]/);
   });
 });
+
+
+describe("a closed case is read-only on screen too", () => {
+  it("replaces the note composer with why it is gone", () => {
+    // A box you can type a paragraph into and lose is worse than no
+    // box: the endpoint refuses it, and the draft goes nowhere.
+    expect(grm).toContain('_grmAllows(current, "comment") ? (');
+    expect(grm).toContain("This case is closed and");
+    expect(grm).toContain("raise a new grievance");
+  });
+
+  it("says nothing was recorded rather than inviting a note", () => {
+    expect(grm).toContain("Nothing was recorded on this case.");
+  });
+
+  it("withholds task controls on a closed case", () => {
+    expect(grm).toMatch(/canTransition = \(isMine \|\| me\.is_officer\)\s*\n\s*&& _grmAllows\(current, "add_task"\)/);
+  });
+
+  it("gets the answer from the server, not from the status string", () => {
+    // allowed_actions returns [] for a closed case, so no ACTION is
+    // gated on the status here. Rendering still reads it — the
+    // CLOSING block only makes sense on a closed case — which is a
+    // different thing from deciding what is permitted.
+    const gates = grm.match(/_grmAllows\(current, "[a-z_]+"\)/g) || [];
+    expect(gates.length).toBeGreaterThanOrEqual(6);
+    expect(grm).not.toMatch(
+      /disabled=\{[^}]*current\.status === "closed"/,
+    );
+  });
+});

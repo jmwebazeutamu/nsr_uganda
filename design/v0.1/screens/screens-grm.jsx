@@ -890,8 +890,10 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
               <div style={{padding:"12px 16px"}}>
                 {comments.length === 0 && (
                   <div className="t-bodysm muted" style={{fontStyle:"italic", marginBottom:10}}>
-                    Nothing recorded yet. Add a note as the case moves —
-                    a visit made, a call, a document still missing.
+                    {_grmAllows(current, "comment")
+                      ? <>Nothing recorded yet. Add a note as the case moves —
+                          a visit made, a call, a document still missing.</>
+                      : <>Nothing was recorded on this case.</>}
                   </div>
                 )}
                 {comments.map(c => (
@@ -911,17 +913,35 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
                     </div>
                   </div>
                 ))}
-                <textarea className="field-text"
-                          style={{width:"100%", minHeight:56, padding:8, fontFamily:"inherit"}}
-                          placeholder="Add a note — what happened, what is still outstanding."
-                          value={commentDraft}
-                          onChange={(e) => setCommentDraft(e.target.value)}/>
-                <div className="row gap-2" style={{justifyContent:"flex-end", marginTop:6}}>
-                  <button className="btn sm" disabled={busy || !commentDraft.trim()}
-                          onClick={postComment}>
-                    {busy ? "Saving…" : "Add note"}
-                  </button>
-                </div>
+                {/* A closed case is read-only, its thread included.
+                    The composer stayed on screen over an endpoint that
+                    now refuses it, which is a box you can type a
+                    paragraph into and lose. */}
+                {_grmAllows(current, "comment") ? (
+                  <>
+                    <textarea className="field-text"
+                              style={{width:"100%", minHeight:56, padding:8, fontFamily:"inherit"}}
+                              placeholder="Add a note — what happened, what is still outstanding."
+                              value={commentDraft}
+                              onChange={(e) => setCommentDraft(e.target.value)}/>
+                    <div className="row gap-2" style={{justifyContent:"flex-end", marginTop:6}}>
+                      <button className="btn sm" disabled={busy || !commentDraft.trim()}
+                              onClick={postComment}>
+                        {busy ? "Saving…" : "Add note"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="t-cap muted" style={{
+                    marginTop: 4, padding: "8px 10px", borderRadius: 6,
+                    background: "var(--neutral-50)",
+                    border: "1px solid var(--neutral-200)",
+                  }}>
+                    <Icon name="lock" size={11}/> This case is closed and
+                    read-only. The closing narrative is the last word on
+                    it — if there is more to record, raise a new grievance.
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -959,7 +979,13 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
                 )}
                 {tasks.map(t => {
                   const isMine = me.username && t.assigned_to === me.username;
-                  const canTransition = isMine || me.is_officer;
+                  // A closed case is read-only, tasks included — and
+                  // the server refuses the transition, so offering it
+                  // is offering an error. Reachable only for a task
+                  // left open on a case closed out of band; the
+                  // lifecycle cannot produce one.
+                  const canTransition = (isMine || me.is_officer)
+                    && _grmAllows(current, "add_task");
                   const statusTone = t.status === "closed" ? "neutral"
                     : t.status === "in_progress" ? "update" : "data";
                   return (

@@ -117,7 +117,12 @@ def allowed_actions(grievance) -> list[str]:
     this says what the case is ready for, not who may do it.
     """
     status = grievance.status
-    actions = ["comment"]  # a note is allowed in every state, including closed
+    if status == "closed":
+        # A closed case is read-only. Not "closed plus a thread that
+        # keeps growing": the closing narrative is the last word, and
+        # new information about a settled case is a new case.
+        return []
+    actions = ["comment"]
     if status in _ASSIGNABLE:
         actions.append("assign")
     if status in _TASKABLE:
@@ -137,6 +142,10 @@ def allowed_actions(grievance) -> list[str]:
     # whether it needs approval, whether the reporter is told. Inventing
     # answers here would put a lifecycle transition into the registry
     # that nobody designed. Raised as an open item instead.
-    if grievance.category == "data_correction" and grievance.household_id:
+    if grievance.category == "data_correction" and grievance.household_id \
+            and not grievance.linked_change_request_id:
+        # Already linked means there is nothing left to open — the
+        # service refuses a second one, and the console offering it
+        # anyway is how a button comes to exist that only ever errors.
         actions.append("open_change_request")
     return actions

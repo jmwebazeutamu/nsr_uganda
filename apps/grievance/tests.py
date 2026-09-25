@@ -1289,10 +1289,17 @@ class TestGrievanceComments:
         g.refresh_from_db()
         assert g.status == GrievanceStatus.OPEN
 
-    def test_a_closed_grievance_can_still_be_commented_on(self, db, _officer):
-        """A comment records what someone knew or did. Refusing it
-        because the case moved on loses the record rather than
-        protecting anything."""
+    def test_a_closed_grievance_cannot_be_commented_on(self, db, _officer):
+        """A closed case is read-only, its thread included.
+
+        This used to be allowed, on the reasoning that a comment
+        records what someone knew and refusing it loses the record.
+        That is right for a case still being worked and wrong for a
+        settled one: the closing narrative is the last word on what
+        happened, and a thread that keeps growing after it means the
+        record of a closed case is not actually closed. New
+        information about a closed case is a new case.
+        """
         g = open_grievance(category=Category.OTHER, description="x")
         resolve(g, actor="officer", narrative="done")
         close(g, actor="officer", narrative="grace expired")
@@ -1300,6 +1307,23 @@ class TestGrievanceComments:
         r = self._client(_officer).post(
             f"/api/v1/grm/grievances/{g.id}/comments/",
             data={"body": "Reporter called back after closure."},
+            format="json",
+        )
+        assert r.status_code == 400
+        assert "read-only" in r.data["detail"]
+        g.refresh_from_db()
+        assert g.comments.count() == 0
+
+    def test_a_resolved_grievance_can_still_be_commented_on(self, db, _officer):
+        """Resolved is not closed. The grace period before closure is
+        exactly when a reporter calls back, and that has to land
+        somewhere."""
+        g = open_grievance(category=Category.OTHER, description="x")
+        resolve(g, actor="officer", narrative="done")
+
+        r = self._client(_officer).post(
+            f"/api/v1/grm/grievances/{g.id}/comments/",
+            data={"body": "Reporter confirms the correction."},
             format="json",
         )
         assert r.status_code == 201

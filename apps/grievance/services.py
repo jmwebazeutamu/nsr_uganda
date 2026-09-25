@@ -52,6 +52,34 @@ class GrievanceError(Exception):
     """A GRM transition is forbidden under current state."""
 
 
+def _require_open_for_writing(grievance: Grievance, what: str) -> None:
+    """A closed grievance is read-only.
+
+    Every transition already refused a closed case, but three things
+    still wrote to one: a note could be appended to the thread, a
+    linked ChangeRequest could be opened from it (stamping
+    linked_change_request_id onto the closed row), and a task could in
+    principle be moved.
+
+    The note was deliberate once — "a comment records what someone knew
+    or did; refusing to store it loses the record rather than
+    protecting anything" — and that reasoning is sound for a case
+    still being worked. It is the wrong trade for a closed one: the
+    closing narrative is the last word on what happened, and a thread
+    that keeps growing after it means the record of a settled case is
+    not settled. New information about a closed case is a new case.
+
+    The rule is here rather than repeated at each caller so that adding
+    a fourth writer does not quietly reopen the hole.
+    """
+    if grievance.status == GrievanceStatus.CLOSED:
+        raise GrievanceError(
+            f"grievance {grievance.id} is closed and read-only — "
+            f"cannot {what}. Raise a new grievance if there is more to "
+            "record.",
+        )
+
+
 def _set_sla(grievance: Grievance) -> None:
     """Give the CURRENT tier its full window, from when it received the
     case.
@@ -450,11 +478,12 @@ def add_comment(
 ) -> GrievanceComment:
     """Append a note to a grievance's running thread.
 
-    Allowed in every status, including CLOSED. A comment records what
-    someone knew or did; refusing to store it because the case has
-    moved on loses the record rather than protecting anything. Nothing
-    about the grievance's state changes — this is not a transition.
+    Allowed in every status EXCEPT closed. A comment is not a
+    transition — nothing about the grievance's state changes — but a
+    closed case is read-only, so the thread stops where the closing
+    narrative does. See _require_open_for_writing.
     """
+    _require_open_for_writing(grievance, "add a note")
     body = (body or "").strip()
     if not body:
         raise GrievanceError("a comment needs something in it")
@@ -556,6 +585,12 @@ def transition_task(
     as a comment on the grievance, not as a column here, so the
     grievance keeps one timeline.
     """
+    # Unreachable today — a grievance cannot be resolved with an open
+    # task, and closing requires resolved — so this guard exists to
+    # state the rule rather than to catch a path. A reader should not
+    # have to reason about reachability to know a closed case is
+    # read-only.
+    _require_open_for_writing(task.grievance, "move a task")
     if not actor:
         raise GrievanceError("actor required")
     if new_status not in TaskStatus.values:
@@ -629,6 +664,7 @@ def open_change_request_for_grievance(
     )
     from apps.update_workflow.services import submit_change_request
 
+    _require_open_for_writing(grievance, "open a linked update")
     if grievance.category != Category.DATA_CORRECTION:
         raise GrievanceError(
             "only DATA_CORRECTION grievances can auto-open a ChangeRequest"

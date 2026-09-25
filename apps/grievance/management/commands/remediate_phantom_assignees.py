@@ -34,7 +34,13 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
 from apps.grievance.models import Grievance
+from apps.grievance.models import GrievanceStatus
 from apps.grievance.services import GrievanceError, add_comment, assign
+from apps.security.audit import emit as emit_audit
+
+#: Action used when the annotation goes to the chain instead of the
+#: thread. Named so the re-run check can find it again.
+ANNOTATE_ACTION = "grm.provenance_note"
 
 # The one grievance that is real work, and who owns it. Chosen by the
 # registry owner: it carries no household and no geography, so nothing
@@ -87,6 +93,42 @@ def _is_phantom(username: str) -> bool:
     ).exists()
 
 
+def _already_annotated(grievance, note: str) -> bool:
+    """True if a previous run left this annotation, wherever it went."""
+    from apps.security.models import AuditEvent
+
+    if grievance.comments.filter(body=note).exists():
+        return True
+    return AuditEvent.objects.filter(
+        action=ANNOTATE_ACTION,
+        entity_type="grievance",
+        entity_id=str(grievance.id),
+    ).exists()
+
+
+def _annotate(grievance, note: str, actor: str) -> None:
+    """Explain what this record is, without writing to a closed case.
+
+    A closed grievance is read-only, which includes its comment thread
+    — see services._require_open_for_writing. But the annotation still
+    has to go somewhere: a record with a phantom assignee and nothing
+    saying why is what this command exists to prevent.
+
+    So for a closed case it goes to the audit chain, which is
+    append-only by design and is where "this is what this historical
+    row is" belongs anyway. The grievance itself does not change. For a
+    record that is still open the thread is the better home, because
+    that is where whoever picks it up will look.
+    """
+    if grievance.status == GrievanceStatus.CLOSED:
+        emit_audit(
+            ANNOTATE_ACTION, "grievance", grievance.id, actor=actor,
+            reason=note,
+        )
+        return
+    add_comment(grievance, body=note, actor=actor)
+
+
 class Command(BaseCommand):
     help = "Reassign the one live grievance; annotate the test records."
 
@@ -120,7 +162,7 @@ class Command(BaseCommand):
             if grievance is None:
                 skipped.append(f"{gid}: not found")
                 continue
-            if grievance.comments.filter(body=note).exists():
+            if _already_annotated(grievance, note):
                 skipped.append(f"{gid}: already annotated")
                 continue
             plan.append(("annotate", grievance, note))
@@ -165,7 +207,7 @@ class Command(BaseCommand):
                         actor=actor,
                     )
                 else:
-                    add_comment(grievance, body=payload, actor=actor)
+                    _annotate(grievance, payload, actor)
 
         self.stdout.write("")
         self.stdout.write(self.style.SUCCESS(
