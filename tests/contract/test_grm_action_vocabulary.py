@@ -111,3 +111,111 @@ class TestAddTaskIsInTheAnswer:
             create_task(g, title="t", description="", assigned_to="whoever",
                         actor="officer")
         assert "resolved" in str(exc.value) or "not an active" in str(exc.value)
+
+
+@pytest.mark.django_db
+class TestABulkActionRefusesPerRow:
+    """QA P1.1. The console fans a bulk action out to one POST per
+    grievance and reports what came back. That only works if each
+    refusal carries a reason a person can act on — a bare 400 gives the
+    operator a list of ids and nothing to do about them.
+
+    And the console predicts which rows will refuse from
+    allowed_actions, so these two have to agree: a prediction that is
+    wrong in the permissive direction is a dialog that promises twelve
+    and delivers seven.
+    """
+
+    def _client(self, django_user_model):
+        from django.contrib.auth.models import Group
+        from rest_framework.test import APIClient
+
+        from apps.security.models import OperatorScope, ScopeLevel
+
+        user = django_user_model.objects.create_user(
+            username="bulk.operator", password="p",
+        )
+        user.groups.add(Group.objects.get_or_create(name="nsr_admin")[0])
+        OperatorScope.objects.get_or_create(
+            user=user, scope_level=ScopeLevel.NATIONAL, scope_code="",
+        )
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c
+
+    def _mixed(self):
+        """One open case and one resolved one — the everyday selection
+        somebody ticks before pressing Close."""
+        from apps.grievance.services import open_grievance, resolve
+
+        still_open = open_grievance(category="other", description="open one")
+        resolved = open_grievance(category="other", description="resolved one")
+        resolve(resolved, actor="officer", narrative="Sorted at the parish")
+        return still_open, resolved
+
+    def test_the_refusal_says_what_was_wrong(self, django_user_model):
+        still_open, _resolved = self._mixed()
+        client = self._client(django_user_model)
+
+        r = client.post(
+            f"/api/v1/grm/grievances/{still_open.id}/close/",
+            {"narrative": "Closing the batch"}, format="json",
+        )
+        assert r.status_code == 400
+        detail = r.data["detail"]
+        assert detail and not detail.isdigit(), (
+            "the console renders this string next to the id; a bare "
+            "status code gives the operator nothing to act on"
+        )
+
+    def test_the_eligible_row_still_goes_through(self, django_user_model):
+        """Per-row, not all-or-nothing: one bad row must not stop the
+        rest, or a mixed selection could never be actioned."""
+        from apps.grievance.models import GrievanceStatus
+
+        still_open, resolved = self._mixed()
+        client = self._client(django_user_model)
+
+        for grievance in (still_open, resolved):
+            client.post(
+                f"/api/v1/grm/grievances/{grievance.id}/close/",
+                {"narrative": "Closing the batch"}, format="json",
+            )
+
+        still_open.refresh_from_db()
+        resolved.refresh_from_db()
+        assert still_open.status == GrievanceStatus.OPEN
+        assert resolved.status == GrievanceStatus.CLOSED
+
+    def test_allowed_actions_predicts_the_refusal(self, django_user_model):
+        """What the console disables the button on. If this said
+        "close" for an open case, the button would be live and every
+        row would come back refused — which is the defect."""
+        still_open, resolved = self._mixed()
+        assert "close" not in visibility.allowed_actions(still_open)
+        assert "close" in visibility.allowed_actions(resolved)
+
+    def test_the_prediction_is_not_permissive(self, django_user_model):
+        """Every action allowed_actions offers for a case is one the
+        API accepts. The other direction is allowed to be
+        conservative; this one is not, because it is what the console
+        promises."""
+        from apps.grievance.models import GrievanceStatus
+
+        still_open, resolved = self._mixed()
+        client = self._client(django_user_model)
+
+        for grievance, action, body in [
+            (resolved, "close", {"narrative": "Grace period elapsed"}),
+        ]:
+            assert action in visibility.allowed_actions(grievance)
+            r = client.post(
+                f"/api/v1/grm/grievances/{grievance.id}/{action}/",
+                body, format="json",
+            )
+            assert r.status_code == 200, (
+                f"allowed_actions offered {action!r} and the API refused "
+                f"it: {r.data}"
+            )
+        resolved.refresh_from_db()
+        assert resolved.status == GrievanceStatus.CLOSED

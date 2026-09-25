@@ -31,6 +31,21 @@ const show = (props) => render(
                onClose={() => {}} onConfirm={() => {}} {...props}/>,
 );
 
+describe("the notice", () => {
+  it("warns about the part of the selection that will be refused", () => {
+    show({
+      recordLabels: ["01A", "01B", "01C"],
+      notice: "2 of the 3 selected will be refused — they are listed below.",
+    });
+    expect(screen.getByText(/2 of the 3 selected will be refused/)).toBeTruthy();
+  });
+
+  it("is absent when there is nothing to warn about", () => {
+    show({ recordLabels: ["01A"] });
+    expect(screen.queryByText(/will be refused/)).toBeNull();
+  });
+});
+
 describe("the record list", () => {
   it("names every record the action will touch", () => {
     show({ recordLabels: ["01AAA", "01BBB", "01CCC"] });

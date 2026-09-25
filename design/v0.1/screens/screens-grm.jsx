@@ -251,6 +251,12 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
   const [comments, setComments] = useStateGrm([]);
   const [commentDraft, setCommentDraft] = useStateGrm("");
   const [busy, setBusy] = useStateGrm(false);
+  // What the last bulk action did, per row. A toast cannot carry it:
+  // "7/12 succeeded" tells the operator five cases did not move and
+  // not which five, so there is nothing to act on. Same shape as the
+  // UPD workbench's bulk panel (screens-upd.jsx) rather than a second
+  // way of saying the same thing.
+  const [bulkResult, setBulkResult] = useStateGrm(null);
   const [caseDrawer, setCaseDrawer] = useStateGrm(false);
   const [auditOpen, setAuditOpen] = useStateGrm(false);
   const [auditRaw, setAuditRaw] = useStateGrm([]);
@@ -623,6 +629,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
     }
     const body = { actor: "console-operator", ...(opts.body || {}) };
     setBusy(true);
+    setBulkResult(null);
     Promise.all(ids.map(id => _grmPost(id, kind, body)
       .then(r => r.ok ? null : r.json().then(j => ({ id, detail: j.detail || r.status })))))
       .then(failures => failures.filter(Boolean))
@@ -636,10 +643,23 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
           };
           setToast(map[kind] || "Done.");
         } else {
+          // The toast is the headline; the panel below the queue is
+          // where the operator finds out WHICH rows refused and why.
+          // It used to print the first two reasons with no ids
+          // attached, so "7/12 succeeded · grievance is closed" left
+          // five cases to find by hand.
           setToast(
-            `${ids.length - failures.length}/${ids.length} succeeded. ` +
-            failures.slice(0, 2).map(f => f.detail).join(" · "),
+            `${ids.length - failures.length} of ${ids.length} done — ` +
+            `${failures.length} refused, listed below the queue.`,
           );
+        }
+        if (failures.length > 0 || ids.length > 1) {
+          const failed = new Set(failures.map(f => f.id));
+          setBulkResult({
+            action: kind,
+            ok: ids.filter(id => !failed.has(id)),
+            failed: failures,
+          });
         }
         // The action just wrote to the chain; the timeline reads it.
         setAuditReloadKey(k => k + 1);
@@ -689,6 +709,29 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
   // just performed by hand, and audit ids of the form
   // A-2026-05-<last two chars of the grievance id>-001. None of it had
   // happened. The chain is the record; it is read, not reconstructed.
+  // How many of the selected cases would actually accept each bulk
+  // action, from allowed_actions.
+  //
+  // Bulk Close was offered whenever anything was ticked, and close
+  // only applies to a RESOLVED case — so on a queue of open cases the
+  // button was live, the dialog asked for a reason and a note, and
+  // every row came back refused. The button now says how many it can
+  // move, and disables when that is none.
+  const selectedRows = allRows.filter(r => selection.has(r.id));
+  const bulkEligible = (action) =>
+    selectedRows.filter(r => _grmAllows(r, action)).length;
+
+  // What to warn about in a bulk dialog: how many of the ticked rows
+  // the server is going to refuse. The toolbar button says it too,
+  // but the dialog is where the operator has stopped to read.
+  const bulkNotice = (action) => {
+    if (selection.size === 0) return null;
+    const skipped = selection.size - bulkEligible(action);
+    if (skipped <= 0) return null;
+    return `${skipped} of the ${selection.size} selected will be refused — `
+      + "they are listed below the queue afterwards, with the reason.";
+  };
+
   const timeline = _grmTimelineFor(auditRaw);
   const auditEvents = (auditRaw || []).map(e => ({
     who: e.actor_id || "unknown",
@@ -1266,15 +1309,30 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
             )}
             {selection.size > 0 && (
               <div className="row gap-2">
-                <button className="btn" onClick={() => setModal("assign")}>
-                  <Icon name="user" size={13}/> Assign
-                </button>
-                <button className="btn" onClick={() => setModal("escalate")}>
-                  <Icon name="arrowUp" size={13}/> Escalate
-                </button>
-                <button className="btn" onClick={() => setModal("close")}>
-                  <Icon name="check" size={13}/> Close
-                </button>
+                {[
+                  { id: "assign", icon: "user", label: "Assign",
+                    why: "None of the selected cases will accept an assignment — they are resolved or closed." },
+                  { id: "escalate", icon: "arrowUp", label: "Escalate",
+                    why: "None of the selected cases can be escalated — they are at L4, resolved, or closed." },
+                  { id: "close", icon: "check", label: "Close",
+                    why: "Close applies to a resolved case. None of the selected cases is resolved yet." },
+                ].map(a => {
+                  const n = bulkEligible(a.id);
+                  return (
+                    <button key={a.id} className="btn"
+                            disabled={n === 0}
+                            title={n === 0 ? a.why
+                              : n < selection.size
+                                ? `${selection.size - n} of the ${selection.size} selected will be skipped`
+                                : undefined}
+                            onClick={() => setModal(a.id)}>
+                      <Icon name={a.icon} size={13}/> {a.label}
+                      {n > 0 && n < selection.size && (
+                        <span style={{fontSize:11, opacity:0.8}}> · {n} of {selection.size}</span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1345,6 +1403,42 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
               <div className="t-bodysm mt-2">No grievances match this filter.</div>
             </div>
           )}
+
+          {/* What the last bulk action did, row by row. The toast can
+              only carry a headline; five refusals inside "7/12
+              succeeded" are five cases the operator has to find by
+              hand. Same shape as the UPD workbench's panel. */}
+          {bulkResult && (
+            <div style={{padding:"10px 16px", background:"var(--neutral-50)",
+                          borderTop:"1px solid var(--neutral-200)", fontSize:13}}>
+              <div className="row gap-2" style={{marginBottom:6}}>
+                <Chip tone="data" size="sm">last bulk: {bulkResult.action}</Chip>
+                <span className="t-bodysm muted">
+                  {bulkResult.ok.length} done · {bulkResult.failed.length} refused
+                </span>
+                <div style={{flex:1}}/>
+                <button className="btn btn-sm" onClick={() => setBulkResult(null)}>
+                  Dismiss
+                </button>
+              </div>
+              {bulkResult.failed.length > 0 && (
+                <ul style={{margin:"4px 0 0 18px", padding:0,
+                             color:"var(--neutral-700)", maxHeight:160,
+                             overflowY:"auto"}}>
+                  {bulkResult.failed.map(f => (
+                    <li key={f.id} style={{padding:"1px 0"}}>
+                      <button type="button" className="link-btn t-mono"
+                              style={{padding:0, fontSize:12}}
+                              onClick={() => { setSelectedRow(f.id); setCaseDrawer(true); }}>
+                        {f.id}
+                      </button>
+                      {" — "}{f.detail}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </div>
 
         {!wide.isWide && casePanel}
@@ -1387,6 +1481,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         title="Escalate to next tier"
         intent="update"
         confirmLabel="Escalate"
+        notice={bulkNotice("escalate")}
         recordLabels={targetIds}
         reasonOptions={reasonsEscalate}
         onClose={() => setModal(null)}
@@ -1410,6 +1505,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         open={modal === "close"}
         title={selection.size > 1 ? `Close ${selection.size} grievances` : "Close grievance"}
         confirmLabel={selection.size > 1 ? `Close ${selection.size} grievances` : "Close grievance"}
+        notice={bulkNotice("close")}
         recordLabels={targetIds}
         reasonOptions={reasonsClose}
         onClose={() => setModal(null)}
@@ -1465,6 +1561,27 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         <div className="t-bodysm" style={{marginBottom:12}}>
           Assign {selection.size > 1 ? `${selection.size} grievances` : "this grievance"} to:
         </div>
+        {/* The assign modal is a plain Modal, not a ReasonModal, so
+            the warning is inline. Same sentence either way. */}
+        {bulkNotice("assign") && (
+          <div className="t-bodysm" style={{
+            marginBottom: 12, padding:"8px 10px", borderRadius:6,
+            background:"var(--neutral-50)",
+            border:"1px solid var(--accent-quality)",
+          }}>
+            <Icon name="alert" size={12}/> {bulkNotice("assign")}
+          </div>
+        )}
+        {selection.size > 0 && (
+          <ul className="t-mono" style={{
+            margin:"0 0 12px", padding:"6px 8px", listStyle:"none",
+            maxHeight:110, overflowY:"auto", fontSize:11.5,
+            border:"1px solid var(--neutral-200)", borderRadius:4,
+            background:"var(--neutral-50)", color:"var(--neutral-900)",
+          }}>
+            {targetIds.map(id => <li key={id} style={{padding:"1px 0"}}>{id}</li>)}
+          </ul>
+        )}
         {/* This was a <select> of four invented people — "Adong
             Florence · CDO Tapac" and friends. None of them had an
             account, so the string went into assigned_to and the

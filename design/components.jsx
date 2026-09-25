@@ -278,7 +278,11 @@ const Modal = ({ open, onClose, title, children, footer, width = 480 }) => {
 // the row open in the detail panel — even when twelve were ticked for
 // a bulk action. That is not vague, it names the wrong thing: the
 // operator reads one id, confirms, and twelve records change.
-const ReasonModal = ({ open, title, intent, onClose, onConfirm, reasonOptions, recordLabel, recordLabels, defaultNote = "", confirmLabel }) => {
+// `notice` is the last chance to say something about the selection
+// before it is confirmed — "5 of these 12 will be refused", say. The
+// toolbar button already carries it, but the dialog is where the
+// operator has stopped to read.
+const ReasonModal = ({ open, title, intent, onClose, onConfirm, reasonOptions, recordLabel, recordLabels, defaultNote = "", confirmLabel, notice = null }) => {
   const [reason, setReason] = useState("");
   const [note, setNote] = useState(defaultNote);
   useEffect(() => { if (open) { setReason(""); setNote(defaultNote || ""); } }, [open, defaultNote]);
@@ -299,6 +303,16 @@ const ReasonModal = ({ open, title, intent, onClose, onConfirm, reasonOptions, r
       </>}
     >
       <div className="col gap-4">
+        {notice && (
+          <div className="t-bodysm" style={{
+            padding:'8px 10px', borderRadius:6,
+            background:'var(--neutral-50)',
+            border:'1px solid var(--accent-quality)',
+            color:'var(--neutral-800)',
+          }}>
+            <Icon name="alert" size={12}/> {notice}
+          </div>
+        )}
         {Array.isArray(recordLabels) && recordLabels.length > 0 ? (
           <div className="t-bodysm muted">
             Action will be applied to{" "}
