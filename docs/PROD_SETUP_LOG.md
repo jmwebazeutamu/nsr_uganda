@@ -2433,3 +2433,116 @@ Email keys confirm the earlier finding — dev sets `EMAIL_BACKEND`,
 `EMAIL_HOST`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` and
 `DEFAULT_FROM_EMAIL`; production sets only `EMAIL_PORT` and
 `EMAIL_USE_TLS`.
+
+---
+
+## 2026-09-25 — deploy d22ca17 → db16de8 (a week of GRM work)
+
+Twelve commits. Nine are the QA brief's 21 GRM fixes plus the
+closed-case rule; one is another session's in-flight work, committed at
+the registry owner's instruction so it could ship with them; one is the
+routing seed that work needed; one is a test correction.
+
+**Pre-deploy backup.** `pre-deploy-20260925T032940Z.dump`, 11M,
+129 tables in the public schema.
+
+```
+03:30:09  === deploy started (ref=origin/main) ===
+03:30:09  current: commit=d22ca17 image=nsr-mis:d22ca17
+03:34:47  build ok
+03:35:34  healthz ok after 1 attempt(s)
+03:35:36  === deploy complete: d22ca17 -> db16de8 ===
+```
+
+All eight services up; web, nginx, public, worker, db, redis healthy.
+Disk free 17G.
+
+### The thing that would have broken production
+
+`routing.py`'s DEFAULT_MATRIX fallback is removed in this range — right
+in principle, since routing policy should not be changeable by a code
+release. It was written without the rows to stand in for it.
+
+Migration 0004 seeded the routing table from that matrix. Migration
+0005 then added ADDRESS_MOVE, ROSTER_CHANGE, ASSET_CHANGE and
+VERIFICATION, and LIFE_EVENT gained a PMT-relevant variant. Nothing
+ever seeded those; the code fallback had been answering for them.
+
+**Production held 13 of the 22 combinations.** Deployed as it stood, an
+address move, a roster change, an asset change, a verification or a
+PMT-relevant life event would have raised `UpdError` at capture instead
+of routing — the DDUP contract outage of 22 September, in a different
+module.
+
+Caught by checking the live table before deploying, not by the test
+suite: the tests that cover it were already red for unrelated reasons.
+`update_workflow/0006` seeds the nine, each value taken from the
+DEFAULT_MATRIX entry that governed it, `get_or_create` so the 13 rows
+operations had tuned by hand are untouched.
+
+**Verified after deploy:**
+
+```
+GRM tier rules   : 4 of 4
+    l1_parish_chief -> parish_chief          24h
+    l2_cdo          -> cdo                   48h
+    l3_district     -> m_and_e_officer       72h
+    l4_nsr_unit     -> nsr_unit_coordinator 168h
+UPD routing rows : 22 of 22   (was 13)
+routing lookups that raise: 0
+sla_for() resolves for all four tiers
+grievances       : 8
+```
+
+Console bundle, checked by string literals rather than identifiers
+(esbuild renames function-local names): `last bulk:`, `Nobody holds
+this tier's role`, `This case is closed and`, `Assigned to me`, `Open
+case` in the GRM screen; `active=true` in the nav counts; `Drafts` in
+UPD. New files `v0.1-components-open-grievance.js` and
+`v0.1-data-grm-vocabulary.js` present.
+
+Live: `/healthz` 200, `/api/v1/grm/grievances/` 403 unauthenticated,
+`/console/` 302 to login.
+
+### Test state, measured rather than assumed
+
+Full suite in a clean checkout, not the shared working tree:
+
+| | failures |
+|---|---|
+| d22ca17 — what production ran until today | **80** |
+| db16de8 — what it runs now | **47** |
+
+35 are the same `data_explorer` failures in both: an unpopulated
+materialized view answering 503 in a full-suite run. Pre-existing,
+environmental, unrelated to this range — see Open below.
+
+The range **fixes 45** of the baseline's failures (the DDUP config
+contract, the code frames, the ingestion hub) and **introduces 12**,
+of which one was mine and is fixed. The remaining eleven all belong to
+the other session's work:
+
+- `apps/update_workflow/tests.py` (9) — four lack a `django_db` mark
+  now that `route_label()` reads the table; one asserts the fallback
+  that was deliberately removed; three fail on a real but cosmetic
+  regression, `route_label()` returning `cdo_receiving` where
+  ROUTE_LABEL says "CDO + receiving CDO", so the bundle endpoint echoes
+  a role code to the operator instead of the display label.
+- `test_actor_not_client_supplied` (1) — a requester naming someone
+  else to approve their own change request now gets 403 rather than
+  400. Still refused; the security property holds.
+- `test_drs_workflow_e2e` (1) — `ed3c62e` tightened geography against
+  DSA scope and the fixture's DSA allows Identifiers only.
+
+None is a production risk. The one that was is closed by 0006.
+
+### Open
+
+- **The `route_label()` regression** is live: operators see
+  `cdo_receiving` rather than "CDO + receiving CDO" in the Updates
+  bundle response. Cosmetic, belongs to the other session.
+- **The data_explorer 503s** need looking at on their own. They pass in
+  isolation and fail in a full run, which points at matview population
+  and test ordering rather than the module.
+- **Production had been two commits behind `origin/main`** before this
+  deploy, as well as behind the feature branch.
