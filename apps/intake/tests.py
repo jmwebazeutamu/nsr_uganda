@@ -81,6 +81,39 @@ def _payload(geo):
 
 # --- Refusal paths ----------------------------------------------------------
 
+@pytest.fixture
+def scorable_pmt_model(db):
+    """Give the seeded active PMT model the thresholds it needs.
+
+    These tests promote a household, and promotion calls
+    `recompute_for_household` unguarded inside its atomic block. The
+    seeded active model (`pmt.0002`, v1) uses `band_strategy=
+    "percentile"`, and a percentile model with no `PMTBandThreshold`
+    rows now raises rather than falling back — correctly, since a
+    percentile rank is not a score threshold.
+
+    Production has 48 such rows, put there by the nightly recompute.
+    A test database has none, because `pmt.0004` skips the backfill
+    when there are no `PMTResult` rows to compute from. So this seeds
+    what a running deployment would have.
+
+    It does NOT fix the underlying gap: on a genuinely fresh
+    deployment there are no results, so no thresholds, so scoring
+    raises, so promotion rolls back, so there are never any results.
+    That deadlock is pinned by
+    `apps/pmt/test_cold_start.py::test_a_fresh_deployment_cannot_score`
+    — do not make this fixture autouse, or that test stops being
+    reachable.
+    """
+    from apps.pmt.models import PMTModelVersion
+    from apps.pmt.test_helpers import seed_band_thresholds
+
+    active = PMTModelVersion.objects.filter(status="active").first()
+    if active is not None and active.band_strategy == "percentile":
+        seed_band_thresholds(active)
+    return active
+
+
 class TestSubmitIntakePreconditions:
     def test_no_active_form_version_raises(self, db, web_source_with_connector, geo):
         with pytest.raises(IntakeError, match="ACTIVE FormVersion"):
@@ -118,6 +151,7 @@ class TestSubmitIntake:
 
     def test_auto_process_fast_tracks_clean_walkin_to_promoted(
         self, db, web_source_with_connector, active_form_version, geo,
+        scorable_pmt_model,
     ):
         sub = submit_intake(
             channel="web", enumerator="e1",
@@ -155,6 +189,7 @@ class TestIntakeConsentGate:
 
     def test_granted_registration_captures_head_consent_on_promotion(
         self, db, web_source_with_connector, active_form_version, geo,
+        scorable_pmt_model,
     ):
         from apps.consent.models import ConsentRecord, ConsentState
         sub = submit_intake(
@@ -173,6 +208,7 @@ class TestIntakeConsentGate:
 
     def test_missing_consent_proceeds_unchanged(
         self, db, web_source_with_connector, active_form_version, geo,
+        scorable_pmt_model,
     ):
         # Legacy payload with no consent field is NOT a refusal.
         sub = submit_intake(

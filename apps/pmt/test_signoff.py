@@ -26,10 +26,16 @@ from apps.pmt.services import (
 def draft_version(db):
     # version=900+ avoids colliding with the production v1 seed.
     # See [[feedback_test_pmt_version_900_pattern]].
-    return PMTModelVersion.objects.create(
+    # Band policy comes from the seeded canonical scheme, not from four
+    # numbers typed here. A model with no band configuration cannot be
+    # activated — `services._validate_band_configuration` runs the same
+    # `derive_band` scoring uses — so a bare fixture fails at the very
+    # step these tests are about.
+    from apps.pmt.test_helpers import make_model_version
+
+    return make_model_version(
         version=910, status=ModelStatus.DRAFT,
         author="analyst@nsr.go.ug",
-        intercept=0, variables=[],
     )
 
 

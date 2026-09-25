@@ -100,6 +100,16 @@ From SAD §11.4. Build these in order:
 
 ## Coding standards
 
+### Single Source of Truth (mandatory)
+
+Before writing, reviewing, or refactoring code, read
+`/docs/ssot_register.md` and identify the applicable canonical source. The
+register is binding for backend, UI, migrations, fixtures, and integrations.
+Do not add client fallbacks, duplicate mappings, hardcoded policy values, or
+parallel domain state where the register names an authoritative contract.
+If the required contract is missing, report the dependency rather than
+inventing a local field, enum, threshold, or lookup list.
+
 - **Trunk-based development.** Short-lived feature branches. Mandatory code review.
 - **Tests first** for any change touching DAT, DAT-DQA, DAT-DDUP, UPD, or DIH promotion. These are the audit-bearing modules.
 - **Every API ships with an OpenAPI spec.** Contract tests run in CI.

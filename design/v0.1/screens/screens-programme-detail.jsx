@@ -44,7 +44,9 @@ const _PROG_FALLBACK = {
   startDate: "—", endDate: "—",
   cohortTarget: 0, enrolled: 0, exited: 0,
   perCycleUgx: 0, ytdUgx: 0, currency: "UGX",
-  geo: [],
+  // Scope is read from `geographic_units` (canonical codes), not from
+  // a parallel `geo` list of names that nothing populated.
+  geographic_units: [],
   dsa: "—", dsaExpiresIn: null, dsaCeiling: "",
   webhookUrl: "", webhookSecret: "wh_••••••••",
   webhookHealth: "unset", lastSync: "—", successRate24h: null,
@@ -1259,23 +1261,78 @@ const PdSchedule = ({ p }) => (
   </div>
 );
 
+// The sub-regions come from GeographicUnit, and scope is matched on
+// CODE.
+//
+// This tab used to hold a list of fourteen sub-region names typed into
+// the file. The registry holds eighteen, so five could never be shown
+// as in scope — and one of the fourteen, "Sebei", is not a sub-region
+// the registry has at all. The names were also spelled for display
+// ("West Nile") while the registry stores "West_Nile", so even the
+// overlap would not have matched.
+//
+// `p.geo` was never populated either: it defaults to [] and nothing
+// assigns it, so every name rendered as out-of-scope over a
+// denominator of 14 that no longer had a source.
+//
+// docs/ssot_register.md: geography comes from GeographicUnit, and
+// codes are exchanged, never labels.
 const PdGeography = ({ p }) => {
-  const allSubregions = ["Karamoja","West Nile","Acholi","Teso","Lango","Bunyoro","Buganda South","Busoga","Tooro","Ankole","Kigezi","Buganda North","Bukedi","Sebei"];
+  const [subRegions, setSubRegions] = useStatePD([]);
+  const [geoState, setGeoState] = useStatePD("loading");
+
+  React.useEffect(() => {
+    let cancelled = false;
+    fetch("/api/v1/reference-data/geographic-units/?level=sub_region&page_size=200", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (cancelled) return;
+        const rows = (data.results || data || [])
+          .filter(g => (g.status || "active") === "active")
+          .map(g => ({ code: g.code, name: g.name }));
+        rows.sort((a, b) => a.name.localeCompare(b.name));
+        setSubRegions(rows);
+        setGeoState("live");
+      })
+      .catch(() => { if (!cancelled) { setSubRegions([]); setGeoState("offline"); } });
+    return () => { cancelled = true; };
+  }, []);
+
+  // The programme's own scope, as codes. `geographic_units` is the
+  // canonical M2M on Programme; the serializer may send ids or the
+  // {id, code, name, level} companion, so read a code from either and
+  // never fall back to a name.
+  const inScopeCodes = new Set(
+    (p.geographic_units || []).map(u => (u && u.code) || u).filter(Boolean),
+  );
+  const total = subRegions.length;
+
   return (
     <div>
       <PD_TabHeader title="Geography & DSA scope"
-        sub={`Programme operates in ${p.geo.length} of 14 sub-regions. DSA-bounded — adding a new sub-region requires a DSA amendment.`}/>
+        sub={total
+          ? `Programme operates in ${inScopeCodes.size} of ${total} sub-regions. DSA-bounded — adding a new sub-region requires a DSA amendment.`
+          : "DSA-bounded — adding a new sub-region requires a DSA amendment."}/>
       <div style={{padding:20, display:'grid', gridTemplateColumns:'1fr 1fr', gap:16}}>
         <div className="card" style={{padding:0, boxShadow:'none', border:'1px solid var(--neutral-200)'}}>
           <div style={{padding:'12px 16px', borderBottom:'1px solid var(--neutral-200)'}}>
             <strong>In-scope sub-regions</strong>
-            <div className="t-cap">{p.geo.length} of 14</div>
+            <div className="t-cap">{inScopeCodes.size} of {total || "—"}</div>
           </div>
           <div style={{padding:16, display:'grid', gridTemplateColumns:'1fr 1fr', gap:6}}>
-            {allSubregions.map(s => {
-              const inScope = p.geo.includes(s);
+            {geoState === "offline" && (
+              <div className="t-bodysm" style={{color:"var(--accent-danger)", gridColumn:"1 / -1"}}>
+                <Icon name="alert" size={12}/> Could not load the sub-region
+                list. It is not shown rather than guessed at.
+              </div>
+            )}
+            {subRegions.map(({ code, name }) => {
+              const inScope = inScopeCodes.has(code);
               return (
-                <div key={s} style={{
+                <div key={code} style={{
                   display:'flex', alignItems:'center', gap:8,
                   padding:'8px 10px', borderRadius:4,
                   background: inScope ? 'var(--accent-data-bg, var(--neutral-50))' : 'transparent',
@@ -1286,7 +1343,7 @@ const PdGeography = ({ p }) => {
                   <span className="t-bodysm" style={{
                     color: inScope ? 'var(--neutral-900)' : 'var(--neutral-500)',
                     fontWeight: inScope ? 500 : 400,
-                  }}>{s}</span>
+                  }}>{name}</span>
                 </div>
               );
             })}
@@ -1295,7 +1352,7 @@ const PdGeography = ({ p }) => {
         <PD_KVCard title="DSA ceiling" tint="programme" rows={[
           ["DSA reference",  <span className="t-mono">{p.dsa}</span>],
           ["Ceiling",        p.dsaCeiling],
-          ["Sub-regions allowed", `${p.geo.length} of 14`],
+          ["Sub-regions allowed", total ? `${inScopeCodes.size} of ${total}` : "—"],
           ["Entity",         UNIT_LABEL[p.unit]],
           ["Expires in",     `${p.dsaExpiresIn} days`],
           ["Renewal owner",  p.partnerLead],
