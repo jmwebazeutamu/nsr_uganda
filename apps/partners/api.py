@@ -425,6 +425,9 @@ class ProgrammeSerializer(serializers.ModelSerializer):
     start_month = serializers.CharField(required=False, allow_blank=True, max_length=24)
     webhook_url = serializers.URLField(required=False, allow_blank=True)
     scope_text = serializers.CharField(required=False, allow_blank=True)
+    # Derived from the canonical ref.ProgrammeEnrolment relation. This is a
+    # read-only projection, never a separately persisted programme counter.
+    enrolment_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = Programme
@@ -446,6 +449,7 @@ class ProgrammeSerializer(serializers.ModelSerializer):
             "duration_months", "channel", "start_month",
             # Geo
             "scope_text", "geographic_units", "beneficiary_estimate",
+            "enrolment_count",
             # Lifecycle
             "exit_codes_allowed", "auto_exit_triggers",
             "suspend_on_grievance",
@@ -1011,6 +1015,7 @@ class ProgrammeViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
     queryset = (
         Programme.objects.all()
         .select_related("partner", "dsa")
+        .annotate(enrolment_count=Count("enrolments", distinct=True))
         .order_by("-created_at")
     )
     serializer_class = ProgrammeSerializer
@@ -1259,6 +1264,7 @@ class ProgrammeViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
             "total": qs.count(),
             "by_status": dict(by_status),
             "by_kind": dict(by_kind),
+            "enrolment_count": sum(qs.values_list("enrolment_count", flat=True)),
         })
 
     @extend_schema(

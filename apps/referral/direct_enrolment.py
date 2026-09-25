@@ -18,6 +18,7 @@ from django.utils import timezone
 from apps.data_management.models import Household
 from apps.partners.models import Programme
 from apps.partners.services.programme_scope import validated_programme_geography
+from apps.reference_data.services import resolve_canonical_code
 from apps.security.audit import emit as emit_audit
 
 from .models import ProgrammeEnrolment
@@ -70,19 +71,34 @@ def _scope_q(units) -> Q:
 def schema_dependencies(programme: Programme) -> list[str]:
     """Return configured rules without an executable registry binding.
 
-    PMT band, composition and programme-sex codes are display ChoiceLists at
-    present.  They have no registry-owned mapping to a PMT band or canonical
-    questionnaire predicate.  Failing closed prevents a local approximation
-    from becoming a second eligibility policy.
+    Composition codes have no registry-owned household predicate yet.
+    PMT and sex codes are resolved separately through the active ChoiceList's
+    ``canonical_code`` contract. Failing closed prevents a local
+    approximation from becoming a second eligibility policy.
     """
     dependencies: list[str] = []
-    if programme.pmt_bands:
-        dependencies.append("programme_pmt_band → canonical PMT band mapping")
     if programme.composition_flags:
         dependencies.append("programme_composition_flag → canonical household predicate mapping")
-    if programme.sex_filter:
-        dependencies.append("programme_sex_filter → canonical household-head predicate mapping")
     return dependencies
+
+
+def _resolved_codes(list_name: str, configured_codes, dependency: str) -> list[str]:
+    """Resolve configured choices to canonical values from Reference Data."""
+    unresolved = []
+    resolved = []
+    for configured_code in configured_codes:
+        found, canonical_code = resolve_canonical_code(list_name, configured_code)
+        if not found or canonical_code is None:
+            unresolved.append(str(configured_code))
+        else:
+            resolved.append(canonical_code)
+    if unresolved:
+        raise EnrolmentEligibilityError(
+            "Programme eligibility cannot be resolved until its schema bindings are configured.",
+            code="schema_dependency",
+            dependencies=[f"{dependency}: {', '.join(unresolved)}"],
+        )
+    return resolved
 
 
 def programme_eligibility_queryset(programme: Programme):
@@ -112,6 +128,18 @@ def programme_eligibility_queryset(programme: Programme):
             code="schema_dependency", dependencies=dependencies,
         )
 
+    # Programme option codes are only UI/configuration identifiers. Resolve
+    # them through the active Reference Data contract before filtering the
+    # canonical PMT result and canonical household-head sex field.
+    pmt_bands = _resolved_codes(
+        "programme_pmt_band", programme.pmt_bands,
+        "programme_pmt_band → canonical PMT band mapping",
+    ) if programme.pmt_bands else []
+    sex_codes = _resolved_codes(
+        "programme_sex_filter", [programme.sex_filter],
+        "programme_sex_filter → canonical household-head predicate mapping",
+    ) if programme.sex_filter else []
+
     units = list(programme.geographic_units.all())
     try:
         # Revalidate the saved programme geography against the active DSA at
@@ -128,6 +156,13 @@ def programme_eligibility_queryset(programme: Programme):
     qs = Household.objects.filter(is_deleted=False)
     if units:
         qs = qs.filter(_scope_q(units))
+    if pmt_bands:
+        qs = qs.filter(current_vulnerability_band__in=pmt_bands)
+    # The empty canonical code is the registry-owned meaning of an
+    # unrestricted option; no local `any` sentinel exists in this policy.
+    restricted_sex_codes = [code for code in sex_codes if code]
+    if restricted_sex_codes:
+        qs = qs.filter(head_member__sex__in=restricted_sex_codes)
     if programme.age_min is not None:
         qs = qs.filter(head_member__age_years__gte=programme.age_min)
     if programme.age_max is not None:

@@ -248,10 +248,14 @@ class TestApi:
             entities_scope={"household": True}, field_scope={},
         )
         dsa.geographic_scope.add(geo["r"])
+        household.current_vulnerability_band = "vulnerable"
+        household.save(update_fields=["current_vulnerability_band"])
         programme.dsa = dsa
         programme.unit_of_enrolment = "household"
+        programme.pmt_bands = ["middle_40"]
+        programme.sex_filter = "any"
         programme.geographic_units.add(geo["r"])
-        programme.save(update_fields=["dsa", "unit_of_enrolment"])
+        programme.save(update_fields=["dsa", "unit_of_enrolment", "pmt_bands", "sex_filter"])
 
         outside_region = GeographicUnit.objects.create(
             level="region", code="REF-OUTSIDE", name="Outside",
@@ -342,7 +346,10 @@ class TestApi:
         dsa.geographic_scope.add(geo["r"])
         programme.dsa = dsa
         programme.unit_of_enrolment = "household"
-        programme.pmt_bands = ["poorest_20"]
+        # A configured code without an approved ChoiceOption canonical_code
+        # binding is rejected. Real active PMT mappings (such as middle_40 →
+        # vulnerable) are covered by the successful OPM test above.
+        programme.pmt_bands = ["unmapped_pmt_option"]
         programme.geographic_units.add(geo["r"])
         programme.save(update_fields=["dsa", "unit_of_enrolment", "pmt_bands"])
         user = django_user_model.objects.create_user(
@@ -357,4 +364,4 @@ class TestApi:
         })
         assert response.status_code == 422
         assert response.data["code"] == "schema_dependency"
-        assert "programme_pmt_band" in response.data["schema_dependencies"][0]
+        assert "unmapped_pmt_option" in response.data["schema_dependencies"][0]

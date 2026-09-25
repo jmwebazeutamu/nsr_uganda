@@ -20,7 +20,7 @@ class GeographicUnitAdmin(admin.ModelAdmin):
 class ChoiceOptionInline(admin.TabularInline):
     model = ChoiceOption
     extra = 0
-    fields = ("code", "label", "language", "parent_code", "sort_order", "status")
+    fields = ("code", "label", "language", "parent_code", "canonical_code", "sort_order", "status")
     ordering = ("sort_order", "code")
 
 
@@ -49,7 +49,7 @@ class ChoiceListAdmin(admin.ModelAdmin):
 @admin.register(ChoiceOption)
 class ChoiceOptionAdmin(admin.ModelAdmin):
     list_display = ("choice_list", "code", "label", "language",
-                    "parent_code", "status")
+                    "parent_code", "canonical_code", "status")
     list_filter = ("status", "language", "choice_list__list_name")
     search_fields = ("code", "label", "choice_list__list_name")
     raw_id_fields = ("choice_list",)

@@ -235,6 +235,13 @@ class ChoiceOption(models.Model):
     label = models.CharField(max_length=256)
     language = models.CharField(max_length=8, default="en")
     parent_code = models.CharField(max_length=32, blank=True)
+    # Optional binding to the code used by the canonical source model.  This
+    # is intentionally distinct from ``code``: programme configuration has
+    # historical UI codes (for example ``middle_40``) while PMT persists its
+    # own canonical code (``vulnerable``).  NULL means that an integration
+    # binding has not been approved; an empty string is an explicit mapping
+    # to an unrestricted predicate (such as Sex = Any).
+    canonical_code = models.CharField(max_length=64, null=True, blank=True)
     sort_order = models.PositiveIntegerField(default=0)
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.ACTIVE,

@@ -94,7 +94,10 @@ const _projectProgramme = (pr) => ({
   statusCode: pr.status || "",
   phase: pr.start_month || "",
   cohortTarget: pr.cohort_target || 0,
-  enrolled: pr.beneficiary_estimate || 0,
+  // The API derives this from canonical ProgrammeEnrolment records. A
+  // beneficiary estimate is a planning input and must never be presented as
+  // a roster count.
+  enrolled: pr.enrolment_count || 0,
   exited: 0,
   perCycleUgx: pr.amount_ugx || 0,
   ytdUgx: 0,
@@ -191,7 +194,7 @@ const ProgrammesScreen = ({ onOpen, onRegister }) => {
   const _orderingMap = {
     lastEvent: "-updated_at",
     name: "name",
-    enrolled: "-beneficiary_estimate",
+    enrolled: "-enrolment_count",
     ytd: "-amount_ugx",
     dsaExp: "-created_at",  // proper DSA expiry sort needs a join — defer
   };
@@ -232,6 +235,7 @@ const ProgrammesScreen = ({ onOpen, onRegister }) => {
   const active = byStatus.active || 0;
   const drafts = byStatus.draft || 0;
   const suspended = byStatus.suspended || 0;
+  const enrolmentCount = aggResp?.enrolment_count ?? 0;
   // YTD disbursement + DSA-expiry-soon need cross-table aggregation
   // (Disbursement + DSA.effective_to) — both deferred until those
   // sources land. Render dashes for now.
@@ -274,8 +278,8 @@ const ProgrammesScreen = ({ onOpen, onRegister }) => {
              foot={`${active} active · ${drafts} draft · ${suspended} suspended`}
              spark={[6,7,7,8,8,9,10,10]}/>
         <KPI title="Beneficiaries enrolled"
-             value="—"
-             foot="Sum across active programmes — lands when ProgrammeEnrolment aggregation ships."
+             value={enrolmentCount.toLocaleString()}
+             foot="Persisted ProgrammeEnrolment records across the displayed programmes."
              spark={[6.4,6.5,6.6,6.7,6.8,6.9,7.0,7.1]}/>
         <KPI title="YTD disbursement"
              value="—"

@@ -97,6 +97,45 @@ def clear_resolver_cache() -> None:
     post_delete signal on ChoiceList and ChoiceOption."""
     _active_list_id.cache_clear()
     _options_map.cache_clear()
+    _canonical_options_map.cache_clear()
+
+
+@lru_cache(maxsize=512)
+def _canonical_options_map(list_name: str, as_of: date) -> dict[str, str | None]:
+    """Active option code -> canonical source code, from the registry.
+
+    A key with a NULL value is deliberately different from a missing key:
+    it records an option that is selectable but has not been approved for a
+    cross-domain predicate yet. An empty string is an approved unrestricted
+    binding. Callers must preserve those three states.
+    """
+    list_id = _active_list_id(list_name, as_of)
+    if list_id is None:
+        return {}
+    return {
+        row["code"]: row["canonical_code"]
+        for row in ChoiceOption.objects.filter(
+            choice_list_id=list_id,
+            status=ChoiceOption.Status.ACTIVE,
+            language="en",
+        ).values("code", "canonical_code")
+    }
+
+
+def resolve_canonical_code(
+    list_name: str, code: str | int | None, as_of: date | None = None,
+) -> tuple[bool, str | None]:
+    """Resolve an approved option-to-canonical binding.
+
+    Returns ``(found, canonical_code)`` so a caller can fail closed when an
+    option is absent or has no approved binding, while recognising an explicit
+    unrestricted binding (``canonical_code == ""``).
+    """
+    if code is None or code == "":
+        return False, None
+    mappings = _canonical_options_map(list_name, as_of or _today())
+    key = str(code)
+    return key in mappings, mappings.get(key)
 
 
 def resolve_label(

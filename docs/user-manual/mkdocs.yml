@@ -37,6 +37,20 @@ theme:
   icon:
     repo: fontawesome/brands/git-alt
 
+# Mermaid, served from this site rather than from unpkg.
+#
+# mkdocs-material lazy-loads mermaid from
+# https://unpkg.com/mermaid@11/dist/mermaid.min.js the first time it
+# meets a diagram. The NITA-U Government Data Centre is not a place to
+# assume outbound internet, and the failure is silent — every workflow
+# diagram in this manual degrades to an unreadable block of text with
+# no error anywhere.
+#
+# Loading it ourselves means material's `typeof mermaid == "undefined"`
+# check is already satisfied and it never reaches for the CDN.
+extra_javascript:
+  - assets/javascripts/mermaid.min.js
+
 markdown_extensions:
   - admonition
   - attr_list
@@ -113,6 +127,15 @@ nav:
       - Grievances (GRM): field/grievances.md
       - Update requests: field/update-requests.md
       - CAPI tablet: field/capi-tablet.md
+  - GRM Officer / Case handler:
+      - grm/index.md
+      - Finding a case: grm/finding-a-case.md
+      - Working the queue: grm/working-the-queue.md
+      - Assigning a case: grm/assigning.md
+      - Tasks: grm/tasks.md
+      - Escalation and SLA: grm/escalation.md
+      - Resolving and closing: grm/resolving.md
+      - Linking to an update: grm/linked-updates.md
   - MDA Partner / API consumer:
       - partner/index.md
       - Partner onboarding: partner/onboarding.md

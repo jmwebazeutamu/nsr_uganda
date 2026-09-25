@@ -9,8 +9,10 @@ from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
 from apps.partners.models import DataSharingAgreement, Partner, Programme
+from apps.data_management.models import Household
 from apps.partners.services.programme_scope import programme_geography_contract
 from apps.reference_data.models import GeographicUnit
+from apps.referral.models import ProgrammeEnrolment
 from apps.reference_data.services import clear_resolver_cache
 from apps.security.models import AuditEvent
 
@@ -223,6 +225,68 @@ class TestProgrammePatch:
         assert r.status_code == 200
         prog.refresh_from_db()
         assert prog.cohort_target == 2500
+
+
+@pytest.mark.django_db
+class TestProgrammeEnrolmentAggregation:
+    def test_list_and_workspace_aggregate_read_programme_enrolment_ssot(self, api, partner):
+        """The programme register must not substitute a cohort estimate."""
+        client, _ = api
+        programme = Programme.objects.create(
+            partner=partner, code="COUNT-SSOT", name="Count from enrolments",
+            kind="cash_transfer", status="active", cohort_target=10,
+        )
+        region = GeographicUnit.objects.create(
+            level="region", code="R-COUNT", name="Count region",
+            effective_from=date(2026, 1, 1),
+        )
+        sub_region = GeographicUnit.objects.create(
+            level="sub_region", code="SR-COUNT", name="Count sub-region",
+            parent=region, effective_from=date(2026, 1, 1),
+        )
+        district = GeographicUnit.objects.create(
+            level="district", code="D-COUNT", name="Count district",
+            parent=sub_region, effective_from=date(2026, 1, 1),
+        )
+        county = GeographicUnit.objects.create(
+            level="county", code="C-COUNT", name="Count county",
+            parent=district, effective_from=date(2026, 1, 1),
+        )
+        sub_county = GeographicUnit.objects.create(
+            level="sub_county", code="SC-COUNT", name="Count sub-county",
+            parent=county, effective_from=date(2026, 1, 1),
+        )
+        parish = GeographicUnit.objects.create(
+            level="parish", code="P-COUNT", name="Count parish",
+            parent=sub_county, effective_from=date(2026, 1, 1),
+        )
+        village = GeographicUnit.objects.create(
+            level="village", code="V-COUNT", name="Count village",
+            parent=parish, effective_from=date(2026, 1, 1),
+        )
+        households = [
+            Household.objects.create(
+                region=region, sub_region=sub_region, district=district,
+                county=county, sub_county=sub_county, parish=parish,
+                village=village, urban_rural="2",
+            )
+            for _ in range(2)
+        ]
+        for household in households:
+            ProgrammeEnrolment.objects.create(
+                programme=programme, household=household,
+                status="active", effective_date=date(2026, 9, 25),
+            )
+
+        listed = client.get(URL_LIST)
+        assert listed.status_code == 200, listed.data
+        row = next(item for item in listed.data["results"] if item["id"] == str(programme.id))
+        assert row["enrolment_count"] == 2
+        assert row["beneficiary_estimate"] != row["enrolment_count"]
+
+        aggregate = client.get(f"{URL_LIST}aggregates/")
+        assert aggregate.status_code == 200, aggregate.data
+        assert aggregate.data["enrolment_count"] == 2
 
 
 @pytest.mark.django_db
