@@ -58,7 +58,7 @@ Per [ADR-0008](../appendices/adrs.md). Tier defaults:
 |---|---|---|
 | `/api/v1/partners/me/` | GET | Your own Partner row |
 | `/api/v1/partners/dsas/` | GET | Your DSAs |
-| `/api/v1/partners/dsas/{id}/` | GET | One DSA with full scope |
+| `/api/v1/dsas/{id}/` | GET | One DSA with full scope |
 | `/api/v1/partners/programmes/` | GET | Programmes your DSAs scope you to |
 | `/api/v1/partners/dashboards/` | GET | Volume and request counts |
 
@@ -71,9 +71,9 @@ Per [ADR-0008](../appendices/adrs.md). Tier defaults:
 | `/api/v1/drs/requests/{id}/` | GET | One request with full payload |
 | `/api/v1/drs/requests/{id}/` | PATCH | Edit a draft |
 | `/api/v1/drs/requests/{id}/submit/` | POST | Submit a draft for review (validates against DSA) |
-| `/api/v1/drs/requests/{id}/cancel/` | POST | Cancel a request before approval |
-| `/api/v1/drs/requests/{id}/deliveries/` | GET | The files generated for this request |
-| `/api/v1/drs/requests/{id}/deliveries/{delivery_id}/download_url/` | GET | A signed, short-lived download URL |
+| `/api/v1/drs/requests/{id}/expire/` | POST | Cancel a request before approval |
+| `/api/v1/drs/requests/{id}/download/` | GET | The files generated for this request |
+| `/api/v1/drs/requests/{id}/download/` | GET | A signed, short-lived download URL |
 | `/api/v1/drs/requests/builder-schema/` | GET | The live field catalogue, including DSA-scoped grants |
 
 ### Reference data

@@ -26,7 +26,25 @@ python scripts/load_ubos_geography.py /path/to/Goegraphy_final_with_codes.xlsx
 
 ### What you get
 
-Seven levels are supported in the schema. The May 2026 supply only carries four. The loader leaves region, sub-region, and village empty.
+Seven levels are supported in the schema and **all seven now carry
+data**. The UBOS workbook supplies district, county, sub-county and
+parish; region, sub-region and village come from the rollup and pilot
+loaders below.
+
+As of 25 September 2026 the dev registry holds:
+
+| Level | Units |
+|---|---|
+| Region | 5 |
+| Sub-region | 19 |
+| District | 147 |
+| County | 329 |
+| Sub-county | 2,225 |
+| Parish | 10,872 |
+| Village | 391 |
+
+Village coverage is partial — only the pilot sub-region has been
+loaded to that depth.
 
 | Level | Loaded? | How codes look |
 |---|---|---|

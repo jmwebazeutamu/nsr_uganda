@@ -15,7 +15,7 @@ Reads from DAT, DQA, GRM, partners, ingestion_hub. Aggregates. Applies the reque
 |---|---|
 | `apps/reporting/` | Django app |
 | `apps/reporting/views.py` | Plain `APIView` dashboards (not ModelViewSets) |
-| `/api/v1/rpt/` | DRF surface |
+| `/api/v1/rpt/dashboards/home-charts/` | DRF surface |
 | `/design/v0.1/screens/screens-reporting.jsx` | Reporting console |
 
 ## Dashboards

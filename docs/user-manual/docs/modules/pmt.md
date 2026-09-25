@@ -21,12 +21,19 @@ Reads the household and its detail entities. Evaluates the registered feature se
 
 | Endpoint | Verb | Purpose |
 |---|---|---|
-| `/api/v1/pmt/scores/{household_id}/` | GET | Latest score and band |
-| `/api/v1/pmt/configurations/` | GET, POST | PMT model versions |
-| `/api/v1/pmt/configurations/{id}/sign-off/` | POST | DPO sign-off for a model |
-| `/api/v1/admin/pmt/dashboard/` | GET | Union payload for the PMT Dashboard (active model, bands, coverage, top variables, sub-region rates, threshold drift, trigger sources, recompute job, recent events) |
-| `/api/v1/admin/pmt/recompute/run-now/` | POST | Operator-triggered recompute — refreshes snapshots **and** empirical band thresholds in one transaction. Returns `report_url` for the downloadable report. |
-| `/api/v1/admin/pmt/recompute/runs/<id>/report/` | GET | Per-run computational artefact (run metadata, model context, threshold rows written, distribution summary). `?as=csv` for a flat CSV attachment download. |
+| `/api/v1/pmt/model-versions/` | GET | The versioned PMT formulae |
+| `/api/v1/pmt/model-versions/{id}/` | GET | One version |
+| `/api/v1/pmt/model-versions/current/` | GET | The version currently scoring |
+| `/api/v1/pmt/results/` | GET | Scores, ABAC-scoped |
+| `/api/v1/pmt/results/{id}/` | GET | One score with its inputs snapshot |
+| `/api/v1/pmt/results/recompute/{household_id}/` | POST | Re-score one household |
+
+!!! warning "The endpoints on this page were wrong"
+    It listed `/api/v1/pmt/model-versions/`,
+    `/api/v1/admin/pmt/versions/{id}/` and
+    `/api/v1/pmt/results/recompute/{household_id}/`. None of those exists — the
+    resources are `model-versions` and `results`. Corrected
+    25 September 2026.
 
 ## Sign-off lifecycle
 
@@ -73,8 +80,8 @@ Operators attach the CSV to audit / sign-off tickets when triggering ad-hoc reco
 
 ## Key entities
 
-- `PmtScore` — historical chain of scores per household
-- `PmtConfiguration` — versioned model weights and thresholds
+- `PMTResult` — historical chain of scores per household
+- `PMTModelVersion` — versioned model weights and thresholds
 - Feature registry under `apps/pmt/registered_features.py`
 
 ## Trigger surface

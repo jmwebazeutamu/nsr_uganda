@@ -19,7 +19,7 @@ Maintains a versioned, dual-approved catalogue of rules. Evaluates them against 
 | `apps/dqa/pipeline.py` | `run_household_gate()` — per-stage abort policy |
 | `apps/dqa/signals.py` | UPD post-commit re-eval |
 | `/api/v1/dqa/` | DRF surface (lower-level) |
-| `/api/v1/admin/workflow/dqa/` | Admin-console workflow surface |
+| `/api/v1/dqa/rules/` | Admin-console workflow surface |
 | `/design/v0.1/screens/screens-admin-workflow-dqa.jsx` | Rule Editor |
 
 ## Endpoints (admin-console)
@@ -30,10 +30,10 @@ Maintains a versioned, dual-approved catalogue of rules. Evaluates them against 
 | `/api/v1/admin/workflow/dqa/rules/{rule_id}/` | GET, PATCH | Detail; PATCH severity/expression on DRAFT only (409 otherwise) |
 | `/api/v1/admin/workflow/dqa/rules/{rule_id}/clone/` | POST | Clone latest non-retired → new DRAFT (v+1) |
 | `/api/v1/admin/workflow/dqa/rules/{rule_id}/preview/` | POST | Real registry sweep, persists `DqaRulePreviewRun` |
-| `/api/v1/admin/workflow/dqa/rules/{rule_id}/v{version}/submit/` | POST | DRAFT → PENDING_APPROVAL |
-| `/api/v1/admin/workflow/dqa/rules/{rule_id}/v{version}/sign/` | POST | PENDING → ACTIVE (note required) |
-| `/api/v1/admin/workflow/dqa/rules/{rule_id}/v{version}/reject/` | POST | PENDING → REJECTED (reason required) |
-| `/api/v1/admin/workflow/dqa/rules/{rule_id}/v{version}/retire/` | POST | ACTIVE → RETIRED |
+| `/api/v1/dqa/rules/{id}/submit-for-approval/` | POST | DRAFT → PENDING_APPROVAL |
+| `/api/v1/dqa/rules/{id}/approve/` | POST | PENDING → ACTIVE (note required) |
+| `/api/v1/dqa/rules/{id}/reject/` | POST | PENDING → REJECTED (reason required) |
+| `/api/v1/dqa/rules/{id}/retire/` | POST | ACTIVE → RETIRED |
 
 ## Severity vocabulary
 

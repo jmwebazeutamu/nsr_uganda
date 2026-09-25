@@ -26,10 +26,10 @@ Maintains the Partner catalogue. Maintains DSAs per partner with full scope (fie
 | `/api/v1/partners/` | GET, POST | Partner catalogue |
 | `/api/v1/partners/{id}/` | GET, PATCH | Detail |
 | `/api/v1/partners/dsas/` | GET, POST | DSA list and create |
-| `/api/v1/partners/dsas/{id}/` | GET, PATCH | DSA detail |
-| `/api/v1/partners/dsas/{id}/scope-edit/` | POST | Edit scope (narrow immediate, widen needs countersign) |
-| `/api/v1/partners/dsas/{id}/renew/` | POST | Renewal flow |
-| `/api/v1/partners/dsas/{id}/signature/` | POST | Trigger signature |
+| `/api/v1/dsas/{id}/` | GET, PATCH | DSA detail |
+| `/api/v1/dsas/{id}/edit-scope/` | POST | Edit scope (narrow immediate, widen needs countersign) |
+| `/api/v1/dsas/{id}/renew/` | POST | Renewal flow |
+| `/api/v1/dsas/{id}/sign/{signature_id}/` | POST | Trigger signature |
 | `/api/v1/partners/dashboards/` | GET | Aggregates |
 | `/api/v1/partners/programmes/` | GET, POST | Programme catalogue |
 
@@ -38,7 +38,7 @@ Maintains the Partner catalogue. Maintains DSAs per partner with full scope (fie
 - `Partner`
 - `DataSharingAgreement` (DSA)
 - `Programme`
-- `ProgrammeLifecycleEvent`
+- `ProgrammeSignOff` — the sign-off record (this page listed a `ProgrammeLifecycleEvent`; no such model exists)
 
 ## Feature flags
 

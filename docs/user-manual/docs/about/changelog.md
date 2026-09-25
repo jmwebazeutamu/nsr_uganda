@@ -2,6 +2,98 @@
 
 This manual tracks meaningful additions and corrections. For code-level changes see `/docs/api_changelog.md`.
 
+## v0.4 — 25 September 2026
+
+A week of GRM work, and a review of the whole manual against the code.
+
+### Added
+
+- **[GRM Officer / Case handler](../grm/index.md)** — eight new
+  task-oriented pages for the people who *work* the grievance queue,
+  with eleven workflow diagrams. The manual previously told Parish
+  Chiefs how to raise a grievance and nobody how to handle one.
+- **Case numbers.** Grievances, change requests, data requests and
+  referrals now carry a number people can quote — `GRM-2026-0001`,
+  `UPD-`, `DRS-`, `REF-` — beside their ULID. Documented on each
+  module page and in [Finding a case](../grm/finding-a-case.md).
+- **Mermaid is served from this site**, not from unpkg. Diagrams now
+  render on a network with no outbound internet, which the NITA-U data
+  centre may well be.
+
+### Corrected — these pages were wrong, not merely out of date
+
+- **[Grievances (GRM)](../field/grievances.md)** described **three**
+  tiers; there are four (L1 Parish Chief, L2 CDO, L3 District M&E, L4
+  NSR Unit). It gave SLAs in days; they are hours. It listed a
+  `triaged` state that does not exist. It said the routing matrix
+  "lives in REF-DATA as a ChoiceList"; it never did. And it described a
+  per-case confidentiality flag hiding fraud cases from L1 and L2
+  operators — **no such flag exists**, and that is now recorded as an
+  open item rather than left implied.
+- **[SEC](../modules/sec.md)** named two `AuditEvent` columns that do
+  not exist: `row_hash` and `created_at` are `self_hash` and
+  `occurred_at`. Any query built from this page has never worked.
+- **[UPD](../modules/upd.md)** listed two entities that were never
+  built — `ChangeRequestDiff` and `RoutingDecision`. It also said
+  no-self-approve was pending; it is enforced, as a 403.
+- **[REF-DATA](../modules/ref-data.md)** claimed ownership of the UPD
+  routing matrix. Routing is `apps.update_workflow.UpdRoutingRule`.
+- **[Reference data loaders](../admin/reference-data.md)** said only
+  four of the seven geographic levels carried data. All seven do.
+
+### Corrected — a sweep of every API path and entity name
+
+Every `/api/v1/…` path and every entity name in this manual was
+resolved against the code. **40 of the 122 paths did not exist**, and
+eleven entities had been described that were never built.
+
+Paths, now corrected:
+
+| Page said | It is |
+|---|---|
+| `/api/v1/dih/staged-records/`, `/api/v1/dih/runs/` | `stage-records`, `connector-runs` |
+| `/api/v1/ddup/candidates/`, `match-models/`, `merge/` | `match-pairs/`, `model-versions/`, `match-pairs/{id}/merge/` |
+| `/api/v1/pmt/configurations/`, `scores/{id}/` | `model-versions/`, `results/` |
+| `/api/v1/dqa/violations/` | `/api/v1/dqa/results/` |
+| `/api/v1/admin/workflow/dqa/rules/{id}/v{n}/sign/` | `/api/v1/dqa/rules/{id}/approve/` |
+| `/api/v1/partners/dsas/…` | `/api/v1/dsas/…` |
+| `/api/v1/idv/verify/`, `results/{id}/` | the module serves one route, a sandbox mock |
+| `/api/v1/drs/requests/{id}/deliveries/…` | `/api/v1/drs/requests/{id}/download/` |
+
+Entities that were never built: `ChangeRequestDiff`, `RoutingDecision`,
+`MatchCandidate`, `MatchModel`, `PmtConfiguration`, `PmtScore`,
+`IdvResult`, `RawRecord`, `Delivery`, `BuilderSchema`,
+`ProgrammeLifecycleEvent`, `VitalEvent`, `SourceCredential`,
+`StagedRecord`, and a `Relationship` table.
+
+Two routes this manual has always documented **do not exist and are not
+planned**: committing a change request over HTTP (it runs in-process on
+approval) and reading a household's version chain. Both are now struck
+through and labelled on their pages rather than quietly deleted, so a
+reader who built against them finds out.
+
+!!! note "This cannot drift silently again"
+    `tests/contract/test_manual_api_paths.py` resolves every documented
+    path against the URLconf and checks every named entity against the
+    app registry. Prose drifts from code — that is what prose does. The
+    console has the same guard for the same reason.
+
+### Changed
+
+- **[UPD](../modules/upd.md)** — the routing table is now the only
+  source; a combination with no active row refuses rather than falling
+  back to a constant. The failure mode this created in production, and
+  what to do when adding a `ChangeType`, are written up on the page.
+- **[DAT-DDUP](../modules/dat-ddup.md)** — matching policy lives in the
+  approved model version with no defaults. Tier 1 only in production;
+  tiers 2 and 3 declared and off. Auto-merge is off. Discovery now
+  actually runs.
+- **[DAT](../modules/dat.md)** — geography is denormalised onto
+  `Household` as seven `*_code` columns beside the seven foreign keys.
+- **[SEC](../modules/sec.md)** — repeat reads inside a five-minute
+  window are folded into one audit row. 91% of the chain had been one
+  browser tab polling badges.
+
 ## v0.3 — 27 May 2026
 
 End-to-end notification surface, Open-CR wizard refactor, PMT Dashboard live wiring, DDUP discard path, miscellaneous bug fixes.

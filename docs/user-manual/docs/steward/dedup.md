@@ -19,8 +19,8 @@ The dedup workbench is where two records that might be the same person get resol
 |---|---|
 | Console screen | `/console/` → "Dedup" |
 | Source JSX | `/design/v0.1/screens/screens-dedup.jsx → DedupScreen` |
-| API list | `/api/v1/ddup/candidates/` |
-| API merge | `/api/v1/ddup/merge/` |
+| API list | `/api/v1/ddup/match-pairs/` |
+| API merge | `/api/v1/ddup/match-pairs/{id}/merge/` |
 | Audit action | `ddup_merge_committed` |
 
 ## The compare screen

@@ -11,7 +11,7 @@ Every record entering the Registry passes through DIH. Most of them auto-promote
 |---|---|
 | Console screen | `/console/` → "DIH" |
 | Source JSX | `/design/v0.1/screens/screens-dih.jsx → DIHScreen` (Review tab) |
-| API | `/api/v1/dih/runs/` and `/api/v1/dih/staged-records/` |
+| API | `/api/v1/dih/connector-runs/` and `/api/v1/dih/stage-records/` |
 | Audit action | `dih_record_promoted`, `dih_record_rejected`, `dih_record_held` |
 
 ## Layout

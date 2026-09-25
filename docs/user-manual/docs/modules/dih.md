@@ -24,11 +24,11 @@ Pulls records from partner sources via Connectors. Lands raw payloads. Applies M
 |---|---|---|
 | `/api/v1/dih/source-systems/` | GET, POST | List, create |
 | `/api/v1/dih/connectors/` | GET, POST | Connector catalogue |
-| `/api/v1/dih/runs/` | GET | ConnectorRun list with live counts |
-| `/api/v1/dih/runs/{id}/` | GET | Run detail with log tail |
-| `/api/v1/dih/staged-records/` | GET | Review queue |
-| `/api/v1/dih/staged-records/{id}/promote/` | POST | Steward promotes |
-| `/api/v1/dih/staged-records/{id}/reject/` | POST | Steward rejects |
+| `/api/v1/dih/connector-runs/` | GET | ConnectorRun list with live counts |
+| `/api/v1/dih/connector-runs/{id}/` | GET | Run detail with log tail |
+| `/api/v1/dih/stage-records/` | GET | Review queue |
+| `/api/v1/dih/stage-records/{id}/promote/` | POST | Steward promotes |
+| `/api/v1/dih/stage-records/{id}/reject/` | POST | Steward rejects |
 
 ## Key entities
 
@@ -38,10 +38,10 @@ Pulls records from partner sources via Connectors. Lands raw payloads. Applies M
 | `DataProvisionAgreement` | The inbound legal contract |
 | `Connector` | Bound to one SourceSystem |
 | `ConnectorRun` | One execution |
-| `RawRecord` | Inbound payload, pre-mapping |
+| `RawLanding` | Inbound payload, pre-mapping |
 | `MappingRule` | Source-field → canonical-field |
-| `StagedRecord` | Mapped + validated + dedup'd, awaiting promotion or rejection |
-| `SourceCredential` | Encrypted at rest via the `NSR_DATA_KEY` Fernet key |
+| `StageRecord` | Mapped + validated + dedup'd, awaiting promotion or rejection |
+| `KoboCredential` | Encrypted at rest via the `NSR_DATA_KEY` Fernet key. This page called it `SourceCredential`; the model is per-source and there is one so far. |
 
 ## Connectors
 

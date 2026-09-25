@@ -11,7 +11,7 @@ The violations dashboard is your daily inbox for everything the DQA engine flagg
 |---|---|
 | Console screen | `/console/` → "DQA → Violations" |
 | Source JSX | `/design/v0.1/screens/screens-admin-workflow-dqa.jsx` |
-| API | `/api/v1/dqa/violations/` |
+| API | `/api/v1/dqa/results/` |
 | Audit action | `dashboard_read` with `code=dqa_violations` |
 
 ## Columns

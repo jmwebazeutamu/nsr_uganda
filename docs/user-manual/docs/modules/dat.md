@@ -7,7 +7,35 @@ DAT is the canonical store for the National Social Registry. Every other module 
 
 ## What it does
 
-Stores Household, Member, Relationship, and seven detail-entity tables (Dwelling, Utilities, AssetOwnership, FoodConsumption, Shock, CopingStrategy, Health, Education, Employment). Provides versioned reads. Emits audit events on every read and write.
+Stores `Household` and `Member`, each with a `*Version` history table, and the detail entities the questionnaire collects: `Dwelling`, `Utilities`, `AssetOwnership`, `FoodConsumption`, `FoodSecurity`, `Shock`, `CopingStrategy`, `Health`, `Disability`, `Education`, `Employment`, `Livelihood`, `Livestock` and `Crop` — every one of them versioned too.
+
+!!! note "There is no `Relationship` table"
+    This page listed one. Relationships between members are held as
+    `Member.relationship_to_head`, not as their own model. Provides versioned reads. Emits audit events on every read and write.
+
+## Geography is denormalised onto the household
+
+A household holds a foreign key to each of the seven geographic levels
+**and** a copy of each one's code:
+
+| | |
+|---|---|
+| `region` … `village` | the foreign keys |
+| `region_code` … `village_code` | the codes, copied on save |
+
+The codes are what ABAC filters on and what the explorer matviews
+project, so a scope check is one indexed comparison rather than a join
+up the ladder. `Household.GEO_CODE_FIELDS` is the map between the two,
+and `sync_geography_codes()` keeps them in step on every save.
+
+!!! warning "Both sides have to agree"
+    Two copies of one fact is a thing that can drift. It is kept
+    honest by tests rather than by care — see
+    `apps/data_management/test_household_geography_denorm.py`.
+
+    Earlier builds filtered on the foreign key in one place and the
+    code in another, which is how a county-scoped query came to return
+    the whole country.
 
 ## Where it lives
 
@@ -21,9 +49,9 @@ Stores Household, Member, Relationship, and seven detail-entity tables (Dwelling
 
 | Endpoint | Verb | Purpose |
 |---|---|---|
-| `/api/v1/data-management/households/` | GET, POST | List, create (ABAC-scoped) |
+| `/api/v1/data-management/households/` | GET, POST | List, create (ABAC-scoped). `?q=` searches the head's name, the district, sub-county, parish and village names, and the geography codes |
 | `/api/v1/data-management/households/{id}/` | GET, PATCH, DELETE | Read, update, void |
-| `/api/v1/data-management/households/{id}/versions/` | GET | Version chain |
+| ~~`/api/v1/data-management/households/{id}/versions/`~~ | — | **Not exposed.** `HouseholdVersion` rows exist and the audit chain is readable, but no route serves the version chain. Documented here and never built. |
 | `/api/v1/data-management/members/` | GET, POST | List, create |
 | `/api/v1/data-management/members/{id}/` | GET, PATCH | Read, update |
 

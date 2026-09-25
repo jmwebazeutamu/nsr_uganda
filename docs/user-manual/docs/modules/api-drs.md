@@ -61,13 +61,19 @@ See [API reference](../partner/api-reference.md) for the full list. Highlights:
 | `/api/v1/drs/requests/{id}/reject/` | POST | Steward rejection with reason; emails both |
 | `/api/v1/drs/requests/{id}/deliver/` | POST | Mark DELIVERED with manifest SHA + row count; emails both |
 | `/api/v1/drs/requests/builder-schema/` | GET | Live field catalogue |
-| `/api/v1/drs/requests/{id}/deliveries/` | GET | Generated files |
+| `/api/v1/drs/requests/{id}/download/` | GET | Generated files |
 
 ## Key entities
 
 - `DataRequest`
-- `Delivery`
-- `BuilderSchema` (field catalogue, generated)
+- `DataRequest` — the request itself, with `reference` as the number a partner quotes
+
+!!! warning "Two entities this page listed do not exist"
+    `Delivery` and `BuilderSchema` were never built. Delivery state
+    lives on `DataRequest` (`manifest_sha256` and the delivery
+    timestamps); the builder schema is generated on demand by
+    `/api/v1/drs/requests/builder-schema/` and is not stored.
+    Corrected 25 September 2026.
 
 ## Email notifications (v0.3)
 

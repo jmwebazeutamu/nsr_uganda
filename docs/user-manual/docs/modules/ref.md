@@ -62,7 +62,9 @@ with a letter **O** typed for zero or **I**/**l** for one.
 
 - `Programme` (defined in `apps/partners`, consolidated per ADR-0015)
 - `Referral`
-- `ReferralStatus`
+- Referral `status` is a plain `CharField` resolved against the
+  `referral_status` ChoiceList. The `ReferralStatus` TextChoices class
+  this page listed **was removed** by ADR-0015 / US-S26-003.
 
 ## ADRs
 
