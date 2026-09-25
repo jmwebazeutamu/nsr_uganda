@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, KPI, PageHeader, Modal, Field, Toast, useApi, nsrApi, ScopeEditModal */
+/* global React, Icon, Chip, KPI, PageHeader, Modal, Field, Toast, useApi, nsrApi, ScopeEditModal, useFieldGroups */
 // DSA management workspace — list, detail, create wizard, renewal,
 // quick-find. Lives at /dsas/ in the design harness; wired into the
 // admin sidebar, home dashboard, partner detail, and DRS inbox.
@@ -1430,6 +1430,9 @@ const DsaGeographicScopePicker = ({ selected, onAdd, onRemove }) => {
 };
 
 const DsaCreateWizard = ({ onBack, onCreated, prefillPartnerId = null }) => {
+  // The field-group vocabulary is the server's — see
+  // v0.1/data/use-field-groups.jsx and ADR-0040.
+  const [dsaFieldGroups, dsaFieldGroupState] = useFieldGroups();
   const [partnersResp] = useApi("/api/v1/partners/?page_size=200&status=active");
   const partners = (partnersResp && (partnersResp.results || partnersResp)) || [];
 
@@ -1441,10 +1444,12 @@ const DsaCreateWizard = ({ onBack, onCreated, prefillPartnerId = null }) => {
     effective_to: "",
     monthly_row_budget: "",
     entities: { household: true, member: true, referral: false, grievance: false },
-    fields: {
-      Identifiers: true, PMT: false, Health: false, Education: false,
-      Employment: false, Housing: false, FoodShocks: false, Roster: true,
-    },
+    // Only what a new agreement starts granted. Every other group
+    // comes from the server and starts off; this file no longer holds
+    // the vocabulary, because the copy it held offered `Housing`,
+    // `FoodShocks` and `Roster`, which the request validator has never
+    // known — and never offered `Geography`, which it does.
+    fields: { Identifiers: true },
     geographic_scope: [],
     sensitive_data_handling: "none",
     retention_days: "180",
@@ -1623,16 +1628,18 @@ const DsaCreateWizard = ({ onBack, onCreated, prefillPartnerId = null }) => {
               <span className="t-cap">Categories of columns granted by the DSA</span>
             </div>
             <div style={{padding: 16}} className="col gap-2">
-              {[
-                ["Identifiers",  "Identifiers (household ID, geographic codes)"],
-                ["PMT",          "PMT inputs (vulnerability score, band)"],
-                ["Roster",       "Household roster (head, members, ages)"],
-                ["Health",       "Health (chronic illness flags)"],
-                ["Education",    "Education (highest grade, attendance)"],
-                ["Employment",   "Employment (sector, income brackets)"],
-                ["Housing",      "Housing & assets (dwelling, utilities)"],
-                ["FoodShocks",   "Food & shocks (FCS, FIES, shock history)"],
-              ].map(([k, label]) => (
+              {dsaFieldGroupState === "offline" ? (
+                /* No fallback list. A scope picker that quietly offers
+                   the wrong vocabulary is how two signed agreements
+                   came to grant groups nothing could resolve. */
+                <div className="t-bodysm" style={{color:"var(--accent-danger)"}}>
+                  <Icon name="alert" size={12}/> Could not load the field-group
+                  list. Reload before granting scope.
+                </div>
+              ) : dsaFieldGroups.map(g => [
+                g.key,
+                g.description ? `${g.label} (${g.description})` : g.label,
+              ]).map(([k, label]) => (
                 <label key={k} className="row gap-2" style={{cursor: "pointer"}}>
                   <input type="checkbox"
                          checked={!!form.fields[k]}

@@ -22,6 +22,8 @@
  * to window.
  */
 
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -30,17 +32,28 @@ let ScopeEditModal;
 let buildEditScopePayload;
 let formatScopeError;
 let ENTITY_KEYS;
-let FIELD_GROUP_KEYS;
 let GEO_LEVELS;
 
 beforeAll(async () => {
+  // The modal reads the field-group vocabulary from the server on
+  // mount. Stubbed with the canonical groups so these tests exercise
+  // the modal rather than the network.
+  globalThis.useFieldGroups = () => [
+    [
+      { key: "Identifiers", label: "Identifiers", description: "" },
+      { key: "PMT", label: "PMT", description: "" },
+      { key: "Members", label: "Members", description: "" },
+      { key: "Health", label: "Health", description: "" },
+      { key: "Geography", label: "Geography", description: "" },
+    ],
+    "live",
+  ];
   await import("./scope-edit-modal.jsx");
   ({
     ScopeEditModal,
     buildEditScopePayload,
     formatScopeError,
     ScopeEditModal_ENTITY_KEYS: ENTITY_KEYS,
-    ScopeEditModal_FIELD_GROUP_KEYS: FIELD_GROUP_KEYS,
     ScopeEditModal_GEO_LEVELS: GEO_LEVELS,
   } = globalThis);
 });
@@ -139,9 +152,11 @@ describe("ScopeEditModal pre-fill", () => {
     expect(byLabel["Referral"]).not.toBeChecked();
     expect(byLabel["Grievance"]).not.toBeChecked();
 
-    // Field-group checkboxes — Identifiers + PMT checked
+    // Field-group checkboxes — Identifiers + PMT checked.
+    // Labelled by the group's own name now: the server sends the
+    // vocabulary, and "PMT inputs" was this file's wording for it.
     expect(byLabel["Identifiers"]).toBeChecked();
-    expect(byLabel["PMT inputs"]).toBeChecked();
+    expect(byLabel["PMT"]).toBeChecked();
     expect(byLabel["Health"]).not.toBeChecked();
 
     // Geographic chips
@@ -445,10 +460,27 @@ describe("catalogue helpers", () => {
       ["grievance", "household", "member", "referral"],
     );
   });
-  it("FIELD_GROUP_KEYS includes Identifiers + PMT (cross-referenced by AC-DPO-VOL)", () => {
-    const keys = FIELD_GROUP_KEYS.map(f => f.key);
-    expect(keys).toContain("Identifiers");
-    expect(keys).toContain("PMT");
+  it("the field-group list comes from the server, not from this file", () => {
+    // It used to live here, and it offered `Housing`, `FoodShocks` and
+    // `Roster` — names the request validator has never known, because
+    // it resolves a requested field to its group through the DRS
+    // catalogue where those are `Dwelling` + `Utilities`, `Food
+    // consumption` + `Food security`, and `Members`. Agreements edited
+    // here granted groups nothing could look up, and `Geography` was
+    // not offered at all.
+    //
+    // Which groups exist is now the server's to say, and
+    // tests/contract/test_dsa_field_groups.py pins that the vocabulary
+    // the console renders is the one the validator enforces.
+    expect(globalThis.ScopeEditModal_FIELD_GROUP_KEYS).toBeUndefined();
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "design/v0.1/components/scope-edit-modal.jsx"),
+      "utf8",
+    );
+    expect(source).toContain("useFieldGroups()");
+    for (const stale of ['"Housing"', '"FoodShocks"', '"Roster"']) {
+      expect(source).not.toContain(`key: ${stale}`);
+    }
   });
   it("GEO_LEVELS spans the seven-level UBOS chain", () => {
     expect(GEO_LEVELS.map(l => l.value)).toEqual([

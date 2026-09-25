@@ -44,6 +44,7 @@ The full text of each ADR lives at `/docs/adr/`. This page is the index, with a 
 | ADR-0037 | A grievance carries a case number people can use (superseded) | GRM |
 | ADR-0038 | GRM case numbers run in sequence, amending the no-sequences rule | GRM, SEC |
 | ADR-0039 | Case numbers for ChangeRequest, DataRequest and Referral | UPD, DRS, REF |
+| ADR-0040 | One vocabulary for DSA field groups | DRS, Partners |
 
 ## When to write a new ADR
 

@@ -31,6 +31,8 @@ from __future__ import annotations
 import hashlib
 from datetime import date
 
+from apps.data_requests.builder_schema import FIELD_CATALOGUE as _CATALOGUE
+
 import pytest
 from apps.data_management.models import Household
 from apps.data_requests.bundles import put_bundle
@@ -130,9 +132,24 @@ def partner_and_dsa(db, geo):
         partner=partner, reference="DSA-E2E-S27", status="active",
         valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
         allowed_scopes={
-            # field_scope ends up as {"household": True}, which the
-            # builder_schema expands into all household.* catalogue keys.
-            "fields": ["household.id"],
+            # Every household-side field in the catalogue, asked FOR by
+            # the catalogue rather than listed here.
+            #
+            # This used to name one key, `household.id`, on the belief
+            # that field_scope would come out as {"household": True} and
+            # stand for the whole prefix. It never did after the scope
+            # check moved to catalogue GROUPS: one key grants one group,
+            # so the DSA allowed `Identifiers` and the test's request for
+            # `household.sub_region_code` (group `Geography`) was
+            # correctly refused.
+            #
+            # The fixture's intent — "household.* yes, member.* no" — is
+            # expressible because no catalogue group spans both entities,
+            # which `test_dsa_field_groups.py` pins.
+            "fields": [
+                f["key"] for f in _CATALOGUE
+                if str(f["key"]).startswith("household.")
+            ],
             "sub_region_codes": ["SR-DRS-IN"],
             "programme_codes": ["PDM"],
             "max_rows_per_request": 5000,

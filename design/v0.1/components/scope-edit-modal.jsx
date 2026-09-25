@@ -1,4 +1,4 @@
-/* global React, Icon, Chip, Modal */
+/* global React, Icon, Chip, Modal, useFieldGroups */
 // NSR MIS — DSA scope-edit modal (US-S27-002, ADR-0016)
 //
 // Operator surface for POST /api/v1/dsas/{id}/edit-scope/. Pre-fills
@@ -22,7 +22,7 @@
 // DRS query builder; reusing it here lands as a follow-up
 // (OI-S27-SCOPE-GEO).
 //
-// Helpers (ENTITY_KEYS, FIELD_GROUP_KEYS, SENSITIVITY_OPTIONS,
+// Helpers (ENTITY_KEYS, SENSITIVITY_OPTIONS,
 // buildEditScopePayload, formatScopeError) are exported on window for
 // the test file to pull off globalThis.
 
@@ -69,18 +69,16 @@ const ENTITY_KEYS = [
   { key: "grievance",  label: "Grievance" },
 ];
 
-// Known field-group keys that appear in field_scope. Same JSONField
-// semantics — unknown keys round-trip untouched.
-const FIELD_GROUP_KEYS = [
-  { key: "Identifiers", label: "Identifiers" },
-  { key: "PMT",         label: "PMT inputs" },
-  { key: "Health",      label: "Health" },
-  { key: "Education",   label: "Education" },
-  { key: "Employment",  label: "Employment" },
-  { key: "Housing",     label: "Housing & assets" },
-  { key: "FoodShocks",  label: "Food & shocks" },
-  { key: "Roster",      label: "Household roster" },
-];
+// The field groups come from the server — see
+// v0.1/data/use-field-groups.jsx. This list used to live here, and it
+// offered `Housing`, `FoodShocks` and `Roster`, which the request
+// validator has never known: it resolves a requested field to its
+// group through the DRS catalogue, where those are `Dwelling` +
+// `Utilities`, `Food consumption` + `Food security`, and `Members`.
+//
+// An agreement edited here therefore granted a group nothing could
+// look up, and the partner's request was refused as "outside DSA
+// scope". `Geography` was not on the list at all.
 
 // sensitive_data_handling ChoiceList codes (ADR-0010 seed).
 const SENSITIVITY_OPTIONS = [
@@ -138,6 +136,14 @@ const ScopeEditModal = ({
                  //   { fetchUnitsByLevel(level), fetchUnitById(id) }
                  //   defaults to window.nsrApi-backed implementation.
 }) => {
+  // The field-group vocabulary comes from the server, not from a list
+  // in this file. See v0.1/data/use-field-groups.jsx.
+  const [serverGroups, groupState] = useFieldGroups();
+  const fieldGroupOptions = serverGroups.map(g => ({
+    key: g.key,
+    label: g.description ? `${g.label} — ${g.description}` : g.label,
+  }));
+
   const id = dsa?.id || "";
   const status = dsa?.status || "";
   const isActive = status === "active";
@@ -315,8 +321,20 @@ const ScopeEditModal = ({
 
           <ScopeCard title="Field groups in scope"
             sub="Which field categories the partner can pull on those entities.">
-            <CheckboxGrid items={FIELD_GROUP_KEYS} values={fieldGroups}
-              onToggle={toggleFieldGroup} disabled={busy || blocked}/>
+            {groupState === "offline" ? (
+              /* No plausible-looking fallback list. A scope picker that
+                 quietly offers the wrong vocabulary is how two signed
+                 agreements came to grant groups nothing could resolve. */
+              <div className="t-bodysm" style={{color:"var(--accent-danger)"}}>
+                <Icon name="alert" size={12}/> Could not load the field-group
+                list. Reload before editing scope.
+              </div>
+            ) : (
+              <CheckboxGrid
+                items={fieldGroupOptions} values={fieldGroups}
+                onToggle={toggleFieldGroup}
+                disabled={busy || blocked || groupState === "loading"}/>
+            )}
           </ScopeCard>
         </div>
 
@@ -606,7 +624,6 @@ const GeographicUnitPicker = ({ api, alreadyAdded, disabled, onAdd }) => {
 Object.assign(window, {
   ScopeEditModal,
   ScopeEditModal_ENTITY_KEYS: ENTITY_KEYS,
-  ScopeEditModal_FIELD_GROUP_KEYS: FIELD_GROUP_KEYS,
   ScopeEditModal_SENSITIVITY_OPTIONS: SENSITIVITY_OPTIONS,
   ScopeEditModal_GEO_LEVELS: GEO_LEVELS,
   buildEditScopePayload,

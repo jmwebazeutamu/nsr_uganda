@@ -465,6 +465,30 @@ class DataRequestViewSet(
                         "delivery_methods}",
         )},
     )
+    @extend_schema(
+        tags=["drs"],
+        summary="The DSA field-group vocabulary",
+        description=(
+            "The groups a Data Sharing Agreement grants by, with the "
+            "number of catalogue fields in each.\n\n"
+            "Served so the console has no list of its own. It had two, "
+            "and they disagreed with this one: agreements were written "
+            "granting `Roster`, `Housing` and `FoodShocks` while the "
+            "request validator looked for `Members`, `Dwelling`, "
+            "`Utilities`, `Food consumption` and `Food security` — so "
+            "the partner's request was refused as 'outside DSA scope' "
+            "for a group their agreement did grant. `Geography` was "
+            "never offered at all, so no agreement written through the "
+            "console could grant it."
+        ),
+        responses={200: OpenApiResponse(description="field groups")},
+    )
+    @action(detail=False, methods=["get"], url_path="field-groups")
+    def field_groups(self, request):
+        from .field_groups import catalogue
+
+        return Response({"groups": catalogue()})
+
     @action(detail=False, methods=["get"], url_path="builder-schema")
     def builder_schema(self, request):
         schema = build_schema(request.user)
