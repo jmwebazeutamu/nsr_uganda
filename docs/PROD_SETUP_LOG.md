@@ -2694,3 +2694,74 @@ quotes it, not whether it has a ULID.
 - The **data_explorer 503s** logged this morning did not reproduce on a
   freshly built database, which supports the reading that they are
   matview population and test ordering rather than the module.
+
+---
+
+## 2026-09-25 — deploy df576fe → 8492968 (the manual is in the image)
+
+`/manual/` is served by `nsr_mis.views.manual` from
+`docs/user-manual/site/`, which is MkDocs output and is gitignored.
+Nothing built it in the image, so **production had answered every
+/manual/ URL with "Manual not built" since the view was added.** The
+manual existed only on whichever machine had last run mkdocs by hand.
+
+**Backup:** `pre-deploy-20260925T170505Z.dump`, 11M.
+
+A `manual-build` stage renders it; the runtime image copies only
+`site/`. Verified inside the deployed container:
+
+```
+pages:       67 index.html
+GRM section: 8 entries
+mermaid:     3,572,661 bytes (vendored)
+python -c "import mkdocs"  ->  ModuleNotFoundError
+```
+
+The toolchain and the Markdown sources stay in the build stage.
+
+**Verified served**, as a logged-in superuser against the real host:
+
+```
+200     50,069 bytes  /manual/
+200     47,900 bytes  /manual/grm/
+200     50,979 bytes  /manual/grm/assigning/
+200  3,572,661 bytes  /manual/assets/javascripts/mermaid.min.js
+
+diagrams on the escalation page : 2
+nav has the GRM Officer section : True
+mermaid served from this site   : True
+never reaches for unpkg         : True
+```
+
+Unauthenticated requests 302 to `/login/`, which is the intent: the
+manual carries escalation ladders, who may approve what, and the shape
+of the audit chain. It is for people with accounts.
+
+### Two traps, one of them already documented
+
+`.dockerignore` excluded `docs` wholesale, so the first build failed on
+a missing context path. It now keeps the manual's sources and excludes
+its build output.
+
+The comment two lines above that rule already described this exact
+trap — excluding a source tree the build needs is how `/console/` came
+to 404 in production. Worth reading the comments next to the line you
+are editing.
+
+Mermaid is vendored rather than lazy-loaded from unpkg. This data
+centre is not somewhere to assume outbound internet, and the failure is
+silent: every diagram degrades to an unreadable block of text with no
+error anywhere.
+
+`tests/contract/test_static_is_in_the_image.py` now checks that a stage
+builds the manual, that it uses `--strict`, that the runtime image
+copies the directory the view actually serves, and that the toolchain
+is pinned. Gitignored output that nothing generates in the image is
+output that does not exist in production — second time, so now a test.
+
+### Open
+
+- Image is 2.68GB; the manual adds ~4MB of it. The bulk is still
+  CPU-only torch for the chatbot embeddings.
+- `tests/integration/test_drs_workflow_e2e.py` still fails on the
+  other session's DSA-scope tightening. Unchanged by this.
