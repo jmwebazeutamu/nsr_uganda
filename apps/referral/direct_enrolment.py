@@ -167,7 +167,10 @@ def programme_eligibility_queryset(programme: Programme):
         qs = qs.filter(head_member__age_years__gte=programme.age_min)
     if programme.age_max is not None:
         qs = qs.filter(head_member__age_years__lte=programme.age_max)
-    return qs.select_related("head_member", "region", "sub_region", "district")
+    return qs.select_related(
+        "head_member", "region", "sub_region", "district", "county",
+        "sub_county", "parish", "village",
+    )
 
 
 def eligible_household_rows(programme: Programme, *, household_ids=None):

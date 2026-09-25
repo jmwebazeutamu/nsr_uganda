@@ -1,3 +1,4 @@
+import copy
 import logging
 
 from django.db import transaction
@@ -14,6 +15,7 @@ from apps.data_management.choice_field_map import (
     iter_payload_choice_values,
     resolve_with_legacy_frame,
 )
+from apps.reference_data.code_frames import resolve_geographic_labels
 from apps.reference_data.services import resolve_label, resolve_labels
 
 from .models import (
@@ -93,6 +95,31 @@ class ConnectorRunSerializer(serializers.ModelSerializer):
 
 class StageRecordSerializer(serializers.ModelSerializer):
     ddup_candidates = serializers.SerializerMethodField()
+    canonical_payload = serializers.SerializerMethodField()
+
+    def get_canonical_payload(self, obj):
+        """Attach a read-only geography-label projection from Reference Data.
+
+        ``StageRecord.canonical_payload`` stores only canonical codes.  The
+        names are derived when the record is read, so a connector-supplied
+        label cannot become a competing geography source of truth.
+        """
+        payload = copy.deepcopy(obj.canonical_payload or {})
+        geography = payload.get("geographic")
+        if isinstance(geography, dict):
+            # A list serializer reuses its child serializer, so one request
+            # can share labels for identical geography chains without a UI
+            # cache becoming another source of truth.
+            cache = self.context.setdefault("_geographic_label_cache", {})
+            cache_key = tuple(sorted(
+                (level, str(geography[level]))
+                for level in geography
+                if level != "_labels" and geography[level]
+            ))
+            if cache_key not in cache:
+                cache[cache_key] = resolve_geographic_labels(geography)
+            geography["_labels"] = cache[cache_key]
+        return payload
 
     def get_ddup_candidates(self, obj):
         """Attach read-only registry detail to persisted DDUP evidence.

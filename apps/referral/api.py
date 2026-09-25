@@ -132,15 +132,32 @@ class _DirectEnrolmentRequest(serializers.Serializer):
 
 class _EligibleHouseholdSerializer(serializers.ModelSerializer):
     head_name = serializers.SerializerMethodField()
+    # Codes are retained as canonical API identifiers.  Names are the
+    # Reference Data projections for every geography UI, in the same model
+    # order as GeographicUnit.Level.
+    region_name = serializers.CharField(source="region.name", read_only=True)
+    sub_region_name = serializers.CharField(source="sub_region.name", read_only=True)
+    district_name = serializers.CharField(source="district.name", read_only=True)
+    county_name = serializers.CharField(source="county.name", read_only=True)
+    sub_county_name = serializers.CharField(source="sub_county.name", read_only=True)
+    parish_name = serializers.CharField(source="parish.name", read_only=True)
+    village_name = serializers.CharField(source="village.name", read_only=True)
     region_code = serializers.CharField(read_only=True)
     sub_region_code = serializers.CharField(read_only=True)
     district_code = serializers.CharField(read_only=True)
+    county_code = serializers.CharField(read_only=True)
+    sub_county_code = serializers.CharField(read_only=True)
+    parish_code = serializers.CharField(read_only=True)
+    village_code = serializers.CharField(read_only=True)
 
     class Meta:
         model = Household
         fields = (
             "id", "head_name", "current_pmt_score", "current_vulnerability_band",
-            "region_code", "sub_region_code", "district_code",
+            "region_name", "sub_region_name", "district_name", "county_name",
+            "sub_county_name", "parish_name", "village_name",
+            "region_code", "sub_region_code", "district_code", "county_code",
+            "sub_county_code", "parish_code", "village_code",
         )
 
     def get_head_name(self, household):

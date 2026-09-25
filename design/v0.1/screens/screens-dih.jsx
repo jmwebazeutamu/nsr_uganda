@@ -86,44 +86,6 @@ const _durationLabel = (minutes) => {
   return h ? `${h}h ${m % 60}m` : `${m}m`;
 };
 
-/** The four UBOS regions, as (code, name). Small, fixed and national —
- *  the filter is built from this rather than from whatever distinct
- *  strings happen to be in the loaded page of records, so a region with
- *  no records on screen is still an option and a region with records
- *  under two spellings is still one option.
- *
- *  UG-N is deliberately absent: retired in
- *  reference_data/0018_retire_duplicate_northern_region. */
-const REGION_CODES = [
-  ["R-CENTRAL", "Central"],
-  ["R-EASTERN", "Eastern"],
-  ["R-NORTHERN", "Northern"],
-  ["R-WESTERN", "Western"],
-];
-
-const _regionCodeFromName = (name) => {
-  if (!name) return "";
-  const wanted = String(name).trim().toLowerCase();
-  const hit = REGION_CODES.find(([, label]) => label.toLowerCase() === wanted);
-  // An unrecognised value is returned as-is rather than dropped: better
-  // a visible oddity in the filter than a record that quietly cannot be
-  // filtered to at all.
-  return hit ? hit[0] : String(name).trim();
-};
-
-const _regionLabel = (value) => {
-  if (!value) return "—";
-  const raw = String(value).trim();
-  const known = REGION_CODES.find(([code]) => code === raw);
-  if (known) return known[1];
-  // Region codes in the UBOS frame are "R-<NAME>"; the retired "UG-N"
-  // family is handled by reference data, not here.
-  const m = /^R-(.+)$/i.exec(raw);
-  const base = m ? m[1] : raw;
-  if (/[a-z]/.test(base) && /[A-Z]/.test(base)) return base;  // already a name
-  return base.charAt(0).toUpperCase() + base.slice(1).toLowerCase();
-};
-
 /** What the panel can honestly say about a member's NIN.
  *  Full number → masked to its last four. Last-four only → the same
  *  mask, because that is genuinely all the registry holds. A status of
@@ -136,21 +98,19 @@ const _ninDisplay = (m) => {
   return "—";
 };
 
-/** Parish line: the household's place, not a Kobo-only field.
- *  This read `${geo.parish} · ${sourceKeys.kobo_village_name || "—"}`,
- *  so a walk-in household always rendered as "418.1.03.02 · —". */
-const _placeLine = (geo, sourceKeys) => {
+/** Compact local address from the server's Reference Data projection.
+ *  Codes remain in the canonical payload for APIs and traceability, but an
+ *  operator-facing address must never present one as a place name. */
+const _placeLine = (geo) => {
   const labels = (geo && geo._labels) || {};
   const parts = [
-    labels.parish || geo.parish || "",
-    labels.sub_county || labels.subcounty || "",
     labels.district || "",
-    sourceKeys.kobo_village_name || labels.village || "",
+    labels.county || "",
+    labels.sub_county || labels.subcounty || "",
+    labels.parish || "",
+    labels.village || "",
   ].filter(Boolean);
-  // Keep the code beside the name — the reviewer cross-checks against
-  // the UBOS frame — but never show the code alone when a name exists.
-  if (labels.parish && geo.parish) parts[0] = `${labels.parish} (${geo.parish})`;
-  return parts.length ? parts.join(" · ") : "—";
+  return parts.length ? parts.join(" · ") : "Unmapped geography";
 };
 
 // Map an API StageRecord into the row shape the table renders. The
@@ -166,22 +126,11 @@ const _stageToRow = (stage) => {
   const sourceKeys = payload._source_keys || {};
   const isKobo = Boolean(sourceKeys.kobo_form_id);
   const geoLabels = geo._labels || {};
-  // The row's region is the CODE, always.
-  //
-  // This used to prefer whatever display name was lying around — the
-  // Kobo connector's `_source_keys.kobo_region_name`, or the wizard's
-  // `_labels.region` — and fall back to the code. So the same region
-  // reached the filter under two different keys depending on which
-  // connector produced the record, and the filter, built from the
-  // distinct values it found, listed "Northern" beside "R-NORTHERN"
-  // and "Western" beside "R-WESTERN". Picking one silently returned a
-  // subset with nothing to say the rest existed.
-  //
-  // The label is resolved from the code at render time (_regionLabel),
-  // so there is one key per region and one name per key.
-  const regionCode = geo.region
-    || _regionCodeFromName(sourceKeys.kobo_region_name || geoLabels.region || "");
-  const parishLabel = geoLabels.parish || geo.parish || "";
+  // The code remains the filter key; its name comes only from the server's
+  // GeographicUnit projection. Source-system labels never decide scope.
+  const regionCode = geo.region || "";
+  const regionName = geoLabels.region || "Unmapped region";
+  const parishLabel = _placeLine(geo);
 
   // DQA counts pulled from the staged summary written by
   // process_stage_record. Pre-S2 stages may have an empty dict.
@@ -230,6 +179,7 @@ const _stageToRow = (stage) => {
     head: headName || "(no head)",
     hh: members.length,
     region: regionCode,
+    regionName,
     parish: parishLabel,
     source: isKobo ? "Kobo" : "Walk-in",
     channel: isKobo ? "Kobo" : "CAPI",
@@ -648,13 +598,13 @@ const DIHScreen = () => {
     const _u = (arr) => Array.from(new Set(arr.filter(Boolean))).sort();
     return {
       sources: _u(rows.map(r => r.source)),
-      // The national code list, plus anything unrecognised that is
-      // actually present — so an unmappable value stays reachable
-      // instead of becoming a record nobody can filter to.
-      regions: _u([
-        ...REGION_CODES.map(([code]) => code),
-        ...rows.map(r => r.region),
-      ]),
+      // A canonical code is the option key; the API's Reference Data label
+      // is what the operator sees. Records without a resolvable code are
+      // deliberately absent from this scope filter rather than masquerading
+      // as a named region.
+      regions: Array.from(new Map(
+        rows.filter(r => r.region).map(r => [r.region, r.regionName]),
+      ).entries()).sort(([, a], [, b]) => a.localeCompare(b)),
       channels: _u(rows.map(r => r.channel)),
       idvs: _u(rows.map(r => r.idv)),
     };
@@ -1086,19 +1036,8 @@ const DIHScreen = () => {
             title="Region as captured on the form"
           >
             <option value="">Region · any</option>
-            {/* Built from the region code list, not from the distinct
-                values found in the loaded records.
-                
-                Building it from the data listed "Northern, R-CENTRAL,
-                R-EASTERN, R-NORTHERN, R-WESTERN, Western" — four
-                regions as six options, two pairs sharing a label —
-                because rows were keyed on whatever spelling their
-                connector happened to use. Rows are now keyed on the
-                code; this makes the option set fixed as well, so the
-                filter cannot reacquire a duplicate from a page of data
-                that happens to contain one. */}
-            {filterOptions.regions.map(o => (
-              <option key={o} value={o}>{_regionLabel(o)}</option>
+            {filterOptions.regions.map(([code, name]) => (
+              <option key={code} value={code}>{name}</option>
             ))}
           </select>
           <select

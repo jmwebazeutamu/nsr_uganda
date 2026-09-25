@@ -280,6 +280,18 @@ class TestApi:
         })
         assert eligible.status_code == 200, eligible.data
         assert {row["id"] for row in eligible.data["results"]} == {str(household.id)}
+        eligible_row = eligible.data["results"][0]
+        assert {
+            key: eligible_row[key]
+            for key in (
+                "region_name", "sub_region_name", "district_name", "county_name",
+                "sub_county_name", "parish_name", "village_name",
+            )
+        } == {
+            "region_name": "R", "sub_region_name": "Sr", "district_name": "D",
+            "county_name": "C", "sub_county_name": "Sc", "parish_name": "P",
+            "village_name": "V",
+        }
 
         refused = client.post("/api/v1/ref/enrolments/enrol-direct/", {
             "programme_id": programme.id,

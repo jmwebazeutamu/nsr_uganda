@@ -701,7 +701,10 @@ const DirectEnrolmentPanel = ({ programmes, onClose, onComplete }) => {
     programmeId ? `/api/v1/ref/enrolments/eligible-households/?programme=${encodeURIComponent(programmeId)}&page_size=200` : null,
   );
   const eligible = (eligibleResp && eligibleResp.results) || [];
-  const visible = eligible.filter(h => `${h.id} ${h.head_name} ${h.region_code} ${h.sub_region_code} ${h.district_code}`.toLowerCase().includes(query.toLowerCase()));
+  const visible = eligible.filter(h => [
+    h.id, h.head_name, h.region_name, h.sub_region_name, h.district_name,
+    h.county_name, h.sub_county_name, h.parish_name, h.village_name,
+  ].filter(Boolean).join(" ").toLowerCase().includes(query.toLowerCase()));
   const toggle = (id) => setSelected(current => current.includes(id) ? current.filter(value => value !== id) : [...current, id]);
   const submit = async () => {
     setSaving(true); setError("");
@@ -726,7 +729,7 @@ const DirectEnrolmentPanel = ({ programmes, onClose, onComplete }) => {
     {programmeId && <><input className="mt-2" value={query} onChange={e => setQuery(e.target.value)} placeholder="Filter eligible households by ID, head or location" style={{width:"100%"}} />
       {eligibleMeta.loading && <p className="t-bodysm muted">Resolving eligible households…</p>}
       {(eligibleMeta.error || error) && <p className="t-bodysm" style={{color:"var(--accent-danger)"}}>{error || eligibleMeta.error}</p>}
-      {!eligibleMeta.loading && !eligibleMeta.error && <div style={{maxHeight:260, overflow:"auto", marginTop:10}}>{visible.map(h => <label key={h.id} className="row gap-2" style={{padding:"8px 4px", borderBottom:"1px solid var(--neutral-200)"}}><input type="checkbox" checked={selected.includes(h.id)} onChange={() => toggle(h.id)}/><span><strong>{h.head_name || "No designated head"}</strong> <span className="t-cap">{h.id}</span><br/><span className="t-cap">{[h.region_code, h.sub_region_code, h.district_code].filter(Boolean).join(" · ")}</span></span></label>)}{visible.length === 0 && <p className="t-bodysm muted">No eligible households match.</p>}</div>}
+      {!eligibleMeta.loading && !eligibleMeta.error && <div style={{maxHeight:260, overflow:"auto", marginTop:10}}>{visible.map(h => <label key={h.id} className="row gap-2" style={{padding:"8px 4px", borderBottom:"1px solid var(--neutral-200)"}}><input type="checkbox" checked={selected.includes(h.id)} onChange={() => toggle(h.id)}/><span><strong>{h.head_name || "No designated head"}</strong> <span className="t-cap">{h.id}</span><br/><span className="t-cap">{[h.district_name, h.county_name, h.sub_county_name, h.parish_name, h.village_name].filter(Boolean).join(" · ") || "Unmapped geography"}</span></span></label>)}{visible.length === 0 && <p className="t-bodysm muted">No eligible households match.</p>}</div>}
       <div className="row mt-2" style={{justifyContent:"flex-end", gap:8}}><span className="t-cap">{selected.length} selected</span><button className="btn btn-primary" disabled={!selected.length || saving} onClick={submit}>{saving ? "Enrolling…" : "Enrol selected"}</button></div>
     </>}
   </div>;

@@ -93,3 +93,28 @@ def resolve_geographic_unit(level: str, code: str) -> GeographicUnit | None:
         if row is not None:
             return row
     return None
+
+
+def resolve_geographic_labels(codes: dict | None) -> dict[str, str]:
+    """Return Reference Data names for a canonical geography payload.
+
+    Geography codes remain the interchange values.  Operator-facing
+    projections, however, must obtain their labels from the versioned UBOS
+    ``GeographicUnit`` register rather than trusting source-system labels or
+    reproducing a code-to-name table in a screen.  Unknown values are omitted
+    deliberately: callers can show an actionable "unmapped geography" state
+    without exposing an opaque code as if it were a place name.
+
+    The model's declared ``Level`` order is the sole hierarchy contract.
+    """
+    if not isinstance(codes, dict):
+        return {}
+    labels: dict[str, str] = {}
+    for level in GeographicUnit.Level.values:
+        code = codes.get(level)
+        if not code:
+            continue
+        unit = resolve_geographic_unit(level, str(code))
+        if unit is not None:
+            labels[level] = unit.name
+    return labels

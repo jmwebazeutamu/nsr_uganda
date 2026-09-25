@@ -10,6 +10,7 @@ The server now owns it and every caller asks for `?queue=review`.
 """
 
 import pytest
+from datetime import date
 
 from apps.ingestion_hub.models import (
     REVIEW_QUEUE_STATES, TERMINAL_STAGE_STATES, StageRecordState,
@@ -115,3 +116,53 @@ class TestTheEndpointAgreesWithTheDefinition:
         c = self._client(client, django_user_model, "q4")
         response = c.get("/api/v1/dih/stage-records/?state=promoted&page_size=100")
         assert [r["state"] for r in response.json()["results"]] == ["promoted"]
+
+    def test_stage_geography_labels_are_derived_from_geographicunit(
+        self, client, django_user_model, db,
+    ):
+        """The DIH display projection never trusts connector label strings.
+
+        The stored payload retains canonical codes for promotion; API reads
+        obtain the visible names from the versioned Reference Data hierarchy.
+        """
+        from apps.ingestion_hub.models import (
+            Connector, ConnectorRun, RawLanding, SourceSystem, StageRecord,
+        )
+        from apps.reference_data.models import GeographicUnit
+
+        units = {}
+        for level, parent in [
+            ("region", None), ("sub_region", "region"),
+            ("district", "sub_region"), ("county", "district"),
+            ("sub_county", "county"), ("parish", "sub_county"),
+            ("village", "parish"),
+        ]:
+            units[level] = GeographicUnit.objects.create(
+                level=level, code=f"DISPLAY-{level}",
+                name=f"Reference {level.replace('_', ' ').title()}",
+                parent=units.get(parent), effective_from=date(2026, 1, 1),
+            )
+        source = SourceSystem.objects.create(code="T-GEO-LABEL", name="Test geo labels")
+        connector = Connector.objects.create(source_system=source, name="test-geo-labels")
+        run = ConnectorRun.objects.create(connector=connector)
+        stage = StageRecord.objects.create(
+            raw_landing=RawLanding.objects.create(connector_run=run, payload={}),
+            connector_run=run,
+            canonical_payload={
+                "geographic": {
+                    **{level: unit.code for level, unit in units.items()},
+                    "_labels": {"parish": "Untrusted connector parish"},
+                },
+            },
+        )
+        c = self._client(client, django_user_model, "geo-label-reader")
+        response = c.get(f"/api/v1/dih/stage-records/{stage.id}/")
+        assert response.status_code == 200, response.content
+        geography = response.json()["canonical_payload"]["geographic"]
+        assert geography["_labels"] == {
+            level: unit.name for level, unit in units.items()
+        }
+        # Serialization is a projection; source data stays code-only plus
+        # its original lineage label, rather than being overwritten on read.
+        stage.refresh_from_db()
+        assert stage.canonical_payload["geographic"]["_labels"]["parish"] == "Untrusted connector parish"

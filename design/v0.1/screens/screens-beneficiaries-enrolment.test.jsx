@@ -35,4 +35,10 @@ describe("Beneficiaries direct household enrolment", () => {
   it("does not retain the beneficiary exited-chart fixture", () => {
     expect(source).not.toContain("rows={DEMO_BENEFICIARIES.filter");
   });
+
+  it("uses server-projected geographic names rather than geography codes", () => {
+    expect(source).toContain("h.parish_name");
+    expect(source).toContain("h.district_name");
+    expect(source).not.toContain("h.region_code, h.sub_region_code, h.district_code");
+  });
 });
