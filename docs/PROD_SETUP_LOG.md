@@ -2626,3 +2626,71 @@ answers as 403.
 - **ChangeRequest, DataRequest and Referral** have the same
   unreadable-identifier problem. Each is its own decision about what its
   users actually quote; none is done.
+
+---
+
+## 2026-09-25 — deploy 96b0344 → df576fe (case numbers for UPD, DRS, REF)
+
+The same treatment GRM got this morning, for the three entities
+ADR-0037 had flagged and the registry owner then asked for.
+
+**Backup:** `pre-deploy-20260925T122305Z.dump`, 11M.
+
+**Verified on prod:**
+
+```
+GRM: 8 rows, 0 unnumbered, first=GRM-2026-0001
+UPD: 9 rows, 0 unnumbered, first=UPD-2026-0001
+DRS: 7 rows, 0 unnumbered, first=DRS-2026-0001
+REF: 0 rows, 0 unnumbered
+sequences: [('DRS', 2026, 7), ('GRM', 2026, 8), ('UPD', 2026, 9)]
+```
+
+The prefix is the SAD §4 module code, so a number says which queue it
+belongs to before anyone has typed it anywhere.
+
+### One counter, not four
+
+`apps/reference_data/references.py` and a single `ReferenceSequence`
+table serve all four. GRM's own counter, added hours earlier as
+`GrmReferenceSequence`, was migrated into it rather than left beside
+it — migration `grievance.0012` moves the rows before dropping the
+table, because `last_number` is the only thing standing between the
+next grievance and a duplicate.
+
+Four copies of "take the next number" would drift, and the first thing
+that drifts is whether a rolled-back transaction burns its number,
+which nobody notices until a year has gaps and nobody can say why.
+`tests/contract/test_case_numbers.py` is parametrised across all four
+prefixes for that property among others.
+
+### What got worse, written down rather than discovered
+
+- **Volume disclosure now covers four counts, not one.** Anyone holding
+  two references of the same prefix can read how many records came
+  between them, per module. For the DPO.
+- **The guessability argument is now per-module.** It rests on every
+  list and detail route applying the caller's scope before anything
+  else — `visible_grievances` for GRM, each viewset's ABAC mixin for the
+  rest. Loosening any of those turns these numbers from readable into
+  an index.
+
+### Also
+
+Backfills are in creation order and **there is no second renumbering**:
+a reference is a promise that a number keeps meaning the same record.
+All three backfills ran before any number had been given to anybody.
+
+`ProgrammeEnrolment` deliberately has no number — it is a programme-side
+record nobody rings the registry about. The test is whether a person
+quotes it, not whether it has a ULID.
+
+### Open
+
+- **`tests/integration/test_drs_workflow_e2e.py`** still fails: its
+  fixture DSA allows Identifiers while the test requests Geography.
+  That is `ed3c62e` (the other session's DSA-scope tightening), not this
+  work. The full suite is otherwise 3163 passing.
+- The **data_explorer 503s** logged this morning did not reproduce on a
+  freshly built database, which supports the reading that they are
+  matview population and test ordering rather than the module.
