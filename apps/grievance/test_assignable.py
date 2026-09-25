@@ -318,3 +318,87 @@ class TestThePicker:
             f"/api/v1/grm/grievances/{case.id}/assignable/",
         )
         assert r.status_code == 404
+
+
+class TestTakingACaseYourself:
+    """QA P3.15 made self-assignment a first-class flow: "Assign to me"
+    posts the assignment rather than opening a picker for the operator
+    to find their own name in. The server treats it as any other
+    assignment — the same role and scope rule, not a shortcut past
+    it."""
+
+    def test_an_eligible_operator_can_take_a_case(
+        self, case, django_user_model,
+    ):
+        user = _user(django_user_model, "pc.self", role="parish_chief",
+                     scope=ScopeLevel.NATIONAL)
+        r = _client(user).post(
+            f"/api/v1/grm/grievances/{case.id}/assign/",
+            {"assigned_to": user.username}, format="json",
+        )
+        assert r.status_code == 200, r.data
+        case.refresh_from_db()
+        assert case.assigned_to == "pc.self"
+
+    def test_taking_a_case_you_could_not_be_given_is_still_refused(
+        self, case, south, django_user_model,
+    ):
+        """Naming yourself is not an exemption."""
+        user = _user(django_user_model, "pc.elsewhere", role="parish_chief",
+                     scope=ScopeLevel.SUB_REGION, code="PICK-S-SUB_REGION")
+        r = _client(user).post(
+            f"/api/v1/grm/grievances/{case.id}/assign/",
+            {"assigned_to": user.username}, format="json",
+        )
+        # The case is outside their scope, so they cannot see it at all
+        # — which is the first refusal they meet, and the right one.
+        assert r.status_code == 404
+
+    def test_the_wrong_role_in_scope_is_refused_with_a_reason(
+        self, case, django_user_model,
+    ):
+        user = _user(django_user_model, "enum.self", role="enumerator",
+                     scope=ScopeLevel.NATIONAL)
+        r = _client(user).post(
+            f"/api/v1/grm/grievances/{case.id}/assign/",
+            {"assigned_to": user.username}, format="json",
+        )
+        assert r.status_code == 400
+        assert "does not hold" in r.data["detail"]
+
+    def test_a_case_already_assigned_can_be_taken_over(
+        self, case, django_user_model,
+    ):
+        """The button used to appear only on an unassigned case, so
+        taking one over meant going through the picker. Nothing in the
+        service ever refused it."""
+        first = _user(django_user_model, "pc.first", role="parish_chief",
+                      scope=ScopeLevel.NATIONAL)
+        second = _user(django_user_model, "pc.second", role="parish_chief",
+                       scope=ScopeLevel.NATIONAL)
+        assign(case, assigned_to=first.username, actor="officer")
+
+        r = _client(second).post(
+            f"/api/v1/grm/grievances/{case.id}/assign/",
+            {"assigned_to": second.username}, format="json",
+        )
+        assert r.status_code == 200
+        case.refresh_from_db()
+        assert case.assigned_to == "pc.second"
+
+    def test_allowed_actions_tells_the_console_when_to_offer_it(
+        self, case, caller, django_user_model,
+    ):
+        """The console hides both assign buttons on a case that will
+        not accept one, reading this rather than keeping its own copy
+        of the state machine."""
+        r = _client(caller).get(f"/api/v1/grm/grievances/{case.id}/")
+        assert "assign" in r.data["allowed_actions"]
+
+        resolve_and_close = _client(caller)
+        resolve_and_close.post(
+            f"/api/v1/grm/grievances/{case.id}/resolve/",
+            {"narrative": "Corrected the village on file"}, format="json",
+        )
+        r = _client(caller).get(f"/api/v1/grm/grievances/{case.id}/")
+        assert "assign" not in r.data["allowed_actions"]

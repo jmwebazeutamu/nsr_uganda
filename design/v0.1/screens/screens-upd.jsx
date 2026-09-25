@@ -1038,13 +1038,13 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
       <ReasonModal open={modal === 'reject'} title="Reject change request" intent="danger"
         reasonOptions={reasonsReject} recordLabel={effectiveId}
         onClose={() => setModal(null)} onConfirm={(r) => fire('reject', r)}/>
-      <ReasonModal open={modal === 'hold'} title="Hold for more information" intent="primary"
+      <ReasonModal open={modal === 'hold'} title="Hold for more information" intent="primary" confirmLabel="Hold"
         reasonOptions={["Awaiting additional photo / witness","Awaiting NIRA reconciliation","Awaiting GRM case resolution","Other"]}
         recordLabel={effectiveId} onClose={() => setModal(null)} onConfirm={(r) => fire('hold', r)}/>
-      <ReasonModal open={modal === 'escalate'} title="Escalate to District M&E" intent="primary"
+      <ReasonModal open={modal === 'escalate'} title="Escalate to District M&E" intent="primary" confirmLabel="Escalate"
         reasonOptions={["Out of scope for CDO","Disputed change","Other"]}
         recordLabel={effectiveId} onClose={() => setModal(null)} onConfirm={(r) => fire('escalate', r)}/>
-      <ReasonModal open={modal === 'release'} title="Release from hold" intent="success"
+      <ReasonModal open={modal === 'release'} title="Release from hold" intent="success" confirmLabel="Release"
         reasonOptions={["Awaited info received","Linked GRM case resolved","NIRA reconciliation complete","Other"]}
         recordLabel={effectiveId} onClose={() => setModal(null)} onConfirm={(r) => fire('release', r)}/>
 

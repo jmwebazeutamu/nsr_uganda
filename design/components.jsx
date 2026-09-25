@@ -266,7 +266,13 @@ const Modal = ({ open, onClose, title, children, footer, width = 480 }) => {
 /* ============================================================
    Reason-required modal — used for Approve/Reject/etc.
    ============================================================ */
-const ReasonModal = ({ open, title, intent, onClose, onConfirm, reasonOptions, recordLabel, defaultNote = "" }) => {
+// `confirmLabel` exists because the button's WORDS were derived from
+// `intent`, which picks its COLOUR. intent="success" printed "Confirm
+// approve", so the GRM resolve dialog offered to approve a grievance
+// and UPD's "Release from hold" offered to approve a release. Nothing
+// was being approved in either. Colour and copy are now separate
+// decisions, and every caller that is not an approval says what it is.
+const ReasonModal = ({ open, title, intent, onClose, onConfirm, reasonOptions, recordLabel, defaultNote = "", confirmLabel }) => {
   const [reason, setReason] = useState("");
   const [note, setNote] = useState(defaultNote);
   useEffect(() => { if (open) { setReason(""); setNote(defaultNote || ""); } }, [open, defaultNote]);
@@ -280,7 +286,9 @@ const ReasonModal = ({ open, title, intent, onClose, onConfirm, reasonOptions, r
           disabled={!canSubmit}
           onClick={() => onConfirm?.({ reason, note })}
         >
-          {intent === 'danger' ? 'Confirm reject' : intent === 'success' ? 'Confirm approve' : 'Confirm'}
+          {confirmLabel
+            || (intent === 'danger' ? 'Confirm reject'
+              : intent === 'success' ? 'Confirm approve' : 'Confirm')}
         </button>
       </>}
     >

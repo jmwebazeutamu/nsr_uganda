@@ -44,6 +44,18 @@ const _grmFmtTime = (iso) => {
   const pad = (n) => String(n).padStart(2, "0");
   return `${pad(d.getDate())} ${_grmMonths[d.getMonth()]} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
+// True when the case will accept `action`.
+//
+// `allowed_actions` is null for a row that did not come from the API —
+// the offline preview — and there the console must not start refusing
+// things on its own authority, so an unknown answer is yes. When the
+// server HAS answered, its answer is the answer.
+const _grmAllows = (row, action) => {
+  if (!row) return false;
+  if (!row.allowed_actions) return true;
+  return row.allowed_actions.includes(action);
+};
+
 const _grmApiToView = (g) => {
   // null hours_to_breach means "no SLA set" — slaChip renders it as
   // a dash. Computed positive = within SLA, negative = breached.
@@ -79,6 +91,11 @@ const _grmApiToView = (g) => {
     // an update that existed, and kept offering to open a NEW one —
     // a second DRAFT on every click.
     linked_change_request_id: g.linked_change_request_id || "",
+    // What the case will currently accept, from the server's own state
+    // machine (apps/grievance/visibility.allowed_actions). Carried so
+    // the console does not keep a second copy of the rules and offer a
+    // button the server is going to refuse.
+    allowed_actions: g.allowed_actions || null,
   };
 };
 
@@ -636,9 +653,14 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
       setModal(null); setSelection(new Set());
       return;
     }
-    const ids = selection.size > 0
-      ? [...selection]
-      : current ? [current.id] : [];
+    // `opts.ids` overrides the selection. "Assign to me" acts on the
+    // case in the panel: with rows ticked for a bulk action, falling
+    // back to the selection would take one person's case and hand them
+    // everything that happened to be ticked.
+    const ids = opts.ids
+      || (selection.size > 0
+        ? [...selection]
+        : current ? [current.id] : []);
     if (ids.length === 0) {
       setToast("No grievance selected.");
       setModal(null);
@@ -671,7 +693,11 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
       .finally(() => {
         setBusy(false);
         setModal(null);
-        setSelection(new Set());
+        // An action given its own ids did not read the selection, so it
+        // must not clear it: "Assign to me" on the open case would
+        // otherwise drop the rows the operator had ticked for a bulk
+        // action they had not performed yet.
+        if (!opts.ids) setSelection(new Set());
         setAssignee("");
       });
   };
@@ -1071,9 +1097,33 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
             <div style={{padding:"12px 16px"}}>
               <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", marginBottom:8}}>ACTIONS</div>
               <div className="col gap-2">
-                {!current.assigned_to && (
-                  <button className="btn" onClick={() => setModal("assign")}>
+                {/* "Assign to me" opened the assignee picker, which is
+                    the one thing it should not have had to do — the
+                    operator had already said who. It posts the
+                    assignment now, and "Assign…" is the separate
+                    button for giving it to somebody else.
+
+                    Both only appear while the case will accept an
+                    assignment, from the server's own allowed_actions
+                    rather than a second copy of the state machine
+                    here. Whether THIS operator may take it is the
+                    other half of the question (their role must carry
+                    the tier and their scope reach the household) and
+                    only the server can answer it; a refusal comes back
+                    as the toast, naming what was wrong. */}
+                {_grmAllows(current, "assign") && me.username
+                  && current.assigned_to !== me.username && (
+                  <button className="btn" disabled={busy}
+                          onClick={() => fire("assign", {
+                            ids: [current.id],
+                            body: { assigned_to: me.username },
+                          })}>
                     <Icon name="user" size={13}/> Assign to me
+                  </button>
+                )}
+                {_grmAllows(current, "assign") && (
+                  <button className="btn" onClick={() => setModal("assign")}>
+                    <Icon name="users" size={13}/> Assign…
                   </button>
                 )}
                 {current.status !== "resolved" && current.status !== "closed" && current.tier !== "l4_nsr_unit" && (
@@ -1339,6 +1389,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         open={modal === "escalate"}
         title="Escalate to next tier"
         intent="update"
+        confirmLabel="Escalate"
         recordLabel={current?.id}
         reasonOptions={reasonsEscalate}
         onClose={() => setModal(null)}
@@ -1350,6 +1401,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
         open={modal === "resolve"}
         title="Resolve grievance"
         intent="success"
+        confirmLabel="Resolve"
         recordLabel={current?.id}
         reasonOptions={reasonsResolve}
         onClose={() => setModal(null)}
@@ -1360,6 +1412,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
       <ReasonModal
         open={modal === "close"}
         title={selection.size > 1 ? `Close ${selection.size} grievances` : "Close grievance"}
+        confirmLabel={selection.size > 1 ? `Close ${selection.size} grievances` : "Close grievance"}
         recordLabel={current?.id}
         reasonOptions={reasonsClose}
         onClose={() => setModal(null)}
