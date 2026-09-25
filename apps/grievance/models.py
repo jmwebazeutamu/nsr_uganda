@@ -68,32 +68,9 @@ class TaskStatus(models.TextChoices):
     CLOSED = "closed"
 
 
-class GrmReferenceSequence(models.Model):
-    """One row per year, holding the last case number issued.
-
-    A running number needs somewhere to run from. `select_for_update`
-    on this row serialises concurrent creates, and because the
-    increment happens inside the creating transaction, a rollback
-    releases the number rather than burning it — so the year's
-    references stay contiguous, which is what makes them worth reading.
-
-    Django's own sequences would be simpler and wrong: they are
-    per-table, do not reset in January, and deliberately do not
-    guarantee contiguity.
-    """
-
-    year = models.PositiveIntegerField(primary_key=True)
-    last_number = models.PositiveIntegerField(default=0)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name = "GRM reference sequence"
-        verbose_name_plural = "GRM reference sequences"
-        ordering = ("-year",)
-
-    def __str__(self) -> str:
-        return f"{self.year}: {self.last_number} issued"
-
+# GrmReferenceSequence moved to reference_data.ReferenceSequence in
+# migration 0012 — UPD, DRS and REF need the same counter, and four
+# copies of it would drift.
 
 class Grievance(models.Model):
     id = ULIDField(primary_key=True)

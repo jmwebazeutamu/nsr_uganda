@@ -458,7 +458,7 @@ const BeneficiariesScreen = ({ onOpenHousehold, onNewProgramme }) => {
       {/* EXIT REASON CHART — only when on Exited tab */}
       {statusTab === "exited" && t.showExitChart && (
         <ExitReasonRollup
-          rows={DEMO_BENEFICIARIES.filter(b => b.status === "exited" && (!progCode || b.progCode === progCode))}
+          rows={allRows.filter(b => b.status === "exited" && (!progCode || b.progCode === progCode))}
           exitOpts={exitOpts}
           selected={exitCode}
           onSelect={(c) => { setExitCode(exitCode === c ? "" : c); setPage(0); }}
@@ -712,8 +712,12 @@ const DirectEnrolmentPanel = ({ programmes, onClose, onComplete }) => {
     });
     const body = await response.json().catch(() => ({}));
     setSaving(false);
-    if (!response.ok) { setError(body.detail || `HTTP ${response.status}`); return; }
-    onComplete(body.length);
+    if (!response.ok) {
+      const rejections = (body.rejections || []).map(r => `${r.household_id}: ${r.reason}`).join(" ");
+      setError(`${body.detail || `HTTP ${response.status}`}${rejections ? ` ${rejections}` : ""}`);
+      return;
+    }
+    onComplete(body.summary?.created_count || 0);
   };
   return <div className="card mt-3" style={{padding:16}}>
     <div className="row" style={{justifyContent:"space-between"}}><strong>Enrol eligible households</strong><button className="btn btn-sm" onClick={onClose}>Close</button></div>

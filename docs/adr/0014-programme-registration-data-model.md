@@ -155,8 +155,10 @@ the new columns at their default values (NULL / empty list).
   draft becomes active). The wizard's submit modal advertises the
   three-step chain but the workflow itself isn't shipped.
 - **OI-S25-3**: webhook secret rotation endpoint.
-- **OI-S25-4**: consolidate `apps.referral.Programme` into
-  `apps.partners.Programme` (Sprint 26 candidate).
+- **OI-S25-4**: completed by ADR-0015 / US-S26-005: the legacy
+  `apps.referral.Programme` was consolidated into
+  `apps.partners.Programme`. Direct household enrolment now uses the
+  same canonical programme and `ProgrammeEnrolment` roster.
 
 ## References
 

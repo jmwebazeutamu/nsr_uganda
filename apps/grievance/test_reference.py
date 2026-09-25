@@ -133,11 +133,13 @@ class TestTheSequence:
     def test_the_counter_is_stored_not_derived(self):
         """Counting rows would renumber a year after a deletion and
         hand out a number somebody already has."""
-        from apps.grievance.models import GrmReferenceSequence
+        from apps.reference_data.models import ReferenceSequence
 
         ref.next_reference(2034)
         ref.next_reference(2034)
-        assert GrmReferenceSequence.objects.get(year=2034).last_number == 2
+        assert ReferenceSequence.objects.get(
+            prefix="GRM", year=2034,
+        ).last_number == 2
 
     def test_a_case_is_numbered_in_the_year_it_was_opened(self):
         """A case raised on 31 December keeps a number from the year it

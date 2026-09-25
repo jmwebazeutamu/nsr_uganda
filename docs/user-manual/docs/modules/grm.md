@@ -23,6 +23,16 @@ readers.
 | **Reference** | `GRM-2026-0001` | people — say it, write it, quote it |
 | **Id** | `01M3AT4JSSXFYG02CXC8S6K20X` | the system — URLs, the audit chain, links from other modules |
 
+Three other modules number their records the same way, so a number
+tells you which queue it belongs to before you have typed it anywhere:
+
+| Prefix | Record | Module |
+|---|---|---|
+| `GRM-` | grievance | this one |
+| `UPD-` | change request | [Updates](upd.md) |
+| `DRS-` | data request | [Data requests](api-drs.md) |
+| `REF-` | referral | [Referrals](ref.md) |
+
 The reference is what you give a citizen: the year, and the case's
 number within that year. The count restarts each January, so the first
 grievance of 2027 is `GRM-2027-0001`.

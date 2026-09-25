@@ -265,7 +265,7 @@ class ChangeRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChangeRequest
         fields = (
-            "id", "entity_type", "entity_id", "household_id",
+            "id", "reference", "entity_type", "entity_id", "household_id",
             "change_type", "pmt_relevant",
             "changes", "display_changes", "evidence",
             "source_channel", "requester", "requester_note",
@@ -276,7 +276,7 @@ class ChangeRequestSerializer(serializers.ModelSerializer):
             "created_at", "updated_at",
         )
         read_only_fields = (
-            "id", "household_id", "status", "required_role", "sla_deadline",
+            "id", "reference", "household_id", "status", "required_role", "sla_deadline",
             "approver", "decided_at", "decision_reason",
             "pmt_preview", "created_at", "updated_at",
         )
@@ -649,6 +649,35 @@ class ChangeRequestViewSet(
         # _count_change_requests (US-S14-004).
         qs = super().get_queryset()
         params = self.request.query_params
+
+        # `?q=` — a case number somebody read out or pasted in.
+        #
+        # Normalised server-side with the same module the number was
+        # issued from: dashes and spaces optional, prefix optional, and
+        # O read as 0, I or l as 1. Falls through to a contains-match
+        # on the reference and the ULID so a partial still narrows.
+        #
+        # Detail routes are excluded. Narrowing a LIST is the whole job
+        # of these filters; on a detail route the only thing they can
+        # do is remove the record being asked for, which surfaces as a
+        # 404 that reads like a permission problem.
+        if not self.kwargs.get("pk"):
+            q = (self.request.query_params.get("q") or "").strip()
+            if q:
+                from django.db.models import Q
+
+                from apps.reference_data.references import (
+                    CHANGE_REQUEST as _PREFIX, normalise,
+                )
+
+                exact = normalise(q, prefix=_PREFIX)
+                if exact:
+                    qs = qs.filter(reference=exact)
+                else:
+                    bare = q.upper().replace(" ", "")
+                    qs = qs.filter(
+                        Q(reference__icontains=bare) | Q(id__icontains=bare),
+                    )
 
         # `filterset_fields` above is documentation-only — django-filter
         # isn't installed, so DRF doesn't wire it. Apply the same

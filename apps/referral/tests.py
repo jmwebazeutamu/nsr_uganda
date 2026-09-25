@@ -5,12 +5,14 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from django.db import IntegrityError
 from rest_framework.test import APIClient
 
 from apps.data_management.models import Household
 from apps.partners.models import DataSharingAgreement, Partner, Programme
 from apps.reference_data.models import GeographicUnit
 from apps.referral.models import ProgrammeEnrolment, Referral
+from apps.security.models import AuditEvent
 from apps.referral.services import (
     ENROL_ACTIVE,
     ENROL_EXITED,
@@ -241,7 +243,7 @@ class TestApi:
     ):
         """Direct enrolment can only create the canonical scoped rows."""
         dsa = DataSharingAgreement.objects.create(
-            partner=programme.partner, reference="DSA-REF-DIRECT", version=1,
+            partner=programme.partner, reference="DSA-OPM-2026-001", version=1,
             status="active", effective_from=date(2026, 1, 1),
             entities_scope={"household": True}, field_scope={},
         )
@@ -266,6 +268,8 @@ class TestApi:
         )
         client = APIClient()
         client.force_authenticate(user=user)
+        programme.code = "OPM-GEO-TEST-02"
+        programme.save(update_fields=["code"])
 
         eligible = client.get("/api/v1/ref/enrolments/eligible-households/", {
             "programme": programme.id,
@@ -278,6 +282,11 @@ class TestApi:
             "household_ids": [household.id, outside_household.id],
         }, format="json")
         assert refused.status_code == 422, refused.data
+        assert refused.data["detail"].startswith("No households were enrolled")
+        assert refused.data["rejections"] == [{
+            "household_id": str(outside_household.id), "code": "not_eligible",
+            "reason": "Household is outside saved programme geography or does not meet its configured eligibility.",
+        }]
         assert ProgrammeEnrolment.objects.count() == 0
 
         created = client.post("/api/v1/ref/enrolments/enrol-direct/", {
@@ -285,9 +294,42 @@ class TestApi:
             "household_ids": [household.id],
         }, format="json")
         assert created.status_code == 201, created.data
+        assert created.data["summary"] == {
+            "requested_count": 1, "created_count": 1, "programme_id": str(programme.id),
+        }
+        enrolment_id = created.data["enrolments"][0]["id"]
         assert ProgrammeEnrolment.objects.filter(
             programme=programme, household=household,
         ).exists()
+        assert AuditEvent.objects.filter(
+            entity_type="programme_enrolment_batch", entity_id=str(programme.id),
+        ).exists()
+
+        # The household detail and programme roster read the exact same
+        # persisted ProgrammeEnrolment row, not a client-side roster copy.
+        household_rows = client.get("/api/v1/ref/enrolments/", {"household": household.id})
+        programme_rows = client.get("/api/v1/ref/enrolments/", {"programme": programme.id})
+        assert household_rows.status_code == programme_rows.status_code == 200
+        assert {row["id"] for row in household_rows.data["results"]} == {enrolment_id}
+        assert {row["id"] for row in programme_rows.data["results"]} == {enrolment_id}
+
+        duplicate = client.post("/api/v1/ref/enrolments/enrol-direct/", {
+            "programme_id": programme.id, "household_ids": [household.id],
+        }, format="json")
+        assert duplicate.status_code == 422, duplicate.data
+        assert duplicate.data["rejections"][0]["code"] == "already_enrolled"
+
+    def test_programme_enrolment_constraint_prevents_duplicate_pairs(self, household, programme):
+        """The database remains the concurrency backstop for direct batches."""
+        ProgrammeEnrolment.objects.create(
+            programme=programme, household=household, status="active",
+            effective_date=date(2026, 9, 25),
+        )
+        with pytest.raises(IntegrityError):
+            ProgrammeEnrolment.objects.create(
+                programme=programme, household=household, status="active",
+                effective_date=date(2026, 9, 25),
+            )
 
     def test_direct_enrolment_fails_closed_for_unmapped_choice_rules(
         self, household, programme, geo, django_user_model,

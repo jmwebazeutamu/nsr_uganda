@@ -130,6 +130,30 @@ under author tag `system-migration-referral`. Forward-only.
 
 - **No processing impact**. Documentation + a sealing test.
 
+### OI-S25-4 — Direct household enrolment (current delivery)
+
+- **Processing activity**: the Beneficiaries screen now submits one selected
+  household batch to `POST /api/v1/ref/enrolments/enrol-direct/`. The server
+  resolves the canonical `Programme`, its effective DSA, saved programme
+  geography and executable eligibility before it creates canonical
+  `ProgrammeEnrolment` rows in a single transaction.
+- **Personal-data categories touched**: registry identifiers, household-head
+  name and canonical geography are displayed to an authorised operator for
+  selection. Failed batches return household IDs and policy reasons only; no
+  additional household attributes are exposed in rejection details.
+- **Access control and purpose limitation**: the eligible-households endpoint
+  applies the caller's existing ABAC geographic scope, and the write endpoint
+  applies the same ABAC check before server-side eligibility validation. The
+  programme's effective DSA remains the governing data-sharing contract.
+- **Integrity and accountability**: any invalid selection causes the whole
+  batch to fail with zero enrolments. A database uniqueness constraint on
+  `(programme, household)` prevents concurrent duplicate membership. One
+  audit event is written for the batch and one for each created enrolment.
+- **Schema dependency rule**: PMT-band, composition and sex criteria with no
+  approved canonical predicate mapping are rejected rather than locally
+  approximated. This is deliberate fail-closed behaviour, not an eligibility
+  bypass.
+
 ### US-S11-021 — Console "Run connector" button (2026-05-26)
 
 - **Processing activity**: New REST endpoint `POST

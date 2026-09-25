@@ -46,6 +46,9 @@ const _updApiToView = (cr) => {
     : 3;
   return {
     id: cr.id,
+    // The update number people quote. The id stays the key and stays
+    // in the URLs; this is the string that fits on a slip.
+    reference: cr.reference || cr.id,
     head: cr.entity_id ? cr.entity_id.slice(0, 12) + "…" : "—",
     parish: cr.entity_type === "household" ? "Household" : "Member",
     type: _updTypeLabel[cr.change_type] || cr.change_type,
@@ -370,6 +373,9 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
   // unchanged — Grievance.linked_change_request_id (S2-008) is what
   // the real fetch will resolve.
   const effectiveId = changeRequestId || (isLive ? current.id : "—");
+  // What the header SHOWS. effectiveId stays the id because the audit
+  // fetch and the cross-screen handoff are both keyed on it.
+  const effectiveRef = (isLive && current.reference) || effectiveId;
   const fromGrm = Boolean(changeRequestId);
 
   // Eyebrow indicator — mirrors the GRM workbench convention.
@@ -571,7 +577,7 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
     <div className="page" style={{paddingBottom:0, position:'relative'}}>
       <PageHeader
         eyebrow={eyebrow}
-        title={<>Change request <span className="t-mono" style={{fontSize:14, marginLeft:8, color:'var(--neutral-500)'}}>{effectiveId}</span></>}
+        title={<>Change request <span className="t-mono" style={{fontSize:15, marginLeft:8, color:'var(--primary-900)', fontWeight:600}}>{effectiveRef}</span></>}
         sub={<>
           {fromGrm && <Chip tone="data" size="sm" style={{marginRight:8}}>linked from grievance</Chip>}
           {headerVM.entity_label} <span className="t-mono">{(headerVM.household || "").slice(0,18)}{headerVM.household && headerVM.household.length > 18 ? "…" : ""}</span>
@@ -672,8 +678,8 @@ const UPDScreen = ({ changeRequestId, onNavigate }) => {
                       onChange={() => toggleRow(r.id)} onClick={(e) => e.stopPropagation()}/>
                   )}
                 </div>
-                <div className="t-mono" style={{padding:'10px 12px', fontSize:12, display:'flex', alignItems:'center'}}>
-                  {r.id}
+                <div className="t-mono" style={{padding:'10px 12px', fontSize:12, fontWeight:600, color:'var(--primary-900)', display:'flex', alignItems:'center'}}>
+                  {r.reference || r.id}
                 </div>
                 <div style={{padding:'10px 12px', fontSize:13, display:'flex', flexDirection:'column'}}>
                   <strong>{r.head}</strong>

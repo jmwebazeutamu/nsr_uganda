@@ -26,10 +26,16 @@ from .models import ProgrammeEnrolment
 class EnrolmentEligibilityError(Exception):
     """A programme cannot enrol the submitted household selection."""
 
-    def __init__(self, detail: str, *, code: str = "ineligible", dependencies=None):
+    def __init__(
+        self, detail: str, *, code: str = "ineligible", dependencies=None,
+        rejections=None,
+    ):
         super().__init__(detail)
         self.code = code
         self.dependencies = list(dependencies or [])
+        # Return policy reasons only: do not disclose household attributes
+        # through a failed batch request.
+        self.rejections = list(rejections or [])
 
 
 def _dsa_is_effective(dsa) -> bool:
@@ -145,27 +151,38 @@ def enrol_households_directly(*, programme: Programme, household_ids, actor: str
     if not requested_ids:
         raise EnrolmentEligibilityError("Select at least one household.", code="selection_empty")
 
+    # Lock the programme before evaluating its status, DSA and saved scope.
+    # A configuration change cannot race this batch between validation and
+    # insertion.
+    programme = Programme.objects.select_for_update().get(pk=programme.pk)
+    existing_ids = {
+        str(value) for value in ProgrammeEnrolment.objects.select_for_update()
+        .filter(programme=programme, household_id__in=requested_ids)
+        .values_list("household_id", flat=True)
+    }
     eligible = list(eligible_household_rows(programme, household_ids=requested_ids))
     eligible_ids = {str(household.id) for household in eligible}
-    rejected = sorted(set(requested_ids) - eligible_ids)
-    if rejected:
+    available_ids = {
+        str(value) for value in Household.objects.filter(
+            id__in=requested_ids, is_deleted=False,
+        ).values_list("id", flat=True)
+    }
+    rejections = []
+    for household_id in requested_ids:
+        if household_id not in available_ids:
+            rejections.append({"household_id": household_id, "code": "not_available",
+                               "reason": "Household does not exist or is no longer available."})
+        elif household_id in existing_ids:
+            rejections.append({"household_id": household_id, "code": "already_enrolled",
+                               "reason": "Household is already enrolled in this programme."})
+        elif household_id not in eligible_ids:
+            rejections.append({"household_id": household_id, "code": "not_eligible",
+                               "reason": "Household is outside saved programme geography or does not meet its configured eligibility."})
+    if rejections:
         raise EnrolmentEligibilityError(
-            "Selected household(s) are outside the programme's current eligibility scope: "
-            + ", ".join(rejected),
+            "No households were enrolled because one or more selected households are invalid.",
             code="selection_ineligible",
-        )
-
-    existing = set(
-        ProgrammeEnrolment.objects.select_for_update()
-        .filter(programme=programme, household_id__in=requested_ids)
-        .exclude(status="exited")
-        .values_list("household_id", flat=True),
-    )
-    if existing:
-        raise EnrolmentEligibilityError(
-            "Selected household(s) already have a live enrolment in this programme: "
-            + ", ".join(sorted(str(value) for value in existing)),
-            code="already_enrolled",
+            rejections=rejections,
         )
 
     enrolled_on = effective_date or timezone.localdate()
@@ -188,4 +205,13 @@ def enrol_households_directly(*, programme: Programme, household_ids, actor: str
             reason=f"direct household enrolment in {programme.code or programme.id}",
             field_changes={"programme_id": str(programme.id), "household_id": str(enrolment.household_id)},
         )
+    emit_audit(
+        "create", "programme_enrolment_batch", str(programme.id), actor=actor,
+        reason=f"direct enrolment batch created {len(created)} enrolment(s)",
+        field_changes={
+            "programme_id": str(programme.id),
+            "household_ids": [str(enrolment.household_id) for enrolment in created],
+            "created_count": len(created),
+        },
+    )
     return created

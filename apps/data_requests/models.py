@@ -48,6 +48,16 @@ class DataRequest(models.Model):
     """
 
     id = ULIDField(primary_key=True)
+
+    #: The case number people use — "DRS-2026-0001".
+    #:
+    #: The request number a partner quotes in email and a DSA officer writes in a decision note.
+    #: The ULID above stays the key, stays in the URLs and stays in the
+    #: audit chain; this is the string a person can carry.
+    #:
+    #: Blank only for a row mid-creation; save() fills it in. See
+    #: apps/reference_data/references.py and ADR-0039.
+    reference = models.CharField(max_length=16, unique=True, blank=True)
     dsa = models.ForeignKey(
         "partners.DataSharingAgreement",
         on_delete=models.PROTECT, related_name="requests",
@@ -79,6 +89,19 @@ class DataRequest(models.Model):
             models.Index(fields=["dsa", "status"]),
             models.Index(fields=["status", "expires_at"]),
         ]
+
+
+    def save(self, *args, **kwargs):
+        if not self.reference:
+            from apps.reference_data.references import assign, DATA_REQUEST
+            # Inside whatever transaction is writing this row, so the
+            # select_for_update in assign() serialises and a rollback
+            # gives the number back.
+            self.reference = assign(self, DATA_REQUEST)
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None:
+                kwargs["update_fields"] = [*update_fields, "reference"]
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"DataRequest {self.id} dsa={self.dsa_id} [{self.status}]"

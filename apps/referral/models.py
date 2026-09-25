@@ -32,6 +32,16 @@ class Referral(models.Model):
     """
 
     id = ULIDField(primary_key=True)
+
+    #: The case number people use — "REF-2026-0001".
+    #:
+    #: The referral number a programme officer quotes back when they ask what happened to a household.
+    #: The ULID above stays the key, stays in the URLs and stays in the
+    #: audit chain; this is the string a person can carry.
+    #:
+    #: Blank only for a row mid-creation; save() fills it in. See
+    #: apps/reference_data/references.py and ADR-0039.
+    reference = models.CharField(max_length=16, unique=True, blank=True)
     programme = models.ForeignKey(
         "partners.Programme", on_delete=models.PROTECT,
         related_name="referrals",
@@ -63,6 +73,21 @@ class Referral(models.Model):
             models.Index(fields=["programme", "status"]),
             models.Index(fields=["household", "status"]),
         ]
+
+
+    def save(self, *args, **kwargs):
+        if not self.reference:
+            from apps.reference_data.references import assign, REFERRAL
+            # Inside whatever transaction is writing this row, so the
+            # select_for_update in assign() serialises and a rollback
+            # gives the number back.
+            # sent_at, not created_at: a referral has no created_at,
+            # and when it was SENT is when it happened.
+            self.reference = assign(self, REFERRAL, date_field="sent_at")
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None:
+                kwargs["update_fields"] = [*update_fields, "reference"]
+        super().save(*args, **kwargs)
 
     def __str__(self) -> str:
         return f"Referral {self.id} {self.household_id}->{self.programme_id} [{self.status}]"

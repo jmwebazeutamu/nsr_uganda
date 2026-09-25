@@ -144,9 +144,9 @@ class Programme(models.Model):
     programme can sit under multiple DSAs across renewal cycles.
 
     US-S25-002 extends this model with the cohort / disbursement /
-    lifecycle / webhook columns captured by the registration wizard
-    (apps.referral.Programme keeps the operational referral side
-    until that legacy app is consolidated in a Sprint 26 follow-up).
+    lifecycle / webhook columns captured by the registration wizard.
+    Per ADR-0015 it is also the canonical programme used by referral
+    and enrolment workflows.
     """
 
     id = ULIDField(primary_key=True)

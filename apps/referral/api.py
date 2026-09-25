@@ -39,7 +39,7 @@ class ReferralSerializer(serializers.ModelSerializer):
     class Meta:
         model = Referral
         fields = (
-            "id", "programme", "programme_code", "programme_name",
+            "id", "reference", "programme", "programme_code", "programme_name",
             "household", "eligibility_rule_version",
             "status", "status_label",
             "sent_at", "accepted_at", "enrolled_at",
@@ -48,7 +48,7 @@ class ReferralSerializer(serializers.ModelSerializer):
             "last_delivery_id", "last_delivery_at",
         )
         read_only_fields = (
-            "id", "status", "sent_at", "accepted_at", "enrolled_at",
+            "id", "reference", "status", "sent_at", "accepted_at", "enrolled_at",
             "rejected_at", "exited_at",
             "last_delivery_id", "last_delivery_at",
         )
@@ -70,6 +70,9 @@ class EnrolmentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ProgrammeEnrolment
+        # No `reference` here: an enrolment is a programme-side record,
+        # not something a person quotes back to the registry. The three
+        # that got numbers are the ones people ring up about.
         fields = ("id", "programme", "programme_code", "programme_name",
                   "household", "household_head_name", "household_sub_region_name", "household_district_name", "referral",
                   "status", "status_label",
@@ -147,7 +150,11 @@ class _EligibleHouseholdSerializer(serializers.ModelSerializer):
 
 def _eligibility_error_response(exc: EnrolmentEligibilityError):
     return Response(
-        {"detail": str(exc), "code": exc.code, "schema_dependencies": exc.dependencies},
+        {
+            "detail": str(exc), "code": exc.code,
+            "schema_dependencies": exc.dependencies,
+            "rejections": exc.rejections,
+        },
         status=status.HTTP_422_UNPROCESSABLE_ENTITY,
     )
 
@@ -180,6 +187,35 @@ class ReferralViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyMode
         filtered by the server before its results are serialised.
         """
         qs = super().get_queryset()
+
+        # `?q=` — a case number somebody read out or pasted in.
+        #
+        # Normalised server-side with the same module the number was
+        # issued from: dashes and spaces optional, prefix optional, and
+        # O read as 0, I or l as 1. Falls through to a contains-match
+        # on the reference and the ULID so a partial still narrows.
+        #
+        # Detail routes are excluded. Narrowing a LIST is the whole job
+        # of these filters; on a detail route the only thing they can
+        # do is remove the record being asked for, which surfaces as a
+        # 404 that reads like a permission problem.
+        if not self.kwargs.get("pk"):
+            q = (self.request.query_params.get("q") or "").strip()
+            if q:
+                from django.db.models import Q
+
+                from apps.reference_data.references import (
+                    REFERRAL as _PREFIX, normalise,
+                )
+
+                exact = normalise(q, prefix=_PREFIX)
+                if exact:
+                    qs = qs.filter(reference=exact)
+                else:
+                    bare = q.upper().replace(" ", "")
+                    qs = qs.filter(
+                        Q(reference__icontains=bare) | Q(id__icontains=bare),
+                    )
         for field in ("status", "programme", "household"):
             value = self.request.query_params.get(field)
             if value:
@@ -307,7 +343,8 @@ class ProgrammeEnrolmentViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.Re
 
     @extend_schema(
         tags=["ref"], summary="Directly enrol selected eligible households",
-        request=_DirectEnrolmentRequest, responses={201: EnrolmentSerializer},
+        request=_DirectEnrolmentRequest,
+        responses={201: OpenApiResponse(description="Batch summary and created canonical enrolments")},
     )
     @action(detail=False, methods=["post"], url_path="enrol-direct")
     def enrol_direct(self, request):
@@ -338,7 +375,17 @@ class ProgrammeEnrolmentViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.Re
             )
         except EnrolmentEligibilityError as exc:
             return _eligibility_error_response(exc)
-        return Response(EnrolmentSerializer(created, many=True).data, status=status.HTTP_201_CREATED)
+        return Response(
+            {
+                "summary": {
+                    "requested_count": len(set(str(value) for value in household_ids)),
+                    "created_count": len(created),
+                    "programme_id": str(programme.id),
+                },
+                "enrolments": EnrolmentSerializer(created, many=True).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
     @extend_schema(tags=["ref"], summary="Exit an enrolment",
                    request=_RejectReq, responses={200: EnrolmentSerializer})

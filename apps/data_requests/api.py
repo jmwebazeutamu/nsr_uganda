@@ -47,7 +47,7 @@ class DataRequestSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = DataRequest
-        fields = ("id", "dsa", "dsa_reference", "partner_code", "partner_name",
+        fields = ("id", "reference", "dsa", "dsa_reference", "partner_code", "partner_name",
                   "requester", "requester_note",
                   "request_payload", "status",
                   "submitted_at", "approver", "decided_at",
@@ -55,7 +55,7 @@ class DataRequestSerializer(serializers.ModelSerializer):
                   "manifest_sha256", "row_count_delivered",
                   "created_at", "updated_at")
         read_only_fields = (
-            "id", "dsa_reference", "partner_code", "partner_name",
+            "id", "reference", "dsa_reference", "partner_code", "partner_name",
             "requester", "status",
             "submitted_at", "approver", "decided_at",
             "decision_reason", "delivered_at", "expires_at",
@@ -80,7 +80,7 @@ class MyDataRequestSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = DataRequest
-        fields = ("id", "dsa_reference", "status",
+        fields = ("id", "reference", "dsa_reference", "status",
                   # Audit + decision metadata — partner has a right
                   # to know why a request was rejected and when each
                   # transition happened.
@@ -242,6 +242,35 @@ class DataRequestViewSet(
         """
         qs = super().get_queryset()
         # Explicitly apply the filter used by both the list chips and sidebar
+
+        # `?q=` — a case number somebody read out or pasted in.
+        #
+        # Normalised server-side with the same module the number was
+        # issued from: dashes and spaces optional, prefix optional, and
+        # O read as 0, I or l as 1. Falls through to a contains-match
+        # on the reference and the ULID so a partial still narrows.
+        #
+        # Detail routes are excluded. Narrowing a LIST is the whole job
+        # of these filters; on a detail route the only thing they can
+        # do is remove the record being asked for, which surfaces as a
+        # 404 that reads like a permission problem.
+        if not self.kwargs.get("pk"):
+            q = (self.request.query_params.get("q") or "").strip()
+            if q:
+                from django.db.models import Q
+
+                from apps.reference_data.references import (
+                    DATA_REQUEST as _PREFIX, normalise,
+                )
+
+                exact = normalise(q, prefix=_PREFIX)
+                if exact:
+                    qs = qs.filter(reference=exact)
+                else:
+                    bare = q.upper().replace(" ", "")
+                    qs = qs.filter(
+                        Q(reference__icontains=bare) | Q(id__icontains=bare),
+                    )
         # counts.  Relying on an optional django-filter backend meant a
         # ``?status=submitted`` count could silently include every status.
         request_status = (self.request.query_params.get("status") or "").strip()

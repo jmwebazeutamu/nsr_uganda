@@ -1373,7 +1373,9 @@ class TestPartnerSelfService:
         # CRITERIA + rejection reason. Operator identifiers
         # (approver, requester) are still withheld.
         assert set(row.keys()) == {
-            "id", "dsa_reference", "status",
+            "id",
+            # The request number the partner quotes in email.
+            "reference", "dsa_reference", "status",
             "created_at", "submitted_at", "decided_at",
             "delivered_at", "expires_at",
             "decision_reason", "request_payload",

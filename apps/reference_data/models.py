@@ -264,3 +264,45 @@ class ChoiceOption(models.Model):
 
     def __str__(self) -> str:
         return f"{self.choice_list.list_name}:{self.code} {self.label}"
+
+
+class ReferenceSequence(models.Model):
+    """The running count behind every case number in the registry.
+
+    One row per (module prefix, year): GRM/2026, UPD/2026, and so on.
+    `apps.reference_data.references` takes numbers from it under
+    `select_for_update`, so concurrent creates queue rather than
+    collide and a rolled-back transaction gives its number back —
+    which is what keeps a year's numbers contiguous, and contiguous is
+    most of why they are worth reading.
+
+    One table rather than one per module. Four copies of a counter
+    would drift, and the first thing that drifts is whether a rollback
+    burns a number — which nobody notices until the numbering has gaps
+    and nobody can say why.
+
+    Not to be confused with the rest of this app: "reference data" is
+    geography and choice lists, "reference" here is the case number
+    people quote. Same word, different jobs.
+
+    Django's own sequences would be simpler and wrong: per-table, no
+    reset in January, and explicitly not contiguous.
+    """
+
+    prefix = models.CharField(max_length=8)
+    year = models.PositiveIntegerField()
+    last_number = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "case-number sequence"
+        verbose_name_plural = "case-number sequences"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["prefix", "year"], name="refseq_unique_prefix_year",
+            ),
+        ]
+        ordering = ("prefix", "-year")
+
+    def __str__(self) -> str:
+        return f"{self.prefix}-{self.year}: {self.last_number} issued"

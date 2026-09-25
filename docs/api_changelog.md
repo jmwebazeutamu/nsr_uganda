@@ -511,10 +511,12 @@ the screen itself.
 The screen reads `/api/v1/programmes/?status=active` (Sprint 25)
 to populate the programme rollup strip, and
 `/api/v1/reference-data/geographic-units/` to populate the
-sub-region filter. The enrolment listing itself is design-preview
-data pending the consolidated enrolment endpoint (OI-S25-4 —
-slated for Sprint 26 alongside the `apps.referral.Programme` →
-`apps.partners.Programme` consolidation).
+sub-region filter. The enrolment listing is backed by the canonical
+`ProgrammeEnrolment` relationship. Direct household enrolment is available at
+`POST /api/v1/ref/enrolments/enrol-direct/`; it resolves programme, DSA,
+saved geography and executable eligibility server-side, then creates an
+atomic batch. ADR-0015 completed the programme consolidation, so there is no
+Sprint-26 placeholder or parallel referral programme source.
 
 ---
 

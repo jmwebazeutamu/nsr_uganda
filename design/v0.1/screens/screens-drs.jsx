@@ -500,7 +500,9 @@ const OperatorDRSList = ({ onNewRequest, onNavigate, onResumeDraft, dsaId = "" }
                   cursor:"pointer", alignItems:"center",
                 }}>
                 <div style={{padding:"12px 16px"}}>
-                  <div className="t-mono" style={{fontSize:12, color:"var(--neutral-900)"}}>{r.id}</div>
+                  <div className="t-mono" style={{fontSize:12, fontWeight:600, color:"var(--primary-900)"}}>
+                    {r.reference || r.id}
+                  </div>
                   <div className="t-bodysm muted" style={{marginTop:2}}>{r.dsa_reference || `DSA ${r.dsa || "—"}`}</div>
                 </div>
                 <div style={{padding:"12px 8px"}}>
