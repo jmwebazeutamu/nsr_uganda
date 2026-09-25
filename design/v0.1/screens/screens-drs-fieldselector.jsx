@@ -55,89 +55,9 @@
 
 const { useState: useStateFS, useMemo: useMemoFS, useRef: useRefFS } = React;
 
-/* ----------------------------------------------------------------
-   Field catalogue with richer metadata than the wizard's prior
-   FIELDS tuple. In production this comes from
-   /api/v1/drs/requests/builder-schema/ — the `key`, `g`, `sens`,
-   and `dsaBlocked` columns map directly to the schema response.
-   ---------------------------------------------------------------- */
-const FS_FIELDS = [
-  // Identifiers
-  { group:"Identifiers", key:"household.registry_id",      label:"Registry ID",       sensitivity:"Public",    type:"ulid",   example:"01HXY7K3B2N9PVQE4M6FZRWS18", completeness:100.0, desc:"Stable cross-system identifier." },
-  { group:"Identifiers", key:"household.household_number", label:"Household number",  sensitivity:"Public",    type:"text",   example:"HH-7411-002-0148",            completeness:100.0, desc:"Field-channel reference." },
-  { group:"Identifiers", key:"household.captured_date",    label:"Captured date",     sensitivity:"Public",    type:"date",   example:"2026-03-14",                  completeness: 99.7, desc:"Date the household was enumerated." },
-  { group:"Identifiers", key:"household.captured_parish",  label:"Captured at parish",sensitivity:"Internal",  type:"text",   example:"Nakiloro",                    completeness: 98.4, desc:"Parish at the time of capture (may differ from current)." },
-
-  // Geography
-  { group:"Geography",   key:"household.sub_region_code",  label:"Sub-region",        sensitivity:"Public",    type:"enum",   example:"SR-KARAMOJA",                 completeness:100.0, desc:"UBOS sub-region code (9 values)." },
-  { group:"Geography",   key:"household.district_code",   label:"District",          sensitivity:"Public",    type:"enum",   example:"DST-MOROTO",                  completeness:100.0, desc:"UBOS district code." },
-  { group:"Geography",   key:"household.subcounty_code",  label:"Sub-county",        sensitivity:"Public",    type:"enum",   example:"SUB-TAPAC",                   completeness: 99.9, desc:"UBOS sub-county code." },
-  { group:"Geography",   key:"household.parish_code",     label:"Parish code",       sensitivity:"Internal",  type:"enum",   example:"PAR-NAKILORO",                completeness: 99.5, desc:"UBOS parish code." },
-  { group:"Geography",   key:"household.village_name",    label:"Village",           sensitivity:"Internal",  type:"text",   example:"Lopuwapuwa A",                completeness: 96.2, desc:"Free-text village; not on UBOS frame." },
-  { group:"Geography",   key:"household.gps_lat",         label:"GPS latitude",      sensitivity:"Sensitive", type:"number", example:"2.5283",                      completeness: 94.1, disabled:true, disabled_reason:"DSA clause 4.2.b" },
-  { group:"Geography",   key:"household.gps_lng",         label:"GPS longitude",     sensitivity:"Sensitive", type:"number", example:"34.6614",                     completeness: 94.1, disabled:true, disabled_reason:"DSA clause 4.2.b" },
-
-  // Programmes
-  { group:"Programmes",  key:"household.programme_codes",   label:"Programme enrolment", sensitivity:"Internal", type:"list",   example:"[OPM-PDM, MGLSD-SCG]",        completeness: 87.3, desc:"Active programme codes." },
-  { group:"Programmes",  key:"household.enrolment_status",  label:"Enrolment status",   sensitivity:"Internal", type:"enum",   example:"active",                      completeness: 87.3, desc:"Aggregate across programmes." },
-
-  // PMT
-  { group:"PMT",         key:"household.pmt_score",      label:"PMT score",            sensitivity:"Internal",  type:"number", example:"0.213",                       completeness: 98.8, desc:"Proxy means test score · 0–1." },
-  { group:"PMT",         key:"household.pmt_band",       label:"PMT band",             sensitivity:"Internal",  type:"enum",   example:"Poorest 40%",                 completeness: 98.8, desc:"Quintile band from PMT model v2.1." },
-  { group:"PMT",         key:"household.vulnerability_band", label:"Vulnerability band", sensitivity:"Internal",type:"enum",   example:"Vulnerable",                  completeness: 98.8, desc:"Composite band combining PMT + shock indicators." },
-
-  // Household composition
-  { group:"Household",   key:"household.size",            label:"Household size",     sensitivity:"Public",    type:"number", example:"6",                           completeness:100.0, desc:"Member count." },
-  { group:"Household",   key:"household.dependency_ratio",label:"Dependency ratio",   sensitivity:"Internal",  type:"number", example:"1.50",                        completeness: 99.6, desc:"Non-working / working members." },
-  { group:"Household",   key:"household.head_sex",        label:"Head sex",           sensitivity:"Public",    type:"enum",   example:"F",                           completeness:100.0, desc:"Single-letter code (F / M)." },
-  { group:"Household",   key:"household.head_age_band",   label:"Head age band",      sensitivity:"Public",    type:"enum",   example:"30–39",                       completeness: 99.8, desc:"5-year bands." },
-  { group:"Household",   key:"household.head_education",  label:"Head education",     sensitivity:"Internal",  type:"enum",   example:"Primary",                     completeness: 96.5, desc:"Highest level attained." },
-  { group:"Household",   key:"household.head_disability_flag", label:"Head has disability", sensitivity:"Internal", type:"bool", example:"false",                    completeness: 99.1, desc:"Self-reported." },
-
-  // Identity (mostly DSA-blocked at this level)
-  { group:"Identity",    key:"member.head_name",          label:"Head of household name", sensitivity:"Personal", type:"text", example:"Akiteng Margaret",            completeness:100.0, desc:"PII — limited to operator review." },
-  { group:"Identity",    key:"member.head_phone",         label:"Phone (masked)",     sensitivity:"Personal",  type:"text",   example:"+256 ••• ••4567",             completeness: 78.2, desc:"Last 4 digits revealed; full reveal needs IDV clearance." },
-  { group:"Identity",    key:"member.nin_value",          label:"NIN",                sensitivity:"Sensitive", type:"text",   example:"CM12345678ABCD",              completeness: 96.4, disabled:true, disabled_reason:"DSA clause 4.2.b" },
-  { group:"Identity",    key:"member.photo_ref",          label:"Photo (object ref)", sensitivity:"Sensitive", type:"text",   example:"s3://nsr/photos/…",           completeness: 92.1, disabled:true, disabled_reason:"DSA clause 4.2.b" },
-
-  // Housing
-  { group:"Housing",     key:"household.roof_material",   label:"Roof material",      sensitivity:"Internal",  type:"enum",   example:"Iron sheets",                 completeness: 99.7, desc:"5 categorical values." },
-  { group:"Housing",     key:"household.walls_material",  label:"Walls material",     sensitivity:"Internal",  type:"enum",   example:"Brick",                       completeness: 99.6, desc:"5 categorical values." },
-  { group:"Housing",     key:"household.toilet_type",     label:"Toilet type",        sensitivity:"Internal",  type:"enum",   example:"VIP latrine",                 completeness: 99.5, desc:"4 categorical values." },
-  { group:"Housing",     key:"household.water_source",    label:"Water source",       sensitivity:"Internal",  type:"enum",   example:"Borehole",                    completeness: 99.5, desc:"4 categorical values." },
-
-  // Wealth
-  { group:"Wealth",      key:"household.assets_owned_count", label:"Assets owned (count)", sensitivity:"Internal", type:"number", example:"3",                       completeness: 98.2, desc:"From 12-item asset list." },
-  { group:"Wealth",      key:"household.savings_amount",  label:"Savings amount",     sensitivity:"Sensitive", type:"number", example:"450,000 UGX",                 completeness: 71.8, disabled:true, disabled_reason:"DSA clause 4.2.b" },
-];
-
-const FS_FIELD_BY_KEY = FS_FIELDS.reduce((a,f) => (a[f.key]=f, a), {});
-const FS_GROUPS = Array.from(new Set(FS_FIELDS.map(f => f.group)));
-const FS_SENS  = ["Public", "Internal", "Personal", "Sensitive"];
-
-/* Recommended packs — one-click preset selections. Each pack is
-   an ordered list of field keys; clicking it replaces the current
-   selection. DSA-blocked keys are filtered out automatically. */
-const FS_PACKS = [
-  { id:"minimum",    label:"Minimum reporting", icon:"filter",
-    note:"Canonical registry, geography and vulnerability fields.",
-    fields:["household.id","household.region_code","household.district_code",
-            "household.current_pmt_score","household.current_vulnerability_band"] },
-  { id:"geography",  label:"Geography rollup",  icon:"mapPin",
-    note:"Where households live · public + internal codes.",
-    fields:["household.registry_id","household.sub_region_code","household.district_code",
-            "household.subcounty_code","household.parish_code"] },
-  { id:"vuln",       label:"Vulnerability profile", icon:"shield",
-    note:"Targeting variables for cash-transfer programmes.",
-    fields:["household.registry_id","household.sub_region_code","household.size",
-            "household.head_sex","household.head_age_band","household.head_disability_flag",
-            "household.pmt_score","household.pmt_band","household.vulnerability_band"] },
-  { id:"housing",    label:"Housing & utilities", icon:"home",
-    note:"WASH + shelter quality indicators.",
-    fields:["household.registry_id","household.sub_region_code",
-            "household.roof_material","household.walls_material",
-            "household.toilet_type","household.water_source"] },
-];
+// ``DataRequestFieldDefinition`` (via /builder-schema/) is the sole field
+// catalogue. This screen must never substitute demo fields or field packs:
+// doing so would allow a request UI to show keys the server cannot validate.
 
 /* ----------------------------------------------------------------
    Available list — left pane
@@ -484,23 +404,27 @@ const FSBreakdownCard = ({ selectedKeys, byKey }) => {
    Step 3 — top-level
    ---------------------------------------------------------------- */
 const FieldStepV2 = ({
-  selectedKeys, onChange, dsaReference = "DSA-OPM-PDM-2026",
+  selectedKeys, onChange, dsaReference = "",
   fields,  // US-S27-014: live catalogue from /builder-schema/
-  packs = FS_PACKS,
 }) => {
   const [search, setSearch] = useStateFS("");
   const [groupFilter, setGroupFilter] = useStateFS("All");
   const [sensFilter, setSensFilter]   = useStateFS("All");
   const [showDisabled, setShowDisabled] = useStateFS(true);
 
-  // Active catalogue: live `fields` prop or offline-preview fallback.
-  const activeFields = (fields && fields.length > 0) ? fields : FS_FIELDS;
+  // The Data Dictionary response is authoritative. An empty catalogue is an
+  // explicit unavailable state, never a reason to substitute local keys.
+  const activeFields = Array.isArray(fields) ? fields : [];
   const byKey = useMemoFS(
     () => activeFields.reduce((a, f) => (a[f.key] = f, a), {}),
     [activeFields],
   );
   const groups = useMemoFS(
     () => Array.from(new Set(activeFields.map(f => f.group))),
+    [activeFields],
+  );
+  const sensitivities = useMemoFS(
+    () => Array.from(new Set(activeFields.map(f => f.sensitivity).filter(Boolean))),
     [activeFields],
   );
 
@@ -530,42 +454,25 @@ const FieldStepV2 = ({
     keys.forEach(k => { if (!next.includes(k)) next.push(k); });
     onChange(next);
   };
-  const loadPack = (pack) => {
-    onChange(pack.fields.filter(k => {
-      const f = byKey[k];
-      return f && !f.disabled;
-    }));
-  };
-
   const availableCount = filtered.filter(f => !f.disabled).length;
   const disabledCount  = activeFields.filter(f => f.disabled).length;
+
+  if (activeFields.length === 0) {
+    return (
+      <div className="card" style={{padding:24}}>
+        <strong className="t-bodysm">Field catalogue unavailable</strong>
+        <div className="t-cap muted" style={{marginTop:6}}>
+          The Data Dictionary returned no requestable fields. Refresh the
+          request scope or ask an administrator to configure active field
+          definitions; no local fallback is used.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{display:'grid', gridTemplateColumns:'1fr 320px', gap:16}}>
       <div className="col gap-3" style={{minWidth:0}}>
-        {/* Pack strip */}
-        <div className="card" style={{padding:14}}>
-          <div className="row gap-3" style={{flexWrap:"wrap"}}>
-            <div style={{display:"flex", flexDirection:"column", gap:2, marginRight:8}}>
-              <span className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)"}}>
-                RECOMMENDED PACKS
-              </span>
-              <span className="t-cap">Replaces current selection</span>
-            </div>
-            {packs.map(p => (
-              <button key={p.id} onClick={() => loadPack(p)} title={p.note}
-                className="btn btn-sm" style={{background:"var(--neutral-0)", borderColor:"var(--neutral-300)"}}>
-                <Icon name={p.icon} size={12}/> {p.label}
-                <span style={{
-                  marginLeft:6, padding:"0 5px", borderRadius:8,
-                  background:"var(--neutral-100)", color:"var(--neutral-700)",
-                  fontSize:10, fontWeight:600,
-                }}>{p.fields.filter(k => byKey[k] && !byKey[k].disabled).length}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-
         {/* Filter strip */}
         <div className="card" style={{padding:14, display:"flex", flexDirection:"column", gap:10}}>
           <div className="row gap-3" style={{flexWrap:"wrap"}}>
@@ -604,7 +511,7 @@ const FieldStepV2 = ({
 
           <div className="row gap-2" style={{flexWrap:"wrap"}}>
             <span className="t-cap" style={{fontWeight:600, marginRight:4}}>SENSITIVITY</span>
-            {["All", ...FS_SENS].map(s => {
+            {["All", ...sensitivities].map(s => {
               const active = sensFilter === s;
               return (
                 <button key={s} onClick={() => setSensFilter(s)}
@@ -692,15 +599,10 @@ const FieldStepV2 = ({
             <h3 className="t-h3" style={{margin:0}}>Sensitivity legend</h3>
           </div>
           <div style={{padding:14, display:"flex", flexDirection:"column", gap:10}}>
-            {[
-              ["Public",    "Geography rolled up · safe to publish in aggregate."],
-              ["Internal",  "Programme-level reporting · partner-internal use."],
-              ["Personal",  "Identifies a person · DPO co-approval required."],
-              ["Sensitive", "PII + categorical risk · request DSA scope expansion."],
-            ].map(([s, desc]) => (
+            {sensitivities.map(s => (
               <div key={s} className="row gap-3">
                 <Chip size="sm">{s}</Chip>
-                <span className="t-bodysm muted">{desc}</span>
+                <span className="t-bodysm muted">Classification supplied by the Data Dictionary.</span>
               </div>
             ))}
           </div>
@@ -731,5 +633,4 @@ const FieldStepV2 = ({
 
 Object.assign(window, {
   FieldStepV2,
-  FS_FIELDS, FS_FIELD_BY_KEY, FS_PACKS,
 });

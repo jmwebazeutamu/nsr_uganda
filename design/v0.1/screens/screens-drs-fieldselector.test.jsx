@@ -1,8 +1,7 @@
 /* BUG-S27-018 — regression: FieldStepV2 must not crash when fed a
  * builder-schema row that lacks the optional `completeness` key.
  *
- * The browser harness's local FS_FIELDS fallback always carries
- * `completeness` (a percentage), but the live builder-schema
+ * The live builder-schema
  * (apps/data_requests/builder_schema.py) only emits the contract
  * keys group/key/label/sensitivity/type. Earlier code called
  * `field.completeness.toFixed(1)` unconditionally → TypeError on
@@ -64,5 +63,18 @@ describe("FieldStepV2 — backend catalogue parity", () => {
       />,
     );
     expect(screen.getByText(/SELECTION SUMMARY/)).toBeInTheDocument();
+  });
+
+  it("does not substitute local fields when the Data Dictionary is empty", () => {
+    render(
+      <FieldStepV2
+        selectedKeys={[]}
+        onChange={() => {}}
+        fields={[]}
+        dsaReference="DSA-TEST"
+      />,
+    );
+    expect(screen.getByText("Field catalogue unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Registry ID")).not.toBeInTheDocument();
   });
 });

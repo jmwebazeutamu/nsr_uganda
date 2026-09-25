@@ -12,7 +12,7 @@ from decimal import Decimal
 
 import pytest
 
-from apps.pmt.engine import derive_band
+from apps.pmt.engine import PMTConfigurationError, derive_band
 from apps.pmt.models import (
     Band,
     ModelStatus,
@@ -41,6 +41,7 @@ def model_version(db):
         variables=[],
         intercept=Decimal("0"),
         band_cutoffs=dict(_PERCENTILE_RANKS),
+        band_strategy="percentile",
     )
 
 
@@ -154,10 +155,12 @@ class TestDeriveBand:
 
 
 class TestEmptyResults:
-    """AC-PBT-EMPTY-RESULTS — when there are no PMTResults the beat
-    job is a no-op, derive_band falls back to fixed band_cutoffs
-    (project-default behaviour, not the spec's stricter "everyone is
-    not_poor" — see derive_band docstring + the implementation review)."""
+    """A percentile model without empirical thresholds cannot score.
+
+    Percentile ranks are calibration inputs, not score values. Treating them
+    as fixed cutoffs would create a different, undocumented eligibility
+    policy, so the model must be completed before it can classify.
+    """
 
     def test_no_results_writes_no_threshold_rows(self, model_version, caplog):
         recompute_band_thresholds(actor="test")
@@ -172,15 +175,9 @@ class TestEmptyResults:
         )
         assert events.exists()
 
-    def test_derive_band_falls_back_to_fixed_cutoffs(self, model_version):
-        # band_cutoffs on the fixture map bands to percentile RANKS
-        # (used by the recompute job). With no threshold rows,
-        # derive_band uses the legacy fixed-cutoff path against those
-        # numbers — a score of 25 lands in `vulnerable` (largest cutoff
-        # not exceeding the score is 10 → poverty; next is 30 →
-        # vulnerable is just above; so poverty wins for 25).
-        result = derive_band(25.0, model_version)
-        assert result in (Band.POVERTY, Band.VULNERABLE)  # cutoff-driven
+    def test_derive_band_rejects_missing_empirical_thresholds(self, model_version):
+        with pytest.raises(PMTConfigurationError, match="no persisted empirical thresholds"):
+            derive_band(25.0, model_version)
 
 
 class TestIdempotent:

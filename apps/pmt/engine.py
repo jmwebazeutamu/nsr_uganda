@@ -18,14 +18,11 @@ import math
 from decimal import Decimal
 from typing import Any
 
-from .models import Band, PMTBandThreshold, PMTModelVersion
+from .models import PMTBandThreshold, PMTModelVersion
 
-DEFAULT_BAND_CUTOFFS = {
-    Band.EXTREME_POVERTY: 0,
-    Band.POVERTY: 30,
-    Band.VULNERABLE: 60,
-    Band.NOT_POOR: 80,
-}
+
+class PMTConfigurationError(ValueError):
+    """A model cannot safely classify a score from its saved configuration."""
 
 
 def _get(record: Any, path: str) -> Any:
@@ -68,7 +65,16 @@ def derive_band_from_cutoffs(score: float, cutoffs: dict[str, float]) -> str:
     US-S22-PMT-BAND-THRESHOLD semantics; the empirical-percentile
     classifier below flips that).
     """
-    items = sorted((c, b) for b, c in cutoffs.items())
+    if not cutoffs:
+        raise PMTConfigurationError(
+            "PMT fixed-threshold configuration has no persisted band cutoffs.",
+        )
+    try:
+        items = sorted((float(c), str(b)) for b, c in cutoffs.items())
+    except (TypeError, ValueError) as exc:
+        raise PMTConfigurationError(
+            "PMT fixed-threshold configuration contains a non-numeric cutoff.",
+        ) from exc
     band = items[0][1]
     for cutoff, b in items:
         if score >= cutoff:
@@ -86,7 +92,8 @@ def derive_band_from_thresholds(score: float, model_version: PMTModelVersion) ->
     poorer band (expands eligibility marginally; MGLSD default).
 
     Returns None when no PMTBandThreshold rows exist for the model
-    version — caller falls back to the fixed-cutoff path.
+    version. The caller must then fail closed: percentile ranks are
+    not score thresholds and must never be reinterpreted as such.
     """
     rows = list(
         PMTBandThreshold.objects
@@ -119,30 +126,33 @@ def derive_band(score: float, target) -> str:
     """Classify a score into a band.
 
     `target` may be either:
-    - a PMTModelVersion instance — the new behaviour. Uses the
-      latest empirical PMTBandThreshold rows; falls back to
-      `target.band_cutoffs` (fixed-cutoff path) if no threshold rows
-      exist yet (e.g. first day after a fresh model activates,
-      before the daily beat job has run). Final fallback if both
-      are missing is the project default.
+    - a PMTModelVersion instance — uses the model's persisted band
+      strategy. A percentile model requires empirical
+      ``PMTBandThreshold`` records. A fixed-threshold model requires
+      its persisted ``band_cutoffs``. Incomplete configuration raises
+      ``PMTConfigurationError`` rather than silently applying a
+      project default.
     - a dict of band -> cutoff — legacy callers (tests, ad-hoc
       scoring) keep working without modification.
 
-    Two-path fallback is policy-conservative: a fresh system without
-    threshold rows still classifies via the existing cutoff dict
-    rather than tagging every household as `not_poor` (which the
-    ticket suggested but which would erase eligibility on day-zero
-    and trip every downstream eligibility check).
+    This intentionally has no fallback values. Band policy belongs to
+    the approved PMT model, not to application code.
     """
     if isinstance(target, PMTModelVersion):
-        band = derive_band_from_thresholds(score, target)
-        if band is not None:
-            return band
-        cutoffs = target.band_cutoffs or {
-            b.value: float(c) for b, c in DEFAULT_BAND_CUTOFFS.items()
-        }
-        return derive_band_from_cutoffs(
-            score, {str(k): float(v) for k, v in cutoffs.items()},
+        if target.band_strategy == "percentile":
+            band = derive_band_from_thresholds(score, target)
+            if band is not None:
+                return band
+            raise PMTConfigurationError(
+                f"PMT model v{target.version} uses percentile bands but has "
+                "no persisted empirical thresholds. Recompute and approve "
+                "the model thresholds before scoring households.",
+            )
+        if target.band_strategy == "threshold":
+            return derive_band_from_cutoffs(score, target.band_cutoffs or {})
+        raise PMTConfigurationError(
+            f"PMT model v{target.version} has unsupported band strategy "
+            f"{target.band_strategy!r}.",
         )
     return derive_band_from_cutoffs(score, target)
 

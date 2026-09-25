@@ -227,6 +227,12 @@ class TestNoPlusOne:
         FoodConsumption.objects.create(household=hh, staples_days=5)
 
         # Activate a draft model so recompute_for_household actually runs.
+        # The migration seed is active in the test database. Retire it before
+        # creating this fixture so the test preserves the one-active-model
+        # invariant enforced by the activation service.
+        PMTModelVersion.objects.filter(status=ModelStatus.ACTIVE).update(
+            status=ModelStatus.RETIRED,
+        )
         model = PMTModelVersion.objects.create(
             version=9001, status=ModelStatus.ACTIVE,
             author="t", approved_by="t2",

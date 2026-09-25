@@ -111,24 +111,43 @@ class TestActivation:
     # activations — incidental, doesn't affect the test assertions.
 
     def test_activate_happy_path(self, db):
-        v = PMTModelVersion.objects.create(version=900, author="a", variables=[])
+        v = PMTModelVersion.objects.create(
+            version=900, author="a", variables=[],
+            band_cutoffs={"extreme_poverty": 0},
+        )
         activate_model_version(v, approver="b")
         v.refresh_from_db()
         assert v.status == ModelStatus.ACTIVE
         assert v.approved_by == "b"
 
     def test_author_cannot_approve(self, db):
-        v = PMTModelVersion.objects.create(version=900, author="alice", variables=[])
+        v = PMTModelVersion.objects.create(
+            version=900, author="alice", variables=[],
+            band_cutoffs={"extreme_poverty": 0},
+        )
         with pytest.raises(PMTApprovalError, match="differ"):
             activate_model_version(v, approver="alice")
 
     def test_activate_retires_prior(self, db):
-        v1 = PMTModelVersion.objects.create(version=900, author="a", variables=[])
+        v1 = PMTModelVersion.objects.create(
+            version=900, author="a", variables=[],
+            band_cutoffs={"extreme_poverty": 0},
+        )
         activate_model_version(v1, approver="b")
-        v2 = PMTModelVersion.objects.create(version=901, author="a", variables=[])
+        v2 = PMTModelVersion.objects.create(
+            version=901, author="a", variables=[],
+            band_cutoffs={"extreme_poverty": 0},
+        )
         activate_model_version(v2, approver="b")
         v1.refresh_from_db()
         assert v1.status == ModelStatus.RETIRED
+
+    def test_activation_rejects_missing_persisted_band_policy(self, db):
+        v = PMTModelVersion.objects.create(version=900, author="a", variables=[])
+        with pytest.raises(PMTApprovalError, match="no persisted band cutoffs"):
+            activate_model_version(v, approver="b")
+        v.refresh_from_db()
+        assert v.status == ModelStatus.DRAFT
 
 
 # --- Recompute service -----------------------------------------------------

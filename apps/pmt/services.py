@@ -17,12 +17,25 @@ from apps.security.audit import emit as emit_audit
 from apps.security.notifications import send_notification
 
 from .constants import PMT_TRIGGER_MANUAL
-from .engine import compute_pmt
+from .engine import PMTConfigurationError, compute_pmt, derive_band
 from .models import ModelStatus, PMTModelVersion, PMTResult
 
 
 class PMTApprovalError(Exception):
     """The model-version transition is forbidden."""
+
+
+def _validate_band_configuration(version: PMTModelVersion) -> None:
+    """Ensure an approved model can classify without a code fallback.
+
+    Calling ``derive_band`` against a neutral score exercises exactly the
+    persisted policy path used by scoring. This keeps activation and runtime
+    classification on one contract without duplicating band rules here.
+    """
+    try:
+        derive_band(0.0, version)
+    except PMTConfigurationError as exc:
+        raise PMTApprovalError(str(exc)) from exc
 
 
 @transaction.atomic
@@ -32,6 +45,7 @@ def activate_model_version(version: PMTModelVersion, *, approver: str) -> PMTMod
         raise PMTApprovalError(f"cannot activate from {version.status}")
     if not approver or approver == version.author:
         raise PMTApprovalError("approver must differ from author")
+    _validate_band_configuration(version)
     PMTModelVersion.objects.filter(status=ModelStatus.ACTIVE).update(status=ModelStatus.RETIRED)
     version.status = ModelStatus.ACTIVE
     version.approved_by = approver
