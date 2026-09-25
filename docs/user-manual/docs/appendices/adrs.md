@@ -41,7 +41,8 @@ The full text of each ADR lives at `/docs/adr/`. This page is the index, with a 
 | ADR-0034 | Stage the instrument, not just the records — UBOS field waves | INT, DIH |
 | ADR-0035 | The GRM tier ladder is configuration, and it decides who may hold a case | GRM, SEC |
 | ADR-0036 | A closed grievance is read-only | GRM |
-| ADR-0037 | A grievance carries a case number people can use | GRM |
+| ADR-0037 | A grievance carries a case number people can use (superseded) | GRM |
+| ADR-0038 | GRM case numbers run in sequence, amending the no-sequences rule | GRM, SEC |
 
 ## When to write a new ADR
 

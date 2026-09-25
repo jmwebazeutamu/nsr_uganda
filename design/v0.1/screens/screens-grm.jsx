@@ -1310,7 +1310,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
           <Icon name="search" size={14}/>
           <input className="field-text" type="text"
                  style={{flex:1, maxWidth:320, padding:"6px 8px"}}
-                 placeholder="Case number — GRM-7K4P-2QX9"
+                 placeholder="Case number — GRM-2026-0001"
                  value={caseSearch}
                  onChange={(e) => setCaseSearch(e.target.value)}
                  onKeyDown={(e) => { if (e.key === "Enter") findByReference(); }}/>

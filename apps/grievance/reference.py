@@ -1,110 +1,118 @@
-"""Human case references for grievances.
+"""Human case references for grievances: GRM-2026-0001.
 
 `Grievance.id` is a ULID — `01M3AT4JSSXFYG02CXC8S6K20X`. That is the
-right primary key and ADR-0002 keeps it: unique without coordination,
-sortable by creation time, and no sequence to leak how many cases the
-registry holds.
+right primary key and ADR-0002 keeps it. It is the wrong thing to say
+out loud: a Parish Chief reads a case number back to a citizen over the
+phone, writes it in a ledger, and quotes it on a follow-up visit two
+weeks later, and twenty-six ungrouped characters do not survive that.
 
-It is the wrong thing to say out loud. A Parish Chief reads a case
-number back to a citizen over the phone, writes it in a ledger, and
-quotes it in a follow-up visit. Twenty-six characters with no grouping
-cannot survive that. Every transcription is a chance to drop a
-character, and nothing about the string tells you when you have.
+The reference is the number for that job. A year and a running count
+inside it, restarting each January:
 
-So a grievance now also carries a **reference**: `GRM-7K4P-2QX9`.
+    GRM-2026-0001, GRM-2026-0002, ... GRM-2026-00012, ... GRM-2027-0001
 
-Eight significant characters, Crockford base32 — the same alphabet the
-ULID uses, so nothing new has to be explained — grouped in fours.
+Four digits is a minimum, not a cap: the 10,000th case of a year is
+GRM-2026-10000, not an error.
 
-Crockford's alphabet is the point. It omits I, L, O and U, so there is
-no I/1 or O/0 to confuse, and no U, which keeps accidental words out.
-Its decoder also maps the mistakes people actually make: someone who
-writes O for 0, or I or l for 1, still resolves to the right case. That
-is what `normalise` does, and it is why this is worth having over a
-plain random string.
+**Why a sequence, given CLAUDE.md forbids sequential externally-visible
+identifiers.** The rule is there because a running number is guessable
+and leaks volume. Both remain true here:
 
-**Random, not sequential.** A running number would be easier still to
-read, and it would tell anyone who saw two references how many
-grievances the registry took between them — and let them walk the range.
-CLAUDE.md forbids sequential externally-visible identifiers for exactly
-that reason. 32^8 is about 1.1 x 10^12, and the column is unique, so a
-collision is a retry rather than a problem.
+  * Guessable — but guessing is not a way in. `?q=` filters what
+    `visible_grievances` already returned, and the detail route applies
+    the same rule, so a number you were not given opens nothing you
+    could not already see. The sequence costs confidentiality of
+    *volume*, not of records.
+  * Volume — two references disclose how many grievances the registry
+    took between them.
 
-The reference is for people. The ULID stays the key, stays in the URLs
-and stays in the audit chain; nothing about the record's identity
-changes.
+Against that: this is a number a distressed citizen has to keep hold of
+and repeat accurately. The registry owner weighed the two and chose
+readability, which is a decision about their own service to make. See
+ADR-0038, which also amends the CLAUDE.md rule rather than leaving it
+quietly broken.
+
+Numbers come from GrmReferenceSequence under `select_for_update`, so
+two cases opened at the same moment cannot take the same one, and a
+rolled-back transaction releases its number rather than burning it.
 """
 
 from __future__ import annotations
 
-import secrets
-
-#: Crockford base32: no I, L, O or U.
-ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+import re
 
 PREFIX = "GRM"
-GROUP = 4
-GROUPS = 2
-LENGTH = GROUP * GROUPS
+PAD = 4
 
-#: What people write instead of what they meant. Crockford's own
-#: decoding rules: O is zero; I and L are one.
+#: What people write instead of what they meant. A reference read over
+#: a phone and typed back is where these happen.
 CONFUSABLES = {"O": "0", "I": "1", "L": "1"}
 
-
-def generate() -> str:
-    """A new reference. `secrets`, not `random`: this is an identifier
-    people will quote, and a predictable one invites guessing even
-    where the scope check is what actually protects the record."""
-    body = "".join(secrets.choice(ALPHABET) for _ in range(LENGTH))
-    return format_reference(body)
+_CANONICAL = re.compile(r"^(\d{4})(\d+)$")
 
 
-def format_reference(body: str) -> str:
-    """Group the significant characters for reading aloud."""
-    groups = [body[i:i + GROUP] for i in range(0, len(body), GROUP)]
-    return "-".join([PREFIX, *groups])
+def format_reference(year: int, number: int) -> str:
+    return f"{PREFIX}-{year:04d}-{number:0{PAD}d}"
 
 
 def normalise(raw: str) -> str:
     """Turn what somebody typed into the stored form, or "".
 
     Accepts it lower-case, without the prefix, without the dashes, with
-    spaces, and with the confusable characters written wrongly — all of
-    which is what a reference read over a phone and typed back looks
-    like. Returns "" when there is nothing usable, so a caller can
-    treat it as "not a reference" rather than guessing.
+    spaces, and with O written for zero or I/l for one — which is what
+    a reference read aloud and typed back looks like. Returns "" when
+    there is nothing usable, so a caller can treat it as "not a
+    reference" rather than guessing.
     """
     if not raw:
         return ""
-    text = "".join(raw.upper().split())
-    text = text.replace("-", "").replace("_", "")
+    text = "".join(str(raw).upper().split())
+    text = text.replace("-", "").replace("/", "").replace("_", "")
     if text.startswith(PREFIX):
         text = text[len(PREFIX):]
     text = "".join(CONFUSABLES.get(c, c) for c in text)
-    if len(text) != LENGTH or any(c not in ALPHABET for c in text):
+    match = _CANONICAL.match(text)
+    if not match:
         return ""
-    return format_reference(text)
+    year, number = int(match.group(1)), int(match.group(2))
+    # A four-digit year that is not a plausible one is somebody's
+    # phone number, not a case.
+    if not (2000 <= year <= 2999):
+        return ""
+    return format_reference(year, number)
 
 
 def looks_like_a_reference(raw: str) -> bool:
     return bool(normalise(raw))
 
 
-def assign(grievance, *, attempts: int = 8) -> str:
-    """Give `grievance` a reference nobody else has.
+def year_of(reference: str) -> int | None:
+    parts = (reference or "").split("-")
+    return int(parts[1]) if len(parts) == 3 and parts[1].isdigit() else None
 
-    Collision at 32^8 needs roughly a million cases before it is worth
-    thinking about, and the column is unique either way — so this
-    retries rather than reserving anything.
+
+def next_reference(year: int) -> str:
+    """Take the next number for `year`.
+
+    `select_for_update` holds the row for the rest of the caller's
+    transaction, so concurrent creates queue rather than collide. The
+    unique constraint on Grievance.reference is the backstop.
     """
-    from .models import Grievance
+    from .models import GrmReferenceSequence
 
-    for _ in range(attempts):
-        candidate = generate()
-        if not Grievance.objects.filter(reference=candidate).exists():
-            return candidate
-    raise RuntimeError(
-        "could not find a free grievance reference in "
-        f"{attempts} attempts — the keyspace may be exhausted",
+    row, _ = GrmReferenceSequence.objects.select_for_update().get_or_create(
+        year=year, defaults={"last_number": 0},
     )
+    row.last_number += 1
+    row.save(update_fields=["last_number"])
+    return format_reference(year, row.last_number)
+
+
+def assign(grievance) -> str:
+    """The reference for `grievance`, numbered in the year it was
+    opened — so a case raised on 31 December keeps a number from the
+    year it happened, whatever day the row is written."""
+    from django.utils import timezone
+
+    opened = getattr(grievance, "opened_at", None) or timezone.now()
+    return next_reference(timezone.localtime(opened).year)

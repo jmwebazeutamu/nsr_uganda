@@ -15,9 +15,30 @@ production; correctness is worth more than speed here.
 from django.db import migrations, models
 
 
+# Inlined, not imported from apps.grievance.reference.
+#
+# This migration ran when references were random Crockford base32
+# (GRM-7K4P-2QX9). 0011 replaced that scheme with a year sequence and
+# renumbered every row, so importing the module here would make a
+# historical migration follow the code forward and fail — which it did,
+# on the first fresh database built after the change.
+#
+# A migration reproduces the state as of when it ran. The values these
+# produce are overwritten by 0011 minutes later; all that matters is
+# that they are distinct, so the unique constraint below can be added.
+_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+_LENGTH = 8
+
+
+def _legacy_reference(body):
+    return "-".join(["GRM", body[:4], body[4:]])
+
+
 def backfill(apps, schema_editor):
-    from apps.grievance.reference import ALPHABET, LENGTH, format_reference
     import secrets
+
+    ALPHABET, LENGTH = _ALPHABET, _LENGTH
+    format_reference = _legacy_reference
 
     Grievance = apps.get_model("grievance", "Grievance")
     # The historical model has no .reference uniqueness yet, so the

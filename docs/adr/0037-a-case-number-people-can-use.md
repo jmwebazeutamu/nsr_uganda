@@ -1,10 +1,22 @@
 # ADR-0037: A grievance carries a case number people can use
 
-- **Status**: Accepted
+- **Status**: Superseded by [ADR-0038](0038-grm-case-numbers-run-in-sequence.md)
 - **Date**: 25 September 2026
 - **Owner**: NSR MIS Architecture Team
 - **Decision-makers**: Registry owner (jmwebaze), GRM Lead (MGLSD), Engineering Lead
 - **References**: ADR-0002 (identifier strategy); CLAUDE.md (*"Identifiers are ULIDs. Never sequential integers for externally-visible IDs."*); `apps/grievance/reference.py`
+
+---
+
+!!! note "Superseded within the hour"
+    The random scheme below was deployed on 25 September 2026 and
+    replaced the same day, before any reference had been given to a
+    citizen. The registry owner asked for `GRM-2026-0001` — a year and
+    a running number — on the grounds that it is what a complainant can
+    actually remember and repeat. ADR-0038 records that decision and
+    the trade it accepts. This ADR is kept because the random scheme
+    did reach production, and because its reasoning about the alphabet
+    and about normalisation survives into the replacement.
 
 ---
 

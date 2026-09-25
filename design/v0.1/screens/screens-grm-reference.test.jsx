@@ -57,7 +57,7 @@ describe("the console shows the case number", () => {
 
 describe("an operator can look a case up by its number", () => {
   it("has somewhere to type it", () => {
-    expect(grm).toContain("Case number — GRM-7K4P-2QX9");
+    expect(grm).toContain("Case number — GRM-2026-0001");
   });
 
   it("asks the server rather than matching in the browser", () => {

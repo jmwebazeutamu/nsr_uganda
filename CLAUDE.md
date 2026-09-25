@@ -120,6 +120,9 @@ From SAD §11.4. Build these in order:
 - Do not run PMT in DIH. PMT is a registry-only post-promotion trigger.
 - Do not soften approval gates "just for testing". The audit trail must be intact from day one.
 - Do not use sequential primary keys for any entity exposed externally.
+  `Grievance.reference` (`GRM-2026-0001`) is the one sequential identifier
+  in the registry, it is not a key, and it is allowed by ADR-0038 — which
+  states what that costs and what makes it acceptable.
 - Do not commit `.env` or any KMS-managed secret. Use Keycloak service accounts and the secrets manager.
 
 ## Definition of Done (per story)

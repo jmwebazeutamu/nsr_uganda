@@ -20,24 +20,26 @@ readers.
 
 | | Example | For |
 |---|---|---|
-| **Reference** | `GRM-7K4P-2QX9` | people — say it, write it, quote it |
+| **Reference** | `GRM-2026-0001` | people — say it, write it, quote it |
 | **Id** | `01M3AT4JSSXFYG02CXC8S6K20X` | the system — URLs, the audit chain, links from other modules |
 
-The reference is what you give a citizen. Eight characters in two
-groups, from an alphabet with **no I, L, O or U** — so there is no I/1
-or O/0 to mishear.
+The reference is what you give a citizen: the year, and the case's
+number within that year. The count restarts each January, so the first
+grievance of 2027 is `GRM-2027-0001`.
+
+Four digits is a minimum, not a limit — the ten-thousandth case of a
+year is `GRM-2026-10000`.
 
 **Type it however it reaches you.** The search box on the workbench
 accepts all of these and finds the same case:
 
 ```
-GRM-7K4P-2QX9      grm-7k4p-2qx9      GRM7K4P2QX9
-7K4P-2QX9          7k4p2qx9           GRM 7K4P 2QX9
+GRM-2026-0001      grm-2026-0001      GRM20260001
+2026-0001          20260001           GRM 2026 0001
 ```
 
-It also forgives the two mistakes people actually make copying eight
-characters off a slip: **O read as zero**, and **I or l written for
-one**. `GRM-OK4P-2QI9` finds `GRM-0K4P-2Q19`.
+It also forgives what people write copying a number off a slip: a
+letter **O for zero**, or **I or l for one**.
 
 !!! note "A number you were told is not a way past your scope"
     Searching filters the cases you can already see. If the reference
@@ -49,8 +51,13 @@ one**. `GRM-OK4P-2QI9` finds `GRM-0K4P-2Q19`.
     and closure do not touch it, because a number quoted to a citizen
     has to keep meaning that case.
 
-See [ADR-0037](../appendices/adrs.md) for why it is random rather than
-a running number.
+!!! warning "A case number can be guessed — that is why scope matters"
+    The number after yours is somebody's case. Guessing it opens
+    nothing: the search and the case route both apply your scope, so a
+    reference you were not given behaves exactly like one that does not
+    exist. What a sequence does disclose is **how many** grievances the
+    registry has taken. [ADR-0038](../appendices/adrs.md) records that
+    trade and why it was accepted.
 
 ---
 
@@ -440,7 +447,8 @@ Tick rows, then Assign, Escalate or Close.
 
 - **ADR-0035** — the tier ladder is configuration, and it decides who may hold a case
 - **ADR-0036** — a closed grievance is read-only
-- **ADR-0037** — a grievance carries a case number people can use
+- **ADR-0037** — a grievance carries a case number people can use (superseded)
+- **ADR-0038** — case numbers run in sequence, and what that costs
 - ADR-0026 — ABAC multi-level scope (the scope half of assignment)
 - ADR-0028 — role catalogue (where `required_role` comes from)
 - ADR-0029 — the audit chain is append-only
