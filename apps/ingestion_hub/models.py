@@ -371,6 +371,49 @@ class StageRecord(models.Model):
         super().save(*args, **kwargs)
 
 
+class UnmappedChoiceValue(models.Model):
+    """An inbound answer code with no approved ChoiceList mapping.
+
+    This is an ingestion fact, not a second option catalogue: the canonical
+    definition and effective option set remain ``ChoiceList`` /
+    ``ChoiceOption``.  The row preserves the exact code and the concrete
+    canonical field path so a wave can be counted and remediated without
+    modifying the append-only raw landing.
+    """
+
+    id = ULIDField(primary_key=True)
+    stage_record = models.ForeignKey(
+        StageRecord, on_delete=models.PROTECT,
+        related_name="unmapped_choice_values",
+    )
+    canonical_path = models.CharField(max_length=512)
+    choice_list_name = models.CharField(max_length=64)
+    source_code = models.CharField(max_length=512)
+    is_current = models.BooleanField(default=True)
+    detected_at = models.DateTimeField(auto_now_add=True)
+    cleared_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Unmapped choice value"
+        verbose_name_plural = "Unmapped choice values"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["stage_record", "canonical_path", "choice_list_name", "source_code"],
+                name="dih_unmapped_choice_value_unique",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["is_current", "choice_list_name"]),
+            models.Index(fields=["stage_record", "is_current"]),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"{self.stage_record_id}:{self.canonical_path}="
+            f"{self.source_code} ({self.choice_list_name})"
+        )
+
+
 # --- Decisions and quarantine ---------------------------------------------
 
 class PromotionBatch(models.Model):

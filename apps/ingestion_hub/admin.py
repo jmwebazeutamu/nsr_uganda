@@ -15,6 +15,7 @@ from .models import (
     Quarantine,
     RawLanding,
     StageRecord,
+    UnmappedChoiceValue,
 )
 from .services import mark_stuck_runs_failed, stuck_run_timeout
 
@@ -128,6 +129,30 @@ class RawLandingAdmin(admin.ModelAdmin):
     list_filter = ("connector_run__connector__source_system",)
     raw_id_fields = ("connector_run",)
     readonly_fields = ("id", "connector_run", "payload", "received_at", "source_reference")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(UnmappedChoiceValue)
+class UnmappedChoiceValueAdmin(admin.ModelAdmin):
+    list_display = (
+        "stage_record", "canonical_path", "choice_list_name", "source_code",
+        "is_current", "detected_at", "cleared_at",
+    )
+    list_filter = ("is_current", "choice_list_name")
+    search_fields = ("source_code", "canonical_path", "stage_record__id")
+    raw_id_fields = ("stage_record",)
+    readonly_fields = (
+        "id", "stage_record", "canonical_path", "choice_list_name", "source_code",
+        "is_current", "detected_at", "cleared_at",
+    )
 
     def has_add_permission(self, request):
         return False

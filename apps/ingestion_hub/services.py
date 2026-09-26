@@ -50,10 +50,16 @@ from apps.data_management.models import (
     Shock,
     Utilities,
 )
+from apps.data_management.choice_field_map import (
+    approved_choice_lists_for,
+    iter_payload_choice_values,
+)
+from apps.dqa.models import Severity
 from apps.dqa.engine import evaluate_all as dqa_evaluate_all
 from apps.identity_verification.mock import NiraError, verify_nin
 from apps.reference_data.code_frames import resolve_geographic_unit
 from apps.reference_data.models import GeographicUnit
+from apps.reference_data.services import has_active_option
 from apps.security.audit import emit as emit_audit
 from apps.security.hashing import nin_hash as compute_nin_hash
 from apps.security.hashing import nin_last4 as compute_nin_last4
@@ -71,6 +77,7 @@ from .models import (
     SourceSystemKind,
     StageRecord,
     StageRecordState,
+    UnmappedChoiceValue,
 )
 
 # 1% of fast-track auto-promotions land in the NSR Unit audit queue
@@ -175,6 +182,11 @@ def stage_from_landing(
     ConnectorRun.objects.filter(pk=landing.connector_run_id).update(
         records_staged=F("records_staged") + 1,
     )
+    unmapped = sync_unmapped_choice_values(stage)
+    if unmapped:
+        stage.dqa_summary = _unmapped_choice_summary(stage, unmapped)
+        stage.state = StageRecordState.QUALITY_FAILED
+        stage.save(update_fields=["dqa_summary", "state", "updated_at"])
     # US-S11-044 — intra-household DQA at DIH_INGEST. Persist-only;
     # never aborts (the queue is the triage surface). Skipped when
     # DQA_INTRA_HOUSEHOLD_ENABLED is off.
@@ -187,6 +199,112 @@ def stage_from_landing(
         actor="connector",
     )
     return stage
+
+
+def _choice_codes(value, kind: str) -> list[str]:
+    """Normalise the declared single/multi storage shapes without coercion."""
+    if kind == "multi":
+        values = value.split() if isinstance(value, str) else value
+        if not isinstance(values, (list, tuple, set)):
+            return [str(values)]
+        return [str(item) for item in values if item is not None and item != ""]
+    return [str(value)] if value is not None and value != "" else []
+
+
+def sync_unmapped_choice_values(stage: StageRecord) -> list[UnmappedChoiceValue]:
+    """Reconcile current unmapped-code facts against the canonical payload.
+
+    Option validity comes exclusively from active, effective-dated reference
+    data.  A fixed legacy frame is accepted only where the canonical field
+    contract explicitly declares it.  No source value is transformed or
+    discarded.  Prior observations remain auditable when a later correction
+    or approved ChoiceList revision makes a value interpretable.
+    """
+    # US-122 is the UBOS wave-intake control.  Other historical connector
+    # types have not yet been admitted to the Questionnaire/ChoiceList
+    # contract; treating their independently shaped payloads as UBOS answer
+    # codes would manufacture false failures.  Their onboarding must add the
+    # same canonical mapping contract before this gate is enabled for them.
+    source_kind = stage.connector_run.connector.source_system.kind
+    if (source_kind != SourceSystemKind.UBOS
+            or not stage.mapping_rule_version_id
+            or not stage.mapping_rule_version.is_active):
+        return []
+
+    as_of = (
+        stage.raw_landing.received_at.date()
+        if stage.raw_landing_id and stage.raw_landing is not None
+        else timezone.localdate()
+    )
+    observed: set[tuple[str, str, str]] = set()
+    for path, list_name, kind, stored_value in iter_payload_choice_values(
+        stage.canonical_payload or {},
+    ):
+        for source_code in _choice_codes(stored_value, kind):
+            if any(
+                has_active_option(candidate, source_code, as_of=as_of)
+                for candidate in approved_choice_lists_for(list_name)
+            ):
+                continue
+            observed.add((".".join(path), list_name, source_code))
+
+    current = {
+        (row.canonical_path, row.choice_list_name, row.source_code): row
+        for row in stage.unmapped_choice_values.filter(is_current=True)
+    }
+    now = timezone.now()
+    for key, row in current.items():
+        if key not in observed:
+            row.is_current = False
+            row.cleared_at = now
+            row.save(update_fields=["is_current", "cleared_at"])
+    for path, list_name, source_code in observed:
+        row = current.get((path, list_name, source_code))
+        if row is None:
+            UnmappedChoiceValue.objects.get_or_create(
+                stage_record=stage,
+                canonical_path=path,
+                choice_list_name=list_name,
+                source_code=source_code,
+                defaults={"is_current": True},
+            )
+    return list(
+        stage.unmapped_choice_values.filter(is_current=True).order_by(
+            "canonical_path", "choice_list_name", "source_code",
+        ),
+    )
+
+
+def _unmapped_choice_summary(
+    stage: StageRecord, values: list[UnmappedChoiceValue] | None = None,
+) -> dict:
+    """Project immutable unmapped-code facts into the DIH DQA contract."""
+    values = values if values is not None else sync_unmapped_choice_values(stage)
+    findings = [
+        {
+            # The model label is a stable control identity, not a new
+            # hard-coded DQA rule or a duplicate choice vocabulary.
+            "rule_id": UnmappedChoiceValue._meta.label_lower,
+            "record_id": stage.provisional_registry_id,
+            "reason": (
+                f"Unmapped code {item.source_code!r} for "
+                f"{item.canonical_path} in ChoiceList "
+                f"{item.choice_list_name!r}."
+            ),
+            "severity": Severity.BLOCK,
+            "scope": "choice_mapping",
+            "canonical_path": item.canonical_path,
+            "choice_list": item.choice_list_name,
+            "source_code": item.source_code,
+        }
+        for item in values
+    ]
+    return {
+        "blocking_failures": findings,
+        "warnings": [],
+        "flagged": [],
+        "info": [],
+    }
 
 
 def _emit_create(entity_type: str, entity_id: str, *, actor: str) -> None:
@@ -624,6 +742,12 @@ def promote_stage_record(
         )
 
     payload = stage.canonical_payload or {}
+
+    if sync_unmapped_choice_values(stage):
+        raise DihError(
+            "cannot promote while canonical payload contains unmapped "
+            "ChoiceList codes; review the DIH DQA findings",
+        )
 
     # US-S11-044 — intra-household DQA gate at DIH_PROMOTE. BLOCK
     # severity refuses promotion (DqaBlockError bubbles to caller).
@@ -1436,6 +1560,10 @@ def process_stage_record(
     # into the DqaResult record_ids so the violations dashboard can
     # aggregate by rule and trace back to the originating stage.
     dqa_summary = _evaluate_dqa(payload, stage_id=stage.provisional_registry_id)
+    unmapped_summary = _unmapped_choice_summary(stage)
+    dqa_summary["blocking_failures"].extend(
+        unmapped_summary["blocking_failures"],
+    )
     # Fold the intra-household gate findings (AC-HOH-EXISTS etc.) into the
     # summary so the Decision panel + stage status report ALL DQA issues —
     # not only field-level ones — instead of the operator hitting a
@@ -1953,17 +2081,22 @@ def edit_stage_record(
                     warnings.append(r.rule_id)
                 else:
                     info.append(r.rule_id)
-            stage.dqa_summary = {
+            dqa_summary = {
                 "blocking_failures": blocking,
                 "warnings": warnings,
                 "flagged": warnings,
                 "info": info,
                 "rerun_after_edit": True,
             }
+            dqa_summary["blocking_failures"].extend(
+                _unmapped_choice_summary(stage)["blocking_failures"],
+            )
+            stage.dqa_summary = dqa_summary
             # If the edit cleared every blocking failure, the record
             # automatically returns to PROVISIONAL so the queue treats
             # it as actionable again.
-            if stage.state == StageRecordState.QUALITY_FAILED and not blocking:
+            if (stage.state == StageRecordState.QUALITY_FAILED
+                    and not dqa_summary["blocking_failures"]):
                 stage.state = StageRecordState.PROVISIONAL
             stage.save(update_fields=["dqa_summary", "state", "updated_at"])
         except Exception as exc:  # noqa: BLE001 — DQA must not fail the edit

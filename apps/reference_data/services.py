@@ -98,6 +98,7 @@ def clear_resolver_cache() -> None:
     _active_list_id.cache_clear()
     _options_map.cache_clear()
     _canonical_options_map.cache_clear()
+    _active_option_codes.cache_clear()
 
 
 @lru_cache(maxsize=512)
@@ -120,6 +121,43 @@ def _canonical_options_map(list_name: str, as_of: date) -> dict[str, str | None]
             language="en",
         ).values("code", "canonical_code")
     }
+
+
+@lru_cache(maxsize=512)
+def _active_option_codes(list_name: str, as_of: date) -> frozenset[str]:
+    """Approved capture codes for the effective ChoiceList version.
+
+    This deliberately returns codes rather than labels.  A label may equal
+    its code (for example ``"Other"``), whereas ingestion safety needs an
+    exact answer-code match.  New inbound data is valid only when the code is
+    selectable on the effective registry version; deprecated options remain
+    readable for historical records but are not a current mapping decision.
+    """
+    list_id = _active_list_id(list_name, as_of)
+    if list_id is None:
+        return frozenset()
+    return frozenset(
+        ChoiceOption.objects.filter(
+            choice_list_id=list_id,
+            status=ChoiceOption.Status.ACTIVE,
+        ).values_list("code", flat=True),
+    )
+
+
+def has_active_option(
+    list_name: str,
+    code: str | int | None,
+    *,
+    as_of: date | None = None,
+) -> bool:
+    """Whether an inbound code has an approved exact mapping.
+
+    This is the ingestion-facing counterpart to :func:`resolve_label`.
+    It never guesses from a label and never selects a nearest code.
+    """
+    if code is None or code == "":
+        return False
+    return str(code) in _active_option_codes(list_name, as_of or _today())
 
 
 def resolve_canonical_code(

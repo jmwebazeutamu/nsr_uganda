@@ -96,6 +96,21 @@ class ConnectorRunSerializer(serializers.ModelSerializer):
 class StageRecordSerializer(serializers.ModelSerializer):
     ddup_candidates = serializers.SerializerMethodField()
     canonical_payload = serializers.SerializerMethodField()
+    unmapped_choice_values = serializers.SerializerMethodField()
+
+    def get_unmapped_choice_values(self, obj):
+        """Current unresolved code facts, owned by the DIH mapping gate."""
+        return [
+            {
+                "canonical_path": item.canonical_path,
+                "choice_list": item.choice_list_name,
+                "source_code": item.source_code,
+                "detected_at": item.detected_at.isoformat(),
+            }
+            for item in obj.unmapped_choice_values.filter(is_current=True).order_by(
+                "canonical_path", "choice_list_name", "source_code",
+            )
+        ]
 
     def get_canonical_payload(self, obj):
         """Attach a read-only geography-label projection from Reference Data.
@@ -192,7 +207,7 @@ class StageRecordSerializer(serializers.ModelSerializer):
             "id", "provisional_registry_id",
             "raw_landing", "connector_run", "mapping_rule_version",
             "canonical_payload", "state",
-            "dqa_summary", "ddup_candidates", "idv_outcome",
+            "dqa_summary", "unmapped_choice_values", "ddup_candidates", "idv_outcome",
             "promoted_household_id", "promoted_at",
             "rejected_reason", "rejected_at", "rejected_by",
             "last_edited_by", "last_edited_at",

@@ -320,6 +320,18 @@ def resolve_with_legacy_frame(resolver, list_name, code, language, as_of):
     return resolver(fallback, code, language, as_of)
 
 
+def approved_choice_lists_for(list_name: str) -> tuple[str, ...]:
+    """Return the approved code frames a declared payload field may use.
+
+    ``PAYLOAD_FIELDS`` remains the canonical field-to-list contract.  This
+    helper only exposes its explicit, approved legacy-frame bridge to callers
+    that must validate a value rather than render a label.  It does not infer
+    alternatives or attempt a closest match.
+    """
+    fallback = LEGACY_FRAME_FALLBACK.get(list_name)
+    return (list_name, fallback) if fallback else (list_name,)
+
+
 def apply_payload_labels(payload, resolver, *, as_of=None, language: str = "en"):
     """Walk `payload` (the canonical_payload JSON), producing a parallel
     tree of resolved labels for every path declared in PAYLOAD_FIELDS.
