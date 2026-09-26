@@ -2982,6 +2982,18 @@ disk      17G free (83% used) — was 33G at the 22 Sep deploy
 - **Disk is at 83%**, down from 33G free on 22 Sep. Worth a look before
   the next build; a cold torch layer needs several GB.
 
+**Decision: wait and retry.** The user chose to leave production on
+`b4adea9` and retry `deploy.sh` when the link recovers, keeping the
+build-on-prod mechanism. Nothing needs undoing — `origin/main` is ready
+and the verified backup is on the box.
+
+For whoever picks this up: building on dev and shipping the image with
+`docker save | ssh | docker load` is a workable fallback and was measured,
+not guessed. Dev pulls from PyPI at **21 MB/s** (against prod's 7-27 KB/s)
+and dev -> prod runs at **2.25 MB/s** (200 MB in 89s), so a multi-GB image
+is roughly half an hour of transfer. It is a direct copy, not a registry.
+It was not used this time because the simple path was preferred.
+
 ### Commands run on prod
 
 ```
