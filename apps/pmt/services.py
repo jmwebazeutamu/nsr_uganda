@@ -66,6 +66,29 @@ def _validate_band_configuration(version: PMTModelVersion) -> None:
         raise PMTApprovalError(str(exc)) from exc
 
 
+def _validate_coded_operands(version: PMTModelVersion) -> None:
+    """Refuse a model whose codes contradict the questionnaire.
+
+    A membership test against a code the field's ChoiceList does not
+    carry is not a runtime error — `_h_membership` returns 0.0 — so it
+    ships as a variable that scores zero for every household and nothing
+    ever reports it. Activation is the last point where it is still
+    cheap to catch, and the only gate a model must pass.
+
+    Unresolved bindings are deliberately not fatal: see
+    `apps.pmt.coded_operands` for why, and ADR-0041.
+    """
+    from .coded_operands import report_for_variables
+
+    report = report_for_variables(version.variables)
+    if report.errors:
+        detail = "; ".join(report.errors)
+        raise PMTApprovalError(
+            f"PMT model v{version.version} names codes the questionnaire "
+            f"does not carry — {detail}",
+        )
+
+
 @transaction.atomic
 def activate_model_version(version: PMTModelVersion, *, approver: str) -> PMTModelVersion:
     """AC-PMT-MODEL-VERSION dual approval. Activating retires any prior ACTIVE."""
@@ -74,6 +97,7 @@ def activate_model_version(version: PMTModelVersion, *, approver: str) -> PMTMod
     if not approver or approver == version.author:
         raise PMTApprovalError("approver must differ from author")
     _validate_band_configuration(version)
+    _validate_coded_operands(version)
     PMTModelVersion.objects.filter(status=ModelStatus.ACTIVE).update(status=ModelStatus.RETIRED)
     version.status = ModelStatus.ACTIVE
     version.approved_by = approver
