@@ -119,10 +119,39 @@ beforeAll(async () => {
   ({ DIHScreen } = globalThis);
 });
 
+// GeographicUnit's region level, as the dev registry actually holds it:
+// four active regions and a retired UG-N whose name is ALSO "Northern".
+//
+// The retired row is here on purpose. It does not matter whether the
+// screen passes ?status=active or omits it, because the server excludes
+// retired either way — but a screen that asks for ?status=all gets two
+// options both reading "Northern" that filter to different records, and
+// the two assertions below fail. That is the guard.
+const REGION_UNITS = [
+  { code: "R-CENTRAL", name: "Central", level: "region", status: "active", parent_code: "" },
+  { code: "R-EASTERN", name: "Eastern", level: "region", status: "active", parent_code: "" },
+  { code: "R-NORTHERN", name: "Northern", level: "region", status: "active", parent_code: "" },
+  { code: "UG-N", name: "Northern", level: "region", status: "retired", parent_code: "" },
+  { code: "R-WESTERN", name: "Western", level: "region", status: "active", parent_code: "" },
+];
+
 beforeEach(() => {
   globalThis.fetch = vi.fn((url) => {
-    if (String(url).includes("stage-records")) {
+    const u = String(url);
+    if (u.includes("stage-records")) {
       return jsonOk({ results: [STAGE, STAGE_RAW_REGION, STAGE_KOBO] });
+    }
+    if (u.includes("geographic-units")) {
+      // Stand in for the server's own filtering (ordered by name,
+      // retired excluded unless ?status=all) rather than handing back
+      // the whole table — the screen relies on the server for both.
+      const params = new URLSearchParams(u.split("?")[1] || "");
+      const level = params.get("level");
+      const status = params.get("status");
+      let rows = REGION_UNITS.filter(r => !level || r.level === level);
+      if (status !== "all") rows = rows.filter(r => r.status === (status || "active"));
+      rows = [...rows].sort((a, b) => a.name.localeCompare(b.name) || a.code.localeCompare(b.code));
+      return jsonOk({ results: rows });
     }
     return jsonOk({ results: [] });
   });

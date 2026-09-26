@@ -354,6 +354,11 @@ const DIHScreen = () => {
 // people — names, NINs and ULIDs — with only a small "mock" chip to say
 // so. It now starts empty and says which state it is in.
   const [rows, setRows] = useStateDIH([]);
+  // The region code list, from GeographicUnit. Empty when the endpoint
+  // is unreachable: the filter then offers nothing rather than a list
+  // reconstructed from whatever happens to be on screen, which is the
+  // defect this replaced.
+  const [regionUnits, setRegionUnits] = useStateDIH([]);
   // Live count of post-promotion MatchPairs pending — reused from
   // useNavCounts which already polls /api/v1/ddup/match-pairs/.
   // Surfaces a tiny caption clarifying that the two queues count
@@ -568,6 +573,34 @@ const DIHScreen = () => {
   // Initial load uses the same canonical refresh path as an operator action.
   // This keeps the three tab snapshots subject to one queue contract.
   useEffectDIH(() => {
+    let cancelled = false;
+    // Active units only. GeographicUnit holds a retired `UG-N` whose
+    // name is also "Northern", so a caller that asks for `status=all`
+    // gets two options reading "Northern" that filter to different
+    // records. The server already defaults to active — this is explicit
+    // about which set it wants, and deliberately does NOT re-filter on
+    // status below, so that policy lives in one place.
+    fetch(
+      "/api/v1/reference-data/geographic-units/"
+      + "?level=region&status=active&page_size=200",
+      { credentials: "same-origin", headers: { Accept: "application/json" } },
+    )
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(data => {
+        if (cancelled) return;
+        // The API orders by name already; keep its order rather than
+        // imposing a second one.
+        setRegionUnits(
+          (data.results || data || [])
+            .filter(u => u && u.code)
+            .map(u => ({ code: u.code, name: u.name || u.code })),
+        );
+      })
+      .catch(() => { if (!cancelled) setRegionUnits([]); });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffectDIH(() => {
     refreshDihQueues(false);
   }, []);
 
@@ -598,17 +631,25 @@ const DIHScreen = () => {
     const _u = (arr) => Array.from(new Set(arr.filter(Boolean))).sort();
     return {
       sources: _u(rows.map(r => r.source)),
-      // A canonical code is the option key; the API's Reference Data label
-      // is what the operator sees. Records without a resolvable code are
-      // deliberately absent from this scope filter rather than masquerading
-      // as a named region.
-      regions: Array.from(new Map(
-        rows.filter(r => r.region).map(r => [r.region, r.regionName]),
-      ).entries()).sort(([, a], [, b]) => a.localeCompare(b)),
+      // Regions come from GeographicUnit, not from the page.
+      //
+      // This was built from the loaded rows —
+      // `new Map(rows.map(r => [r.region, r.regionName]))` — which was
+      // wrong twice over. The Map keeps the LAST write, so a region one
+      // record labels "Northern" and another leaves unlabelled came out
+      // as "Unmapped region": a row missing its `_labels` poisoned the
+      // option for every row that had them. And a region with no rows on
+      // the current page could not be selected at all, so filtering to
+      // it was impossible precisely when the queue was busy elsewhere.
+      //
+      // The code is still the option key and still what the row is
+      // filtered on. Only the list of regions, and the name shown for
+      // each, now come from reference data.
+      regions: regionUnits.map(u => [u.code, u.name]),
       channels: _u(rows.map(r => r.channel)),
       idvs: _u(rows.map(r => r.idv)),
     };
-  }, [rows]);
+  }, [rows, regionUnits]);
 
   // Counts per quick filter, computed against the FULL row set so the
   // numbers match the chip labels regardless of which one is active.
