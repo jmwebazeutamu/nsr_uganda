@@ -30,27 +30,7 @@ THRESHOLD_SOURCES = {
     "head_min_age": ("AC-HOH-AGE", "min_head_age"),
     "child_max_age": ("AC-HOH-AGE-CHILD-LED", "max_age_inclusive"),
     "orphan_max_age": ("AC-ORPHAN-FLAG", "max_age"),
-}
-
-# The elderly boundary has no owner.
-#
-# `AC-HOH-AGE-CHILD-LED` and `AC-ORPHAN-FLAG` define the child boundary,
-# but nothing in the registry defines where "elderly" starts — no DQA
-# rule carries it, no choice list encodes it, and there is no system
-# configuration store to hold it. The composition panel used 60 as a
-# literal, which is a plausible number with no authority behind it.
-#
-# Rather than move that literal somewhere more respectable, the
-# dictionary reports it as an unresolved dependency: the API returns
-# null, the screen omits the elderly band and names the parameter that
-# would restore it. See the missing_dependencies contract test.
-UNRESOLVED_THRESHOLDS = {
-    "elderly_min_age": (
-        "No DQA rule or configuration entry defines where 'elderly' "
-        "begins. The composition panel previously assumed 60. Define it "
-        "as a rule parameter (for example AC-ELDERLY-HEAD.min_age) and "
-        "the elderly band returns automatically."
-    ),
+    "elderly_min_age": ("AC-ELDERLY-HEAD", "min_age"),
 }
 
 
@@ -208,9 +188,11 @@ def build_field_dictionary(form_version: FormVersion | None = None) -> FieldDict
         )
 
     for key, (rule_id, parameter) in THRESHOLD_SOURCES.items():
-        dictionary.thresholds[key] = _active_rule_parameters(rule_id).get(parameter)
-    for key, why in UNRESOLVED_THRESHOLDS.items():
-        dictionary.thresholds[key] = None
-        dictionary.missing_thresholds[key] = why
+        value = _active_rule_parameters(rule_id).get(parameter)
+        dictionary.thresholds[key] = value
+        if value is None:
+            dictionary.missing_thresholds[key] = (
+                f"No active {rule_id} rule defines its {parameter!r} parameter."
+            )
 
     return dictionary

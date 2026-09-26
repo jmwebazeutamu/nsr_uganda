@@ -228,6 +228,10 @@ const HhReviewRow = ({ row, draft, onEdit }) => {
             aria-label={`${row.label} (${row.path})`}
             value={shown === null || shown === undefined ? "" : String(shown)}
             onChange={(e) => onEdit(row.path, e.target.value)}/>
+        ) : row.displayLabel ? (
+          <span title={`Canonical GeographicUnit code: ${String(shown)}`}>
+            {row.displayLabel}
+          </span>
         ) : row.choiceList ? (
           <HhCodedCell listName={row.choiceList} value={shown} type={row.type}/>
         ) : (

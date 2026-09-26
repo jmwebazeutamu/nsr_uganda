@@ -252,7 +252,10 @@ def active_age_rules(db):
 
     seed()
     DqaRule.objects.filter(
-        rule_id__in=["AC-HOH-AGE", "AC-HOH-AGE-CHILD-LED", "AC-ORPHAN-FLAG"],
+        rule_id__in=[
+            "AC-HOH-AGE", "AC-HOH-AGE-CHILD-LED", "AC-ORPHAN-FLAG",
+            "AC-ELDERLY-HEAD",
+        ],
     ).update(status=RuleStatus.ACTIVE)
 
 
@@ -342,6 +345,7 @@ class TestThresholds:
         assert dictionary["thresholds"]["head_min_age"] == 12
         assert dictionary["thresholds"]["child_max_age"] == 17
         assert dictionary["thresholds"]["orphan_max_age"] == 18
+        assert dictionary["thresholds"]["elderly_min_age"] == 60
 
     def test_changing_the_rule_moves_the_threshold(self, active_age_rules):
         """These were literals in the console. Editing AC-HOH-AGE moved
@@ -358,16 +362,26 @@ class TestThresholds:
 
         assert build_field_dictionary().as_dict()["thresholds"]["head_min_age"] == 15
 
-    def test_the_elderly_boundary_is_reported_missing_not_invented(self):
-        """60 was a literal with no authority behind it. Until something
-        in the registry defines it, the dictionary must say so rather
-        than supply a number."""
-        dictionary = build_field_dictionary().as_dict()
-        assert dictionary["thresholds"]["elderly_min_age"] is None
-        assert "elderly_min_age" in dictionary["missing_thresholds"]
-        assert "AC-ELDERLY-HEAD" in dictionary["missing_thresholds"]["elderly_min_age"], (
-            "the gap must name what would close it, or nobody will close it"
+    def test_changing_the_elderly_rule_moves_the_threshold(self, active_age_rules):
+        rule = DqaRule.objects.get(
+            rule_id="AC-ELDERLY-HEAD", status=RuleStatus.ACTIVE,
         )
+        rule.parameters = {**rule.parameters, "min_age": 65}
+        rule.save(update_fields=["parameters"])
+
+        dictionary = build_field_dictionary().as_dict()
+        assert dictionary["thresholds"]["elderly_min_age"] == 65
+        assert "elderly_min_age" not in dictionary["missing_thresholds"]
+
+    def test_elderly_parameter_rule_is_not_a_household_dqa_gate(self, active_age_rules):
+        """The policy value must not turn every elderly household into a
+        DQA finding; its empty stage list makes it configuration-only."""
+        from apps.dqa.household_evaluator import load_active_household_rules
+
+        active_gate_ids = {
+            rule["rule_id"] for rule in load_active_household_rules("dih_ingest")
+        }
+        assert "AC-ELDERLY-HEAD" not in active_gate_ids
 
 
 @pytest.mark.django_db
@@ -385,7 +399,8 @@ class TestFieldDictionaryEndpoint:
         assert body["form_version"] is not None
         assert body["fields"]["wall_material"]["choice_list"] == "wall_material"
         assert body["thresholds"]["head_min_age"] == 12
-        assert "elderly_min_age" in body["missing_thresholds"]
+        assert body["thresholds"]["elderly_min_age"] == 60
+        assert "elderly_min_age" not in body["missing_thresholds"]
 
     def test_it_serves_an_etag_and_honours_a_conditional_get(
         self, client, django_user_model,

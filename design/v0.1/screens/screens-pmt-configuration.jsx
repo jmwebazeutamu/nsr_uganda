@@ -40,6 +40,9 @@ const STATUS_LABEL = {
 const PCFG_API_ROOT = "/api/v1/admin/pmt/versions/";
 
 const pcfgStatus = (value) => String(value || "draft").toLowerCase();
+// The API still enforces this using PMTModelVersion.status. This helper only
+// controls whether the destructive action is offered in the browser.
+const canDiscardPmtDraft = (version) => !!version && pcfgStatus(version.status) === "draft";
 const pcfgNum = (value, fallback = 0) => {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -313,6 +316,25 @@ const PmtConfigurationScreen = ({ onBack }) => {
       setNotice(`Cloned PMT v${selected.version} into draft v${created.version}.`);
     } catch (err) {
       setError(err?.body?.detail || err?.message || "Could not clone PMT model version.");
+    } finally {
+      setSaving("");
+    }
+  };
+
+  const discardDraft = async () => {
+    const api = typeof window !== "undefined" ? window.nsrApi : null;
+    if (!api || !selected?.id || !canDiscardPmtDraft(selected)) return;
+    if (!window.confirm(
+      `Discard PMT v${selected.version}? This permanently removes this unsubmitted draft.`
+    )) return;
+    setSaving("discard");
+    setError("");
+    try {
+      const result = await api.post(`${PCFG_API_ROOT}${selected.id}/discard/`, {});
+      await fetchVersions();
+      setNotice(`Discarded unsubmitted PMT v${result.version} draft.`);
+    } catch (err) {
+      setError(err?.body?.detail || err?.message || "Could not discard PMT model draft.");
     } finally {
       setSaving("");
     }
@@ -628,6 +650,10 @@ const PmtConfigurationScreen = ({ onBack }) => {
               <div className="row gap-2">
                 {selected.status === 'draft' && <>
                   <button className="btn" onClick={cloneVersion} disabled={!!saving}><Icon name="copy" size={13}/> Clone</button>
+                  <button className="btn" onClick={discardDraft} disabled={!!saving}
+                          title="Permanently discard this unsubmitted draft">
+                    <Icon name="trash" size={13}/> {saving === "discard" ? "Discarding…" : "Discard draft"}
+                  </button>
                   <button className="btn btn-primary" onClick={submitVersion} disabled={!!saving}><Icon name="upload" size={13}/> Submit for approval</button>
                 </>}
                 {selected.status === 'pending_approval' && <>
@@ -1253,4 +1279,4 @@ const PmtConfigurationScreen = ({ onBack }) => {
   );
 };
 
-Object.assign(window, { PmtConfigurationScreen });
+Object.assign(window, { PmtConfigurationScreen, canDiscardPmtDraft });

@@ -16,6 +16,7 @@ Rules:
   AC-DISABILITY-CONSISTENCY  flag       no disability detail when flag=false
   AC-ORPHAN-FLAG             flag       orphan flag set when both parents dead + age<18
   AC-MEMBER-DETAIL-REQUIRED  block      every member has the per-member required answers
+  AC-ELDERLY-HEAD            info       editable elderly-head age policy parameter
 
 Usage:
   .venv/bin/python scripts/seed_dqa_intra_household_rules.py
@@ -296,6 +297,44 @@ AC_HOH_AGE_CHILD_LED = {
             "expected_outcome": "pass",
         },
     ],
+}
+
+
+# ─────────────────────────────────────────────────────────────────────
+# AC-ELDERLY-HEAD — policy parameter for the household-composition view.
+#
+# This rule deliberately has no evaluation stages. It is an approved DQA
+# policy artefact that owns the `min_age` boundary consumed by the Field
+# Dictionary; it does not classify an elderly-headed household as a DQA
+# failure. Changing the approved rule version changes every reader of that
+# dictionary without a frontend or scoring-code release.
+AC_ELDERLY_HEAD = {
+    "rule_id": "AC-ELDERLY-HEAD",
+    "description": (
+        "Policy parameter defining the minimum age for an elderly-headed "
+        "household in operator-facing household composition summaries."
+    ),
+    "severity": Severity.INFO,
+    "parameters": {"min_age": 60},
+    "applies_to": {
+        "fields": ["members.*.is_head", "members.*.age_years"],
+    },
+    # A valid DSL shape allows Rule Editor preview/versioning. It is never
+    # evaluated by a pipeline because this parameter-only rule has no stages.
+    "expression": {
+        "op": "count_where",
+        "predicate": {"op": "and", "args": [
+            _head_predicate(),
+            {"op": "gte", "args": ["$.age_years", "$parameters.min_age"]},
+        ]},
+        "_fail_when": {"op": "gt", "args": ["$", 0]},
+    },
+    "error_message_template": (
+        "Elderly-headed household — head is at least {min_age} years old."
+    ),
+    "message_template_i18n_key": "dqa.ac_elderly_head.message",
+    "test_fixtures": [],
+    "stages": [],
 }
 
 
@@ -830,6 +869,7 @@ ALL_RULES = [
     AC_HOH_EXISTS,
     AC_HOH_AGE,
     AC_HOH_AGE_CHILD_LED,
+    AC_ELDERLY_HEAD,
     AC_SPOUSE_PAIR,
     AC_PARENT_AGE,
     AC_MEMBER_COUNT_MATCH,
@@ -863,7 +903,7 @@ def seed() -> int:
             category=RuleCategory.INTRA_HOUSEHOLD,
             scope=RuleScope.HOUSEHOLD,
             expression_type=ExpressionType.DSL,
-            stages=ALL_STAGES,
+            stages=spec.get("stages", ALL_STAGES),
             parameters=spec["parameters"],
             applies_to=spec["applies_to"],
             expression=spec["expression"],

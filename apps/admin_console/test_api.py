@@ -12,10 +12,12 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.pmt.models import (
+    ModelStatus,
     PMTCoverageSnapshot,
     PMTModelVersion,
     PMTRecomputeJobRun,
 )
+from apps.security.models import AuditEvent
 
 
 @pytest.fixture
@@ -335,6 +337,48 @@ class TestVersionsEndpoint:
         assert r.data["version"] == existing_max + 1
         # Variables copied through.
         assert len(r.data["variables"]) == len(v1.variables)
+
+    def test_discard_removes_only_an_unsubmitted_draft_and_audits_it(self, admin_client):
+        v1 = PMTModelVersion.objects.get(version=1)
+        created = admin_client.post(f"/api/v1/admin/pmt/versions/{v1.id}/clone/")
+        draft_id = created.data["id"]
+
+        response = admin_client.post(
+            f"/api/v1/admin/pmt/versions/{draft_id}/discard/",
+        )
+
+        assert response.status_code == 200, response.data
+        assert response.data["discarded_id"] == draft_id
+        assert not PMTModelVersion.objects.filter(pk=draft_id).exists()
+        event = AuditEvent.objects.filter(
+            action="pmt.model.discarded", entity_id=draft_id,
+        ).latest("occurred_at")
+        assert event.field_changes["previous_status"] == ModelStatus.DRAFT
+
+    def test_discard_refuses_a_submitted_version_and_keeps_it(self, admin_client):
+        v1 = PMTModelVersion.objects.get(version=1)
+        created = admin_client.post(f"/api/v1/admin/pmt/versions/{v1.id}/clone/")
+        draft_id = created.data["id"]
+        submitted = admin_client.post(
+            f"/api/v1/admin/pmt/versions/{draft_id}/submit/",
+            {
+                "author_email": "analyst@nsr.go.ug",
+                "mglsd_steward_email": "steward@mglsd.go.ug",
+                "ubos_dg_email": "dg@ubos.go.ug",
+            },
+            format="json",
+        )
+        assert submitted.status_code == 200, submitted.data
+
+        response = admin_client.post(
+            f"/api/v1/admin/pmt/versions/{draft_id}/discard/",
+        )
+
+        assert response.status_code == 409
+        assert response.data["status"] == ModelStatus.PENDING_APPROVAL
+        assert PMTModelVersion.objects.filter(
+            pk=draft_id, status=ModelStatus.PENDING_APPROVAL,
+        ).exists()
 
 
 # ───────────────────────────────────────────────────────────────

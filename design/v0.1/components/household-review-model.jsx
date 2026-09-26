@@ -125,7 +125,9 @@ const isEmpty = (v) =>
 
 /** Flatten an object into review rows, recursing into nested objects.
  *  `prefix` builds the dotted path the edit endpoint speaks. */
-const rowsFrom = (obj, prefix, { skip = new Set(), dictionary = null } = {}) => {
+const rowsFrom = (
+  obj, prefix, { skip = new Set(), dictionary = null, displayLabels = null } = {},
+) => {
   const rows = [];
   if (!obj || typeof obj !== "object") return rows;
   for (const [key, value] of Object.entries(obj)) {
@@ -147,6 +149,10 @@ const rowsFrom = (obj, prefix, { skip = new Set(), dictionary = null } = {}) => 
       missing: field.missing,
       source: field.source,
       questionName: field.questionName,
+      // Only the API's GeographicUnit projection supplies these labels.
+      // The persisted canonical payload continues to carry stable UBOS
+      // codes; a screen must not maintain its own code-to-name map.
+      displayLabel: displayLabels && displayLabels[key] ? displayLabels[key] : "",
       empty: isEmpty(value),
     });
   }
@@ -304,11 +310,18 @@ const SECTION_SPECS = [
              "source_channel", "reported_household_size", "consent_block"] },
 
   { id: "location", title: "Location",
-    from: (p, dictionary) => rowsFrom(p.geographic, "geographic", { dictionary: dictionary, skip: new Set(["_labels"]) })
+    from: (p, dictionary) => {
+      const geographic = p.geographic || {};
+      return rowsFrom(geographic, "geographic", {
+        dictionary: dictionary,
+        skip: new Set(["_labels"]),
+        displayLabels: geographic._labels || null,
+      })
       .concat(rowsFrom({
         address_narrative: p.address_narrative, urban_rural: p.urban_rural,
         gps_lat: p.gps_lat, gps_lng: p.gps_lng, gps_accuracy_m: p.gps_accuracy_m,
-      }, "", { dictionary })),
+      }, "", { dictionary }));
+    },
     claims: ["geographic", "address_narrative", "urban_rural",
              "gps_lat", "gps_lng", "gps_accuracy_m"] },
 
@@ -330,12 +343,12 @@ const SECTION_SPECS = [
     claims: ["housing"] },
 
   { id: "livelihood", title: "Livelihood & agriculture",
-    from: (p, dictionary) => rowsFrom((p.housing || {}).livelihood, "housing.livelihood")
+    from: (p, dictionary) => rowsFrom((p.housing || {}).livelihood, "housing.livelihood", { dictionary })
       .concat(rowsFrom(p.agriculture, "agriculture", { dictionary: dictionary })),
     claims: ["agriculture"] },
 
   { id: "food", title: "Food security",
-    from: (p, dictionary) => rowsFrom((p.food_shocks || {}).food_security, "food_shocks.food_security")
+    from: (p, dictionary) => rowsFrom((p.food_shocks || {}).food_security, "food_shocks.food_security", { dictionary })
       .concat(rowsFrom((p.food_shocks || {}).food_consumption, "food_shocks.food_consumption", { dictionary }))
       .concat(rowsFrom((p.food_security || {}).fies, "food_security.fies", { dictionary }))
       .concat(rowsFrom((p.food_security || {}).food_groups, "food_security.food_groups", { dictionary }))
@@ -345,7 +358,7 @@ const SECTION_SPECS = [
     claims: ["food_security"] },
 
   { id: "shocks", title: "Shocks & coping",
-    from: (p, dictionary) => rowsFrom((p.shocks_coping || {}).coping, "shocks_coping.coping")
+    from: (p, dictionary) => rowsFrom((p.shocks_coping || {}).coping, "shocks_coping.coping", { dictionary })
       .concat(rowsFrom((p.shocks_coping || {}).shocks, "shocks_coping.shocks", { dictionary }))
       .concat(rowsFrom(p.shocks_coping, "shocks_coping", { dictionary,
         skip: new Set(["coping", "shocks"]),

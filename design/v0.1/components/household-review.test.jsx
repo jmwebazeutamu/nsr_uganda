@@ -278,6 +278,63 @@ describe("labels", () => {
   it("uses the known label where there is one", () => {
     expect(humaniseKey("roof_material")).toBe("Roof material");
   });
+
+  it("uses the server-projected GeographicUnit name, not the stored code", () => {
+    const model = buildReviewModel({
+      members: [],
+      geographic: {
+        district: "104",
+        _labels: { district: "Luweero" },
+      },
+    });
+    const row = model.sections.find(section => section.id === "location")
+      .rows.find(item => item.path === "geographic.district");
+    expect(row.value).toBe("104");
+    expect(row.displayLabel).toBe("Luweero");
+  });
+
+  it("renders a GeographicUnit name without treating it as a replacement code", () => {
+    render(React.createElement(HouseholdReview, {
+      payload: {
+        members: [],
+        geographic: {
+          district: "104",
+          _labels: { district: "Luweero" },
+        },
+      },
+    }));
+    fireEvent.click(screen.getByRole("button", { name: /location/i }));
+    expect(screen.getByText("Luweero")).toBeTruthy();
+    expect(screen.queryByText("104")).toBeNull();
+  });
+});
+
+describe("field dictionary propagation", () => {
+  it("uses the active Questionnaire mapping for coping-strategy fields", () => {
+    const dictionary = {
+      fields: {
+        l01a_casual_labor: {
+          label: "Engage in casual labor",
+          question_label: "L01.a Engage in casual labor",
+          choice_list: "coping_frequency",
+          question_name: "l01a_casual_labor",
+          section: "L", type: "select_one", source: "instrument",
+        },
+      },
+      thresholds: {}, missing_thresholds: {}, conflicts: [],
+    };
+    const model = buildReviewModel({
+      members: [],
+      shocks_coping: { coping: { l01a_casual_labor: "2" } },
+    }, dictionary);
+    const row = model.sections.find(section => section.id === "shocks")
+      .rows.find(item => item.path === "shocks_coping.coping.l01a_casual_labor");
+    expect(row).toMatchObject({
+      label: "Engage in casual labor",
+      choiceList: "coping_frequency",
+      missing: false,
+    });
+  });
 });
 
 

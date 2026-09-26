@@ -11,7 +11,10 @@ from __future__ import annotations
 from datetime import timedelta
 
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Count
+from django.db.models.deletion import ProtectedError
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, status, viewsets
@@ -30,6 +33,8 @@ from apps.pmt.models import (
     PMTSubregionSnapshot,
     PMTVariableInfluence,
 )
+from apps.pmt.models import ModelStatus
+from apps.security.audit import emit as emit_audit
 from apps.security.models import AuditEvent
 
 # ───────────────────────────────────────────────────────────────
@@ -604,6 +609,57 @@ class PMTModelVersionAdminViewSet(viewsets.ViewSet):
                 setattr(mv, field, request.data[field])
         mv.save()
         return Response(_version_detail(mv))
+
+    @action(detail=True, methods=["post"], url_path="discard")
+    def discard(self, request, pk=None):
+        """Permanently remove a never-submitted PMT draft.
+
+        ``PMTModelVersion.status`` is the lifecycle SSOT.  Submitted,
+        rejected, active, and retired versions are audit-bearing records and
+        cannot be discarded through this endpoint.  A draft with protected
+        dependent records is likewise retained so historical scores or
+        snapshots can never be orphaned.
+        """
+        with transaction.atomic():
+            mv = get_object_or_404(
+                PMTModelVersion.objects.select_for_update(), pk=pk,
+            )
+            if mv.status != ModelStatus.DRAFT:
+                return Response({
+                    "detail": (
+                        "Only an unsubmitted PMT draft can be discarded. "
+                        "Submitted versions must complete the approval or "
+                        "rejection workflow."
+                    ),
+                    "status": mv.status,
+                }, status=status.HTTP_409_CONFLICT)
+
+            version_id = str(mv.id)
+            version_number = mv.version
+            try:
+                mv.delete()
+            except ProtectedError:
+                return Response({
+                    "detail": (
+                        "This draft has dependent PMT records and cannot be "
+                        "discarded. It has been retained for audit safety."
+                    ),
+                    "status": ModelStatus.DRAFT,
+                }, status=status.HTTP_409_CONFLICT)
+
+            emit_audit(
+                "pmt.model.discarded", "pmt_model_version", version_id,
+                actor=request.user.username or "admin",
+                reason=f"Unsubmitted PMT v{version_number} draft discarded",
+                field_changes={
+                    "previous_status": ModelStatus.DRAFT,
+                    "version": version_number,
+                },
+            )
+        return Response({
+            "discarded_id": version_id,
+            "version": version_number,
+        }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["post"], url_path="clone")
     def clone(self, request, pk=None):
