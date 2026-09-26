@@ -1,9 +1,8 @@
 """Recompute the PMT dashboard snapshot tables.
 
-Called from the "Run now" admin button + the nightly Celery beat
-job (`recompute_dashboard_snapshots_task` — wiring deferred until
-the beat schedule lands). One PMTRecomputeJobRun row per execution
-so the dashboard's recent-runs table is queryable.
+Called from the "Run now" admin button and the nightly Celery beat
+job (`recompute_dashboard_snapshots_task`). One PMTRecomputeJobRun
+row per execution makes the dashboard's recent-runs table queryable.
 """
 
 from __future__ import annotations

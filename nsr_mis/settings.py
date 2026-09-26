@@ -85,6 +85,13 @@ PARTNERS_MODULE_ENABLED = True
 # workflow literal: use DIH_STUCK_RUN_TIMEOUT_HOURS to change the window
 # without releasing application code.
 DIH_STUCK_RUN_TIMEOUT_HOURS = env.int("DIH_STUCK_RUN_TIMEOUT_HOURS", default=6)
+# PMT dashboard snapshots are operational aggregates, refreshed by the
+# scheduled full recompute. The API owns the freshness decision and exposes
+# it to every admin-console client; deployments may tighten this independently
+# of the nightly schedule without changing UI/business code.
+PMT_DASHBOARD_SNAPSHOT_MAX_AGE_HOURS = env.int(
+    "PMT_DASHBOARD_SNAPSHOT_MAX_AGE_HOURS", default=24,
+)
 # Open-CR evidence file storage (CR-modal slice 3). "file" by default
 # (dev convenience), "memory" in tests via conftest, "minio" once the
 # production bucket lands. Dir under repo root keeps dev sessions

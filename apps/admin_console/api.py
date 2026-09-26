@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from django.conf import settings
 from django.db.models import Count
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
@@ -142,8 +143,11 @@ def _coverage_payload() -> dict:
         return {
             "total_households": 0, "scored": 0,
             "scored_30d": 0, "scored_90d": 0, "stale_12mo": 0,
-            "taken_at": "",
+            "taken_at": "", "is_stale": True,
+            "stale_after_hours": settings.PMT_DASHBOARD_SNAPSHOT_MAX_AGE_HOURS,
         }
+    stale_after_hours = settings.PMT_DASHBOARD_SNAPSHOT_MAX_AGE_HOURS
+    is_stale = timezone.now() - snap.taken_at > timedelta(hours=stale_after_hours)
     return {
         "total_households": snap.total_households,
         "scored": snap.scored,
@@ -151,6 +155,8 @@ def _coverage_payload() -> dict:
         "scored_90d": snap.scored_90d,
         "stale_12mo": snap.stale_12mo,
         "taken_at": snap.taken_at.isoformat(),
+        "is_stale": is_stale,
+        "stale_after_hours": stale_after_hours,
     }
 
 

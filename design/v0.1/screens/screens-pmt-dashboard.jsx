@@ -118,6 +118,9 @@ const _pmtProjectCoverage = (c) => c ? ({
   scoredStalePct: c.total_households
     ? (c.stale_12mo * 100) / c.total_households
     : 0,
+  takenAt: c.taken_at || "",
+  isStale: !!c.is_stale,
+  staleAfterHours: c.stale_after_hours ?? null,
 }) : null;
 
 const _pmtProjectVariablesTop = (rows) => (rows || []).map(v => ({
@@ -302,6 +305,9 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
   const PMT_TRIGGERS = dash.triggers;
   const PMT_JOB = dash.job;
   const PMT_RECENT_EVENTS = dash.recentEvents;
+  const snapshotLabel = PMT_COVERAGE?.takenAt
+    ? `Snapshot last refreshed ${_pmtFmtDateTime(PMT_COVERAGE.takenAt)}`
+    : "No PMT dashboard snapshot has been generated.";
 
   // Trigger a recompute via the admin API. Disables the button
   // while running; reloads the dashboard payload on completion so
@@ -399,6 +405,28 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
           <button className="btn btn-primary" onClick={onOpenConfig}><Icon name="sliders" size={14}/> Open configuration</button>
         </>}
       />
+
+      <div
+        data-testid="pmt-snapshot-freshness"
+        className="card"
+        style={{
+          marginBottom: 16, padding: "10px 14px",
+          borderLeft: `3px solid ${PMT_COVERAGE.isStale ? "var(--accent-danger)" : "var(--accent-data)"}`,
+          background: PMT_COVERAGE.isStale ? "var(--accent-danger-soft, var(--neutral-50))" : "var(--neutral-50)",
+        }}
+      >
+        <div className="row gap-2" style={{ alignItems: "center" }}>
+          <Chip size="sm" tone={PMT_COVERAGE.isStale ? "danger" : "data"}>
+            {PMT_COVERAGE.isStale ? "Snapshot stale" : "Snapshot current"}
+          </Chip>
+          <span className="t-bodysm">{snapshotLabel}</span>
+          {PMT_COVERAGE.isStale && (
+            <span className="t-cap muted">
+              Refresh via Run now; server freshness window: {PMT_COVERAGE.staleAfterHours}h.
+            </span>
+          )}
+        </div>
+      </div>
 
       {/* Top row — Active model card + headline KPIs */}
       <div className="grid" style={{ gridTemplateColumns: '1.4fr 1fr 1fr 1fr', gap: 16 }}>

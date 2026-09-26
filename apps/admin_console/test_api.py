@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
+from django.test import override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.pmt.models import (
@@ -91,6 +95,31 @@ class TestDashboardPayload:
             "geo", "drift", "triggers", "job", "recent_events",
         ):
             assert key in r.data, f"dashboard payload missing key {key!r}"
+
+    @override_settings(PMT_DASHBOARD_SNAPSHOT_MAX_AGE_HOURS=1)
+    def test_dashboard_marks_an_old_snapshot_stale(self, admin_client):
+        PMTCoverageSnapshot.objects.all().delete()
+        snapshot = PMTCoverageSnapshot.objects.create(
+            total_households=10, scored=10,
+        )
+        PMTCoverageSnapshot.objects.filter(pk=snapshot.pk).update(
+            taken_at=timezone.now() - timedelta(hours=2),
+        )
+
+        response = admin_client.get("/api/v1/admin/pmt/dashboard/")
+
+        assert response.data["coverage"]["is_stale"] is True
+        assert response.data["coverage"]["stale_after_hours"] == 1
+        assert response.data["coverage"]["taken_at"]
+
+    @override_settings(PMT_DASHBOARD_SNAPSHOT_MAX_AGE_HOURS=1)
+    def test_dashboard_marks_a_recent_snapshot_current(self, admin_client):
+        PMTCoverageSnapshot.objects.all().delete()
+        PMTCoverageSnapshot.objects.create(total_households=10, scored=10)
+
+        response = admin_client.get("/api/v1/admin/pmt/dashboard/")
+
+        assert response.data["coverage"]["is_stale"] is False
 
 
 # ───────────────────────────────────────────────────────────────
