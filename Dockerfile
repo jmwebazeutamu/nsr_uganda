@@ -48,11 +48,6 @@ RUN node scripts/build_console.mjs
 # ---------------------------------------------------------------------
 FROM python:3.12-slim AS manual-build
 
-# Same timeout reasoning as the runtime stage below; a separate FROM
-# inherits no ENV.
-ENV PIP_DEFAULT_TIMEOUT=120 \
-    PIP_RETRIES=10
-
 WORKDIR /build
 RUN pip install --no-cache-dir mkdocs==1.6.1 mkdocs-material==9.7.7
 
@@ -66,20 +61,10 @@ RUN cd docs/user-manual && mkdocs build --strict
 # ---------------------------------------------------------------------
 FROM python:3.12-slim
 
-# pip's defaults (15s read timeout, 5 retries) are too tight for this
-# host's link to files.pythonhosted.org. Three consecutive deploys of
-# 9f4df16 died on `ReadTimeoutError: ... files.pythonhosted.org` part-way
-# through the dependency set, each time at a different package — the
-# connection opens and then the read stalls. Nothing was wrong with the
-# code or the pins; the build just gave up too early on a slow CDN, and
-# this image pulls some large wheels (torch, transformers, scipy,
-# scikit-learn). Raising both makes the build wait it out instead.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_DEFAULT_TIMEOUT=120 \
-    PIP_RETRIES=10 \
     DJANGO_SETTINGS_MODULE=nsr_mis.settings
 
 # Build + runtime deps. libpq-dev for psycopg; build-essential for any
