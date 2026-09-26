@@ -2872,3 +2872,130 @@ No errors or tracebacks in worker/beat since the deploy.
   screen's filter, not a data one.
 - Backend suite is **3330 passed, 0 failed** — the first fully green run
   in this stretch of work.
+
+---
+
+## 2026-09-26 — attempted deploy b4adea9 -> 9f4df16 (BLOCKED, not deployed)
+
+Production was **not changed**. It still runs `b4adea9`. Four builds were
+attempted and all four failed; `deploy.sh` restored the checkout each
+time and the running site was never touched.
+
+### What was meant to ship
+
+`07208df` the DIH region filter read from GeographicUnit instead of from
+the loaded page, and `9f4df16` the SSOT digest plus its contract test.
+Both are on `origin/main`.
+
+The filter defect is real on production: `reference_data_geographicunit`
+holds five region rows, four active plus a **retired `UG-N` also named
+"Northern"** — the same shape as dev.
+
+```
+R-CENTRAL |Central |active
+R-EASTERN |Eastern |active
+R-NORTHERN|Northern|active
+UG-N      |Northern|retired
+R-WESTERN |Western |active
+```
+
+### Pre-deploy backup (taken, verified, kept)
+
+`/opt/nsrmis/backups/pre-dih-region-ssot-20260926-095710Z.dump` — 11M,
+`pg_dump -Fc` exit 0. Verified by the documented method (`pg_restore -l`
+inside a throwaway `postgis/postgis:16-3.4` container, since the host has
+no `pg_restore` and piping into `exec -T` falsely reports corruption):
+exit 0, empty stderr, 1304 TOC entries, all key tables present.
+
+Row counts at backup time:
+
+```
+households 354 · members 1575 · audit events 100701
+geo units 13971 (regions 5) · pmt results 354 · stage records 397
+```
+
+### Why it failed: the link to the PyPI CDN, not the code
+
+Four failures, three different error messages, one cause.
+
+| # | Died at | Reported as |
+|---|---|---|
+| 1 | `pip install .`, 5m | `ResolutionImpossible` on uritemplate |
+| 2 | `pip install .`, 48s | `No matching distribution for setuptools` |
+| 3 | `pip install .`, 2m | `ReadTimeoutError: files.pythonhosted.org` |
+| 4 | `pip install mkdocs`, 5m33s | `ReadTimeoutError: files.pythonhosted.org` |
+
+**The first two are not dependency conflicts.** When pip cannot fetch a
+package's metadata it backtracks through every version it can see and
+then reports the result as a conflict, so a stalled read surfaces as
+"conflicting dependencies" for pins that have not changed in months.
+Attempt 3 showed the real error. Anyone reading only attempt 1 would go
+looking for a bad pin and find nothing wrong.
+
+Measured from the host:
+
+```
+pypi.org index            200, 44 KB in 1.45s     fine
+github.com                200 in 20.6s            slow
+files.pythonhosted.org    460 KB in 60s =  7.7 KB/s
+files.pythonhosted.org  1.66 MB in 60s = 27.7 KB/s
+```
+
+Nothing is misconfigured: IPv4 to PyPI works, DNS returns v4 only, a
+plain `docker run` downloads setuptools fine, and a minimal BuildKit
+build does too. Small transfers succeed; bulk transfers crawl. The image
+pulls torch, transformers, scipy and scikit-learn, so there is a lot of
+wheel to read at 20 KB/s.
+
+### A self-inflicted step backwards, reverted
+
+`fc0ce20` raised `PIP_DEFAULT_TIMEOUT` to 120 and `PIP_RETRIES` to 10.
+Sound in principle, useless here — at 20 KB/s the bandwidth decides
+whether the build finishes, not the timeout — and it **cost more than it
+could save**. Both ENV blocks sit above the expensive layers, so editing
+them invalidated the build cache from that point down. Attempt 3 had the
+mkdocs layer `CACHED`; attempt 4, with the change in, had to fetch mkdocs
+over the degraded link and died there, on a step that had been free a
+minute earlier.
+
+Reverted in `8cfe8e5`. The Dockerfile is now byte-identical to `9f4df16`,
+so the old cache keys are valid again and the only layer that must cross
+the network is `pip install .`, which re-runs for new source anyway.
+Worth reapplying when the link is healthy, with the ENV placed
+immediately above the pip call it is meant to help.
+
+### Production state after four failed builds
+
+```
+checkout  b4adea9 (unchanged)
+services  beat certbot db nginx public redis web worker — all running
+/healthz  200   /  200   /console/  302   /manual/  302
+disk      17G free (83% used) — was 33G at the 22 Sep deploy
+```
+
+### Open
+
+- **The deploy is still pending.** It needs either a recovered link or a
+  different way to get the image onto the box. The user chose "build on
+  prod from git" deliberately and rejected a registry, so changing that
+  is their call.
+- **Disk is at 83%**, down from 33G free on 22 Sep. Worth a look before
+  the next build; a cold torch layer needs several GB.
+
+### Commands run on prod
+
+```
+ssh nsr-prod 'hostname; uptime; cd /opt/nsrmis && git log --oneline -1; docker compose ... ps; df -h /'
+ssh nsr-prod 'docker compose ... exec -T db pg_dump -U nsr -d nsr -Fc --no-owner --no-acl > backups/<dump>'
+ssh nsr-prod 'docker run --rm -v /opt/nsrmis/backups:/b:ro postgis/postgis:16-3.4 pg_restore -l /b/<dump>'
+ssh nsr-prod 'docker compose ... exec -T db psql -U nsr -d nsr -tA -c "<row counts>"'
+ssh nsr-prod 'docker compose ... exec -T web python manage.py showmigrations ingestion_hub'
+ssh nsr-prod 'cd /opt/nsrmis && ./deploy.sh'          # x4, all failed at build
+ssh nsr-prod 'tail /opt/nsrmis/deploy.log'            # and greps over it
+ssh nsr-prod 'curl ... pypi.org / files.pythonhosted.org / github.com'   # throughput
+ssh nsr-prod 'docker run --rm python:3.12-slim ... pip download setuptools'
+ssh nsr-prod 'docker build ... bkprobe'               # minimal BuildKit probe, removed after
+ssh nsr-prod 'docker rmi -f bkprobe:t; rm -rf /tmp/bkprobe'
+```
+
+No data was modified. No secrets printed.
