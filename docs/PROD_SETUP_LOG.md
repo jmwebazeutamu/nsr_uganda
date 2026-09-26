@@ -2765,3 +2765,110 @@ output that does not exist in production — second time, so now a test.
   CPU-only torch for the chatbot embeddings.
 - `tests/integration/test_drs_workflow_e2e.py` still fails on the
   other session's DSA-scope tightening. Unchanged by this.
+
+---
+
+## 2026-09-26 — deploy 8492968 → b4adea9 (DRS schema SSOT, PMT cold start)
+
+Seven commits, three migrations. Two move the DRS disclosure schema into
+the canonical Data Dictionary; one normalises DSA field scope; the rest
+fix a deadlock that would have stopped any fresh registry working.
+
+**Backup:** `pre-deploy-20260925T235302Z.dump`, 11M, 131 tables.
+
+```
+23:58:58  healthz ok after 1 attempt(s)
+23:59:00  === deploy complete: 8492968 -> b4adea9 ===
+```
+
+All eight services up. Disk free 18G.
+
+### Pre-deploy check, because a range is all of it
+
+`intake.0012` seeds `DataRequestFieldDefinition` and binds each row to
+the `FormQuestion` that collects it and the `ChoiceList` that
+constrains it. A field whose choice list is missing or retired becomes
+**unavailable** rather than falling back — so the seed had to be checked
+against production's data before shipping, not after.
+
+```
+FormQuestion with canonical_field : 156
+active ChoiceLists               :  96
+```
+
+Enough to bind against. Verified after:
+
+```
+definitions           : 95
+disclosure groups     : 15
+bound to a question   : 60
+bound to a ChoiceList : 45
+```
+
+(Dev holds 96 definitions to production's 95 — one field production has
+no question for. Not chased; noted.)
+
+### The DSA vocabulary is now one vocabulary
+
+`partners.0013` moved the two agreements written in the console's old
+names. `Housing` and `FoodShocks` each covered two catalogue groups, so
+they **expanded** rather than renamed — narrowing a signed agreement is
+not a migration's decision.
+
+```
+unresolvable groups : none
+DSA_OPM_Johnson Mwebaze  Dwelling, Education, Employment,
+                         Food consumption, Food security, Health,
+                         Identifiers, Members, PMT, Utilities
+kkk                      Identifiers, Members
+```
+
+Both were `pending_signature` / `draft`, so no partner had yet been
+refused a group their agreement granted. That was luck.
+
+### The PMT cold start
+
+`f73d0ad` removed the band fallback — right, since a percentile rank is
+not a score threshold. It left an empty registry unable to function:
+no thresholds, so scoring raised, so promotion rolled back inside its
+atomic block, so no score was stored, so the nightly job had nothing to
+compute thresholds from. **76 ingestion_hub tests** failed on it, and
+any environment built from schema — a DR rebuild, a new instance,
+staging — could not promote one household.
+
+Production was never affected: it held 48 threshold rows written before
+the enforcement landed. Now 52, the job having run since.
+
+```
+active         : v1 strategy=percentile
+threshold rows : 52
+results        : 354
+can band       : yes -> vulnerable
+```
+
+Three fixes, none inventing band policy: a household is promoted
+whether or not PMT can band it yet (audited, not raised through
+somebody else's transaction); the threshold job scores the population
+itself when it has no stored results to read; and activation checks a
+percentile model **declares** its ranks rather than that it can already
+classify — thresholds are computed for active models only, so the old
+check made every percentile model impossible to activate.
+
+### Live
+
+```
+/healthz                            200
+/api/v1/drs/requests/field-groups/  403  (unauthenticated — correct)
+/manual/grm/                        302  (login — correct)
+/console/                           302  (login — correct)
+```
+
+No errors or tracebacks in worker/beat since the deploy.
+
+### Open
+
+- **Four DIH region-filter tests** still fail (`6c7d354`, region names vs
+  codes). Deployed and untouched; a display defect in the DIH review
+  screen's filter, not a data one.
+- Backend suite is **3330 passed, 0 failed** — the first fully green run
+  in this stretch of work.
