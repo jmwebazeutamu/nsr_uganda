@@ -50,6 +50,65 @@ const pcfgNum = (value, fallback = 0) => {
 const pcfgVariableName = (v) => v.name || v.variable || v.path || "";
 const pcfgVariableGroup = (v) => v.group || v.category || "DSL";
 const pcfgVariableTransform = (v) => v.transform || (v.feature && v.feature.type) || "direct";
+
+// A variable is named for the questionnaire field it scores, with a
+// qualifier after `__` where several variables score one field (the
+// education, wall, floor and lighting ladders). Mirrors
+// apps.pmt.variable_catalogue.field_for_name — the server decides the
+// spelling, this only reads it back.
+const pcfgVariableField = (v) => {
+  const feature = v.feature || {};
+  if (feature.path) return String(feature.path).split(".").pop();
+  return String(pcfgVariableName(v)).split("__")[0];
+};
+
+// What the variable actually tests, in the operator's words.
+//
+// The codes are the model's, the labels are Reference Data's, and the
+// join is done here only for display — `catalogue` is the server's
+// field catalogue, keyed by canonical field. With no catalogue loaded
+// the raw codes still show: a bare "17, 19" is honest, whereas
+// inventing a label for 17 is the defect ADR-0041 is about.
+const pcfgVariableValue = (v, catalogue) => {
+  const feature = v.feature || {};
+  const entry = catalogue && catalogue[pcfgVariableField(v)];
+  const labelFor = (code) => {
+    const hit = entry && (entry.options || []).find(o => String(o.code) === String(code));
+    return hit ? hit.label : "";
+  };
+  const describe = (raw) => {
+    const codes = Array.isArray(raw) ? raw : [raw];
+    const shown = codes.map(String);
+    const labels = shown.map(labelFor).filter(Boolean);
+    const codeText = shown.length > 3
+      ? `${shown[0]}\u2013${shown[shown.length - 1]} (${shown.length})`
+      : shown.join(", ");
+    if (!labels.length) return codeText;
+    const ends = labels.length > 2
+      ? `${labels[0]} \u2026 ${labels[labels.length - 1]}`
+      : labels.join(", ");
+    return `${codeText} \u00b7 ${ends}`;
+  };
+
+  if (feature.operand !== undefined && feature.operand !== null && feature.path) {
+    const prefix = feature.type === "inequality" ? "not " : "";
+    return prefix + describe(feature.operand);
+  }
+  const filter = feature.filter || {};
+  const codedKey = Object.keys(filter).find(k => /__(in|exact|iexact)$/.test(k));
+  if (codedKey) return describe(filter[codedKey]);
+  if (feature.numerator && feature.denominator) {
+    return `${feature.numerator} / ${feature.denominator}`;
+  }
+  if (feature.collection) {
+    const where = Object.keys(filter).length
+      ? Object.entries(filter).map(([k, val]) => `${k}=${val}`).join(", ")
+      : "all";
+    return `over ${feature.collection} (${where})`;
+  }
+  if (feature.path) return `value of ${feature.path}`;
+  return "\u2014";
+};
 const pcfgVersionLabelDate = (value) => {
   if (!value) return "";
   const d = new Date(value);
@@ -144,9 +203,21 @@ const PmtConfigurationScreen = ({ onBack }) => {
   const [saving, setSaving] = useStatePCfg("");
   const [notice, setNotice] = useStatePCfg("");
   const [addModalOpen, setAddModalOpen] = useStatePCfg(false);
+  // The server's field catalogue: which fields a variable may score and
+  // what values each permits, from FormQuestion + ChoiceOption. The
+  // screen keeps no list of its own — see apps/pmt/variable_catalogue.py.
+  const [catalogue, setCatalogue] = useStatePCfg({ fields: [], derived: [] });
+  const [catalogueError, setCatalogueError] = useStatePCfg("");
+  const [pickedField, setPickedField] = useStatePCfg(null);
+  const [pickedCodes, setPickedCodes] = useStatePCfg([]);
+  const [pickedQualifier, setPickedQualifier] = useStatePCfg("");
   const [variablePickSearch, setVariablePickSearch] = useStatePCfg("");
   const [simulating, setSimulating] = useStatePCfg(false);
   const [simulation, setSimulation] = useStatePCfg(null);
+  // path -> value typed/picked by the operator. Empty until touched, so
+  // an untouched field posts nothing and the feature reads as absent
+  // rather than as a fabricated default.
+  const [simValues, setSimValues] = useStatePCfg({});
   const fileInputRef = useRefPCfg(null);
 
   const fetchVersions = async (preferredId = selectedId) => {
@@ -238,20 +309,24 @@ const PmtConfigurationScreen = ({ onBack }) => {
     setNotice("");
     setError("");
     try {
-      const result = await api.post(`${PCFG_API_ROOT}${selected.id}/simulate/`, {
-        features: {
-          household: {
-            member_count: 6,
-            dwelling_rooms: 2,
-            floor_material: "earth",
-            roof_material: "metal",
-            electricity: false,
-            open_defecation: true,
-          },
-          assets: { motorcycle: false, television: false, cellphone: true },
-          head: { education_level: "primary_completed" },
-        },
+      // Nest each `a.b.c` path so the posted object is the shape
+      // `evaluate_feature` walks. Untouched fields are omitted.
+      const features = {};
+      Object.entries(simValues).forEach(([path, raw]) => {
+        if (raw === "" || raw === undefined || raw === null) return;
+        const parts = path.split(".");
+        let node = features;
+        parts.slice(0, -1).forEach(part => {
+          if (typeof node[part] !== "object" || node[part] === null) node[part] = {};
+          node = node[part];
+        });
+        const asNumber = Number(raw);
+        node[parts[parts.length - 1]] =
+          (String(raw).trim() !== "" && Number.isFinite(asNumber) && !/^0\d/.test(String(raw)))
+            ? asNumber
+            : raw;
       });
+      const result = await api.post(`${PCFG_API_ROOT}${selected.id}/simulate/`, { features });
       setSimulation(result);
       setNotice(`Simulation complete: score ${pcfgNum(result.score).toFixed(2)}.`);
     } catch (err) {
@@ -465,6 +540,84 @@ const PmtConfigurationScreen = ({ onBack }) => {
     }
   };
 
+  useEffectPCfg(() => {
+    // `api` is fetched per-call here, not held in component scope —
+    // every other handler on this screen does the same. An earlier
+    // version of this effect closed over a bare `api`, which does not
+    // exist at this level, and the ReferenceError took out the whole
+    // admin console: every screen after this one failed to mount.
+    const api = typeof window !== "undefined" ? window.nsrApi : null;
+    if (!api || typeof api.get !== "function") return;
+    let cancelled = false;
+    api.get(`${PCFG_API_ROOT.replace("/admin/pmt/versions/", "/pmt/model-versions/")}variable-catalogue/`)
+      .then(data => {
+        if (cancelled) return;
+        setCatalogue({
+          fields: Array.isArray(data?.fields) ? data.fields : [],
+          derived: Array.isArray(data?.derived) ? data.derived : [],
+        });
+        setCatalogueError("");
+      })
+      .catch(err => {
+        if (cancelled) return;
+        // Offer nothing rather than a guessed field list. The table
+        // still renders; it shows raw codes instead of labels.
+        setCatalogue({ fields: [], derived: [] });
+        setCatalogueError(
+          err?.body?.detail || err?.message || "Could not load the field catalogue.",
+        );
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  // canonical field -> catalogue entry, for the Value column and the
+  // simulator's option lists.
+  const catalogueByField = useMemoPCfg(() => {
+    const out = {};
+    [...(catalogue.fields || []), ...(catalogue.derived || [])].forEach(entry => {
+      out[entry.field] = entry;
+    });
+    return out;
+  }, [catalogue]);
+
+  // The simulator asks for exactly the fields this model scores.
+  //
+  // It used to render ten hardcoded labels with fabricated defaults
+  // ("Floor material" / "Earth") that had no state and were never read:
+  // `runSimulation` posted a fixed literal payload whose keys
+  // (`floor_material`) did not match the engine's paths
+  // (`dwelling.floor_material`), so every membership feature evaluated
+  // to 0 and the score never moved. Inputs now come from the variables
+  // themselves and post under the paths the engine resolves.
+  const simFields = useMemoPCfg(() => {
+    const seen = new Map();
+    variables.forEach(v => {
+      const feature = v.feature || {};
+      const path = feature.path || (typeof v.variable === "string" ? v.variable : "");
+      if (!path || seen.has(path)) return;
+      const entry = catalogueByField[pcfgVariableField(v)] || null;
+      seen.set(path, {
+        path,
+        label: (entry && entry.label) || path,
+        options: (entry && entry.options) || [],
+        kind: entry ? entry.kind : "value",
+        group: (entry && entry.group) || pcfgVariableGroup(v),
+      });
+    });
+    return [...seen.values()];
+  }, [variables, catalogueByField]);
+
+  // Fields the catalogue offers, filtered by the modal's search box.
+  const filteredCatalogue = useMemoPCfg(() => {
+    const all = [...(catalogue.derived || []), ...(catalogue.fields || [])];
+    const q = variablePickSearch.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter(entry =>
+      entry.field.toLowerCase().includes(q)
+      || (entry.label || "").toLowerCase().includes(q)
+      || (entry.group || "").toLowerCase().includes(q));
+  }, [catalogue, variablePickSearch]);
+
   const addVariableFromCatalog = (catalogVariable) => {
     const name = pcfgVariableName(catalogVariable);
     if (!name || existingVariableNames.has(name)) return;
@@ -478,6 +631,48 @@ const PmtConfigurationScreen = ({ onBack }) => {
     patchSelected({ variables: [...variables, nextVariable] }, `Added variable ${name}.`);
     setAddModalOpen(false);
     setVariablePickSearch("");
+  };
+
+  const removeVariable = (variable) => {
+    const name = pcfgVariableName(variable);
+    if (!window.confirm(
+      `Remove ${name} from PMT v${selected.version}?\n\n` +
+      "The draft keeps its other variables; nothing is scored until the " +
+      "draft is approved.",
+    )) return;
+    patchSelected(
+      { variables: variables.filter(v => pcfgVariableName(v) !== name) },
+      `Removed variable ${name}.`,
+    );
+  };
+
+  // Add a variable for a questionnaire field, named after that field.
+  //
+  // The name, path and permitted codes all come from the server
+  // catalogue; nothing here is typed. A qualifier is required only when
+  // the plain field name is taken, which is what keeps the education,
+  // wall, floor and lighting ladders distinguishable.
+  const addVariableFromField = (entry, codes, qualifier) => {
+    const base = entry.field;
+    const name = qualifier ? `${base}__${qualifier}` : base;
+    if (existingVariableNames.has(name)) {
+      setError(`A variable called ${name} is already on this version.`);
+      return;
+    }
+    const feature = entry.kind === "derived"
+      ? { type: "direct", path: entry.path }
+      : (codes && codes.length
+        ? { type: "membership", path: entry.path, operand: codes }
+        : { type: "direct", path: entry.path });
+    patchSelected(
+      { variables: [...variables, { name, weight: 0, feature }] },
+      `Added variable ${name}. Set its weight before submitting.`,
+    );
+    setAddModalOpen(false);
+    setVariablePickSearch("");
+    setPickedField(null);
+    setPickedCodes([]);
+    setPickedQualifier("");
   };
 
   const editVariable = (variable) => {
@@ -789,11 +984,11 @@ const PmtConfigurationScreen = ({ onBack }) => {
               <table className="tbl" style={{ boxShadow: 'none' }}>
                 <thead>
                   <tr>
-                    <th>Variable</th>
-                    <th>Group</th>
+                    <th>Variable name</th>
+                    <th>Value</th>
                     <th>Transform</th>
                     <th style={{ textAlign: 'right' }}>Weight (β)</th>
-                    <th style={{ width: '20%' }}>Magnitude</th>
+                    <th style={{ width: '18%' }}>Magnitude</th>
                     {isEditable && <th className="col-actions"></th>}
                   </tr>
                 </thead>
@@ -801,14 +996,24 @@ const PmtConfigurationScreen = ({ onBack }) => {
                   {filteredVariables.map(v => {
                     const name = pcfgVariableName(v);
                     const group = pcfgVariableGroup(v);
+                    const value = pcfgVariableValue(v, catalogueByField);
+                    const bound = catalogueByField[pcfgVariableField(v)];
                     const transform = pcfgVariableTransform(v);
                     const weight = pcfgNum(v.weight);
                     const max = Math.max(...variables.map(x => Math.abs(pcfgNum(x.weight))), 0.001);
                     const isNeg = weight < 0;
                     return (
                       <tr key={name}>
-                        <td className="t-mono" style={{ fontSize: 12.5 }}>{name}</td>
-                        <td><Chip size="sm">{group}</Chip></td>
+                        <td className="t-mono" style={{ fontSize: 12.5 }}>
+                          {name}
+                          {bound && bound.kind === 'derived' && (
+                            <Chip size="sm" tone="data" style={{ marginLeft: 6 }}>derived</Chip>
+                          )}
+                          {bound && bound.question && (
+                            <div className="t-cap" style={{ fontSize: 10.5 }}>{bound.question}</div>
+                          )}
+                        </td>
+                        <td className="t-bodysm" style={{ maxWidth: 260 }} title={value}>{value}</td>
                         <td className="t-mono t-cap">{transform}</td>
                         <td className="t-num t-bodysm" style={{ textAlign: 'right', fontWeight: 600, color: isNeg ? 'var(--accent-quality)' : 'var(--accent-data)' }}>
                           {weight >= 0 ? '+' : ''}{weight.toFixed(3)}
@@ -835,6 +1040,9 @@ const PmtConfigurationScreen = ({ onBack }) => {
                         {isEditable && <td className="col-actions">
                           <button className="icon-btn" title="Edit" onClick={() => editVariable(v)} disabled={!!saving}>
                             <Icon name="edit" size={12}/>
+                          </button>
+                          <button className="icon-btn" title="Remove variable" onClick={() => removeVariable(v)} disabled={!!saving}>
+                            <Icon name="trash" size={12}/>
                           </button>
                         </td>}
                       </tr>
@@ -1095,22 +1303,45 @@ const PmtConfigurationScreen = ({ onBack }) => {
                   background: 'var(--neutral-50)',
                 }}>
                   <strong className="t-bodysm">Household inputs</strong>
+                  {catalogueError && (
+                    <div className="t-cap mt-2" style={{ color: 'var(--accent-danger)' }}>
+                      {catalogueError} Coded fields fall back to free text.
+                    </div>
+                  )}
+                  {simFields.length === 0 && (
+                    <div className="t-cap mt-2 muted">
+                      This version has no variables with a readable path yet, so
+                      there is nothing to vary.
+                    </div>
+                  )}
                   <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                    {[
-                      ['Member count',          '6'],
-                      ['Rooms',                 '2'],
-                      ['Floor material',        'Earth'],
-                      ['Roof material',         'Metal'],
-                      ['Has electricity',       'No'],
-                      ['Owns motorcycle',       'No'],
-                      ['Owns television',       'No'],
-                      ['Has cellphone',         'Yes'],
-                      ['Head education',        'Primary completed'],
-                      ['Open defecation',       'Yes'],
-                    ].map(([k, v]) => (
-                      <label key={k} style={{ display: 'flex', flexDirection: 'column', fontSize: 12, gap: 4 }}>
-                        <span className="muted">{k}</span>
-                        <input className="field-input" defaultValue={v} style={{ padding: '4px 6px', height: 28, fontSize: 13 }}/>
+                    {simFields.map(f => (
+                      <label key={f.path} style={{ display: 'flex', flexDirection: 'column', fontSize: 12, gap: 4 }}>
+                        <span className="muted" title={f.path}>{f.label}</span>
+                        {f.options.length > 0 ? (
+                          <select
+                            className="field-select"
+                            style={{ height: 28, fontSize: 13 }}
+                            value={simValues[f.path] ?? ''}
+                            onChange={e => setSimValues({ ...simValues, [f.path]: e.target.value })}
+                          >
+                            {/* Not answered is a real state, and the engine
+                                treats an absent value as absent rather than
+                                as the first option. */}
+                            <option value="">— not answered —</option>
+                            {f.options.map(o => (
+                              <option key={o.code} value={o.code}>{o.code} · {o.label}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            className="field-input"
+                            style={{ padding: '4px 6px', height: 28, fontSize: 13 }}
+                            value={simValues[f.path] ?? ''}
+                            placeholder={f.kind === 'derived' ? 'number' : ''}
+                            onChange={e => setSimValues({ ...simValues, [f.path]: e.target.value })}
+                          />
+                        )}
                       </label>
                     ))}
                   </div>
@@ -1199,7 +1430,10 @@ const PmtConfigurationScreen = ({ onBack }) => {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <h3 className="t-h3" style={{ margin: 0 }}>Add variable</h3>
                 <div className="t-cap mt-1">
-                  Select from variables already stored on PMT model versions in the database.
+                  Pick the questionnaire field this variable scores. The field
+                  list and its permitted values come from the questionnaire and
+                  Reference Data, so a variable cannot name a code the registry
+                  does not carry.
                 </div>
               </div>
               <button className="icon-btn" title="Close" onClick={() => setAddModalOpen(false)}>
@@ -1216,56 +1450,122 @@ const PmtConfigurationScreen = ({ onBack }) => {
                   autoFocus
                 />
               </div>
-              <span className="t-cap">{filteredDatabaseVariables.length} available</span>
+              <span className="t-cap">{filteredCatalogue.length} field{filteredCatalogue.length === 1 ? "" : "s"}</span>
             </div>
             <div style={{ maxHeight: "58vh", overflow: "auto" }}>
               <table className="tbl" style={{ boxShadow: "none" }}>
                 <thead>
                   <tr>
-                    <th>Variable</th>
-                    <th>Source</th>
-                    <th>Transform</th>
-                    <th style={{ textAlign: "right" }}>Weight (β)</th>
+                    <th>Field</th>
+                    <th>Group</th>
+                    <th>Values</th>
                     <th className="col-actions"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredDatabaseVariables.map(variable => {
-                    const name = pcfgVariableName(variable);
-                    const alreadySelected = existingVariableNames.has(name);
-                    const weight = pcfgNum(variable.weight);
+                  {filteredCatalogue.map(entry => {
+                    const taken = existingVariableNames.has(entry.field);
+                    const picked = pickedField && pickedField.field === entry.field;
                     return (
-                      <tr key={name}>
-                        <td>
-                          <div className="t-mono" style={{ fontSize: 12.5 }}>{name}</div>
-                          {variable.comment && <div className="t-cap mt-1">{variable.comment}</div>}
-                        </td>
-                        <td>
-                          <div className="row gap-2">
-                            <Chip size="sm">v{variable.sourceVersion}</Chip>
-                            <Chip size="sm" tone={STATUS_TONE[variable.sourceStatus]}>{STATUS_LABEL[variable.sourceStatus]}</Chip>
-                          </div>
-                        </td>
-                        <td className="t-mono t-cap">{pcfgVariableTransform(variable)}</td>
-                        <td className="t-num t-bodysm" style={{ textAlign: "right", fontWeight: 600 }}>
-                          {weight >= 0 ? "+" : ""}{weight.toFixed(3)}
-                        </td>
-                        <td className="col-actions">
-                          <button
-                            className="btn btn-sm"
-                            disabled={alreadySelected || !!saving}
-                            onClick={() => addVariableFromCatalog(variable)}
-                          >
-                            {alreadySelected ? "Added" : "Use variable"}
-                          </button>
-                        </td>
-                      </tr>
+                      <React.Fragment key={entry.field}>
+                        <tr>
+                          <td>
+                            <div className="t-mono" style={{ fontSize: 12.5 }}>{entry.field}</div>
+                            <div className="t-cap mt-1">{entry.label}</div>
+                          </td>
+                          <td><Chip size="sm">{entry.group}</Chip></td>
+                          <td className="t-cap">
+                            {entry.kind === "derived"
+                              ? (entry.help || "computed from the household")
+                              : entry.options.length
+                                ? `${entry.options.length} options`
+                                : "numeric"}
+                          </td>
+                          <td className="col-actions">
+                            <button
+                              className="btn btn-sm"
+                              disabled={!!saving}
+                              onClick={() => {
+                                setPickedField(picked ? null : entry);
+                                setPickedCodes([]);
+                                setPickedQualifier(taken ? "" : "");
+                              }}
+                            >
+                              {picked ? "Cancel" : "Select"}
+                            </button>
+                          </td>
+                        </tr>
+                        {picked && (
+                          <tr>
+                            <td colSpan="4" style={{ background: "var(--neutral-50)" }}>
+                              {entry.options.length > 0 && (
+                                <div style={{ marginBottom: 10 }}>
+                                  <div className="t-cap mb-1">
+                                    Which values should score? Leave empty to read the
+                                    raw value instead of testing membership.
+                                  </div>
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                    {entry.options.map(o => {
+                                      const on = pickedCodes.includes(o.code);
+                                      return (
+                                        <button
+                                          key={o.code}
+                                          className={on ? "btn btn-sm btn-primary" : "btn btn-sm"}
+                                          onClick={() => setPickedCodes(
+                                            on
+                                              ? pickedCodes.filter(c => c !== o.code)
+                                              : [...pickedCodes, o.code],
+                                          )}
+                                        >
+                                          <span className="t-mono">{o.code}</span>&nbsp;{o.label}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+                              <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+                                <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+                                  <span className="muted">
+                                    Qualifier{taken ? " (required — the plain name is taken)" : " (optional)"}
+                                  </span>
+                                  <input
+                                    className="field-input"
+                                    style={{ height: 30, width: 220 }}
+                                    value={pickedQualifier}
+                                    placeholder="tertiary"
+                                    onChange={e => setPickedQualifier(
+                                      e.target.value.replace(/[^a-z0-9_]/gi, "_").toLowerCase(),
+                                    )}
+                                  />
+                                </label>
+                                <div className="t-cap" style={{ paddingBottom: 6 }}>
+                                  Name:&nbsp;
+                                  <span className="t-mono">
+                                    {pickedQualifier ? `${entry.field}__${pickedQualifier}` : entry.field}
+                                  </span>
+                                </div>
+                                <div style={{ flex: 1 }}/>
+                                <button
+                                  className="btn btn-sm btn-primary"
+                                  disabled={!!saving || (taken && !pickedQualifier)}
+                                  onClick={() => addVariableFromField(entry, pickedCodes, pickedQualifier)}
+                                >
+                                  Add variable
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     );
                   })}
-                  {filteredDatabaseVariables.length === 0 && (
+                  {filteredCatalogue.length === 0 && (
                     <tr>
-                      <td colSpan="5" className="muted" style={{ padding: 24, textAlign: "center" }}>
-                        No database variables match this search.
+                      <td colSpan="4" className="muted" style={{ padding: 24, textAlign: "center" }}>
+                        {catalogueError
+                          ? catalogueError
+                          : "No questionnaire field matches this search."}
                       </td>
                     </tr>
                   )}
@@ -1279,4 +1579,7 @@ const PmtConfigurationScreen = ({ onBack }) => {
   );
 };
 
-Object.assign(window, { PmtConfigurationScreen, canDiscardPmtDraft });
+Object.assign(window, {
+  PmtConfigurationScreen, canDiscardPmtDraft,
+  pcfgVariableField, pcfgVariableValue,
+});

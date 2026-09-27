@@ -37,6 +37,27 @@ class PMTModelVersionViewSet(viewsets.ReadOnlyModelViewSet):
     filterset_fields = ["status"]
 
     @extend_schema(
+        tags=["pmt"],
+        summary="Fields a PMT variable may score, and their permitted values",
+        responses={200: OpenApiResponse(
+            description="Canonical field catalogue assembled from the engine's "
+                        "feature tree, FormQuestion and ChoiceOption.",
+        )},
+    )
+    @action(detail=False, methods=["get"], url_path="variable-catalogue")
+    def variable_catalogue(self, request):
+        """What the Configuration screen offers when adding a variable.
+
+        Served so the console has no catalogue of its own: the field
+        list, the operator-facing labels and the permitted codes all
+        come from the questionnaire and reference data. See
+        `apps.pmt.variable_catalogue`.
+        """
+        from .variable_catalogue import catalogue
+
+        return Response(catalogue())
+
+    @extend_schema(
         tags=["pmt"], summary="Get the current active PMT model version",
         responses={200: PMTModelVersionSerializer,
                    404: OpenApiResponse(description="no ACTIVE PMT model")},
