@@ -32,6 +32,13 @@ from apps.reference_data.models import ChoiceList, ChoiceListStatus, ChoiceOptio
 def choice_source(db):
     source = SourceSystem.objects.create(
         code="US122-SOURCE", name="US-122 source", kind=SourceSystemKind.UBOS,
+        # US-122's control is that an uninterpretable code stops the
+        # wave. That used to be implied by `kind == UBOS` in the service;
+        # it is now stated on the source system, so a test about
+        # blocking has to configure blocking. Migration
+        # ingestion_hub.0009 sets it on the UBOS rows that already
+        # existed.
+        blocks_on_unmapped_choice_value=True,
     )
     DataProvisionAgreement.objects.create(
         source_system=source, reference="DPA-US122",
@@ -137,3 +144,69 @@ class TestUnmappedChoiceCodes:
         assert "members.0.sex" in report
         assert "X-UNDECIDED" in report
         assert ",2," in report
+
+
+class TestEveryPayloadIsChecked:
+    """The gate used to run for UBOS only.
+
+    `sync_unmapped_choice_values` returned early unless the source kind
+    was UBOS, on the stated grounds that other connectors had not been
+    admitted to the Questionnaire/ChoiceList contract. Kobo is admitted:
+    its canonical payload resolves through PAYLOAD_FIELDS to the right
+    list, and 114 of 1,087 codes on the most recent wave are housing
+    codes from the retired frame. Those findings were being skipped.
+    """
+
+    @pytest.fixture
+    def kobo_source(self, db, approved_sex_list):
+        source = SourceSystem.objects.create(
+            code="KOBO-CHECK", name="Kobo check", kind=SourceSystemKind.KOBO,
+        )
+        DataProvisionAgreement.objects.create(
+            source_system=source, reference="DPA-KOBO-CHECK",
+            valid_from=date(2026, 1, 1), valid_to=date(2030, 12, 31),
+        )
+        return source
+
+    PAYLOAD = {"members": [{"line_number": 1, "sex": "X-UNDECIDED"}]}
+
+    def test_a_kobo_code_outside_the_list_is_recorded(self, kobo_source):
+        """The finding exists, which it did not before."""
+        stage, _landing = _stage(kobo_source, self.PAYLOAD)
+        rows = stage.unmapped_choice_values.filter(is_current=True)
+        assert [r.source_code for r in rows] == ["X-UNDECIDED"]
+
+    def test_recording_is_not_blocking(self, kobo_source):
+        """391 of 392 households on the current Kobo wave carry a
+        retired housing code. Failing them all would stop national
+        intake without fixing the form, so the observation is written
+        and the record proceeds."""
+        stage, _landing = _stage(kobo_source, self.PAYLOAD)
+        assert stage.state != StageRecordState.QUALITY_FAILED
+
+    def test_a_non_blocking_finding_is_not_reported_as_blocking(
+        self, kobo_source,
+    ):
+        """A BLOCK severity routes the record to QUALITY_FAILED
+        downstream, so the DQA contract must not say "blocked" while the
+        policy says "proceed" — the record would stop one step later
+        with a worse message."""
+        stage, _landing = _stage(kobo_source, self.PAYLOAD)
+        summary = stage.dqa_summary or {}
+        assert summary.get("blocking_failures") == []
+        assert summary.get("flagged"), "the finding must still be reported"
+
+    def test_a_blocking_source_still_stops(self, kobo_source):
+        """The policy is configuration, not the connector's kind."""
+        kobo_source.blocks_on_unmapped_choice_value = True
+        kobo_source.save(update_fields=["blocks_on_unmapped_choice_value"])
+        stage, _landing = _stage(kobo_source, self.PAYLOAD)
+        assert stage.state == StageRecordState.QUALITY_FAILED
+        assert stage.dqa_summary["blocking_failures"]
+
+    def test_a_valid_code_records_nothing(self, kobo_source):
+        """The check has to be able to pass, or it says nothing."""
+        stage, _landing = _stage(
+            kobo_source, {"members": [{"line_number": 1, "sex": "1"}]},
+        )
+        assert not stage.unmapped_choice_values.filter(is_current=True).exists()

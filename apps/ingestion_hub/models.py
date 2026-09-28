@@ -41,6 +41,23 @@ class SourceSystem(models.Model):
     kind = models.CharField(max_length=24, choices=SourceSystemKind.choices)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
+    # Whether a code this registry cannot interpret stops the record at
+    # the gate, or is recorded and passed to review.
+    #
+    # Every source is checked; this decides what happens when a check
+    # fails, and it is per source because the answer genuinely differs.
+    # A UBOS wave arrives under an approved mapping rule, so a code
+    # outside it means the mapping is wrong and the wave must not
+    # proceed. A field connector collecting on a deployed form can be
+    # months behind a code-frame revision, and failing every record
+    # would stop intake nationally rather than fix the form — the
+    # observation is what is needed, and it is recorded either way.
+    #
+    # This replaced a `kind == UBOS` test in the code. The rule had not
+    # changed, but it was a source-kind vocabulary in application logic
+    # and therefore unreadable and unchangeable by the people who own
+    # the decision.
+    blocks_on_unmapped_choice_value = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

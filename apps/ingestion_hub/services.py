@@ -184,9 +184,23 @@ def stage_from_landing(
     )
     unmapped = sync_unmapped_choice_values(stage)
     if unmapped:
+        # Recording the finding and stopping the record are different
+        # decisions, and only the second belongs to the source system.
+        #
+        # Every source is now checked, and a field connector can be
+        # months behind a code-frame revision through no fault of the
+        # record in front of you: on the current Kobo wave 391 of 392
+        # households carry at least one retired housing code. Failing
+        # them all would stop national intake without fixing the form,
+        # so the observation is written, the summary is attached, and
+        # whether that halts the record is
+        # `SourceSystem.blocks_on_unmapped_choice_value`.
         stage.dqa_summary = _unmapped_choice_summary(stage, unmapped)
-        stage.state = StageRecordState.QUALITY_FAILED
-        stage.save(update_fields=["dqa_summary", "state", "updated_at"])
+        fields = ["dqa_summary", "updated_at"]
+        if stage.connector_run.connector.source_system.blocks_on_unmapped_choice_value:
+            stage.state = StageRecordState.QUALITY_FAILED
+            fields.append("state")
+        stage.save(update_fields=fields)
     # US-S11-044 — intra-household DQA at DIH_INGEST. Persist-only;
     # never aborts (the queue is the triage surface). Skipped when
     # DQA_INTRA_HOUSEHOLD_ENABLED is off.
@@ -220,15 +234,33 @@ def sync_unmapped_choice_values(stage: StageRecord) -> list[UnmappedChoiceValue]
     discarded.  Prior observations remain auditable when a later correction
     or approved ChoiceList revision makes a value interpretable.
     """
-    # US-122 is the UBOS wave-intake control.  Other historical connector
-    # types have not yet been admitted to the Questionnaire/ChoiceList
-    # contract; treating their independently shaped payloads as UBOS answer
-    # codes would manufacture false failures.  Their onboarding must add the
-    # same canonical mapping contract before this gate is enabled for them.
-    source_kind = stage.connector_run.connector.source_system.kind
-    if (source_kind != SourceSystemKind.UBOS
-            or not stage.mapping_rule_version_id
-            or not stage.mapping_rule_version.is_active):
+    # Every source is checked, not only UBOS.
+    #
+    # This returned early unless the source kind was UBOS, on the stated
+    # grounds that other connectors "have not yet been admitted to the
+    # Questionnaire/ChoiceList contract" and checking them "would
+    # manufacture false failures". Kobo is admitted now: its canonical
+    # payload resolves through PAYLOAD_FIELDS to the right list for 73
+    # coded values on a single household, and of 1,087 codes across the
+    # most recent wave 114 fail — every one of them a housing code from
+    # the retired frame, sitting in a column whose active list starts at
+    # 11. Those are the findings this exists to produce, and they were
+    # being skipped.
+    #
+    # The check is self-limiting: `iter_payload_choice_values` only
+    # yields values sitting at a canonical path, so a producer whose
+    # payload is not in the contract yields nothing and nothing is
+    # asserted about it. That is what makes the source-kind test
+    # unnecessary rather than merely inconvenient.
+    #
+    # A UBOS wave is still governed by its mapping rule version: without
+    # an active one the wave is not yet interpretable, so nothing is
+    # claimed about its codes either way.
+    source = stage.connector_run.connector.source_system
+    if source.kind == SourceSystemKind.UBOS and not (
+        stage.mapping_rule_version_id
+        and stage.mapping_rule_version.is_active
+    ):
         return []
 
     as_of = (
@@ -276,10 +308,27 @@ def sync_unmapped_choice_values(stage: StageRecord) -> list[UnmappedChoiceValue]
 
 
 def _unmapped_choice_summary(
-    stage: StageRecord, values: list[UnmappedChoiceValue] | None = None,
+    stage: StageRecord,
+    values: list[UnmappedChoiceValue] | None = None,
+    *,
+    blocking: bool | None = None,
 ) -> dict:
-    """Project immutable unmapped-code facts into the DIH DQA contract."""
+    """Project immutable unmapped-code facts into the DIH DQA contract.
+
+    The severity follows the source system's policy. A finding reported
+    as BLOCK is not advisory — the orchestrator routes the record to
+    QUALITY_FAILED on it — so emitting BLOCK for a source that has been
+    configured not to block would have the DQA contract contradict the
+    policy, and the record would stop one step later anyway with a
+    less honest message.
+    """
     values = values if values is not None else sync_unmapped_choice_values(stage)
+    if blocking is None:
+        blocking = (
+            stage.connector_run.connector.source_system
+            .blocks_on_unmapped_choice_value
+        )
+    severity = Severity.BLOCK if blocking else Severity.FLAG
     findings = [
         {
             # The model label is a stable control identity, not a new
@@ -291,7 +340,7 @@ def _unmapped_choice_summary(
                 f"{item.canonical_path} in ChoiceList "
                 f"{item.choice_list_name!r}."
             ),
-            "severity": Severity.BLOCK,
+            "severity": severity,
             "scope": "choice_mapping",
             "canonical_path": item.canonical_path,
             "choice_list": item.choice_list_name,
@@ -300,9 +349,9 @@ def _unmapped_choice_summary(
         for item in values
     ]
     return {
-        "blocking_failures": findings,
+        "blocking_failures": findings if blocking else [],
         "warnings": [],
-        "flagged": [],
+        "flagged": [] if blocking else findings,
         "info": [],
     }
 
@@ -1007,7 +1056,15 @@ def promote_stage_record(
 
     payload = stage.canonical_payload or {}
 
-    if sync_unmapped_choice_values(stage):
+    # The same policy as the ingest gate, applied at the same place the
+    # record enters the registry. Recording an uninterpretable code and
+    # refusing the household are different decisions; a source that does
+    # not block on ingest must not be blocked here either, or the record
+    # simply stops one step later with a worse message.
+    unmapped_at_promotion = sync_unmapped_choice_values(stage)
+    if (unmapped_at_promotion
+            and stage.connector_run.connector.source_system
+            .blocks_on_unmapped_choice_value):
         raise DihError(
             "cannot promote while canonical payload contains unmapped "
             "ChoiceList codes; review the DIH DQA findings",
