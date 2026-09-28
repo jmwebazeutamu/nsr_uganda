@@ -395,6 +395,18 @@ class PMTVariableInfluence(models.Model):
     influence = models.DecimalField(
         max_digits=10, decimal_places=4, default=0,
     )
+    # How many scored households this variable was read from, and how
+    # many of those produced a non-zero value.
+    #
+    # `sample_mean` alone cannot answer "does this variable ever fire".
+    # A `direct` feature legitimately averages 5.0 and a `ratio`
+    # legitimately averages 0, so a zero mean is only meaningful for a
+    # 0/1 feature. `nonzero_count == 0` is the precise question, and
+    # `sample_size` is what says whether the answer is yet worth acting
+    # on — a variable added yesterday has no history to be alarmed
+    # about. Both were already computed here and thrown away.
+    sample_size = models.PositiveIntegerField(default=0)
+    nonzero_count = models.PositiveIntegerField(default=0)
     computed_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

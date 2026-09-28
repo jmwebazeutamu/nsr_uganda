@@ -123,6 +123,25 @@ const _pmtProjectCoverage = (c) => c ? ({
   staleAfterHours: c.stale_after_hours ?? null,
 }) : null;
 
+// Variables carrying weight that have never moved a score.
+//
+// Deliberately NOT a slice of variables_top: that list is ordered by
+// influence, and a variable which never fires has influence exactly 0,
+// so the one view that would show the defect is the one that cannot.
+// The finding code and its tone are decided server-side
+// (apps/pmt/findings.py) — this reads them and renders nothing of its
+// own, including the label, which is a `pmt_variable_finding`
+// ChoiceList label.
+const _pmtProjectFindings = (rows) => (rows || []).map(v => ({
+  variable: v.variable,
+  finding: v.finding || "",
+  tone: v.finding_tone || "neutral",
+  weight: Number(v.weight ?? 0),
+  fireRate: Number(v.fire_rate ?? 0),
+  sampleSize: Number(v.sample_size ?? 0),
+  nonzeroCount: Number(v.nonzero_count ?? 0),
+}));
+
 const _pmtProjectVariablesTop = (rows) => (rows || []).map(v => ({
   name: v.name,
   weight: Number(v.weight ?? 0),
@@ -205,6 +224,7 @@ const usePmtDashboard = () => {
     bands: [],
     coverage: null,
     variablesTop: [],
+    findings: [],
     geo: [],
     drift: [],
     triggers: [],
@@ -228,6 +248,7 @@ const usePmtDashboard = () => {
           bands: _pmtProjectBands(data.bands),
           coverage: _pmtProjectCoverage(data.coverage),
           variablesTop: _pmtProjectVariablesTop(data.variables_top),
+          findings: _pmtProjectFindings(data.variable_findings),
           geo: _pmtProjectGeo(data.geo),
           drift: _pmtProjectDrift(data.drift),
           triggers: _pmtProjectTriggers(data.triggers),
@@ -300,6 +321,19 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
   const PMT_BANDS = dash.bands;
   const PMT_COVERAGE = dash.coverage;
   const PMT_VARIABLES_TOP = dash.variablesTop;
+  const PMT_FINDINGS = dash.findings || [];
+  // The finding label is a `pmt_variable_finding` ChoiceList label, read
+  // from reference data like every other coded value on this console.
+  // Resolved here rather than inside the row map — a hook cannot run in
+  // a loop — and falling back to the bare code if the list has not
+  // loaded, because a blank cell beside a real defect is worse than an
+  // unfriendly one.
+  const [, { allLists: _pmtFindingLists }] = useChoiceList("pmt_variable_finding");
+  const pmtFindingLabel = (code) => {
+    const options = (_pmtFindingLists && _pmtFindingLists.pmt_variable_finding) || [];
+    const hit = options.find(o => String(o.code) === String(code));
+    return hit ? hit.label : code;
+  };
   const PMT_GEO = dash.geo;
   const PMT_DRIFT = dash.drift;
   const PMT_TRIGGERS = dash.triggers;
@@ -427,6 +461,60 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
           )}
         </div>
       </div>
+
+      {/* Variables that carry weight but have never moved a score.
+          Absent when there is nothing to report — a permanently
+          visible empty panel is how a warning stops being read. */}
+      {PMT_FINDINGS.length > 0 && (
+        <div
+          data-testid="pmt-variable-findings"
+          className="card"
+          style={{
+            marginBottom: 16, padding: "12px 14px",
+            borderLeft: "3px solid var(--accent-danger)",
+          }}
+        >
+          <div className="row gap-2" style={{ alignItems: "center", marginBottom: 8 }}>
+            <Chip size="sm" tone="danger">
+              {PMT_FINDINGS.length} variable{PMT_FINDINGS.length === 1 ? "" : "s"} not contributing
+            </Chip>
+            <span className="t-bodysm">
+              Carrying {PMT_FINDINGS.reduce((a, f) => a + Math.abs(f.weight), 0).toFixed(3)} of
+              total weight between them. A score computed from this model did not
+              include these terms.
+            </span>
+          </div>
+          <table className="tbl" style={{ boxShadow: "none" }}>
+            <thead>
+              <tr>
+                <th>Variable</th>
+                <th>Finding</th>
+                <th style={{ textAlign: "right" }}>Weight</th>
+                <th style={{ textAlign: "right" }}>Fired</th>
+              </tr>
+            </thead>
+            <tbody>
+              {PMT_FINDINGS.map(f => (
+                <tr key={f.variable}>
+                  <td className="t-mono" style={{ fontSize: 12.5 }}>{f.variable}</td>
+                  <td>
+                    {/* Label and tone are both the server's. */}
+                    <Chip size="sm" tone={f.tone}>
+                      {pmtFindingLabel(f.finding)}
+                    </Chip>
+                  </td>
+                  <td className="t-num" style={{ textAlign: "right" }}>
+                    {f.weight >= 0 ? "+" : ""}{f.weight.toFixed(3)}
+                  </td>
+                  <td className="t-num t-cap" style={{ textAlign: "right" }}>
+                    {f.sampleSize ? `${f.nonzeroCount} / ${f.sampleSize}` : "\u2014"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Top row — Active model card + headline KPIs */}
       <div className="grid" style={{ gridTemplateColumns: '1.4fr 1fr 1fr 1fr', gap: 16 }}>
@@ -909,4 +997,5 @@ const ThresholdDrift = ({ data }) => {
 
 Object.assign(window, {
   PmtDashboardScreen,
+  _pmtProjectFindings,
 });

@@ -184,6 +184,17 @@ def _variables_top_payload(mv: PMTModelVersion | None, limit: int = 10) -> list:
     ]
 
 
+def _variable_findings_payload(mv: PMTModelVersion | None) -> list:
+    """Variables carrying weight that have never moved a score.
+
+    The classification, its vocabulary and its tone are all decided in
+    `apps.pmt.findings`; this only passes them through.
+    """
+    from apps.pmt.findings import payload_for_model
+
+    return payload_for_model(mv)
+
+
 def _geo_payload(mv: PMTModelVersion | None, limit: int = 20) -> list:
     if mv is None:
         return []
@@ -327,6 +338,12 @@ def pmt_dashboard(request):
         "bands": _bands_payload(mv),
         "coverage": _coverage_payload(),
         "variables_top": _variables_top_payload(mv),
+        # Every variable that carries weight and has never moved a
+        # score. Deliberately NOT a slice of variables_top: that list is
+        # ordered by influence and a variable which never fires has
+        # influence exactly 0, so the one view that would show the
+        # defect is the one that cannot. See apps.pmt.findings.
+        "variable_findings": _variable_findings_payload(mv),
         "geo": _geo_payload(mv),
         "drift": _drift_payload(mv),
         "triggers": _triggers_payload(),
@@ -406,6 +423,10 @@ def pmt_recompute_run_report(request, run_id: str):
                 float(mv.validation_r_squared)
                 if mv.validation_r_squared is not None else None,
             "variables_count": len(mv.variables or []),
+            # Variables carrying weight that never moved a score. This
+            # is sign-off evidence: a run whose report lists a finding
+            # produced numbers a variable could not have contributed to.
+            "variable_findings": _variable_findings_payload(mv),
         }
 
     # Threshold rows written during this run. computed_at must fall

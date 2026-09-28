@@ -67,9 +67,10 @@ class TestBundleSchema:
         # (US-S25-001) + 1 beneficiary (US-S25-006) + 1 referral
         # (US-S26-002) + 24 detail-entities (US-S22-DE-02)
         # + 1 pmt_trigger_source (US-PMT-014)
-        # + 1 programme_signoff_status (US-182, migration 0011) = 96.
+        # + 1 programme_signoff_status (US-182, migration 0011) = 96
+        # + 1 pmt_variable_finding (migration 0024) = 97.
         r = api.get(URL)
-        assert len(r.data["lists"]) == 96
+        assert len(r.data["lists"]) == 97
 
     def test_sex_options_resolved(self, api):
         r = api.get(URL)

@@ -92,6 +92,14 @@ DIH_STUCK_RUN_TIMEOUT_HOURS = env.int("DIH_STUCK_RUN_TIMEOUT_HOURS", default=6)
 PMT_DASHBOARD_SNAPSHOT_MAX_AGE_HOURS = env.int(
     "PMT_DASHBOARD_SNAPSHOT_MAX_AGE_HOURS", default=24,
 )
+# How many scored households a PMT variable must have been read from
+# before "it has never once fired" is reported as a defect rather than
+# as too early to tell. A pilot district and a national sweep warrant
+# different thresholds and neither is an engineering decision, so it is
+# configuration. See apps.pmt.findings.minimum_sample.
+PMT_VARIABLE_FINDING_MIN_SAMPLE = env.int(
+    "PMT_VARIABLE_FINDING_MIN_SAMPLE", default=30,
+)
 # Open-CR evidence file storage (CR-modal slice 3). "file" by default
 # (dev convenience), "memory" in tests via conftest, "minio" once the
 # production bucket lands. Dir under repo root keeps dev sessions

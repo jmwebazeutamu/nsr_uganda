@@ -33,8 +33,9 @@ class TestSeededChoiceLists:
         # + 1 referral (migration 0007, US-S26-002)
         # + 24 detail-entities (migration 0008, US-S22-DE-02)
         # + 1 pmt_trigger_source (migration 0009, US-PMT-014)
-        # + 1 programme_signoff_status (migration 0011, US-182) = 96.
-        assert ChoiceList.objects.filter(version=1).count() == 96
+        # + 1 programme_signoff_status (migration 0011, US-182) = 96
+        # + 1 pmt_variable_finding (migration 0024) = 97.
+        assert ChoiceList.objects.filter(version=1).count() == 97
 
     def test_options_seeded(self):
         # 499 (after US-S25-006) + 5 referral-status options
@@ -49,10 +50,13 @@ class TestSeededChoiceLists:
         # + 1 refrigerator on asset_type (US-117-FRIDGE,
         #   migration 0012) = 717
         # + 52 pre-UBOS options seeded DEPRECATED so historical
-        #   responses still read (migration 0021) = 769.
+        #   responses still read (migration 0021) = 769
+        # + 3 pmt_variable_finding codes (migration 0024:
+        #   never_fires/insufficient_sample/
+        #   operand_not_in_choice_list) = 772.
         assert ChoiceOption.objects.filter(
             choice_list__version=1,
-        ).count() == 769
+        ).count() == 772
 
     def test_the_legacy_options_are_deprecated_not_selectable(self):
         """They exist so a 2023 response still reads as words. A capture
