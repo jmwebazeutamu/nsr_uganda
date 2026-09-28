@@ -99,6 +99,7 @@ def clear_resolver_cache() -> None:
     _options_map.cache_clear()
     _canonical_options_map.cache_clear()
     _active_option_codes.cache_clear()
+    _label_to_code.cache_clear()
 
 
 @lru_cache(maxsize=512)
@@ -158,6 +159,58 @@ def has_active_option(
     if code is None or code == "":
         return False
     return str(code) in _active_option_codes(list_name, as_of or _today())
+
+
+@lru_cache(maxsize=512)
+def _label_to_code(list_name: str, as_of: date) -> dict[str, str]:
+    """Normalised active label -> code, for the effective list version.
+
+    Only active options, and only an exact match once case and inner
+    whitespace are normalised. Two options sharing a normalised label
+    would make the answer ambiguous, so neither is offered.
+    """
+    list_id = _active_list_id(list_name, as_of)
+    if list_id is None:
+        return {}
+    seen: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    rows = ChoiceOption.objects.filter(
+        choice_list_id=list_id, status=ChoiceOption.Status.ACTIVE,
+    ).values_list("code", "label")
+    for code, label in rows:
+        key = " ".join(str(label or "").split()).casefold()
+        if not key:
+            continue
+        if key in seen and seen[key] != code:
+            ambiguous.add(key)
+        seen.setdefault(key, code)
+    for key in ambiguous:
+        seen.pop(key, None)
+    return seen
+
+
+def code_for_label(
+    list_name: str, label: str, *, as_of: date | None = None,
+) -> str:
+    """The code whose active label is exactly `label`, or "".
+
+    The inverse of `resolve_label`, and deliberately strict. It exists
+    because some instruments collect a coded fact as free text — the
+    crops and livestock blocks arrive as "Maize, beans" and
+    "Goats 3; Chickens 8" — and the only defensible way to reach a code
+    from that is the list's own label.
+
+    Exact, after normalising case and inner whitespace. No stemming, no
+    plural handling, no nearest match: "Goats" does not resolve to
+    "Goat" and "Matooke" does not resolve to "Banana / matoke". Those
+    need a declared synonym, and inventing one here is how a household
+    ends up recorded as farming something it never mentioned. A caller
+    that gets "" should report the value, not guess at it.
+    """
+    text = " ".join(str(label or "").split()).casefold()
+    if not text:
+        return ""
+    return _label_to_code(list_name, as_of or _today()).get(text, "")
 
 
 def resolve_canonical_code(

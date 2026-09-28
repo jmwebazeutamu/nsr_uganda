@@ -60,7 +60,12 @@ from apps.ingestion_hub.models import (
     StageRecordState,
 )
 from apps.intake.models import FormQuestion, FormSection, FormVersion
-from apps.reference_data.models import GeographicUnit
+from apps.reference_data.models import (
+    ChoiceList,
+    ChoiceListStatus,
+    ChoiceOption,
+    GeographicUnit,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -816,3 +821,160 @@ def test_a_member_with_no_detail_blocks_gains_no_rows(
     member = household.members.first()
     assert not Health.objects.filter(member=member).exists()
     assert not Education.objects.filter(member=member).exists()
+
+
+# ── crops and livestock: coded facts collected as prose ───────────────
+
+@pytest.fixture
+def agriculture_lists(db):
+    """The seeded `crop_name` and `livestock_type` lists.
+
+    Deliberately NOT a hand-built fixture: the whole question is whether
+    the instrument's prose matches the registry's real labels, and a
+    fixture written to match would answer it by construction. These are
+    the lists migrations seed, with the labels operators actually see —
+    including "Banana / matoke" and "Other poultry (duck / turkey /
+    etc.)", which are exactly the ones free text struggles with.
+    """
+    from apps.reference_data.services import clear_resolver_cache
+
+    lists = {
+        name: ChoiceList.objects.filter(
+            list_name=name, status=ChoiceListStatus.ACTIVE,
+        ).first()
+        for name in ("crop_name", "livestock_type")
+    }
+    for name, choice_list in lists.items():
+        assert choice_list is not None, f"{name} is not seeded"
+    clear_resolver_cache()
+    return lists
+
+
+def _agri(crops="", livestock=""):
+    return {"agriculture": {"crops_grown": crops, "livestock_counts": livestock}}
+
+
+def test_the_crop_list_is_split_and_resolved_to_codes(agriculture_lists):
+    """`crop_name` is a code column. "Maize, beans" must become codes,
+    in the order given, or the column holds labels."""
+    from apps.ingestion_hub.services import _agriculture_free_text_rows
+
+    crops, _ = _agriculture_free_text_rows(_agri(crops="Maize, beans"))
+    assert crops == [
+        {"crop_name": "maize", "rank_order": 1},
+        {"crop_name": "beans", "rank_order": 2},
+    ]
+
+
+def test_livestock_counts_are_split_into_type_and_count(agriculture_lists):
+    from apps.ingestion_hub.services import _agriculture_free_text_rows
+
+    _, livestock = _agriculture_free_text_rows(
+        _agri(livestock="Cattle 2; Chicken 8"),
+    )
+    assert livestock == [
+        {"livestock_type": "cattle", "count": 2},
+        {"livestock_type": "chicken", "count": 8},
+    ]
+
+
+def test_a_multi_word_name_resolves(agriculture_lists):
+    """The count is the trailing number, so the name may be several
+    words — and the real label has punctuation in it."""
+    from apps.ingestion_hub.services import _agriculture_free_text_rows
+
+    _, livestock = _agriculture_free_text_rows(
+        _agri(livestock="Other poultry (duck / turkey / etc.) 12"),
+    )
+    assert livestock == [{"livestock_type": "other_poultry", "count": 12}]
+
+
+def test_a_plural_is_reported_not_stemmed(agriculture_lists, caplog):
+    """"Goats" is not "Goat". Stemming it would be the same move that
+    makes "Matooke" mean whatever is closest, and both would put a
+    household on record as farming something it never named."""
+    from apps.ingestion_hub.services import _agriculture_free_text_rows
+
+    with caplog.at_level("WARNING"):
+        _, livestock = _agriculture_free_text_rows(_agri(livestock="Goats 3"))
+    assert livestock == []
+    assert any("Goats" in r.getMessage() for r in caplog.records)
+
+
+def test_an_unmatched_crop_is_reported_not_nearest_matched(
+    agriculture_lists, caplog,
+):
+    """"bananas" against the label "Banana / matoke"."""
+    from apps.ingestion_hub.services import _agriculture_free_text_rows
+
+    with caplog.at_level("WARNING"):
+        crops, _ = _agriculture_free_text_rows(_agri(crops="Coffee, bananas"))
+    assert crops == [{"crop_name": "coffee", "rank_order": 1}]
+    assert any("bananas" in r.getMessage() for r in caplog.records)
+    # And the label it was "obviously" meant to be does resolve, which
+    # is what makes the miss a vocabulary problem rather than a bug.
+    from apps.reference_data.services import code_for_label
+    assert code_for_label("crop_name", "Banana / matoke") == "banana"
+
+
+def test_a_name_with_no_count_is_recorded_with_zero(agriculture_lists):
+    """Owning cattle without a number recorded is still owning cattle."""
+    from apps.ingestion_hub.services import _agriculture_free_text_rows
+
+    _, livestock = _agriculture_free_text_rows(_agri(livestock="Cattle"))
+    assert livestock == [{"livestock_type": "cattle", "count": 0}]
+
+
+def test_case_and_spacing_do_not_matter(agriculture_lists):
+    from apps.ingestion_hub.services import _agriculture_free_text_rows
+
+    crops, _ = _agriculture_free_text_rows(_agri(crops="  MAIZE ,   beans "))
+    assert [c["crop_name"] for c in crops] == ["maize", "beans"]
+
+
+def test_the_rows_reach_the_registry(
+    db, instrument, agriculture_lists, connector, geo_codes,
+):
+    from apps.data_management.models import Crop, Livestock
+
+    payload = _household_payload(geo_codes, first_name="Mo")
+    payload.update(_agri(crops="Maize, beans", livestock="Cattle 2"))
+    household = _promote(connector, payload)
+
+    assert sorted(c.crop_name for c in Crop.objects.filter(household=household)) == [
+        "beans", "maize",
+    ]
+    row = Livestock.objects.get(household=household)
+    assert (row.livestock_type, row.count) == ("cattle", 2)
+
+
+def test_explicit_agriculture_rows_win(
+    db, instrument, agriculture_lists, connector, geo_codes,
+):
+    from apps.data_management.models import Crop
+
+    payload = _household_payload(geo_codes, first_name="Nia")
+    payload.update(_agri(crops="Maize"))
+    payload["crops"] = [{"crop_name": "coffee", "rank_order": 1}]
+    household = _promote(connector, payload)
+    assert [c.crop_name for c in Crop.objects.filter(household=household)] == [
+        "coffee",
+    ]
+
+
+def test_an_ambiguous_label_resolves_to_nothing(db):
+    """Two active options sharing a label make the answer unknowable,
+    so neither is offered rather than the first winning by load order."""
+    from apps.reference_data.services import clear_resolver_cache, code_for_label
+
+    choice_list = ChoiceList.objects.create(
+        list_name="ambig_crop", version=1,
+        status=ChoiceListStatus.ACTIVE, author="fixture",
+    )
+    for code in ("a", "b"):
+        ChoiceOption.objects.create(
+            choice_list=choice_list, code=code, label="Millet",
+            status=ChoiceOption.Status.ACTIVE,
+        )
+    clear_resolver_cache()
+    assert code_for_label("ambig_crop", "Millet") == ""

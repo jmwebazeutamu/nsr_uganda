@@ -693,8 +693,88 @@ def _create_assets(hh: Household, payload: dict, *, actor: str) -> None:
             _emit_create("asset_ownership", obj.id, actor=actor)
 
 
+_CROP_LIST = "crop_name"
+_LIVESTOCK_LIST = "livestock_type"
+
+
+def _agriculture_free_text_rows(payload: dict) -> tuple[list[dict], list[dict]]:
+    """Crop and livestock rows parsed out of the agriculture free text.
+
+    The form collects two coded facts as prose:
+
+        h5_crops_grown      "Maize, beans"
+        h3_livestock_counts "Goats 3; Chickens 8"
+
+    `_create_crops` and `_create_livestock` read `payload["crops"]` and
+    `payload["livestock"]` as lists of rows, which this shape never
+    produces, so both tables were empty for every Kobo household.
+
+    Splitting the text is unambiguous. Reaching a CODE from a name is
+    not, and is done only through the list's own active label, exactly
+    (`reference_data.code_for_label`). A name that does not match is
+    reported and dropped, never stemmed or nearest-matched: on the real
+    data "Maize", "beans", "Coffee" and "Cattle" resolve while "Goats",
+    "Chickens", "Matooke" and "bananas" do not, and guessing that
+    "Goats" means `goat` is the same move that would make "Matooke"
+    mean whatever is closest. `crop_name` and `livestock_type` are code
+    columns; putting a label in one is what the register forbids.
+
+    The real fix is upstream — these should be `select_multiple`
+    questions bound to the `crop_name` and `livestock_type` lists, so
+    the form emits codes. Until then this recovers what can be recovered
+    and names the rest.
+    """
+    from apps.reference_data.services import code_for_label
+
+    agriculture = payload.get("agriculture")
+    if not isinstance(agriculture, dict):
+        return [], []
+
+    crops: list[dict] = []
+    text = str(agriculture.get("crops_grown") or "").strip()
+    for rank, token in enumerate(
+        (t.strip() for t in text.split(",")), start=1,
+    ):
+        if not token:
+            continue
+        code = code_for_label(_CROP_LIST, token)
+        if not code:
+            log.warning(
+                "crops_grown %r is not an active %s label — no Crop row",
+                token, _CROP_LIST,
+            )
+            continue
+        crops.append({"crop_name": code, "rank_order": rank})
+
+    livestock: list[dict] = []
+    text = str(agriculture.get("livestock_counts") or "").strip()
+    for entry in text.split(";"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        parts = entry.split()
+        # "<name...> <count>" — the count is the trailing number, and a
+        # name is more than one word for "Other poultry".
+        count = 0
+        if parts and parts[-1].isdigit():
+            count = int(parts[-1])
+            parts = parts[:-1]
+        name = " ".join(parts)
+        code = code_for_label(_LIVESTOCK_LIST, name)
+        if not code:
+            log.warning(
+                "livestock_counts %r is not an active %s label — no "
+                "Livestock row", name or entry, _LIVESTOCK_LIST,
+            )
+            continue
+        livestock.append({"livestock_type": code, "count": count})
+
+    return crops, livestock
+
+
 def _create_crops(hh: Household, payload: dict, *, actor: str) -> None:
-    for row in payload.get("crops") or []:
+    rows = payload.get("crops") or _agriculture_free_text_rows(payload)[0]
+    for row in rows:
         name = (row.get("crop_name") or "").strip()
         if not name:
             continue
@@ -707,7 +787,8 @@ def _create_crops(hh: Household, payload: dict, *, actor: str) -> None:
 
 
 def _create_livestock(hh: Household, payload: dict, *, actor: str) -> None:
-    for row in payload.get("livestock") or []:
+    rows = payload.get("livestock") or _agriculture_free_text_rows(payload)[1]
+    for row in rows:
         kind = (row.get("livestock_type") or "").strip()
         if not kind:
             continue
