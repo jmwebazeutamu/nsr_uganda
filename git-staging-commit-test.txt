@@ -1,0 +1,1 @@
+Git staging and commit test.
