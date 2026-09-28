@@ -53,10 +53,11 @@ class TestSeededChoiceLists:
         #   responses still read (migration 0021) = 769
         # + 3 pmt_variable_finding codes (migration 0024:
         #   never_fires/insufficient_sample/
-        #   operand_not_in_choice_list) = 772.
+        #   operand_not_in_choice_list) = 772
+        # + 1 missing_data (migration 0025) = 773.
         assert ChoiceOption.objects.filter(
             choice_list__version=1,
-        ).count() == 772
+        ).count() == 773
 
     def test_the_legacy_options_are_deprecated_not_selectable(self):
         """They exist so a 2023 response still reads as words. A capture

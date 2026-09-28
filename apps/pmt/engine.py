@@ -383,6 +383,7 @@ def _compute(household, model_version: PMTModelVersion, *, band: bool):
     from apps.pmt.feature_evaluator import (
         FeatureEvaluationError,
         evaluate_feature,
+        missing_segment,
     )
 
     snapshot: dict[str, dict] = {}
@@ -413,6 +414,16 @@ def _compute(household, model_version: PMTModelVersion, *, band: bool):
                 "contribution": contribution,
                 "feature_type": feature.get("type"),
             }
+            # Which segment the walk died on, when it did.
+            #
+            # A zero is three different facts — the entity row does not
+            # exist, the answer is blank, the code did not match — and
+            # nothing downstream could tell them apart. Recorded only
+            # when non-empty, so the common case costs nothing and a
+            # household with no Dwelling row says so.
+            missing = missing_segment(record, feature.get("path") or "")
+            if missing:
+                snapshot[name]["missing"] = missing
         else:
             # Legacy path+transform shape.
             path = var.get("variable", "")

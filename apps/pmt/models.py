@@ -407,6 +407,11 @@ class PMTVariableInfluence(models.Model):
     # about. Both were already computed here and thrown away.
     sample_size = models.PositiveIntegerField(default=0)
     nonzero_count = models.PositiveIntegerField(default=0)
+    # How many of those reads died before reaching the leaf — the
+    # household had no Dwelling row, no Education row, and so on.
+    # Distinguishes "nobody captured this" from "this never matches",
+    # which are different problems with different owners.
+    missing_count = models.PositiveIntegerField(default=0)
     computed_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

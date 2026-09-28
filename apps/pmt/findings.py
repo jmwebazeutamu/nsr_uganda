@@ -44,12 +44,17 @@ from django.conf import settings
 FINDING_NEVER_FIRES = "never_fires"
 FINDING_INSUFFICIENT_SAMPLE = "insufficient_sample"
 FINDING_OPERAND_NOT_IN_CHOICE_LIST = "operand_not_in_choice_list"
+FINDING_MISSING_DATA = "missing_data"
 
 #: finding code -> `ui_tone` code.
 _FINDING_TONE: dict[str, str] = {
     FINDING_NEVER_FIRES: "danger",
     FINDING_INSUFFICIENT_SAMPLE: "neutral",
     FINDING_OPERAND_NOT_IN_CHOICE_LIST: "danger",
+    # Not danger: the model is fine and nobody captured the data. A
+    # different problem with a different owner, and colouring it the
+    # same as a broken formula sends it to the wrong desk.
+    FINDING_MISSING_DATA: "quality",
 }
 
 
@@ -74,6 +79,9 @@ class VariableFinding:
     fire_rate: float
     sample_size: int
     nonzero_count: int
+    missing_count: int = 0
+    #: The branch that was absent, when every read died on the same one.
+    missing_segment: str = ""
 
     @property
     def tone(self) -> str:
@@ -92,14 +100,23 @@ def finding_for(influence) -> VariableFinding:
     weight = float(influence.weight or 0)
     sample_size = int(influence.sample_size or 0)
     nonzero = int(influence.nonzero_count or 0)
+    missing = int(getattr(influence, "missing_count", 0) or 0)
     fire_rate = (nonzero / sample_size) if sample_size else 0.0
 
     code = ""
     if weight != 0 and nonzero == 0:
-        code = (
-            FINDING_NEVER_FIRES if sample_size >= minimum_sample()
-            else FINDING_INSUFFICIENT_SAMPLE
-        )
+        if sample_size < minimum_sample():
+            code = FINDING_INSUFFICIENT_SAMPLE
+        elif missing >= sample_size:
+            # Every read died before reaching the leaf. The variable is
+            # not broken and the codes are not wrong — the entity was
+            # never captured for anyone, which is a data-collection
+            # problem and belongs to a different team.
+            code = FINDING_MISSING_DATA
+        else:
+            # Some households HAD the data and it still never matched,
+            # which is the model's problem, not the registry's.
+            code = FINDING_NEVER_FIRES
 
     return VariableFinding(
         variable_name=influence.variable_name,
@@ -108,6 +125,7 @@ def finding_for(influence) -> VariableFinding:
         fire_rate=round(fire_rate, 4),
         sample_size=sample_size,
         nonzero_count=nonzero,
+        missing_count=missing,
     )
 
 
@@ -189,6 +207,7 @@ def payload_for_model(model_version) -> list[dict]:
             "fire_rate": f.fire_rate,
             "sample_size": f.sample_size,
             "nonzero_count": f.nonzero_count,
+            "missing_count": f.missing_count,
         }
         for f in _all_findings(model_version)
         if f.code

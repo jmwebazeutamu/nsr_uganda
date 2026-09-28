@@ -72,6 +72,36 @@ def resolve_path(features: Any, path: str) -> Any:
     return cur
 
 
+def missing_segment(features: Any, path: str) -> str:
+    """Which segment of `path` the walk died on, or "" if it reached
+    the leaf.
+
+    `resolve_path` answers None for three different situations — the
+    entity row does not exist, the answer is blank, the path is
+    misspelled — and a score of zero looks identical in all three. This
+    names the first segment that resolved to None, so
+    `dwelling.floor_material` against a household with no Dwelling row
+    answers "dwelling" rather than nothing.
+
+    The leaf itself is deliberately NOT reported as missing: a captured
+    Dwelling whose `floor_material` is blank is a different fact from a
+    household that was never asked, and conflating them is what this
+    exists to stop. A blank leaf resolves and reads as empty.
+    """
+    if path in ("", None):
+        return ""
+    cur = features
+    parts = path.split(".")
+    for index, part in enumerate(parts):
+        if cur is None:
+            return parts[index - 1] if index else ""
+        cur = cur.get(part) if isinstance(cur, dict) else getattr(cur, part, None)
+        # A None at a non-leaf segment means the branch is absent.
+        if cur is None and index < len(parts) - 1:
+            return part
+    return ""
+
+
 def _as_float(value: Any) -> float:
     """Coerce a value to float. None / non-numeric strings / falsy
     return 0.0 so a missing column doesn't blow up a sum."""

@@ -140,6 +140,7 @@ const _pmtProjectFindings = (rows) => (rows || []).map(v => ({
   fireRate: Number(v.fire_rate ?? 0),
   sampleSize: Number(v.sample_size ?? 0),
   nonzeroCount: Number(v.nonzero_count ?? 0),
+  missingCount: Number(v.missing_count ?? 0),
 }));
 
 const _pmtProjectVariablesTop = (rows) => (rows || []).map(v => ({
@@ -491,6 +492,7 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
                 <th>Finding</th>
                 <th style={{ textAlign: "right" }}>Weight</th>
                 <th style={{ textAlign: "right" }}>Fired</th>
+                <th style={{ textAlign: "right" }}>Not captured</th>
               </tr>
             </thead>
             <tbody>
@@ -508,6 +510,9 @@ const PmtDashboardScreen = ({ onOpenConfig }) => {
                   </td>
                   <td className="t-num t-cap" style={{ textAlign: "right" }}>
                     {f.sampleSize ? `${f.nonzeroCount} / ${f.sampleSize}` : "\u2014"}
+                  </td>
+                  <td className="t-num t-cap" style={{ textAlign: "right" }}>
+                    {f.sampleSize ? `${f.missingCount} / ${f.sampleSize}` : "\u2014"}
                   </td>
                 </tr>
               ))}

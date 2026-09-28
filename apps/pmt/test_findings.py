@@ -16,6 +16,7 @@ from django.test import override_settings
 
 from apps.pmt.findings import (
     FINDING_INSUFFICIENT_SAMPLE,
+    FINDING_MISSING_DATA,
     FINDING_NEVER_FIRES,
     FINDING_OPERAND_NOT_IN_CHOICE_LIST,
     finding_for,
@@ -40,6 +41,7 @@ class _Row:
         self.weight = Decimal(str(weight))
         self.sample_size = sample_size
         self.nonzero_count = nonzero_count
+        self.missing_count = 0
 
 
 # ── the classifier ────────────────────────────────────────────────────
@@ -303,6 +305,9 @@ def test_the_nightly_snapshot_records_what_the_alarm_reads():
              "feature": {"type": "membership", "path": "x.y", "operand": ["1"]}},
             {"name": "never", "weight": 0.3,
              "feature": {"type": "membership", "path": "x.z", "operand": ["9"]}},
+            {"name": "uncaptured", "weight": 0.2,
+             "feature": {"type": "membership", "path": "dwelling.q",
+                         "operand": ["1"]}},
         ],
     )
     unit = GeographicUnit.objects.create(
@@ -325,6 +330,11 @@ def test_the_nightly_snapshot_records_what_the_alarm_reads():
                                     "feature_type": "membership"},
                 "never": {"value": 0.0, "weight": 0.3, "contribution": 0.0,
                           "feature_type": "membership"},
+                # Present for every household: the branch was absent.
+                "uncaptured": {"value": 0.0, "weight": 0.2,
+                               "contribution": 0.0,
+                               "feature_type": "membership",
+                               "missing": "dwelling"},
             },
         )
 
@@ -337,10 +347,167 @@ def test_the_nightly_snapshot_records_what_the_alarm_reads():
         model_version=version, variable_name="never",
     ).latest("computed_at")
 
+    uncaptured = PMTVariableInfluence.objects.filter(
+        model_version=version, variable_name="uncaptured",
+    ).latest("computed_at")
+
     assert fires.sample_size == 3 and fires.nonzero_count == 1
     assert never.sample_size == 3 and never.nonzero_count == 0
+    assert never.missing_count == 0
+    # The writer must persist the missing counts too, or every dead
+    # variable reads as a model defect when the real problem is that
+    # nobody captured the data.
+    assert uncaptured.missing_count == 3
 
-    # And the alarm reads them: only `never` is reported.
+    # And the alarm reads them, telling the two apart.
     with override_settings(PMT_VARIABLE_FINDING_MIN_SAMPLE=1):
-        reported = [f.variable_name for f in findings_for_model(version) if f.code]
-    assert reported == ["never"]
+        reported = {
+            f.variable_name: f.code
+            for f in findings_for_model(version) if f.code
+        }
+    assert reported == {
+        "never": FINDING_NEVER_FIRES,
+        "uncaptured": FINDING_MISSING_DATA,
+    }
+
+
+# ── missing data is not a broken model ────────────────────────────────
+
+def test_a_branch_absent_for_everyone_is_missing_data_not_never_fires():
+    """Eleven of v1's eighteen dead variables resolve perfectly through
+    the questionnaire and score zero only because `Dwelling` holds no
+    rows. Calling that a model defect sends it to the wrong desk."""
+    row = _Row("floor_material__tiles", 0.326, 374, 0)
+    row.missing_count = 374
+    assert finding_for(row).code == FINDING_MISSING_DATA
+
+
+def test_data_present_and_still_never_matching_stays_a_model_finding():
+    """Some households HAD the entity and it still never matched, which
+    is the model's problem and not the registry's."""
+    row = _Row("floor_material__tiles", 0.326, 374, 0)
+    row.missing_count = 100
+    assert finding_for(row).code == FINDING_NEVER_FIRES
+
+
+def test_a_feature_with_no_path_is_never_reported_as_missing_data():
+    """`owns_*` and `rooms_per_capita` read collections, not a path. An
+    empty asset list is genuinely ambiguous — never captured and owns
+    nothing look identical — so it must not be claimed as missing."""
+    row = _Row("owns_radio", 0.107, 374, 0)
+    row.missing_count = 0
+    assert finding_for(row).code == FINDING_NEVER_FIRES
+
+
+def test_missing_data_is_not_toned_as_a_defect():
+    row = _Row("x", 0.3, 374, 0)
+    row.missing_count = 374
+    assert finding_for(row).tone == "quality"
+    # A broken formula and uncaptured data must not look the same.
+    assert finding_for(_Row("y", 0.3, 374, 0)).tone == "danger"
+
+
+def test_too_small_a_sample_still_wins_over_missing_data():
+    """Four households with no Dwelling row is not evidence that the
+    country has no dwellings."""
+    row = _Row("x", 0.3, 4, 0)
+    row.missing_count = 4
+    assert finding_for(row).code == FINDING_INSUFFICIENT_SAMPLE
+
+
+# ── the segment resolver ──────────────────────────────────────────────
+
+def test_missing_segment_names_the_branch_that_was_absent():
+    from apps.pmt.feature_evaluator import missing_segment
+
+    record = {"household": {}, "dwelling": None}
+    assert missing_segment(record, "dwelling.floor_material") == "dwelling"
+
+
+def test_missing_segment_is_empty_when_the_leaf_resolves():
+    from apps.pmt.feature_evaluator import missing_segment
+
+    record = {"dwelling": {"floor_material": "11"}}
+    assert missing_segment(record, "dwelling.floor_material") == ""
+
+
+def test_a_blank_leaf_is_not_reported_as_missing():
+    """A captured Dwelling whose floor_material is blank is a different
+    fact from a household that was never asked. Conflating them is what
+    this whole split exists to stop."""
+    from apps.pmt.feature_evaluator import missing_segment
+
+    record = {"dwelling": {"floor_material": None}}
+    assert missing_segment(record, "dwelling.floor_material") == ""
+
+
+def test_missing_segment_names_the_deepest_branch_it_reached():
+    from apps.pmt.feature_evaluator import missing_segment
+
+    record = {"head_member": {"education": None}}
+    assert missing_segment(record, "head_member.education.highest_grade") == (
+        "education"
+    )
+
+
+@pytest.mark.django_db
+def test_the_engine_records_the_missing_segment():
+    """End to end: a household with no Dwelling row must say so."""
+    from datetime import date
+
+    from apps.data_management.models import Household
+    from apps.pmt.engine import compute_score
+    from apps.reference_data.models import GeographicUnit
+
+    unit = GeographicUnit.objects.create(
+        level="sub_region", code="SR-MISS", name="Missing",
+        effective_from=date(2026, 1, 1),
+    )
+    household = Household.objects.create(
+        region=unit, sub_region=unit, district=unit, county=unit,
+        sub_county=unit, parish=unit, village=unit,
+    )
+    version = PMTModelVersion.objects.create(
+        version=92_005, status=ModelStatus.ACTIVE, author="fixture",
+        intercept=Decimal("0"), band_strategy="threshold",
+        band_cutoffs=canonical_band_cutoffs(),
+        variables=[{
+            "name": "floor", "weight": 0.3,
+            "feature": {"type": "membership",
+                        "path": "dwelling.floor_material",
+                        "operand": ["11"]},
+        }],
+    )
+    _score, snapshot = compute_score(household, version)
+    assert snapshot["floor"]["missing"] == "dwelling"
+
+
+@pytest.mark.django_db
+def test_a_resolving_path_writes_no_missing_key():
+    """Recorded only when non-empty, so the common case costs nothing
+    in a snapshot stored 12 million times."""
+    from datetime import date
+
+    from apps.data_management.models import Household
+    from apps.pmt.engine import compute_score
+    from apps.reference_data.models import GeographicUnit
+
+    unit = GeographicUnit.objects.create(
+        level="sub_region", code="SR-PRESENT", name="Present",
+        effective_from=date(2026, 1, 1),
+    )
+    household = Household.objects.create(
+        region=unit, sub_region=unit, district=unit, county=unit,
+        sub_county=unit, parish=unit, village=unit,
+    )
+    version = PMTModelVersion.objects.create(
+        version=92_006, status=ModelStatus.ACTIVE, author="fixture",
+        intercept=Decimal("0"), band_strategy="threshold",
+        band_cutoffs=canonical_band_cutoffs(),
+        variables=[{
+            "name": "size", "weight": 0.3,
+            "feature": {"type": "direct", "path": "member_count"},
+        }],
+    )
+    _score, snapshot = compute_score(household, version)
+    assert "missing" not in snapshot["size"]

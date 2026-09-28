@@ -155,6 +155,8 @@ def _refresh_variable_influence(active: PMTModelVersion) -> int:
     # How often the variable produced a non-zero value. `counts` alone
     # cannot answer "does this ever fire" — see PMTVariableInfluence.
     nonzero: dict[str, int] = {}
+    # Reads that died before the leaf — the entity row was absent.
+    missing: dict[str, int] = {}
     for r in PMTResult.objects.filter(model_version=active).values("inputs_snapshot"):
         snap = r["inputs_snapshot"] or {}
         for name, entry in snap.items():
@@ -173,6 +175,8 @@ def _refresh_variable_influence(active: PMTModelVersion) -> int:
             counts[name] = counts.get(name, 0) + 1
             if fv != 0.0:
                 nonzero[name] = nonzero.get(name, 0) + 1
+            if entry.get("missing"):
+                missing[name] = missing.get(name, 0) + 1
     for var in (active.variables or []):
         weight = float(var.get("weight", 0))
         name = var.get("name") or var.get("variable") or ""
@@ -186,6 +190,7 @@ def _refresh_variable_influence(active: PMTModelVersion) -> int:
             influence=Decimal(str(round(abs(weight) * abs(avg), 4))),
             sample_size=n,
             nonzero_count=nonzero.get(name, 0),
+            missing_count=missing.get(name, 0),
         )
         written += 1
     return written
