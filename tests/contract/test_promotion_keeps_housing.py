@@ -40,7 +40,12 @@ from datetime import date
 
 import pytest
 
-from apps.data_management.models import Dwelling, Livelihood, Utilities
+from apps.data_management.models import (
+    AssetOwnership,
+    Dwelling,
+    Livelihood,
+    Utilities,
+)
 from apps.ingestion_hub.services import (
     land_payload,
     promote_stage_record,
@@ -114,6 +119,45 @@ CAPTURED_HOUSING = {
     "asset_counts": {"bed": 4, "phone": 1, "mattress": 2},
 }
 
+#: The nested food-group block, as the upload carries it. Five of the
+#: nine names differ from the model's columns.
+FOOD_GROUP_DAYS = {
+    "staples": 7, "pulses_nuts": 5, "milk_dairy": 1, "meat_fish_eggs": 4,
+    "vegetables": 5, "fruits": 4, "oils_fats": 7, "sugar_sweets": 2,
+    "condiments": 7,
+}
+CAPTURED_FOOD_SECURITY = {
+    "fies": {f"i{n}_fies": "2" for n in range(1, 9)},
+    "food_groups": {
+        group: {"days": days, "yesterday": "", "source_primary": "",
+                "source_secondary": ""}
+        for group, days in FOOD_GROUP_DAYS.items()
+    },
+}
+
+
+def _household_payload(geo_codes, *, housing=None, extra=None, first_name="James"):
+    payload = {
+        "geographic": geo_codes,
+        "urban_rural": "rural",
+        "housing": dict(CAPTURED_HOUSING if housing is None else housing),
+        "food_security": CAPTURED_FOOD_SECURITY,
+        "members": [
+            {"line_number": 1, "surname": "Okot", "first_name": first_name,
+             "sex": "M", "relationship_to_head": "01", "is_head": True},
+        ],
+    }
+    payload.update(extra or {})
+    return payload
+
+
+def _promote(connector, payload):
+    run = start_connector_run(connector)
+    landing = land_payload(run, payload)
+    stage = stage_from_landing(landing, canonical_payload=payload)
+    return promote_stage_record(stage, actor="reviewer-1")
+
+
 #: payload key -> (model, canonical column, expected value).
 ROUTED = [
     ("tenure", Dwelling, "tenure", "2"),
@@ -167,6 +211,18 @@ def instrument(db):
          ["share_toilet_households"]),
         ("g14_waste_disposal", "waste_disposal", []),
         ("g16_livelihood_source", "main_livelihood", ["livelihood_source"]),
+        # The food-group block. Five of the nine are spelled one way by
+        # the questionnaire and another by the model column, which is
+        # the second half of what this routing has to get right.
+        ("i9_staples_days", "staples_days", []),
+        ("i10_pulses_nuts_days", "pulses_nuts_days", ["pulses_days"]),
+        ("i11_milk_dairy_days", "milk_dairy_days", ["dairy_days"]),
+        ("i12_meat_fish_eggs_days", "meat_fish_eggs_days", ["meat_days"]),
+        ("i13_vegetables_days", "vegetables_days", []),
+        ("i14_fruits_days", "fruits_days", []),
+        ("i15_oils_fats_days", "oils_fats_days", ["oils_days"]),
+        ("i16_sugar_sweets_days", "sugar_sweets_days", ["sugar_days"]),
+        ("i17_condiments_days", "condiments_days", []),
     ]
     for order, (name, canonical, aliases) in enumerate(bindings, start=1):
         FormQuestion.objects.create(
@@ -181,22 +237,7 @@ def instrument(db):
 @pytest.fixture
 def promoted(db, instrument, connector, geo_codes):
     """A household promoted from the real payload shape."""
-    payload = {
-        "geographic": geo_codes,
-        "urban_rural": "rural",
-        "housing": dict(CAPTURED_HOUSING),
-        "members": [
-            {"line_number": 1, "surname": "Okot", "first_name": "James",
-             "sex": "M", "relationship_to_head": "01", "is_head": True},
-        ],
-    }
-    run = start_connector_run(connector)
-    landing = land_payload(run, payload)
-    stage = stage_from_landing(landing, canonical_payload=payload)
-    household = promote_stage_record(stage, actor="reviewer-1")
-    stage.refresh_from_db()
-    assert stage.state == StageRecordState.PROMOTED
-    return household
+    return _promote(connector, _household_payload(geo_codes))
 
 
 def test_promotion_creates_the_detail_rows(promoted):
@@ -383,3 +424,153 @@ def test_a_value_the_column_cannot_hold_does_not_abort_the_promotion(
     assert dwelling.total_rooms is None
     assert dwelling.floor_material == "1"
     assert dwelling.sleeping_rooms == 2
+
+
+# ── assets: three shapes, one union ───────────────────────────────────
+
+def test_assets_come_from_the_housing_section(promoted):
+    """`_create_assets` iterated `payload["assets"]`, a list that does
+    not exist. The data is `housing.assets_owned` (a space-separated
+    code list) and `housing.asset_counts`. Six `owns_*` PMT variables
+    carrying 1.14 of weight read these rows."""
+    owned = {
+        a.asset_type: a.count
+        for a in AssetOwnership.objects.filter(household=promoted)
+    }
+    assert owned == {"phone": 1, "radio": 0, "bed": 4, "mattress": 2}
+
+
+def test_a_count_implies_ownership(db, instrument, connector, geo_codes):
+    """An item counted but absent from `assets_owned` is still owned."""
+    payload = _household_payload(
+        geo_codes,
+        housing={
+            **CAPTURED_HOUSING,
+            "assets_owned": "radio",
+            "asset_counts": {"bicycle": 2},
+        },
+        first_name="Ada",
+    )
+    household = _promote(connector, payload)
+    owned = {
+        a.asset_type: a.count
+        for a in AssetOwnership.objects.filter(household=household)
+    }
+    assert owned == {"radio": 0, "bicycle": 2}
+
+
+def test_a_null_count_is_not_ownership(db, instrument, connector, geo_codes):
+    """`{"tv": null}` means not owned, and must not become a tv with
+    zero. Zero owned and not owned are different facts."""
+    payload = _household_payload(
+        geo_codes,
+        housing={**CAPTURED_HOUSING, "assets_owned": "", "asset_counts": {"tv": None}},
+        first_name="Ben",
+    )
+    household = _promote(connector, payload)
+    assert not AssetOwnership.objects.filter(household=household).exists()
+
+
+def test_a_null_count_is_normal_data_and_a_bad_one_is_not(caplog):
+    """A null count must be skipped SILENTLY; a junk one must be logged.
+
+    Without the explicit null guard the two collapse: `int(None)` raises
+    and lands in the same `except`, so the row is dropped either way but
+    every unowned asset on every household writes a warning. That is how
+    a log stops being read — and `asset_counts` carries a null for every
+    item the household does not own, so it would be most of them.
+    """
+    from apps.ingestion_hub.services import _asset_rows
+
+    with caplog.at_level("WARNING"):
+        assert _asset_rows({"housing": {"asset_counts": {"tv": None}}}) == {}
+    assert caplog.records == []
+
+    with caplog.at_level("WARNING"):
+        assert _asset_rows({"housing": {"asset_counts": {"tv": "many"}}}) == {}
+    assert len(caplog.records) == 1
+    assert "tv" in caplog.records[0].getMessage()
+
+
+def test_the_legacy_assets_list_still_works(db, instrument, connector, geo_codes):
+    """The shape the old code expected must keep working — some
+    connectors may well send it."""
+    payload = _household_payload(
+        geo_codes,
+        extra={"assets": [{"asset_type": "car", "count": 1}]},
+        first_name="Cai",
+    )
+    household = _promote(connector, payload)
+    assert AssetOwnership.objects.get(household=household, asset_type="car").count == 1
+
+
+# ── food consumption: nested, and renamed ─────────────────────────────
+
+def test_food_consumption_reads_the_nested_food_groups(promoted):
+    """Three misses on one block: the section was absent
+    (`food_security.food_groups`, not `food_consumption`), the leaf key
+    was wrong (`days`, not `days_last_7`), and five of the nine group
+    names disagreed with the model's columns."""
+    from apps.data_management.models import FoodConsumption
+
+    fc = FoodConsumption.objects.get(household=promoted)
+    assert fc.staples_days == 7
+    assert fc.fruits_days == 4
+
+
+@pytest.mark.parametrize(
+    ("payload_group", "column"),
+    [
+        ("pulses_nuts", "pulses_days"),
+        ("milk_dairy", "dairy_days"),
+        ("meat_fish_eggs", "meat_days"),
+        ("oils_fats", "oils_days"),
+        ("sugar_sweets", "sugar_days"),
+    ],
+)
+def test_each_renamed_food_group_reaches_its_column(
+    promoted, payload_group, column,
+):
+    """The questionnaire calls it `pulses_nuts_days`; the column is
+    `pulses_days`. Both are spellings of one question, so the router
+    takes the one the model uses."""
+    from apps.data_management.models import FoodConsumption
+
+    fc = FoodConsumption.objects.get(household=promoted)
+    assert getattr(fc, column) == FOOD_GROUP_DAYS[payload_group], (
+        f"{payload_group} did not reach {column}"
+    )
+
+
+def test_the_legacy_food_consumption_shape_still_works(
+    db, instrument, connector, geo_codes,
+):
+    """`food_consumption.<group>.days_last_7` predates the nested
+    food_groups block and has its own end-to-end test. Its leaf key is
+    not an alias of anything, so the router cannot see it — it must keep
+    working through the explicit path, or fixing the new shape breaks
+    the old one."""
+    from apps.data_management.models import FoodConsumption
+
+    payload = _household_payload(geo_codes, first_name="Dee")
+    payload.pop("food_security")
+    payload["food_consumption"] = {
+        "staples": {"days_last_7": 6, "source_primary": "own"},
+    }
+    household = _promote(connector, payload)
+    fc = FoodConsumption.objects.get(household=household)
+    assert fc.staples_days == 6
+    assert fc.staples_source == "own"
+
+
+def test_the_questionnaire_wins_when_both_shapes_arrive(
+    db, instrument, connector, geo_codes,
+):
+    """A payload carrying both must take the questionnaire-resolved
+    value; the legacy path fills gaps, it does not override."""
+    from apps.data_management.models import FoodConsumption
+
+    payload = _household_payload(geo_codes, first_name="Eli")
+    payload["food_consumption"] = {"staples": {"days_last_7": 1}}
+    household = _promote(connector, payload)
+    assert FoodConsumption.objects.get(household=household).staples_days == 7

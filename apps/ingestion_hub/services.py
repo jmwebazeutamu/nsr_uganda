@@ -461,21 +461,48 @@ def _create_food_security(hh: Household, payload: dict, *, actor: str) -> None:
 def _create_food_consumption(
     hh: Household, payload: dict, *, actor: str,
 ) -> None:
-    sect = payload.get("food_consumption") or {}
-    if not sect:
+    """Food-group frequencies, wherever the connector put them.
+
+    This read `payload["food_consumption"]` with keys like
+    `staples.days_last_7`. Real payloads nest the same answers under
+    `food_security.food_groups.<group>.days`, and name five of the nine
+    groups differently again — `pulses_nuts`, `milk_dairy`,
+    `meat_fish_eggs`, `oils_fats`, `sugar_sweets` against the model's
+    `pulses`, `dairy`, `meat`, `oils`, `sugar`. So the section was
+    absent, the leaf key was wrong, and the group names disagreed:
+    three misses on one block, and no row was ever written.
+
+    `FormQuestion` carries all of it — `i10_pulses_nuts_days` is aliased
+    to both `pulses_nuts_days` and `pulses_days` — so the router
+    resolves `<group>_<key>` through the questionnaire and picks the
+    spelling this model uses.
+    """
+    defaults = _detail_defaults(payload, FoodConsumption)
+
+    # The older shape — `food_consumption.<group>.days_last_7` with the
+    # model's own short group names — is still a real shape and has its
+    # own end-to-end test. Its leaf key is not a payload alias of
+    # anything, so the router cannot see it; it fills the gaps rather
+    # than overriding, so a payload carrying both keeps the questionnaire
+    # -resolved value.
+    legacy = payload.get("food_consumption") or {}
+    if isinstance(legacy, dict):
+        for group in (
+            "staples", "pulses", "dairy", "meat",
+            "vegetables", "fruits", "oils", "sugar", "condiments",
+        ):
+            block = legacy.get(group) or {}
+            if not isinstance(block, dict):
+                continue
+            days = block.get("days_last_7")
+            if days not in (None, "") and f"{group}_days" not in defaults:
+                defaults[f"{group}_days"] = days
+            source = block.get("source_primary")
+            if source not in (None, "") and f"{group}_source" not in defaults:
+                defaults[f"{group}_source"] = source
+
+    if not defaults:
         return
-    # The build prompt's expected shape is per-food-group dicts:
-    # {"staples": {"days_last_7": 7, "source_primary": "..."}, ...}.
-    # The model flattens that to <group>_days / <group>_source columns.
-    groups = (
-        "staples", "pulses", "dairy", "meat",
-        "vegetables", "fruits", "oils", "sugar", "condiments",
-    )
-    defaults: dict = {}
-    for g in groups:
-        grp = sect.get(g) or {}
-        defaults[f"{g}_days"] = grp.get("days_last_7", 0) or 0
-        defaults[f"{g}_source"] = grp.get("source_primary", "")
     obj, created = FoodConsumption.objects.get_or_create(
         household=hh, defaults=defaults,
     )
@@ -598,14 +625,72 @@ def _create_employment(
         _emit_create("employment", obj.id, actor=actor)
 
 
-def _create_assets(hh: Household, payload: dict, *, actor: str) -> None:
+def _asset_rows(payload: dict) -> dict[str, int]:
+    """asset_type code -> count, from whichever shape arrived.
+
+    Three shapes, all real:
+
+      assets: [{"asset_type": "radio", "count": 1}, ...]   the list this
+                                                           expected and
+                                                           never saw
+      housing.assets_owned:  "phone radio bed mattress"    a space-
+                                                           separated code
+                                                           list
+      housing.asset_counts:  {"bed": 4, "phone": 1, ...}   counts, with
+                                                           null for the
+                                                           ones not owned
+
+    A count implies ownership, so the two housing keys union rather than
+    one gating the other: an item counted but missing from
+    `assets_owned` is still owned. A null count is not a zero — it is
+    "not owned" — and contributes nothing. Ownership with no count
+    recorded is count 0, which is what the column already meant.
+
+    The codes are not translated. `assets_owned` carries `asset_type`
+    codes directly (`phone`, `radio`, `bed`), and every token in the
+    real payloads resolves against the active `asset_type` list; an
+    unknown one is staged by the DIH mapping gate rather than dropped
+    or guessed at here.
+    """
+    counts: dict[str, int] = {}
+
     for row in payload.get("assets") or []:
-        code = (row.get("asset_type") or "").strip()
-        if not code:
+        if not isinstance(row, dict):
             continue
+        code = (row.get("asset_type") or "").strip()
+        if code:
+            counts[code] = int(row.get("count") or 0)
+
+    housing = payload.get("housing")
+    if not isinstance(housing, dict):
+        housing = {}
+
+    owned = housing.get("assets_owned") or ""
+    if isinstance(owned, str):
+        owned = owned.split()
+    if isinstance(owned, (list, tuple)):
+        for code in owned:
+            code = str(code).strip()
+            if code:
+                counts.setdefault(code, 0)
+
+    for code, value in (housing.get("asset_counts") or {}).items():
+        code = str(code).strip()
+        if not code or value in (None, ""):
+            continue
+        try:
+            counts[code] = int(value)
+        except (TypeError, ValueError):
+            log.warning("asset_counts[%s]: refusing %r — not a count",
+                        code, value)
+    return counts
+
+
+def _create_assets(hh: Household, payload: dict, *, actor: str) -> None:
+    for code, count in _asset_rows(payload).items():
         obj, created = AssetOwnership.objects.get_or_create(
             household=hh, asset_type=code,
-            defaults={"count": row.get("count", 0) or 0},
+            defaults={"count": count},
         )
         if created:
             _emit_create("asset_ownership", obj.id, actor=actor)
