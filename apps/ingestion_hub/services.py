@@ -332,63 +332,106 @@ def _emit_create(entity_type: str, entity_id: str, *, actor: str) -> None:
 # Expected canonical_payload shape — see the build prompt §3.
 
 
+def _own_field_names(model) -> set[str]:
+    """The model's own editable columns, minus the plumbing."""
+    return {
+        f.name for f in model._meta.get_fields()
+        if getattr(f, "concrete", False)
+        and f.name not in ("id", "household", "member", "created_at", "updated_at")
+    }
+
+
+def _detail_defaults(payload: dict, model, *, index=None) -> dict:
+    """Which of `payload`'s values belong to `model`, by canonical name.
+
+    Routed through `FormQuestion.canonical_field` / `payload_aliases`
+    rather than by reading a named section with hardcoded keys. Both
+    halves of that old approach were wrong at once: the section arrived
+    as `housing` while the code asked for `dwelling`, and seven of the
+    field names differed too (`rooms_total` vs `total_rooms`,
+    `water_source` vs `drinking_water_source`, `lighting_source` vs
+    `lighting_energy`, and so on). It failed silently — `sect` was `{}`,
+    the function returned early, and nineteen households were promoted
+    with a complete housing section and no Dwelling row.
+    """
+    from django.core.exceptions import ValidationError
+
+    from apps.intake.payload_fields import map_payload_to_fields
+
+    mapped = map_payload_to_fields(payload, _own_field_names(model), index=index)
+
+    # Drop values the column cannot hold, and say so.
+    #
+    # `toilet_shared` is a BooleanField and the instrument answers it
+    # with the `yes_no` choice codes "1" and "2". Django's BooleanField
+    # accepts "1" as True and raises on "2" — so half the population
+    # would be silently recorded as sharing a toilet and the other half
+    # would abort the promotion. Neither is acceptable, and deciding
+    # that code "1" means True is a modelling decision nobody has
+    # recorded: it is not in the column, not in the question, and not in
+    # the choice list. So a coded answer is refused for a boolean column
+    # and reported as a missing contract, per the standing rule that a
+    # missing canonical definition is surfaced rather than substituted.
+    # The other thirteen fields still land.
+    out = {}
+    for name, value in mapped.items():
+        field = model._meta.get_field(name)
+        if field.get_internal_type() == "BooleanField":
+            if isinstance(value, bool):
+                out[name] = value
+            else:
+                log.warning(
+                    "%s.%s: refusing %r — a coded answer has no recorded "
+                    "mapping to a boolean column",
+                    model.__name__, name, value,
+                )
+            continue
+        try:
+            out[name] = field.to_python(value)
+        except ValidationError:
+            log.warning(
+                "%s.%s: refusing %r — the column cannot hold it",
+                model.__name__, name, value,
+            )
+    return out
+
+
 def _create_dwelling(hh: Household, payload: dict, *, actor: str) -> None:
-    sect = payload.get("dwelling") or {}
+    defaults = _detail_defaults(payload, Dwelling)
+    # The legacy flat key predates the questionnaire binding and has no
+    # question to resolve through, so it stays explicit.
     legacy_tenure = (payload.get("dwelling_tenure") or "").strip()
-    if not sect and not legacy_tenure:
+    if legacy_tenure:
+        defaults.setdefault("tenure", legacy_tenure)
+    if not defaults:
         return
-    tenure = sect.get("tenure") or legacy_tenure
     obj, created = Dwelling.objects.get_or_create(
-        household=hh,
-        defaults={
-            "tenure": tenure,
-            "dwelling_type": sect.get("dwelling_type", ""),
-            "total_rooms": sect.get("total_rooms"),
-            "sleeping_rooms": sect.get("sleeping_rooms"),
-            "roof_material": sect.get("roof_material", ""),
-            "wall_material": sect.get("wall_material", ""),
-            "floor_material": sect.get("floor_material", ""),
-        },
+        household=hh, defaults=defaults,
     )
     if created:
         _emit_create("dwelling", obj.id, actor=actor)
 
 
 def _create_utilities(hh: Household, payload: dict, *, actor: str) -> None:
-    sect = payload.get("utilities") or {}
-    if not sect:
+    defaults = _detail_defaults(payload, Utilities)
+    if not defaults:
         return
     obj, created = Utilities.objects.get_or_create(
-        household=hh,
-        defaults={
-            "cooking_fuel": sect.get("cooking_fuel", ""),
-            "lighting_energy": sect.get("lighting_energy", ""),
-            "drinking_water_source": sect.get("drinking_water_source", ""),
-            "toilet_facility": sect.get("toilet_facility", ""),
-            "toilet_shared": sect.get("toilet_shared"),
-            "households_sharing_toilet": sect.get("households_sharing_toilet"),
-            "waste_disposal": sect.get("waste_disposal", ""),
-        },
+        household=hh, defaults=defaults,
     )
     if created:
         _emit_create("utilities", obj.id, actor=actor)
 
 
 def _create_livelihood(hh: Household, payload: dict, *, actor: str) -> None:
-    sect = payload.get("livelihood") or {}
-    if not sect:
+    # Same defect as dwelling and utilities: the connector sends
+    # `livelihood_source`, the column is `main_livelihood`, and the
+    # section arrives inside `housing` rather than as `livelihood`.
+    defaults = _detail_defaults(payload, Livelihood)
+    if not defaults:
         return
     obj, created = Livelihood.objects.get_or_create(
-        household=hh,
-        defaults={
-            "main_livelihood": sect.get("main_livelihood", ""),
-            "crop_production_zone": sect.get("crop_production_zone", ""),
-            "livestock_zone": sect.get("livestock_zone", ""),
-            "agricultural_purpose": sect.get("agricultural_purpose", ""),
-            "land_ownership": sect.get("land_ownership", ""),
-            "land_hectares": sect.get("land_hectares"),
-            "land_title": sect.get("land_title", ""),
-        },
+        household=hh, defaults=defaults,
     )
     if created:
         _emit_create("livelihood", obj.id, actor=actor)
