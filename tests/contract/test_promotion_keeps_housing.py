@@ -670,3 +670,149 @@ def test_explicit_rows_win_over_the_question_answers(
     household = _promote(connector, payload)
     assert [c.strategy_type for c in
             CopingStrategy.objects.filter(household=household)] == ["took_loan"]
+
+
+# ── member-level detail: the second failure layer ─────────────────────
+#
+# The housing fixes above were all promotion reading the wrong key. The
+# member blocks fail the same way, plus a second way: six roster fields
+# were never carried by the connector at all, so promotion could not
+# have read them under any name.
+
+MEMBER_HEALTH = {"chronic_illness": "2", "seeing": "1", "hearing": "1",
+                 "walking": "1", "remembering": "1", "self_care": "1",
+                 "communicating": "1"}
+MEMBER_EDUCATION = {"literacy": "3", "ever_school": "1",
+                    "never_school_reason": "", "highest_grade": "10"}
+MEMBER_EMPLOYMENT = {"main_job": "05", "work_sector": "2",
+                     "work_status": "3", "gov_program_beneficiary": "1",
+                     "programmes": "NUSAF", "savings_place": "2"}
+
+
+@pytest.fixture
+def member_instrument(instrument):
+    """The member-level bindings, on top of the household ones."""
+    section = FormSection.objects.create(
+        form_version=instrument, code="C", name="roster", label="Roster",
+        order=2,
+    )
+    bindings = [
+        ("d1_chronic_illness", "chronic_illness_flag", ["chronic_illness"]),
+        ("e1_literacy", "literacy_status", ["literacy"]),
+        ("e2_ever_school", "ever_attended", ["ever_school"]),
+        ("e4_highest_grade", "highest_grade", []),
+        ("f1_main_job", "main_activity_last_30d", ["main_job"]),
+        ("f3_work_sector", "sector", ["work_sector"]),
+        ("f4_work_status", "employment_status", ["work_status"]),
+        # The two whose column name was missing from the alias table
+        # until migration intake.0014.
+        ("f6_gov_program_beneficiary", "is_govt_programme_beneficiary",
+         ["gov_program_beneficiary"]),
+        ("f7_programmes", "programmes_benefited", ["programmes"]),
+        ("f10_savings_place", "savings_location", ["savings_place"]),
+        ("i1_fies", "worried_food", ["i1_fies"]),
+        ("i4_fies", "skipped_meal", ["i4_fies"]),
+    ]
+    for order, (name, canonical, aliases) in enumerate(bindings, start=1):
+        FormQuestion.objects.create(
+            section=section, name=name, label=name, type="text",
+            canonical_field=canonical,
+            payload_aliases=[canonical, *aliases],
+            order_in_section=order,
+        )
+    return instrument
+
+
+@pytest.fixture
+def promoted_member(db, member_instrument, connector, geo_codes):
+    payload = _household_payload(geo_codes, first_name="Ken")
+    payload["food_security"] = {
+        "fies": {"i1_fies": "1", "i4_fies": "2"},
+        "food_groups": CAPTURED_FOOD_SECURITY["food_groups"],
+    }
+    payload["members"][0].update({
+        "health": MEMBER_HEALTH,
+        "education": MEMBER_EDUCATION,
+        "employment": MEMBER_EMPLOYMENT,
+    })
+    household = _promote(connector, payload)
+    return household.members.first()
+
+
+def test_the_fies_items_are_persisted(promoted_member):
+    """The row was always created — the section is truthy either way —
+    with all eight columns blank and fies_raw_score 0. A household that
+    reads as assessed and food-secure when nothing was read."""
+    from apps.data_management.models import FoodSecurity
+
+    fs = FoodSecurity.objects.get(household=promoted_member.household)
+    assert fs.worried_food == "1"
+    assert fs.skipped_meal == "2"
+    # Recomputed on save from the affirmative items.
+    assert fs.fies_raw_score == 1
+
+
+def test_chronic_illness_is_persisted(promoted_member):
+    """Kobo sends `chronic_illness`; the column is
+    `chronic_illness_flag`."""
+    from apps.data_management.models import Health
+
+    assert Health.objects.get(member=promoted_member).chronic_illness_flag == "2"
+
+
+def test_education_is_persisted(promoted_member):
+    from apps.data_management.models import Education
+
+    education = Education.objects.get(member=promoted_member)
+    assert education.literacy_status == "3"
+    assert education.ever_attended == "1"
+    assert education.highest_grade == "10"
+
+
+@pytest.mark.parametrize(
+    ("column", "expected"),
+    [
+        ("main_activity_last_30d", "05"),
+        ("sector", "2"),
+        ("employment_status", "3"),
+        ("is_govt_programme_beneficiary", "1"),
+        ("programmes_benefited", "NUSAF"),
+        ("savings_location", "2"),
+    ],
+)
+def test_each_employment_answer_reaches_its_column(
+    promoted_member, column, expected,
+):
+    """Six of the ten disagreed. Two of those six — F6 and F7 — had no
+    alias naming the column at all until migration intake.0014, so the
+    routing alone would still have dropped them."""
+    from apps.data_management.models import Employment
+
+    employment = Employment.objects.get(member=promoted_member)
+    assert getattr(employment, column) == expected
+
+
+def test_disability_is_read_from_the_health_block(promoted_member):
+    """No connector has ever emitted a `disability` section; all of them
+    put the WG short set under `health`."""
+    from apps.data_management.models import Disability
+
+    disability = Disability.objects.get(member=promoted_member)
+    assert disability.seeing == "1"
+    assert disability.memory == "1"
+    assert disability.selfcare == "1"
+
+
+def test_a_member_with_no_detail_blocks_gains_no_rows(
+    db, member_instrument, connector, geo_codes,
+):
+    """Absent is not blank. A roster row with no health block must not
+    gain a Health row of empty strings, which would read as "asked, no
+    illness"."""
+    from apps.data_management.models import Education, Health
+
+    payload = _household_payload(geo_codes, first_name="Lea")
+    household = _promote(connector, payload)
+    member = household.members.first()
+    assert not Health.objects.filter(member=member).exists()
+    assert not Education.objects.filter(member=member).exists()

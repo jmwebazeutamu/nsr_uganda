@@ -337,7 +337,14 @@ def _own_field_names(model) -> set[str]:
     return {
         f.name for f in model._meta.get_fields()
         if getattr(f, "concrete", False)
-        and f.name not in ("id", "household", "member", "created_at", "updated_at")
+        and f.name not in (
+            "id", "household", "member", "created_at", "updated_at",
+            # System-managed: a denormalised scope column, soft-delete
+            # bookkeeping and encrypted storage are set by the registry,
+            # never by something a connector sent.
+            "sub_region_code", "deleted_at", "is_deleted",
+        )
+        and not f.name.endswith("_encrypted")
     }
 
 
@@ -438,21 +445,23 @@ def _create_livelihood(hh: Household, payload: dict, *, actor: str) -> None:
 
 
 def _create_food_security(hh: Household, payload: dict, *, actor: str) -> None:
-    sect = payload.get("food_security") or {}
-    if not sect:
+    """The eight FIES items, under whichever name they arrived.
+
+    This read `food_security.worried_food` — the wizard's spelling —
+    while Kobo nests the same answers as `food_security.fies.i1_fies`
+    through `i8_fies`. The section was truthy either way, so a row was
+    created with all eight columns blank and `fies_raw_score` 0: a
+    household that looks assessed and food-secure when in fact nothing
+    was read. FIES is a targeting input, so that is not cosmetic.
+
+    `FormQuestion` carries both spellings (`i1_fies` is aliased to
+    `worried_food`), and `fies_raw_score` recomputes on save.
+    """
+    defaults = _detail_defaults(payload, FoodSecurity)
+    if not defaults:
         return
     obj, created = FoodSecurity.objects.get_or_create(
-        household=hh,
-        defaults={
-            "worried_food": sect.get("worried_food", ""),
-            "unhealthy_food": sect.get("unhealthy_food", ""),
-            "limited_variety": sect.get("limited_variety", ""),
-            "skipped_meal": sect.get("skipped_meal", ""),
-            "ate_less": sect.get("ate_less", ""),
-            "ran_out_food": sect.get("ran_out_food", ""),
-            "hungry_no_eat": sect.get("hungry_no_eat", ""),
-            "whole_day_no_eat": sect.get("whole_day_no_eat", ""),
-        },
+        household=hh, defaults=defaults,
     )
     if created:
         _emit_create("food_security", obj.id, actor=actor)
@@ -512,11 +521,13 @@ def _create_food_consumption(
 
 def _create_health(member: Member, m_payload: dict, *, actor: str) -> None:
     sect = m_payload.get("health") or {}
-    if not sect:
+    # The flag arrives as `chronic_illness` from Kobo and
+    # `chronic_illness_flag` from the wizard; the question carries both.
+    defaults = _detail_defaults(m_payload, Health)
+    if not sect and not defaults:
         return
     obj, created = Health.objects.get_or_create(
-        member=member,
-        defaults={"chronic_illness_flag": sect.get("chronic_illness_flag", "")},
+        member=member, defaults=defaults,
     )
     if created:
         # chronic_illness_types may include HIV/TB codes — set via the
@@ -580,19 +591,14 @@ def _create_disability(
 def _create_education(
     member: Member, m_payload: dict, *, actor: str,
 ) -> None:
-    sect = m_payload.get("education") or {}
-    if not sect:
+    # Kobo sends `literacy`, `ever_school`, `never_school_reason`;
+    # the columns are `literacy_status`, `ever_attended`,
+    # `never_attended_reason`. Every pair is on the question.
+    defaults = _detail_defaults(m_payload, Education)
+    if not defaults:
         return
     obj, created = Education.objects.get_or_create(
-        member=member,
-        defaults={
-            "literacy_status": sect.get("literacy_status", ""),
-            "ever_attended": sect.get("ever_attended", ""),
-            "never_attended_reason": sect.get("never_attended_reason", ""),
-            "highest_grade": sect.get("highest_grade", ""),
-            "currently_attending": sect.get("currently_attending", ""),
-            "why_stopped": sect.get("why_stopped", ""),
-        },
+        member=member, defaults=defaults,
     )
     if created:
         _emit_create("education", obj.id, actor=actor)
@@ -601,25 +607,16 @@ def _create_education(
 def _create_employment(
     member: Member, m_payload: dict, *, actor: str,
 ) -> None:
-    sect = m_payload.get("employment") or {}
-    if not sect:
+    # Six of the ten disagreed: main_job/main_activity_last_30d,
+    # work_sector/sector, work_status/employment_status,
+    # gov_program_beneficiary/is_govt_programme_beneficiary,
+    # programmes/programmes_benefited, savings_place/savings_location.
+    # Only `made_savings` and `work_frequency` ever landed.
+    defaults = _detail_defaults(m_payload, Employment)
+    if not defaults:
         return
     obj, created = Employment.objects.get_or_create(
-        member=member,
-        defaults={
-            "main_activity_last_30d": sect.get("main_activity_last_30d", ""),
-            "work_frequency": sect.get("work_frequency", ""),
-            "sector": sect.get("sector", ""),
-            "employment_status": sect.get("employment_status", ""),
-            "not_working_reason": sect.get("not_working_reason", ""),
-            "is_govt_programme_beneficiary": sect.get(
-                "is_govt_programme_beneficiary", "",
-            ),
-            "programmes_benefited": sect.get("programmes_benefited") or [],
-            "currently_benefiting": sect.get("currently_benefiting", ""),
-            "made_savings": sect.get("made_savings", ""),
-            "savings_location": sect.get("savings_location", ""),
-        },
+        member=member, defaults=defaults,
     )
     if created:
         _emit_create("employment", obj.id, actor=actor)

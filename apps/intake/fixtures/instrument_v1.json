@@ -1716,8 +1716,9 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 49,
-   "canonical_field": "gov_program_beneficiary",
+   "canonical_field": "is_govt_programme_beneficiary",
    "payload_aliases": [
+    "is_govt_programme_beneficiary",
     "gov_program_beneficiary"
    ]
   },
@@ -1738,8 +1739,9 @@
    "parameters": {},
    "calculation": "",
    "order_in_section": 50,
-   "canonical_field": "programmes",
+   "canonical_field": "programmes_benefited",
    "payload_aliases": [
+    "programmes_benefited",
     "programmes"
    ]
   },

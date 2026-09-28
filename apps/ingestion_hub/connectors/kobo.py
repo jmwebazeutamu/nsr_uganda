@@ -250,6 +250,30 @@ def _kobo_member_to_canonical(raw: dict, line_number: int) -> dict:
         "father_line_number": _to_int(m.get("c14_father_line")),
         "mother_line_number": _to_int(m.get("c15_mother_line")),
         # ────────────────────────────────────────────────────────────
+        # Collected by the form, and until now not carried at all.
+        #
+        # C3, C7, C10, C11, C17 and C20 are answered on every roster
+        # row and were absent from this dict, so `Member.marital_status`,
+        # `birth_certificate_status`, `nationality`, `residency_status`,
+        # `telephone_in_name_flag` and `mobile_money_flag` were blank on
+        # every household the connector has ever promoted — not dropped
+        # by promotion, never carried to it. Marital status and
+        # residency are eligibility inputs; the phone and mobile-money
+        # flags are what a programme uses to decide whether a household
+        # can be paid.
+        #
+        # The key names are the registry's own column names, so they
+        # resolve without an alias. `_kobo_yes_no` converts the form's
+        # 1/2 coding for the two boolean columns; the coded ones keep
+        # their ChoiceOption codes per ADR-0010.
+        # ────────────────────────────────────────────────────────────
+        "marital_status": (m.get("c3_marital_status") or "").strip(),
+        "birth_certificate_status": (m.get("c7_birth_certificate") or "").strip(),
+        "nationality": (m.get("c10_nationality") or "").strip(),
+        "residency_status": (m.get("c11_residency_status") or "").strip(),
+        "telephone_in_name_flag": _kobo_yes_no(m.get("c17_has_phone")),
+        "mobile_money_flag": _kobo_yes_no(m.get("c20_numbers_registered_mm")),
+        # ────────────────────────────────────────────────────────────
         # Detail blocks (US-S11-020) — per-member sections from the
         # questionnaire so the household-detail screen can render
         # Health / Disability, Education, Employment tabs from the
@@ -329,6 +353,12 @@ def _kobo_housing_block(raw: dict) -> dict:
             "tv":       _to_int(raw.get("g15_count_tv")),
             "bicycle":  _to_int(raw.get("g15_count_bicycle")),
             "phone":    _to_int(raw.get("g15_count_phone")),
+            # Both are on the form (canonical_fields.HOUSING declares
+            # g15_count_motorcycle and g15_count_car) and neither was
+            # read here, so a household's motorcycle or car was recorded
+            # as owned with no count. Both are PMT variables.
+            "motorcycle": _to_int(raw.get("g15_count_motorcycle")),
+            "car":      _to_int(raw.get("g15_count_car")),
         },
         "livelihood_source":   raw.get("g16_livelihood_source", ""),
     }
@@ -342,6 +372,10 @@ def _kobo_agriculture_block(raw: dict) -> dict:
         "ag_purpose":        raw.get("h4_ag_purpose", ""),
         "crops_grown":       raw.get("h5_crops_grown", ""),       # comma-list
         "land_ownership":    raw.get("h6_land_ownership", ""),
+        # H7 is collected and was not carried, so Livelihood.land_hectares
+        # was null on every Kobo household. It is a PMT and targeting
+        # input, and the column already exists.
+        "land_hectares":     raw.get("h7_land_hectares", ""),
     }
 
 

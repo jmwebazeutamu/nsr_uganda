@@ -21,6 +21,7 @@ The branches we exercise here:
 
 from __future__ import annotations
 
+from copy import deepcopy as _deepcopy
 import pytest
 import responses
 from requests.exceptions import RequestException
@@ -541,3 +542,74 @@ class TestKoboV1LegacyForm:
         )
         assert out["geographic"]["region"] == "R-WESTERN"
         assert "R-R-" not in out["geographic"]["region"]
+
+
+# --- Fields the form collects that the mapper was not carrying -------------
+
+
+class TestCollectedFieldsReachTheCanonicalPayload:
+    """The connector's own half of the data loss.
+
+    The promotion helpers were reading the wrong key names, which was
+    one defect. These fields are a second and separate one: they were
+    never put in the canonical payload at all, so promotion could not
+    have read them under any name. `Member.marital_status`,
+    `nationality`, `birth_certificate_status`, `residency_status`,
+    `telephone_in_name_flag` and `mobile_money_flag` were blank on every
+    Kobo household ever promoted, and `promote_stage_record` already
+    reads all six of those exact key names.
+    """
+
+    def _member(self, **overrides):
+        raw = _deepcopy(SAMPLE_KOBO_PAYLOAD)
+        raw["household_members"][0].update({
+            "household_members/c3_marital_status": "2",
+            "household_members/c7_birth_certificate": "1",
+            "household_members/c10_nationality": "UG",
+            "household_members/c11_residency_status": "01",
+            "household_members/c17_has_phone": "1",
+            "household_members/c20_numbers_registered_mm": "2",
+            **overrides,
+        })
+        return kobo_module.kobo_to_canonical(raw)["members"][0]
+
+    def test_the_six_roster_fields_are_carried(self):
+        member = self._member()
+        assert member["marital_status"] == "2"
+        assert member["birth_certificate_status"] == "1"
+        assert member["nationality"] == "UG"
+        assert member["residency_status"] == "01"
+
+    def test_the_yes_no_flags_are_decoded_not_passed_through(self):
+        """The columns are booleans; the form codes 1=Yes, 2=No."""
+        member = self._member()
+        assert member["telephone_in_name_flag"] is True
+        assert member["mobile_money_flag"] is False
+
+    def test_dont_know_is_not_silently_a_no(self):
+        """`_kobo_yes_no` returns None for code 8 so "not established"
+        stays distinguishable.
+
+        Note the columns are currently `null=False`, so promotion
+        coerces this to False and the distinction is lost at the
+        database. That is a schema gap, not a mapper one — recorded here
+        so the mapper's behaviour is not quietly changed to match it.
+        """
+        member = self._member(**{"household_members/c17_has_phone": "8"})
+        assert member["telephone_in_name_flag"] is None
+
+    def test_land_hectares_is_carried(self):
+        raw = _deepcopy(SAMPLE_KOBO_PAYLOAD)
+        raw["h7_land_hectares"] = "2.09"
+        assert kobo_module.kobo_to_canonical(raw)["agriculture"]["land_hectares"] == "2.09"
+
+    def test_motorcycle_and_car_counts_are_carried(self):
+        """Both are declared on the form. Without them a household's
+        motorcycle was recorded as owned with no count, and both are PMT
+        variables."""
+        raw = _deepcopy(SAMPLE_KOBO_PAYLOAD)
+        raw["g15_count_motorcycle"] = "1"
+        raw["g15_count_car"] = "2"
+        counts = kobo_module.kobo_to_canonical(raw)["housing"]["asset_counts"]
+        assert counts["motorcycle"] == 1
+        assert counts["car"] == 2

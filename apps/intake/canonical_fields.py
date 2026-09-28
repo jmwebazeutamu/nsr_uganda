@@ -101,8 +101,13 @@ EMPLOYMENT = {
     "f3_work_sector": ["sector", "work_sector"],
     "f4_work_status": ["employment_status", "work_status"],
     "f5_not_working_reason": ["not_working_reason"],
-    "f6_gov_program_beneficiary": ["gov_program_beneficiary"],
-    "f7_programmes": ["programmes"],
+    # The registry column names differ from the form's and were missing
+    # here, so promotion could not resolve either one and both answers
+    # were dropped. Canonical name first, as everywhere else.
+    "f6_gov_program_beneficiary": [
+        "is_govt_programme_beneficiary", "gov_program_beneficiary",
+    ],
+    "f7_programmes": ["programmes_benefited", "programmes"],
     "f8_currently_benefiting": ["currently_benefiting"],
     "f9_made_savings": ["made_savings"],
     "f10_savings_place": ["savings_location", "savings_place"],
