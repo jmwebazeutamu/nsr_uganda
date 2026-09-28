@@ -779,10 +779,68 @@ def _create_shocks(hh: Household, payload: dict, *, actor: str) -> None:
         _emit_create("shock", obj.id, actor=actor)
 
 
+def _coping_rows_from_questions(payload: dict) -> list[dict]:
+    """Coping rows derived from the per-question answers.
+
+    `_detail_rows` sees `shocks_coping.coping` and skips it, on the
+    stated grounds that "the connector derives the rows separately".
+    It does not: real payloads carry the eighteen L questions there and
+    `coping_strategies` arrives as an empty list, so every answered
+    coping question was dropped. The comment recorded an assumption
+    nobody had checked.
+
+    `canonical_fields.COPING_STRATEGIES` is the stated correspondence
+    from question key to (category, strategy code), and
+    `COPING_STRATEGIES_WITHOUT_A_CODE` names the ten that are answered,
+    carried, and have no registry code yet. Those are reported, never
+    invented — the frame has to gain a code first, and guessing one
+    would put a value in `strategy_type` that no choice list carries.
+
+    A "Never" answer still makes a row: asked-and-not-used is an answer,
+    and `used_flag` is what distinguishes it.
+    """
+    from apps.intake.canonical_fields import (
+        COPING_FREQUENCY_NOT_USED,
+        COPING_STRATEGIES,
+        COPING_STRATEGIES_WITHOUT_A_CODE,
+    )
+
+    answers = (payload.get("shocks_coping") or {}).get("coping") or {}
+    if not isinstance(answers, dict):
+        return []
+
+    rows = []
+    for key, value in answers.items():
+        if value in (None, ""):
+            continue
+        binding = COPING_STRATEGIES.get(key)
+        if binding is None:
+            if key in COPING_STRATEGIES_WITHOUT_A_CODE:
+                log.warning(
+                    "coping %s answered %r but has no code in "
+                    "coping_strategy_type — %s",
+                    key, value, COPING_STRATEGIES_WITHOUT_A_CODE[key],
+                )
+            else:
+                log.warning("coping %s: no canonical binding", key)
+            continue
+        category, strategy_type = binding
+        rows.append({
+            "strategy_type": strategy_type,
+            "category": category,
+            "frequency": str(value),
+            "used_flag": str(value) != COPING_FREQUENCY_NOT_USED,
+        })
+    return rows
+
+
 def _create_coping_strategies(
     hh: Household, payload: dict, *, actor: str,
 ) -> None:
-    for row in _detail_rows(payload, "coping_strategies"):
+    rows = _detail_rows(payload, "coping_strategies")
+    # Rows win when a producer sends them; the per-question answers are
+    # what the Kobo shape carries instead.
+    for row in rows or _coping_rows_from_questions(payload):
         kind = (row.get("strategy_type") or "").strip()
         category = (row.get("category") or "").strip()
         if not kind or not category:

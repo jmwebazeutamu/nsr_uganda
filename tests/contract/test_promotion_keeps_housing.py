@@ -574,3 +574,99 @@ def test_the_questionnaire_wins_when_both_shapes_arrive(
     payload["food_consumption"] = {"staples": {"days_last_7": 1}}
     household = _promote(connector, payload)
     assert FoodConsumption.objects.get(household=household).staples_days == 7
+
+
+# ── coping strategies: per-question answers, not rows ─────────────────
+
+def _coping(answers):
+    return {"shocks_coping": {"coping": answers}}
+
+
+def test_coping_answers_become_rows(db, instrument, connector, geo_codes):
+    """`_detail_rows` sees `shocks_coping.coping` and skips it, on the
+    stated grounds that "the connector derives the rows separately". It
+    does not — `coping_strategies` arrives as an empty list — so every
+    answered coping question was dropped."""
+    from apps.data_management.models import CopingStrategy
+
+    payload = _household_payload(geo_codes, first_name="Fay")
+    payload.update(_coping({"l01a_casual_labor": "3", "l02c_reduce_portions": "2"}))
+    household = _promote(connector, payload)
+
+    rows = {
+        c.strategy_type: (c.category, c.frequency, c.used_flag)
+        for c in CopingStrategy.objects.filter(household=household)
+    }
+    assert rows == {
+        "casual_labor": ("livelihood", "3", True),
+        "smaller_portions": ("food", "2", True),
+    }
+
+
+def test_never_is_an_answer_and_still_makes_a_row(
+    db, instrument, connector, geo_codes,
+):
+    """`coping_frequency` code 1 is Never. Asked-and-not-used is an
+    answer and must be recorded; `used_flag` is what distinguishes it
+    from asked-and-used. Dropping it would make "we asked and they cope
+    fine" indistinguishable from "we never asked"."""
+    from apps.data_management.models import CopingStrategy
+
+    payload = _household_payload(geo_codes, first_name="Gus")
+    payload.update(_coping({"l01b_sell_assets": "1"}))
+    household = _promote(connector, payload)
+
+    row = CopingStrategy.objects.get(household=household)
+    assert row.strategy_type == "sold_asset"
+    assert row.frequency == "1"
+    assert row.used_flag is False
+
+
+def test_a_strategy_with_no_registry_code_is_reported_not_invented(
+    db, instrument, connector, geo_codes, caplog,
+):
+    """Ten of the eighteen L questions are answered, carried, and have
+    no code in `coping_strategy_type`. Inventing one would put a value
+    in the column that no choice list carries. They are reported until
+    the frame gains a code."""
+    from apps.data_management.models import CopingStrategy
+
+    payload = _household_payload(geo_codes, first_name="Hal")
+    payload.update(_coping({"l01i_begging": "2", "l01a_casual_labor": "2"}))
+    with caplog.at_level("WARNING"):
+        household = _promote(connector, payload)
+
+    assert [c.strategy_type for c in
+            CopingStrategy.objects.filter(household=household)] == ["casual_labor"]
+    assert any("l01i_begging" in r.getMessage() for r in caplog.records)
+
+
+def test_an_unanswered_question_makes_no_row(
+    db, instrument, connector, geo_codes,
+):
+    """Blank is "not asked", not "never". All eighteen arrive blank on a
+    household with no shocks, and they must not become eighteen rows."""
+    from apps.data_management.models import CopingStrategy
+
+    payload = _household_payload(geo_codes, first_name="Ivy")
+    payload.update(_coping({k: "" for k in
+                            ("l01a_casual_labor", "l02d_reduce_meals")}))
+    household = _promote(connector, payload)
+    assert not CopingStrategy.objects.filter(household=household).exists()
+
+
+def test_explicit_rows_win_over_the_question_answers(
+    db, instrument, connector, geo_codes,
+):
+    """A producer that sends real rows keeps its own shape."""
+    from apps.data_management.models import CopingStrategy
+
+    payload = _household_payload(geo_codes, first_name="Jo")
+    payload.update(_coping({"l01a_casual_labor": "3"}))
+    payload["coping_strategies"] = [
+        {"strategy_type": "took_loan", "category": "livelihood",
+         "frequency": "4", "used_flag": True},
+    ]
+    household = _promote(connector, payload)
+    assert [c.strategy_type for c in
+            CopingStrategy.objects.filter(household=household)] == ["took_loan"]

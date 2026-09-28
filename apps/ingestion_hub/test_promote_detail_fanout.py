@@ -527,16 +527,33 @@ class TestDetailRowsPromoteFromEitherProducer:
             "both locations were read — rows would be created twice"
         )
 
-    def test_the_per_question_dict_is_not_mistaken_for_rows(
+    def test_the_per_question_dict_is_translated_not_stored_verbatim(
         self, connector, geo_codes,
     ):
-        """Kobo's shocks_coping.coping is the complete answer set keyed by
-        question, not registry rows. Reading it as rows would create
-        garbage strategy_types."""
+        """Kobo's shocks_coping.coping is the answer set keyed by
+        question, not registry rows.
+
+        This test used to assert that no rows were created at all, on
+        the grounds that "the connector derives the rows separately".
+        It does not — `coping_strategies` arrives as an empty list — so
+        that assertion meant every answered coping question was dropped,
+        silently, forever. The concern behind it was real and is kept:
+        the question key must never reach `strategy_type`. What changed
+        is that the answers are now translated through
+        `canonical_fields.COPING_STRATEGIES` into the registry's codes
+        rather than discarded.
+        """
         payload = _base_payload(geo_codes)
         payload["shocks_coping"] = {
             "coping": {"l01a_casual_labor": "4", "l02d_reduce_meals": "5"},
         }
         stage = _stage_with_payload(connector, geo_codes, payload)
         hh = promote_stage_record(stage, actor="op")
-        assert CopingStrategy.objects.filter(household=hh).count() == 0
+
+        kinds = sorted(
+            r.strategy_type
+            for r in CopingStrategy.objects.filter(household=hh)
+        )
+        assert kinds == ["casual_labor", "reduced_meals"]
+        # The original guard: no question key stored as a strategy type.
+        assert not any(k.startswith("l0") for k in kinds)
