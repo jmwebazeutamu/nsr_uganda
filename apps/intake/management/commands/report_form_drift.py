@@ -1,9 +1,20 @@
 """Report where submissions actually come from, and what they carry.
 
-The deployed questionnaire went a year emitting a retired code frame
-and nothing noticed, because nothing compared the form in the field
-against the registry that defines it. Two facts, both already in the
-database, are enough to see it:
+Written on the belief that the deployed questionnaire was emitting a
+retired code frame. It was not: fetched from Kobo, asset
+`ak2w5k5WAbU53ChwwM8bC7` carries 184 questions and floor_material codes
+11-19, identical to what `export_to_xlsx` produces. The retired codes
+in the registry come from synthetic records POSTed straight to the
+submission endpoint against a stale local XLSForm, which bypasses the
+form's own validation — not from the form.
+
+What this command found is still real and still worth having: the
+active FormVersion records `aAeFzAFk6wSpCq7d7dpBga`, which returns 404
+from Kobo, while every submission arrives from two assets the registry
+tracks under no version at all. A republish would have targeted a
+deleted asset.
+
+Two facts, both already in the database, make that visible:
 
 * every submission records the Kobo asset it came from
   (`_xform_id_string`), and `FormVersion.kobo_asset_uid` records the
@@ -11,12 +22,11 @@ database, are enough to see it:
 * every code the registry cannot interpret is an `UnmappedChoiceValue`
   row, attributable to the run and therefore to the asset.
 
-On the dev registry those two facts say something the export code alone
-never could: submissions arrive from `ak2w5k5WAbU53ChwwM8bC7` and
-`aRpVGbQLmPbVo3e4XUjSGe`, while the active FormVersion records
-`aAeFzAFk6wSpCq7d7dpBga`, which has received nothing. Republishing the
-FormVersion would have updated an asset nobody submits to, reported
-success, and left the field forms exactly as stale.
+On the dev registry: submissions arrive from `ak2w5k5WAbU53ChwwM8bC7`
+(399) and `aRpVGbQLmPbVo3e4XUjSGe` (27), while the active FormVersion
+records an asset that no longer exists. Nothing reads a submission's
+`_xform_id_string` against `FormVersion.kobo_asset_uid`, so the registry
+can believe it publishes somewhere it does not and never be contradicted.
 
 Read-only. It reports; it changes nothing and publishes nothing.
 """
