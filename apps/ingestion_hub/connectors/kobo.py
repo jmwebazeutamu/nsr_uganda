@@ -370,7 +370,20 @@ def _kobo_agriculture_block(raw: dict) -> dict:
         "livestock":         raw.get("h2_livestock", ""),
         "livestock_counts":  raw.get("h3_livestock_counts", ""),  # free-text "goats=3; chicken=8"
         "ag_purpose":        raw.get("h4_ag_purpose", ""),
-        "crops_grown":       raw.get("h5_crops_grown", ""),       # comma-list
+        # H5 and H3 are select_multiple now (migration intake.0015), so
+        # both arrive as space-separated codes rather than prose. The
+        # keys are unchanged: answers already collected as prose keep
+        # resolving through the same path.
+        "crops_grown":       raw.get("h5_crops_grown", ""),
+        "livestock_kept":    raw.get("h3_livestock_counts", ""),
+        # One count per kind, mirroring housing.asset_counts.
+        "livestock_counts_by_kind": {
+            kind: _to_int(raw.get("h3_count_{}".format(kind)))
+            for kind in (
+                "cattle", "goat", "sheep", "pig",
+                "chicken", "other_poultry", "rabbit", "bees",
+            )
+        },
         "land_ownership":    raw.get("h6_land_ownership", ""),
         # H7 is collected and was not carried, so Livelihood.land_hectares
         # was null on every Kobo household. It is a PMT and targeting

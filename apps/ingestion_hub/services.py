@@ -781,12 +781,19 @@ def _agriculture_free_text_rows(payload: dict) -> tuple[list[dict], list[dict]]:
 
     crops: list[dict] = []
     text = str(agriculture.get("crops_grown") or "").strip()
-    for rank, token in enumerate(
-        (t.strip() for t in text.split(",")), start=1,
-    ):
+    # H5 is a select_multiple since migration intake.0015, so new answers
+    # are space-separated codes. Older ones are a comma-separated list of
+    # names. Splitting on both costs nothing and the resolution below
+    # tells them apart: a code is accepted as itself, a name only if it
+    # is a label the list carries.
+    tokens = [t.strip() for part in text.split(",") for t in part.split()]
+    for rank, token in enumerate(tokens, start=1):
         if not token:
             continue
-        code = code_for_label(_CROP_LIST, token)
+        code = (
+            token if has_active_option(_CROP_LIST, token)
+            else code_for_label(_CROP_LIST, token)
+        )
         if not code:
             log.warning(
                 "crops_grown %r is not an active %s label — no Crop row",
@@ -796,6 +803,34 @@ def _agriculture_free_text_rows(payload: dict) -> tuple[list[dict], list[dict]]:
         crops.append({"crop_name": code, "rank_order": rank})
 
     livestock: list[dict] = []
+    # The coded shape first: which kinds were kept, and one count each.
+    kept = str(agriculture.get("livestock_kept") or "").strip().split()
+    counts = agriculture.get("livestock_counts_by_kind") or {}
+    seen: set[str] = set()
+    for code in kept:
+        if not has_active_option(_LIVESTOCK_LIST, code):
+            log.warning(
+                "livestock_kept %r is not an active %s code — no Livestock row",
+                code, _LIVESTOCK_LIST,
+            )
+            continue
+        seen.add(code)
+        livestock.append({
+            "livestock_type": code,
+            "count": int(counts.get(code) or 0),
+        })
+    # A count with no matching selection is still ownership, exactly as
+    # a counted asset is.
+    for code, value in counts.items():
+        if code in seen or value in (None, ""):
+            continue
+        if has_active_option(_LIVESTOCK_LIST, str(code)):
+            livestock.append({"livestock_type": str(code), "count": int(value)})
+            seen.add(str(code))
+    if livestock:
+        return crops, livestock
+
+    # Historical prose, unchanged.
     text = str(agriculture.get("livestock_counts") or "").strip()
     for entry in text.split(";"):
         entry = entry.strip()

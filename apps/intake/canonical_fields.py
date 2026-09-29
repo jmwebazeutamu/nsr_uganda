@@ -148,7 +148,20 @@ HOUSING = {
 AGRICULTURE = {
     "h1_crop_production": ["crop_production"],
     "h2_livestock": ["livestock"],
-    "h3_livestock_counts": ["livestock_counts"],
+    # H3 became a select_multiple over `livestock_type` in migration
+    # intake.0015 — it names which kinds were kept, not how many — so
+    # the canonical name changed and the old one stays as an alias, or
+    # every answer collected as prose would stop resolving.
+    "h3_livestock_counts": ["livestock_kept", "livestock_counts"],
+    # One count per kind, mirroring g15_count_<asset>.
+    "h3_count_cattle": ["cattle_kept"],
+    "h3_count_goat": ["goat_kept"],
+    "h3_count_sheep": ["sheep_kept"],
+    "h3_count_pig": ["pig_kept"],
+    "h3_count_chicken": ["chicken_kept"],
+    "h3_count_other_poultry": ["other_poultry_kept"],
+    "h3_count_rabbit": ["rabbit_kept"],
+    "h3_count_bees": ["bees_kept"],
     "h4_ag_purpose": ["agricultural_purpose", "ag_purpose"],
     "h5_crops_grown": ["crops_grown"],
     "h6_land_ownership": ["land_ownership"],

@@ -978,3 +978,135 @@ def test_an_ambiguous_label_resolves_to_nothing(db):
         )
     clear_resolver_cache()
     assert code_for_label("ambig_crop", "Millet") == ""
+
+
+# ── crops and livestock as coded questions ────────────────────────────
+#
+# H5 and H3 were free text over code columns, so every answer arrived as
+# something the registry could not store. Migration intake.0015 makes
+# them selects; these pin that new answers are codes and that the prose
+# already collected still reads.
+
+def test_coded_crops_are_taken_as_codes(agriculture_lists):
+    """A select_multiple answers with space-separated codes."""
+    from apps.ingestion_hub.services import _agriculture_free_text_rows
+
+    crops, _ = _agriculture_free_text_rows(
+        {"agriculture": {"crops_grown": "maize beans"}},
+    )
+    assert crops == [
+        {"crop_name": "maize", "rank_order": 1},
+        {"crop_name": "beans", "rank_order": 2},
+    ]
+
+
+def test_rank_follows_the_order_asked_for(agriculture_lists):
+    """H5 asks for crops "in order of importance", so the order the
+    enumerator gave is the rank and must not be sorted."""
+    from apps.ingestion_hub.services import _agriculture_free_text_rows
+
+    crops, _ = _agriculture_free_text_rows(
+        {"agriculture": {"crops_grown": "coffee maize"}},
+    )
+    assert [c["crop_name"] for c in crops] == ["coffee", "maize"]
+
+
+def test_livestock_kept_pairs_with_its_counts(agriculture_lists):
+    """Mirrors assets: which kinds, then one count each."""
+    from apps.ingestion_hub.services import _agriculture_free_text_rows
+
+    _, livestock = _agriculture_free_text_rows({"agriculture": {
+        "livestock_kept": "cattle chicken",
+        "livestock_counts_by_kind": {"cattle": 2, "chicken": 8},
+    }})
+    assert livestock == [
+        {"livestock_type": "cattle", "count": 2},
+        {"livestock_type": "chicken", "count": 8},
+    ]
+
+
+def test_a_kind_kept_without_a_count_is_still_kept(agriculture_lists):
+    """Count 0 is what the column already meant for unrecorded."""
+    from apps.ingestion_hub.services import _agriculture_free_text_rows
+
+    _, livestock = _agriculture_free_text_rows({"agriculture": {
+        "livestock_kept": "goat",
+        "livestock_counts_by_kind": {"goat": None},
+    }})
+    assert livestock == [{"livestock_type": "goat", "count": 0}]
+
+
+def test_a_count_without_a_selection_is_still_ownership(agriculture_lists):
+    """Same rule as assets — a counted animal is a kept animal, however
+    the selection question was answered."""
+    from apps.ingestion_hub.services import _agriculture_free_text_rows
+
+    _, livestock = _agriculture_free_text_rows({"agriculture": {
+        "livestock_kept": "",
+        "livestock_counts_by_kind": {"cattle": 3},
+    }})
+    assert livestock == [{"livestock_type": "cattle", "count": 3}]
+
+
+def test_a_code_the_list_does_not_carry_is_reported(agriculture_lists, caplog):
+    """A select cannot normally emit one, but these payloads are POSTed
+    around form validation, so the check stays."""
+    from apps.ingestion_hub.services import _agriculture_free_text_rows
+
+    with caplog.at_level("WARNING"):
+        _, livestock = _agriculture_free_text_rows({"agriculture": {
+            "livestock_kept": "dragon",
+        }})
+    assert livestock == []
+    assert any("dragon" in r.getMessage() for r in caplog.records)
+
+
+def test_prose_still_reads_after_the_question_changed(agriculture_lists):
+    """Answers collected before intake.0015 are still prose and are not
+    migrated. Losing them to fix the question would be the worse
+    outcome."""
+    from apps.ingestion_hub.services import _agriculture_free_text_rows
+
+    crops, livestock = _agriculture_free_text_rows({"agriculture": {
+        "crops_grown": "Maize, beans",
+        "livestock_counts": "Cattle 2; Chicken 8",
+    }})
+    assert [c["crop_name"] for c in crops] == ["maize", "beans"]
+    assert livestock == [
+        {"livestock_type": "cattle", "count": 2},
+        {"livestock_type": "chicken", "count": 8},
+    ]
+
+
+@pytest.mark.django_db
+def test_the_instrument_asks_for_codes_now():
+    """The point of the change: both questions are selects bound to the
+    list whose codes the registry stores.
+
+    The instrument is loaded here rather than assumed. `load_instrument`
+    rebuilds FormQuestion from `fixtures/instrument_v1.json`, so this
+    checks the fixture — which is what a fresh environment gets — and
+    not only migration 0015, which only reaches databases that already
+    had the questions. Skipping when the table was empty would have let
+    the fixture and the migration drift apart unnoticed.
+    """
+    from django.core.management import call_command
+
+    from apps.intake.models import FormQuestion
+
+    call_command("load_instrument", quiet=True)
+    crops = FormQuestion.objects.filter(name="h5_crops_grown").first()
+    stock = FormQuestion.objects.filter(name="h3_livestock_counts").first()
+    assert crops is not None and stock is not None
+    assert crops.type == "select_multiple"
+    assert crops.choice_list_ref.list_name == "crop_name"
+    assert stock.type == "select_multiple"
+    assert stock.choice_list_ref.list_name == "livestock_type"
+    # The old payload key still resolves, so collected answers are not
+    # orphaned by the rename of its canonical field.
+    assert "livestock_counts" in (stock.payload_aliases or [])
+    # And the per-kind counts exist, or a selected kind has nowhere to
+    # record how many.
+    counts = FormQuestion.objects.filter(name__startswith="h3_count_")
+    assert counts.count() == 8
+    assert all(q.type == "integer" for q in counts)
