@@ -34,6 +34,7 @@ Thumbs.db
 
 # Secrets / env
 .env
+.pass
 .env.local
 .env.*.local
 
@@ -117,3 +118,10 @@ static/console/manifest-admin.json
 static/console/assets/
 static/console/console.css
 static/console/maps/
+
+# Kobo seeding credentials (tools/kobo/seed_households.py reads these).
+# The API token is live and grants write access to the deployed forms —
+# it must never reach git history, and the script itself is tracked so
+# that `git add tools/` is a normal thing for someone to type.
+tools/kobo/kobo_api_key
+tools/kobo/user_details
