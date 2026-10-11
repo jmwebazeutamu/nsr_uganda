@@ -111,42 +111,22 @@ class ResolvedCategory:
 
 
 def _code_for_label(label: str, list_name: str = STAAC_CATEGORY_LIST) -> str:
-    """The STAAC code whose label matches, or "".
+    """The code whose label matches, or "".
 
     Exact after normalising case and inner whitespace, and ambiguous
-    labels resolve to nothing — the same rule
-    `reference_data.code_for_label` applies, reused rather than
-    restated. The seeded category labels carry STAAC's severity in
-    brackets, so a bare label is matched against the label with that
-    suffix removed as well.
+    labels resolve to nothing — `reference_data.code_for_label`'s own
+    rule, reused rather than restated.
+
+    This used to also retry against labels with a trailing
+    " (Severity)" stripped, because migration 0026 had decorated the
+    seeded labels with STAAC's severity. Migration 0028 removed the
+    decoration, so there is nothing left to undo: the labels are now
+    character-for-character the names STAAC sends, and the match is
+    the plain one.
     """
     from apps.reference_data.services import code_for_label
 
-    code = code_for_label(list_name, label)
-    if code:
-        return code
-    # Seeded as "Targeting and selection irregularity (Serious)".
-    from apps.reference_data.models import (
-        ChoiceList,
-        ChoiceListStatus,
-        ChoiceOption,
-    )
-
-    choice_list = ChoiceList.objects.filter(
-        list_name=list_name, status=ChoiceListStatus.ACTIVE,
-    ).order_by("-version").first()
-    if choice_list is None:
-        return ""
-    wanted = " ".join(str(label or "").split()).casefold()
-    hits = {
-        option.code
-        for option in ChoiceOption.objects.filter(
-            choice_list=choice_list, status=ChoiceOption.Status.ACTIVE,
-        )
-        if " ".join(str(option.label).split()).casefold().rsplit(" (", 1)[0]
-        == wanted
-    }
-    return hits.pop() if len(hits) == 1 else ""
+    return code_for_label(list_name, label)
 
 
 def resolve_category(value: str) -> ResolvedCategory:

@@ -42,7 +42,15 @@ TEST_TOKEN = "test-token"  # noqa: S105 — synthetic test placeholder
 @pytest.fixture(autouse=True)
 def _no_retry_sleep(monkeypatch):
     """Stub the retry sleep so the 5xx-retry test doesn't wait 4
-    seconds of real wall-clock per run."""
+    seconds of real wall-clock per run.
+
+    Two sleeps to stub since the retry loop moved to
+    `nsr_mis.common.http`: that one, and the publish poll's, which is
+    still this module's own.
+    """
+    from nsr_mis.common import http as shared_http
+
+    monkeypatch.setattr(shared_http.time, "sleep", lambda _s: None)
     monkeypatch.setattr(kobo_module.time, "sleep", lambda _s: None)
 
 

@@ -14,7 +14,7 @@ References:
 from __future__ import annotations
 
 from django.db import models
-from nsr_mis.common.fields import ULIDField
+from nsr_mis.common.fields import EncryptedBinaryField, ULIDField
 
 
 class Category(models.TextChoices):
@@ -411,6 +411,147 @@ class GrievanceAttachment(models.Model):
 
     def __str__(self) -> str:
         return f"{self.filename} on grievance {self.grievance_id}"
+
+
+class StaacCredential(models.Model):
+    """How this registry reaches STAAC's partner API, and with what.
+
+    One row per environment. The token is the bearer credential STAAC
+    issues once and then keeps only a SHA-256 digest of; it is held
+    the way this registry already holds a third-party token — an
+    encrypted column, decrypted in one place — rather than in settings
+    or the environment, because ADR-0007 settled that and because a
+    secret in a settings file is a secret in a backup.
+
+    The cursor lives here rather than in its own table because it
+    belongs to the credential, not to the registry: STAAC signs it
+    with its own key, so rotating that key or issuing a new credential
+    invalidates it, and a cursor that outlived its credential would be
+    a silent resume from nowhere. `partner_views` signs cursors with
+    no max age, so the only thing that expires them IS a key change —
+    which is exactly why the pull treats a rejected cursor as "start
+    again from the beginning" rather than an error.
+    """
+
+    id = ULIDField(primary_key=True)
+
+    #: Environment label, so sandbox and production cannot be
+    #: confused for one another in a log or an admin list.
+    environment = models.CharField(max_length=32, unique=True)
+    base_url = models.URLField(max_length=255)
+    token_encrypted = EncryptedBinaryField()
+
+    #: The opaque `next_cursor` STAAC last handed back, persisted only
+    #: after every record on its page was stored. A half-stored page
+    #: must be re-read, not skipped.
+    cursor = models.TextField(blank=True)
+    last_pulled_at = models.DateTimeField(null=True, blank=True)
+
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "STAAC credential"
+
+    def __str__(self) -> str:
+        return f"STAAC {self.environment} ({self.base_url})"
+
+
+class HandoverOutcome(models.TextChoices):
+    """What became of a snapshot this registry retrieved."""
+
+    FILED = "filed", "Filed as a grievance"
+    #: Retrieved, stored, and NOT filed — the registry could not
+    #: classify or place it. Held rather than dropped: the complaint
+    #: is real and the obstacle is configuration.
+    HELD = "held", "Held — needs configuration before it can be filed"
+    #: STAAC says the handover was withdrawn. The snapshot stays, the
+    #: case does not get re-filed.
+    WITHDRAWN = "withdrawn", "Withdrawn by STAAC"
+
+
+class StaacHandover(models.Model):
+    """One retrieved snapshot, exactly as STAAC sent it.
+
+    This is the immutable landing `docs/ssot_register.md` requires of
+    anything entering the registry from outside: what arrived, when,
+    under which agreement, and what this registry made of it. The
+    Grievance is the interpretation; this row is the evidence, and the
+    two are deliberately separate so a mapping corrected next month
+    can be re-applied to what was actually received rather than to a
+    reconstruction of it.
+
+    Why `(handover_id, exchange_version)` and not the tracking number
+    ------------------------------------------------------------------
+    The partner contract names that pair as the idempotency key, and
+    the two halves answer different questions. `handover_id` is this
+    delivery; `exchange_version` increments when STAAC withdraws and
+    re-offers the same case. So a second version is a second SNAPSHOT
+    of one case, not a second complaint — which is why the unique key
+    is here and `Grievance.external_reference` stays the tracking
+    number the complainant was read back. Several rows here can point
+    at one Grievance; that is the correct shape, not a leak.
+    """
+
+    id = ULIDField(primary_key=True)
+
+    handover_id = models.UUIDField(db_index=True)
+    exchange_version = models.PositiveIntegerField()
+
+    #: STAAC's case number, kept for the officer asked "what happened
+    #: to C-26-057528-8". Not a key here — the pair above is.
+    tracking_number = models.CharField(max_length=64, blank=True, db_index=True)
+
+    #: Exactly what the detail endpoint returned. Never edited.
+    snapshot = models.JSONField()
+
+    #: The approved disclosure list STAAC sent with it. Stored because
+    #: the spec makes it the audit record of what STAAC was permitted
+    #: to release for THIS handover — not a property of the agreement
+    #: in general, and not re-derivable later.
+    fields_manifest = models.JSONField(default=list)
+    agreement_reference = models.CharField(max_length=128, blank=True)
+    agreement_version = models.CharField(max_length=32, blank=True)
+
+    #: Retrieval provenance. The ETag lets a re-read be conditional;
+    #: the correlation id is what STAAC's support can trace a dispute
+    #: by, and is worthless if we do not keep it.
+    etag = models.CharField(max_length=128, blank=True)
+    correlation_id = models.CharField(max_length=64, blank=True)
+    retrieved_at = models.DateTimeField()
+
+    outcome = models.CharField(
+        max_length=16, choices=HandoverOutcome.choices,
+        default=HandoverOutcome.HELD, db_index=True,
+    )
+    #: Why it is held, in words an operator can act on. Blank once
+    #: filed.
+    outcome_detail = models.TextField(blank=True)
+    grievance = models.ForeignKey(
+        "Grievance", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="staac_handovers",
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "STAAC handover"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["handover_id", "exchange_version"],
+                name="staac_handover_idempotency",
+            ),
+        ]
+        indexes = [models.Index(fields=["outcome", "retrieved_at"])]
+        ordering = ("-retrieved_at",)
+
+    def __str__(self) -> str:
+        return (
+            f"{self.tracking_number or self.handover_id} "
+            f"v{self.exchange_version} [{self.outcome}]"
+        )
 
 
 class GrmTierRule(models.Model):

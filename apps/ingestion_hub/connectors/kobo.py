@@ -52,6 +52,8 @@ from typing import Any
 import requests
 from requests.exceptions import RequestException
 
+from nsr_mis.common.http import json_session, request_with_retry
+
 from apps.intake.canonical_fields import (
     COPING_FREQUENCY_NOT_USED,
     COPING_STRATEGIES,
@@ -67,6 +69,11 @@ logger = logging.getLogger(__name__)
 # enough that a transient 503 doesn't fail it. Three attempts at
 # 1s/3s backoff equals at most ~19s of waits + the per-attempt
 # read timeout.
+#
+# The loop itself is `nsr_mis.common.http`. It used to live here, and
+# a second live integration would have had to import this module's
+# private function or write the same loop again. The policy is still
+# Kobo's — these two constants — and only the mechanics are shared.
 DEFAULT_TIMEOUT = (5, 15)  # (connect, read), seconds
 RETRY_BACKOFFS = (1.0, 3.0)  # waits between attempts 1->2 and 2->3
 MAX_ATTEMPTS = 1 + len(RETRY_BACKOFFS)
@@ -77,37 +84,21 @@ def _request_with_retry(
     timeout: tuple[int, int] = DEFAULT_TIMEOUT,
     **kwargs: Any,
 ) -> requests.Response:
-    """Wrap session.request with bounded retries on 5xx + network
-    errors. 4xx responses (incl. 401/403) are returned immediately —
-    those are authentication problems the caller surfaces to the
-    Admin UI as `error=auth_failed`, not infrastructure flakiness."""
-    last_error: Exception | None = None
-    for attempt in range(MAX_ATTEMPTS):
-        try:
-            response = session.request(method, url, timeout=timeout, **kwargs)
-            if response.status_code < 500:
-                return response
-            last_error = RequestException(
-                f"upstream {response.status_code} on {method} {url}",
-            )
-        except RequestException as e:
-            last_error = e
-        # Last attempt — stop retrying.
-        if attempt == MAX_ATTEMPTS - 1:
-            break
-        time.sleep(RETRY_BACKOFFS[attempt])
-    # Exhausted retries — caller turns this into a test-failure result.
-    raise last_error or RequestException("retry budget exhausted")
+    """Kobo's retry policy over the shared loop.
+
+    4xx responses (incl. 401/403) come back immediately — those are
+    authentication problems the caller surfaces to the Admin UI as
+    `error=auth_failed`, not infrastructure flakiness.
+    """
+    return request_with_retry(
+        method, url, session=session, timeout=timeout,
+        backoffs=RETRY_BACKOFFS, **kwargs,
+    )
 
 
 def _new_session() -> requests.Session:
-    """Build a per-call session. Sharing a process-level session
-    would pool connections nicely BUT leak token Authorization
-    headers between credential profiles, which is a security
-    surface we don't need to manage today."""
-    s = requests.Session()
-    s.headers.update({"Accept": "application/json"})
-    return s
+    """A session for this call only — see `nsr_mis.common.http`."""
+    return json_session()
 
 
 # --- Canonical mapper (US-S11-011) -------------------------------------

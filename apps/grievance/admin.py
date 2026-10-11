@@ -20,11 +20,17 @@ fallback for service-account use).
 
 from __future__ import annotations
 
+from django import forms
 from django.contrib import admin, messages
 from django.utils import timezone
 from django.utils.html import format_html
 
-from .models import Grievance, GrievanceStatus
+from .models import (
+    Grievance,
+    GrievanceStatus,
+    StaacCredential,
+    StaacHandover,
+)
 from .services import (
     GrievanceError,
     assign,
@@ -156,3 +162,107 @@ class GrievanceAdmin(admin.ModelAdmin):
     # Re-export for tests that want to invoke the services directly with
     # an admin-shaped actor identifier.
     _services = (assign, escalate, resolve, close)
+
+
+class StaacCredentialForm(forms.ModelForm):
+    """Enter the bearer token once; never read it back.
+
+    STAAC shows the token a single time and then keeps only a
+    SHA-256 digest of it, so the same discipline applies here: the
+    field is a password input with `render_value=False`, and an edit
+    that leaves it blank keeps what is stored rather than clearing
+    it. That is also what stops an operator opening this page and
+    reading a live partner credential off the screen.
+
+    Shaped after `ingestion_hub.admin_credentials.KoboCredentialForm`,
+    which is the recipe ADR-0007 settled for a third-party token.
+    """
+
+    token = forms.CharField(
+        required=False,
+        widget=forms.PasswordInput(render_value=False, attrs={
+            "autocomplete": "off", "size": 60,
+        }),
+        help_text=(
+            "The bearer token the IG issued for this environment. "
+            "Required on first save. Leave blank when editing to keep "
+            "the stored token."
+        ),
+    )
+
+    class Meta:
+        model = StaacCredential
+        fields = ("environment", "base_url", "is_active")
+
+    def clean(self):
+        cleaned = super().clean()
+        if not self.instance.pk and not (cleaned.get("token") or "").strip():
+            raise forms.ValidationError(
+                "A token is required when adding a credential.",
+            )
+        return cleaned
+
+    def save(self, commit=True):
+        from apps.security.encryption import encrypt
+
+        obj = super().save(commit=False)
+        token = (self.cleaned_data.get("token") or "").strip()
+        if token:
+            obj.token_encrypted = encrypt(token.encode("utf-8"))
+            # A new token invalidates the cursor: STAAC signs cursors
+            # per credential, so resuming with the old one would be a
+            # silent resume from nowhere.
+            obj.cursor = ""
+        if commit:
+            obj.save()
+        return obj
+
+
+@admin.register(StaacCredential)
+class StaacCredentialAdmin(admin.ModelAdmin):
+    form = StaacCredentialForm
+    list_display = ("environment", "base_url", "is_active", "last_pulled_at",
+                    "has_cursor")
+    readonly_fields = ("last_pulled_at", "cursor", "created_at", "updated_at")
+
+    @admin.display(boolean=True, description="Resuming")
+    def has_cursor(self, obj) -> bool:
+        return bool(obj.cursor)
+
+
+@admin.register(StaacHandover)
+class StaacHandoverAdmin(admin.ModelAdmin):
+    """What arrived from STAAC, and what became of it.
+
+    Read-only on purpose. The snapshot is the registry's evidence of
+    what a partner sent; an admin who can edit it can rewrite that
+    evidence, and the Grievance — which is the interpretation — is
+    editable through its own screens where every change is audited.
+
+    The list exists mainly for one question: what is HELD and why.
+    A held snapshot is a real complaint this registry received and
+    could not yet file, and the only thing worse than holding it is
+    holding it somewhere nobody looks.
+    """
+
+    list_display = ("tracking_number", "exchange_version", "outcome",
+                    "retrieved_at", "grievance", "short_detail")
+    list_filter = ("outcome",)
+    search_fields = ("tracking_number", "handover_id", "correlation_id")
+    date_hierarchy = "retrieved_at"
+    readonly_fields = tuple(
+        f.name for f in StaacHandover._meta.fields
+    ) + ("snapshot",)
+
+    @admin.display(description="Why it is held")
+    def short_detail(self, obj) -> str:
+        return (obj.outcome_detail or "")[:120]
+
+    def has_add_permission(self, request) -> bool:
+        return False
+
+    def has_change_permission(self, request, obj=None) -> bool:
+        return False
+
+    def has_delete_permission(self, request, obj=None) -> bool:
+        return False
