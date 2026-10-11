@@ -29,6 +29,7 @@ from .test_pull import (  # reuse one definition of the payload
     H1,
     bind_category,
     snapshot,
+    unbind_category,
 )
 
 pytestmark = pytest.mark.django_db
@@ -188,6 +189,7 @@ class TestReceiving:
     ):
         """Non-2xx tells STAAC to retry, and retrying will not bind a
         category. Accepted-and-held is the honest answer."""
+        unbind_category()
         r = push()
         assert r.status_code == 202
         assert r.json()["outcome"] == HandoverOutcome.HELD

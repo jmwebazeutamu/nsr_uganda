@@ -59,7 +59,12 @@ describe("the assignee picker asks the case, not the directory", () => {
 describe("wide view keeps the case panel reachable", () => {
   it("renders the panel once, from one definition", () => {
     expect(grm).toContain("const casePanel = current ? (");
-    expect((grm.match(/\{!wide\.isWide && casePanel\}/g) || [])).toHaveLength(1);
+    // The narrow-view render was wrapped in `.grm-case-panel` when the
+    // workbench grid moved into CSS; what this test is about is that
+    // there is exactly ONE place the panel is rendered from, not what
+    // that place is wrapped in.
+    const narrow = grm.match(/\{!wide\.isWide && [^}]*casePanel[^}]*\}/g) || [];
+    expect(narrow).toHaveLength(1);
   });
 
   it("puts it in a drawer when the list is full width", () => {

@@ -104,6 +104,26 @@ def parish(db):
     return parent
 
 
+def unbind_category(name="Targeting and selection irregularity"):
+    """Put one category back to "registered, nobody has decided".
+
+    Since reference_data.0029 the vocabulary ships BOUND, so a test
+    about an unmapped category has to arrange one. Arranging it is
+    better than the old arrangement anyway: the test now says which
+    category it is talking about instead of relying on the seed
+    being empty.
+    """
+    from apps.reference_data.services import clear_resolver_cache
+
+    option = ChoiceOption.objects.get(
+        choice_list__list_name=STAAC_CATEGORY_LIST, label=name,
+    )
+    option.canonical_code = None
+    option.save(update_fields=["canonical_code"])
+    clear_resolver_cache()
+    return option
+
+
 def bind_category(name="Targeting and selection irregularity",
                   canonical=Category.EXCLUSION_ERROR):
     """Approve one binding, the way the ChoiceList workflow would."""
@@ -381,6 +401,7 @@ class TestTheMapping:
     def test_an_unmapped_category_is_held_not_lost(self, parish, run):
         """Refusing at a console form tells an operator. Refusing in a
         pull tells nobody and STAAC will not send it again."""
+        unbind_category()
         result = file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
         assert result.handover.outcome == HandoverOutcome.HELD
         assert "no approved binding" in result.handover.outcome_detail
@@ -390,6 +411,7 @@ class TestTheMapping:
         assert result.handover.snapshot == snapshot()
 
     def test_a_held_case_files_once_the_binding_lands(self, parish, run):
+        unbind_category()
         file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
         bind_category()
         results = file_held()
@@ -510,6 +532,7 @@ class TestTheRun:
     @responses.activate
     def test_an_unclassifiable_case_does_not_stop_the_run(self, parish, staac_agreement):
         bind_category()
+        unbind_category("Environmental and social")
         mock_collection(
             pages=[{"items": [list_item(H1), list_item(H2, tracking="C-2")],
                     "next_cursor": None}],
@@ -818,6 +841,7 @@ class TestWhyItIsHeld:
     counted rather than read."""
 
     def test_an_unbound_category_names_the_code_to_bind(self, parish, run):
+        unbind_category()
         result = file_snapshot(snapshot(), run=run, handover_id=H1,
                                exchange_version=1)
         row = result.handover
@@ -851,6 +875,7 @@ class TestWhyItIsHeld:
     def test_the_queue_is_countable(self, parish, run):
         """The question an operator actually asks: which codes are
         blocking cases, and how many each."""
+        unbind_category()
         file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
         file_snapshot(snapshot(handover_id=H2, tracking="C-2"), run=run,
                       handover_id=H2, exchange_version=1)
@@ -873,6 +898,7 @@ class TestTheRunRecord:
         from apps.ingestion_hub.models import ConnectorRun, ConnectorRunStatus
 
         bind_category()
+        unbind_category("Environmental and social")
         mock_collection(
             pages=[{"items": [list_item(H1), list_item(H2, tracking="C-2")],
                     "next_cursor": None}],

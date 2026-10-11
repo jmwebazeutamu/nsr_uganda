@@ -161,6 +161,11 @@ def test_a_case_opened_here_is_unaffected(parish):
 # ── 3. the category vocabulary ────────────────────────────────────────
 
 def _bind(code, canonical):
+    """Set, or with None clear, one approved binding.
+
+    Clearing matters since reference_data.0029: the vocabulary ships
+    bound, so a test about an unmapped category has to make one.
+    """
     option = ChoiceOption.objects.get(
         choice_list__list_name=STAAC_CATEGORY_LIST, code=code,
     )
@@ -174,6 +179,7 @@ def test_an_unmapped_category_is_refused_not_defaulted(db):
     """Defaulting to `other` would accept the case and lose the
     classification silently — the failure this registry keeps finding
     in its own pipelines."""
+    _bind("C07", None)
     with pytest.raises(UnmappedCategory) as exc:
         resolve_category("C07")
     assert exc.value.recognised is True
@@ -215,16 +221,49 @@ def test_a_binding_to_a_category_we_do_not_have_is_refused(db):
         resolve_category("C07")
 
 
-def test_the_vocabulary_ships_unmapped(db):
-    """Every STAAC code is registered and none is bound, because the
-    correspondence is MGLSD's to state. If this starts failing, someone
-    has set bindings — check they were approved, then delete this."""
+def test_every_category_is_bound_to_a_category_we_have(db):
+    """The vocabulary shipped unbound and was bound on MGLSD's
+    instruction in reference_data.0029. What matters now is not that
+    bindings exist but that every one of them names a category this
+    registry actually has — a binding pointing at a string we do not
+    recognise refuses the case just as an absent one does, and looks
+    like configuration rather than a typo."""
     options = ChoiceOption.objects.filter(
         choice_list__list_name=STAAC_CATEGORY_LIST,
         choice_list__status=ChoiceListStatus.ACTIVE,
     )
     assert options.count() == 16
-    assert not options.exclude(canonical_code=None).exists()
+    bound = {o.code: o.canonical_code for o in options}
+    assert all(v for v in bound.values()), (
+        f"unbound: {[k for k, v in bound.items() if not v]}"
+    )
+    unknown = {k: v for k, v in bound.items() if v not in Category.values}
+    assert unknown == {}, f"bound to categories that do not exist: {unknown}"
+
+
+def test_the_lossy_binding_is_the_one_we_documented(db):
+    """C07 carries four NSR meanings behind one code — wrongful
+    exclusion, wrongful inclusion, a PMT score dispute and list
+    manipulation. It binds to the dominant one and triage
+    re-categorises the rest. If this changes, the reasoning in
+    reference_data.0029 needs changing with it."""
+    option = ChoiceOption.objects.get(
+        choice_list__list_name=STAAC_CATEGORY_LIST, code="C07",
+    )
+    assert option.canonical_code == Category.EXCLUSION_ERROR
+
+
+def test_nothing_binds_to_data_correction(db):
+    """Not an oversight: no STAAC category means "the registry holds
+    the wrong facts about me". The nearest is a C07 PMT-score dispute,
+    which arrives under C07's binding. Forcing a mapping to fill the
+    gap would misfile the other three quarters of C07."""
+    bound = set(
+        ChoiceOption.objects
+        .filter(choice_list__list_name=STAAC_CATEGORY_LIST)
+        .values_list("canonical_code", flat=True),
+    )
+    assert Category.DATA_CORRECTION not in bound
 
 
 # ── 4. who complained: sex and age ────────────────────────────────────

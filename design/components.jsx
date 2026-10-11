@@ -725,7 +725,7 @@ const PageHeader = ({ eyebrow, title, sub, right, back }) => (
       <h1 className="page-title t-h1">{title}</h1>
       {sub && <div className="page-sub">{sub}</div>}
     </div>
-    {right && <div className="row gap-3">{right}</div>}
+    {right && <div className="row gap-3 page-header-actions">{right}</div>}
   </div>
 );
 

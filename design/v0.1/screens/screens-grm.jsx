@@ -97,6 +97,17 @@ const _grmApiToView = (g) => {
     // an update that existed, and kept offering to open a NEW one —
     // a second DRAFT on every click.
     linked_change_request_id: g.linked_change_request_id || "",
+    // Where the case came from. The NAME is the server's — resolved
+    // from the source register — never mapped here: a
+    // {"STAAC_GRM": "STAAC"} table in this file would be a
+    // vocabulary living nowhere, and renaming a partner would mean a
+    // deploy instead of a row edit.
+    source_system: g.source_system || "",
+    source_label: g.source_system_label || g.source_system || "",
+    // Their number for it, which is what a complainant was read back
+    // and what an officer is asked about. Blank for a case opened
+    // here: there is no other system's number to record.
+    external_reference: g.external_reference || "",
     // What the case will currently accept, from the server's own state
     // machine (apps/grievance/visibility.allowed_actions). Carried so
     // the console does not keep a second copy of the rules and offer a
@@ -816,6 +827,34 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
                 {current.id}
               </div>
 
+              {/* Where it came from, directly under the number.
+                  An officer asked "what happened to C-26-057528-8"
+                  had nothing on this panel to answer with: the case
+                  carried the partner's number and no screen showed
+                  it. Every case names a source now, ours included —
+                  "NSR Web" is a registered source, not a blank. */}
+              {current.source_label && (
+                <>
+                  <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>SOURCE</div>
+                  <div className="row gap-2" style={{alignItems:"center", flexWrap:"wrap"}}>
+                    <Chip tone={current.external_reference ? "system" : "neutral"}>
+                      {current.source_label}
+                    </Chip>
+                    {current.external_reference && (
+                      <span className="t-mono t-bodysm" style={{color:"var(--neutral-800)"}}>
+                        {current.external_reference}
+                      </span>
+                    )}
+                  </div>
+                  {current.external_reference && (
+                    <div className="t-cap muted" style={{marginTop:4}}>
+                      Their reference. Quote it to {current.source_label}; it is
+                      not this registry's case number.
+                    </div>
+                  )}
+                </>
+              )}
+
               <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)", margin:"14px 0 6px"}}>TIER + SLA</div>
               <div className="row gap-2">
                 <Chip tone="data">{GRM_TIERS[current.tier].short} · {GRM_TIERS[current.tier].label}</Chip>
@@ -1286,13 +1325,8 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
           </button>
           <button className="btn" onClick={exportCsv}><Icon name="download"/> Export CSV</button>
           {me.is_officer && (
-            <button className="btn primary" onClick={() => {
-                      setAboutHousehold(null);
-                      setPickedHousehold(null);
-                      setOpenForm(f => ({...f, household_id: "", member_id: ""}));
-                      setModal("open_grievance");
-                    }}>
-              <Icon name="plus"/> Open grievance
+            <button className="btn primary" onClick={() => setModal("open_grievance")}>
+              <Icon name="plus"/> New grievance
             </button>
           )}
         </>}
@@ -1364,10 +1398,8 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
       {/* List + detail split. Wide view stacks them so the list gets the
           full width; the 380px rail is right beside a narrow list and
           wrong beside a wide one. */}
-      <div style={wide.isWide
-        ? { display: "grid", gridTemplateColumns: "1fr", gap: 16 }
-        : { display: "grid", gridTemplateColumns: "1fr 380px", gap: 16 }}>
-        <div className="card">
+      <div className={`grm-workbench-grid ${wide.isWide ? "grm-workbench-grid--wide" : ""}`}>
+        <div className="card grm-case-list">
           <div className="card-toolbar">
             <strong className="t-bodysm">
               {selection.size > 0
@@ -1410,6 +1442,8 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
             )}
           </div>
 
+          <div className="grm-case-table-scroll">
+          <div className="grm-case-table">
           {/* Header */}
           <div style={{display:"grid", gridTemplateColumns:"32px 1fr 110px 100px 130px 140px 130px", borderBottom:"1px solid var(--neutral-200)", background:"var(--neutral-50)", fontSize:11, fontWeight:600, letterSpacing:"0.06em", textTransform:"uppercase", color:"var(--neutral-700)"}}>
             <div style={{padding:"10px 8px", textAlign:"center"}}>
@@ -1479,6 +1513,8 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
               <div className="t-bodysm mt-2">No grievances match this filter.</div>
             </div>
           )}
+          </div>
+          </div>
 
           {/* What the last bulk action did, row by row. The toast can
               only carry a headline; five refusals inside "7/12
@@ -1517,7 +1553,7 @@ const GRMScreen = ({ onNavigate, initialGrievance = null,
           )}
         </div>
 
-        {!wide.isWide && casePanel}
+        {!wide.isWide && <div className="grm-case-panel">{casePanel}</div>}
       </div>
 
       {/* Wide view: the panel as a drawer over the list, not a strip

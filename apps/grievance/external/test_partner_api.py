@@ -36,6 +36,7 @@ from .test_pull import (
     list_item,
     mock_collection,
     snapshot,
+    unbind_category,
 )
 
 pytestmark = pytest.mark.django_db
@@ -127,6 +128,7 @@ class TestWhatIsConfigured:
         assert r.data["source"]["registered_by"] == "migration grievance.0017"
 
     def test_it_names_what_is_missing(self, admin):
+        unbind_category()
         r = admin.get(CONFIG)
         blockers = " ".join(r.data["blockers"])
         assert "No active credential" in blockers
@@ -136,15 +138,8 @@ class TestWhatIsConfigured:
     def test_a_configured_registry_has_no_blockers(
         self, admin, agreement, credential,
     ):
-        from apps.reference_data.models import ChoiceOption
-        from apps.reference_data.services import clear_resolver_cache
-
-        from apps.grievance.intake import STAAC_CATEGORY_LIST
-
-        ChoiceOption.objects.filter(
-            choice_list__list_name=STAAC_CATEGORY_LIST,
-        ).update(canonical_code="other")
-        clear_resolver_cache()
+        """The categories ship bound since reference_data.0029, so this
+        needs only the agreement and the credential."""
         assert admin.get(CONFIG).data["blockers"] == []
 
     def test_it_names_who_approved_the_agreement(self, admin, agreement):
@@ -262,6 +257,7 @@ class TestTheDryRun:
     @responses.activate
     def test_it_says_which_category_blocks_which_case(self, parish,
                                                       agreement, credential):
+        unbind_category()
         mock_collection(
             pages=[{"items": [list_item(H1)], "next_cursor": None}],
             details={H1: snapshot()},

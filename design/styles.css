@@ -418,9 +418,12 @@ a:hover { text-decoration: underline; }
 
 .page-header {
   display: flex; align-items: flex-end; justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--space-4);
   margin-bottom: var(--space-5);
 }
+.page-header > * { min-width: 0; }
+.page-header-actions { flex-wrap: wrap; justify-content: flex-end; }
 .page-eyebrow {
   font-size: 12px;
   text-transform: uppercase;
@@ -484,6 +487,8 @@ a:hover { text-decoration: underline; }
 .card-body { padding: var(--space-5); }
 .card-toolbar {
   display: flex; align-items: center; gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--neutral-200);
   background: var(--neutral-50);
@@ -794,6 +799,29 @@ button:focus-visible { outline: 0; box-shadow: var(--focus-ring); }
   border-bottom: 1px solid var(--neutral-200);
   padding: var(--space-3) var(--space-4);
   z-index: 1;
+}
+
+/* GRM workbench: the queue and case rail must never widen the page.
+   The table remains readable through its own horizontal scroller, while the
+   surrounding workbench and toolbar stay within the viewport. */
+.grm-workbench-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  gap: var(--space-4);
+}
+.grm-workbench-grid--wide { grid-template-columns: minmax(0, 1fr); }
+.grm-case-list,
+.grm-case-panel { min-width: 0; }
+.grm-case-table-scroll { overflow-x: auto; overscroll-behavior-inline: contain; }
+.grm-case-table { min-width: 782px; }
+@media (max-width: 1180px) {
+  .grm-workbench-grid { grid-template-columns: minmax(0, 1fr); }
+  .page-header { align-items: flex-start; }
+  .page-header-actions { justify-content: flex-start; }
+}
+@media (max-width: 640px) {
+  .page { padding: var(--space-4); }
+  .page-header-actions { width: 100%; gap: var(--space-2); }
 }
 
 .audit-row {

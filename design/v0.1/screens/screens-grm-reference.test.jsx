@@ -80,3 +80,18 @@ describe("an operator can look a case up by its number", () => {
     expect(grm).toContain('setCaseSearch(""); refresh();');
   });
 });
+
+describe("opening a grievance from the workbench", () => {
+  it("opens the shared form without calling removed local form setters", () => {
+    expect(grm).toContain('onClick={() => setModal("open_grievance")}');
+    expect(grm).not.toContain("setOpenForm(");
+    expect(grm).not.toContain("setPickedHousehold(");
+    expect(grm).not.toContain("setAboutHousehold(");
+  });
+
+  it("submits through the one shared GRM form", () => {
+    expect(grm).toContain("<OpenGrievanceModal");
+    expect(grm).toContain('open={modal === "open_grievance"}');
+    expect(grm).toContain("refresh().then(() => setSelectedRow(g.id))");
+  });
+});
