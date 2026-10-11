@@ -242,6 +242,16 @@ class PartnerApiConfigView(APIView):
             row = StaacCredential(environment=data["environment"])
         row.base_url = data["base_url"]
         row.is_active = data.get("is_active", True)
+        if row.is_active:
+            # Exactly one environment is live. `credential_for`
+            # refuses to choose between two active credentials — on
+            # purpose, since "production" sorts before "sandbox" — so
+            # without this, pointing at production from the console
+            # would be impossible rather than merely awkward:
+            # activating the new one would leave two and refuse both.
+            StaacCredential.objects.filter(is_active=True).exclude(
+                environment=row.environment,
+            ).update(is_active=False)
         if token:
             # Plaintext in: the column encrypts on write. And a new
             # token invalidates the cursor, which STAAC signs per
@@ -259,6 +269,9 @@ class PartnerApiConfigView(APIView):
             field_changes={
                 "environment": row.environment, "base_url": row.base_url,
                 "is_active": row.is_active, "token_replaced": bool(token),
+                # Which environment this registry now talks to is the
+                # single most consequential thing on this screen.
+                "now_live": row.environment if row.is_active else "",
             },
         )
         return Response({"environment": row.environment, "stored": True})

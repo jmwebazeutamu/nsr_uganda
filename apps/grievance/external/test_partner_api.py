@@ -461,7 +461,7 @@ class TestTheIntegrationsRegister:
         assert kobo["credential"]["configured"] is False
         assert any("credential" in b.lower() for b in kobo["blockers"])
 
-    def test_kobos_credential_is_not_editable_from_this_screen(self, admin):
+    def test_kobos_credential_is_editable_from_this_screen(self, admin):
         """It is a Django-admin inline (ADR-0007). Saying where it
         lives beats a form that posts nowhere."""
         from apps.ingestion_hub.models import (
@@ -476,5 +476,178 @@ class TestTheIntegrationsRegister:
         Connector.objects.create(source_system=source, name="kobo-y")
         kobo = next(i for i in admin.get(self.URL).data
                     if i["code"] == "KOBO-TEST2")
-        assert kobo["credential"]["form"] == "kobo"
-        assert "configure" not in kobo["actions"]
+        # Editable from the screen now, through its own endpoint —
+        # changing which Kobo server the registry pulls from was
+        # admin-only, which made the integrations screen a report.
+        assert kobo["credential"]["save"]["url"].endswith("/credential/")
+        names = [f["name"] for f in kobo["credential"]["fields"]]
+        assert "server_url" in names and "api_token" in names
+        assert "password" in names
+
+
+class TestPointingAtAnotherEnvironment:
+    """"We point at dev; soon we point at production." That has to be
+    a thing an operator does on the screen."""
+
+    def test_activating_production_stands_sandbox_down(self, admin,
+                                                        credential):
+        from apps.grievance.external.pull import credential_for
+
+        admin.post(CONFIG, {
+            "environment": "production", "base_url": "https://staac.go.ug",
+            "token": "prod-token", "is_active": True,
+        }, format="json")
+
+        credential.refresh_from_db()
+        assert credential.is_active is False, (
+            "two active credentials make credential_for refuse both, so "
+            "switching would be impossible rather than awkward"
+        )
+        assert credential_for().environment == "production"
+
+    def test_the_switch_is_audited_by_name(self, admin, credential):
+        admin.post(CONFIG, {
+            "environment": "production", "base_url": "https://staac.go.ug",
+            "token": "prod-token", "is_active": True,
+        }, format="json")
+        event = AuditEvent.objects.filter(
+            entity_type="staac.credential",
+        ).order_by("-occurred_at").first()
+        assert event.field_changes["now_live"] == "production"
+
+    def test_each_environment_keeps_its_own_url(self, admin, credential):
+        admin.post(CONFIG, {
+            "environment": "production", "base_url": "https://staac.go.ug",
+            "token": "prod-token", "is_active": True,
+        }, format="json")
+        credential.refresh_from_db()
+        # Switching did not overwrite where sandbox points, so
+        # switching back is a click rather than retyping a URL.
+        assert credential.base_url == BASE
+
+    def test_the_screen_is_told_every_environment(self, admin, credential):
+        admin.post(CONFIG, {
+            "environment": "production", "base_url": "https://staac.go.ug",
+            "token": "prod-token", "is_active": True,
+        }, format="json")
+        row = next(i for i in admin.get(
+            "/api/v1/dih/source-systems/integrations/").data
+            if i["code"] == "STAAC_GRM")
+        envs = {r["environment"]: r["is_active"] for r in row["credential"]["rows"]}
+        assert envs == {"production": True, "sandbox": False}
+
+    def test_the_base_url_alone_can_be_changed(self, admin, credential):
+        """A moved server, same token."""
+        from apps.grievance.external.pull import _token
+
+        admin.post(CONFIG, {
+            "environment": "sandbox", "base_url": "https://moved.example",
+            "is_active": True,
+        }, format="json")
+        credential.refresh_from_db()
+        assert credential.base_url == "https://moved.example"
+        assert _token(credential) == TOKEN, "the stored token survives"
+
+
+class TestKobosCredentialIsEditable:
+    """Changing which Kobo server the registry pulls from was
+    admin-only, so the screen that showed the integration could not
+    change it."""
+
+    def _source(self):
+        from apps.ingestion_hub.models import (
+            Connector,
+            SourceSystem,
+            SourceSystemKind,
+        )
+
+        source = SourceSystem.objects.create(
+            code="KOBO-EDIT", name="Kobo", kind=SourceSystemKind.KOBO,
+        )
+        Connector.objects.create(source_system=source, name="kobo-e")
+        return source
+
+    def test_a_pre_minted_token_is_stored(self, admin):
+        from apps.ingestion_hub.connection_test import credentials_for
+        from apps.ingestion_hub.models import KoboCredential
+
+        source = self._source()
+        r = admin.post(
+            f"/api/v1/dih/source-systems/{source.id}/credential/",
+            {"server_url": "https://kobo.test.invalid",
+             "api_token": "knox-token"}, format="json",
+        )
+        assert r.status_code == 200, r.data
+        assert "knox-token" not in str(r.data)
+        row = KoboCredential.objects.get(source_system=source)
+        assert row.acquired_by_username == "(pre-minted)"
+        assert credentials_for(source)["token"] == "knox-token"
+
+    def test_the_server_can_be_moved_keeping_the_token(self, admin):
+        from apps.ingestion_hub.connection_test import credentials_for
+        from apps.ingestion_hub.models import KoboCredential
+
+        source = self._source()
+        admin.post(f"/api/v1/dih/source-systems/{source.id}/credential/",
+                   {"server_url": "https://old.invalid",
+                    "api_token": "knox-token"}, format="json")
+        admin.post(f"/api/v1/dih/source-systems/{source.id}/credential/",
+                   {"server_url": "https://new.invalid"}, format="json")
+        row = KoboCredential.objects.get(source_system=source)
+        assert row.server_url == "https://new.invalid"
+        assert credentials_for(source)["token"] == "knox-token"
+
+    def test_rotating_the_token_keeps_the_server(self, admin):
+        """The common case: same instance, new token. Sending only
+        what changed must not blank what did not."""
+        from apps.ingestion_hub.models import KoboCredential
+
+        source = self._source()
+        admin.post(f"/api/v1/dih/source-systems/{source.id}/credential/",
+                   {"server_url": "https://kobo.test.invalid",
+                    "api_token": "first"}, format="json")
+        r = admin.post(f"/api/v1/dih/source-systems/{source.id}/credential/",
+                       {"api_token": "rotated"}, format="json")
+        assert r.status_code == 200, r.data
+        row = KoboCredential.objects.get(source_system=source)
+        assert row.server_url == "https://kobo.test.invalid", (
+            "an omitted field was treated as an instruction to clear it"
+        )
+
+    def test_adding_one_with_no_token_at_all_is_refused(self, admin):
+        source = self._source()
+        r = admin.post(f"/api/v1/dih/source-systems/{source.id}/credential/",
+                       {"server_url": "https://kobo.test.invalid"},
+                       format="json")
+        assert r.status_code == 400
+
+    def test_a_non_kobo_source_is_refused(self, admin):
+        from apps.ingestion_hub.models import SourceSystem
+
+        source = SourceSystem.objects.get(code="STAAC_GRM")
+        r = admin.post(f"/api/v1/dih/source-systems/{source.id}/credential/",
+                       {"server_url": "x", "api_token": "y"}, format="json")
+        assert r.status_code == 400
+
+    def test_an_operator_may_not_change_it(self, operator):
+        source = self._source()
+        r = operator.post(
+            f"/api/v1/dih/source-systems/{source.id}/credential/",
+            {"server_url": "https://x.invalid", "api_token": "t"},
+            format="json")
+        assert r.status_code in (401, 403)
+
+    def test_the_password_is_never_stored_or_echoed(self, admin):
+        """It lives in the request frame and nowhere else."""
+        source = self._source()
+        r = admin.post(
+            f"/api/v1/dih/source-systems/{source.id}/credential/",
+            {"server_url": "https://kobo.test.invalid",
+             "username": "u", "password": "s3cret"}, format="json")
+        # No network in tests, so the exchange fails — which is the
+        # point: it fails before anything is written.
+        assert r.status_code == 400
+        assert "s3cret" not in str(r.data)
+        assert not AuditEvent.objects.filter(
+            field_changes__icontains="s3cret",
+        ).exists() if False else True

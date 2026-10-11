@@ -1270,77 +1270,124 @@ const _IntCheck = ({ ok, label, detail }) => (
   </div>
 );
 
-// The credential form an integration asks for, by name. The SHAPE is
-// the server's: an integration that names no form gets no form, and
-// one that names a form this screen does not have says so rather
-// than rendering a guess.
+// The credential form, built from what the server says it needs.
+//
+// Not keyed by integration: the adapter sends `credential.fields` —
+// name, label, type, current value, help — and this renders them. A
+// partner that needs a client id and a secret needs no change here,
+// and one that cannot be edited from the console sends no `save` and
+// gets the note instead of a form that posts nowhere.
+//
+// Secrets come back empty by design and are never echoed, so a blank
+// password field means "keep what is stored", which is what the
+// field's own help text says.
 const _IntCredentialForm = ({ integration, onSaved }) => {
-  const form = integration.credential && integration.credential.form;
-  const [fields, setFields] = useStateAdmin({
-    environment: (integration.credential || {}).environment || "sandbox",
-    base_url: (integration.credential || {}).base_url || "",
-    token: "",
+  const credential = integration.credential || {};
+  const fields = credential.fields || [];
+  const save = credential.save;
+  const [values, setValues] = useStateAdmin(() => {
+    const out = {};
+    for (const f of fields) out[f.name] = f.value === undefined ? "" : f.value;
+    return out;
   });
   const [busy, setBusy] = useStateAdmin(false);
   const [err, setErr] = useStateAdmin("");
+  const [ok, setOk] = useStateAdmin("");
 
-  if (form !== "staac") {
-    // Kobo's credential is a Django-admin inline (ADR-0007) and the
-    // others have none. Saying where it lives beats a form that
-    // posts nowhere.
+  if (!save || fields.length === 0) {
     return (
       <div className="t-cap muted" style={{marginTop:6}}>
-        {form === "kobo"
-          ? "Credential is managed on this source's Django admin page."
-          : (integration.credential || {}).summary || ""}
+        {credential.summary || ""}
       </div>
     );
   }
 
-  const save = () => {
-    const url = (integration.actions.configure || {}).url;
-    if (!url) return;
-    setBusy(true); setErr("");
-    _intPost(url, { ...fields, is_active: true })
-      .then(() => { setFields(f => ({ ...f, token: "" })); onSaved(); })
+  const submit = () => {
+    setBusy(true); setErr(""); setOk("");
+    // Blank secrets are omitted, not sent as "", so the server can
+    // tell "keep the stored one" from "clear it".
+    const body = {};
+    for (const f of fields) {
+      const v = values[f.name];
+      if (f.type === "password" && !String(v || "").trim()) continue;
+      body[f.name] = v;
+    }
+    _intPost(save.url, body)
+      .then(() => {
+        setOk("Saved.");
+        setValues(v => {
+          const next = { ...v };
+          for (const f of fields) if (f.type === "password") next[f.name] = "";
+          return next;
+        });
+        onSaved();
+      })
       .catch(e => setErr(String(e.message || e)))
       .finally(() => setBusy(false));
   };
 
   return (
     <div style={{marginTop:10}}>
-      <div className="t-cap muted" style={{marginBottom:6}}>
-        The token is shown once by the partner and stored encrypted here.
-        It is never displayed again; leave it blank to keep the stored one.
-        Entering a new one clears the resume cursor.
-      </div>
-      <div style={{display:"grid", gap:8,
-                   gridTemplateColumns:"minmax(0,1fr) minmax(0,2fr) minmax(0,2fr) auto"}}>
-        <label>
-          <div className="t-cap muted" style={{marginBottom:2}}>Environment</div>
-          <input className="field-text" style={{width:"100%", padding:6}}
-                 value={fields.environment}
-                 onChange={e => setFields(f => ({...f, environment: e.target.value}))}/>
-        </label>
-        <label>
-          <div className="t-cap muted" style={{marginBottom:2}}>Base URL</div>
-          <input className="field-text" style={{width:"100%", padding:6}}
-                 value={fields.base_url}
-                 onChange={e => setFields(f => ({...f, base_url: e.target.value}))}/>
-        </label>
-        <label>
-          <div className="t-cap muted" style={{marginBottom:2}}>Token</div>
-          <input className="field-text" type="password" autoComplete="off"
-                 style={{width:"100%", padding:6}}
-                 placeholder={integration.credential.configured ? "•••••• stored" : "paste once"}
-                 value={fields.token}
-                 onChange={e => setFields(f => ({...f, token: e.target.value}))}/>
-        </label>
-        <div style={{alignSelf:"end"}}>
-          <button className="btn" disabled={busy} onClick={save}>
-            {busy ? "Saving…" : "Save"}
-          </button>
+      {(credential.rows || []).length > 1 && (
+        <div style={{marginBottom:8}}>
+          <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)"}}>
+            ENVIRONMENTS
+          </div>
+          {credential.rows.map(r => (
+            <div key={r.environment} className="row gap-2"
+                 style={{padding:"4px 0", alignItems:"center", flexWrap:"wrap"}}>
+              <Chip size="sm" tone={r.is_active ? "system" : "neutral"}>
+                {r.is_active ? "live" : "standby"}
+              </Chip>
+              <strong className="t-bodysm">{r.environment}</strong>
+              <span className="t-cap muted">{r.base_url}</span>
+              <button className="btn btn-sm" disabled={busy || r.is_active}
+                      onClick={() => {
+                        setValues(v => ({ ...v, environment: r.environment,
+                                          base_url: r.base_url,
+                                          is_active: true }));
+                      }}>
+                {r.is_active ? "in use" : "switch to this"}
+              </button>
+            </div>
+          ))}
         </div>
+      )}
+      <div style={{display:"grid", gap:8,
+                   gridTemplateColumns:"repeat(auto-fit, minmax(170px, 1fr))"}}>
+        {fields.map(f => (
+          <label key={f.name}>
+            <div className="t-cap muted" style={{marginBottom:2}}>
+              {f.label}{f.required ? " *" : ""}
+            </div>
+            {f.type === "checkbox" ? (
+              <div style={{padding:"6px 0"}}>
+                <input type="checkbox"
+                       checked={Boolean(values[f.name])}
+                       onChange={e => setValues(v => ({...v, [f.name]: e.target.checked}))}/>
+              </div>
+            ) : (
+              <input className="field-text"
+                     type={f.type === "password" ? "password"
+                           : f.type === "url" ? "url" : "text"}
+                     autoComplete="off"
+                     style={{width:"100%", padding:6}}
+                     placeholder={f.type === "password" && integration.credential.configured
+                       ? "•••••• stored" : ""}
+                     value={values[f.name] === undefined ? "" : values[f.name]}
+                     onChange={e => setValues(v => ({...v, [f.name]: e.target.value}))}/>
+            )}
+            {f.help && (
+              <div className="t-cap muted" style={{marginTop:2}}>{f.help}</div>
+            )}
+          </label>
+        ))}
+      </div>
+      <div className="row gap-2" style={{marginTop:8, alignItems:"center"}}>
+        <button className="btn" disabled={busy} onClick={submit}>
+          {busy ? "Saving…" : "Save configuration"}
+        </button>
+        {ok && <span className="t-cap muted">{ok}</span>}
       </div>
       {err && <div className="t-bodysm" style={{marginTop:6, color:"var(--accent-danger)"}}>{err}</div>}
     </div>

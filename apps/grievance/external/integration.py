@@ -39,7 +39,6 @@ def describe_staac(source, view: Integration) -> None:
     credential = StaacCredential.objects.filter(is_active=True).first()
     view.credential = {
         "configured": bool(credential and credential.token_encrypted),
-        "form": "staac",
         "environment": credential.environment if credential else "",
         "base_url": credential.base_url if credential else "",
         "resuming": bool(credential and credential.cursor),
@@ -56,6 +55,38 @@ def describe_staac(source, view: Integration) -> None:
         label="Credential stored",
         detail=view.credential["summary"],
     ))
+
+    base = "/api/v1/grm/partner-api/staac/"
+    view.credential["fields"] = [
+        {"name": "environment", "label": "Environment", "type": "text",
+         "value": credential.environment if credential else "sandbox",
+         "required": True,
+         "help": "sandbox or production. Each has its own credential, "
+                 "and saving one as live stands the other down."},
+        {"name": "base_url", "label": "Base URL", "type": "url",
+         "value": credential.base_url if credential else "",
+         "required": True,
+         "help": "The partner's origin, no path."},
+        {"name": "token", "label": "Bearer token", "type": "password",
+         "value": "", "required": False,
+         "help": "Shown once by STAAC. Blank keeps the stored one; a "
+                 "new one clears the resume cursor."},
+        {"name": "is_active", "label": "Use this one", "type": "checkbox",
+         "value": True, "required": False,
+         "help": "Which environment the pull talks to."},
+    ]
+    view.credential["save"] = {"url": base}
+    # Every environment on file, so switching to production is
+    # choosing a row rather than editing one in place and losing the
+    # URL you were pointing at.
+    view.credential["rows"] = [
+        {
+            "environment": c.environment, "base_url": c.base_url,
+            "is_active": c.is_active, "resuming": bool(c.cursor),
+            "last_pulled_at": c.last_pulled_at,
+        }
+        for c in StaacCredential.objects.order_by("environment")
+    ]
 
     options = ChoiceOption.objects.filter(
         choice_list__list_name=STAAC_CATEGORY_LIST,
@@ -88,7 +119,6 @@ def describe_staac(source, view: Integration) -> None:
             ),
         })
 
-    base = "/api/v1/grm/partner-api/staac/"
     view.actions = {
         "test": {"url": f"{base}test-connection/", "body": {}},
         "dry_run": {"url": f"{base}dry-run/", "body": {}},

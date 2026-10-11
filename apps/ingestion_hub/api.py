@@ -460,6 +460,104 @@ class SourceSystemViewSet(viewsets.ReadOnlyModelViewSet):
     )
     @extend_schema(
         tags=["dih"],
+        summary="Store a Kobo credential for this source",
+        description=(
+            "Points the connector at a Kobo server and stores a token "
+            "for it. Either a username and password, exchanged once "
+            "for a token and never persisted, or a pre-minted API "
+            "token for an account with MFA. Leaving all three blank "
+            "keeps the stored token and updates only the server URL."
+        ),
+        responses={
+            200: OpenApiResponse(description="Stored"),
+            400: OpenApiResponse(description="Refused upstream, or not Kobo"),
+        },
+    )
+    @action(
+        detail=True, methods=["post"], url_path="credential",
+        permission_classes=[permissions.IsAdminUser],
+    )
+    def credential(self, request, pk=None):
+        """The same exchange the admin inline does, reachable from the
+        console.
+
+        It was admin-only, which meant changing which Kobo server the
+        registry pulls from — a different instance, a rotated token —
+        was not something the screen that shows the integration could
+        do. A configuration screen that can only read is a report.
+        """
+        from requests.exceptions import RequestException
+
+        from .connectors.kobo import acquire_token
+        from .models import KoboCredential, SourceSystemKind
+
+        source = self.get_object()
+        if source.kind != SourceSystemKind.KOBO:
+            return Response(
+                {"detail": f"{source.code} is not a Kobo source."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        actor = (getattr(request.user, "username", "") or "").strip() or "admin"
+        server_url = str(request.data.get("server_url") or "").strip()
+        username = str(request.data.get("username") or "").strip()
+        password = str(request.data.get("password") or "")
+        api_token = str(request.data.get("api_token") or "").strip()
+
+        row = KoboCredential.objects.filter(source_system=source).first()
+        if row is None and not (api_token or (username and password)):
+            return Response(
+                {"detail": (
+                    "A token, or a username and password, is required when "
+                    "adding a credential."
+                )},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not server_url and row is None:
+            return Response({"detail": "A server URL is required."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        row = row or KoboCredential(source_system=source)
+        if server_url:
+            row.server_url = server_url
+        replaced = False
+        if api_token:
+            row.token_encrypted = api_token.encode("utf-8")
+            row.acquired_by_username = "(pre-minted)"
+            replaced = True
+        elif username and password:
+            try:
+                token = acquire_token(row.server_url, username, password)
+            except RequestException as exc:
+                # The password never leaves this frame, and a refusal
+                # is reported as one rather than half-saving a row.
+                return Response(
+                    {"detail": f"Kobo refused the credentials: {exc}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            row.token_encrypted = token.encode("utf-8")
+            row.acquired_by_username = username
+            replaced = True
+        if replaced:
+            # A new token invalidates the watermark no more than the
+            # old one did, so the cursor is deliberately left alone:
+            # the same server with a new token is the same stream.
+            pass
+        row.save()
+
+        emit_audit(
+            "update", "kobo_credential", row.id, actor=actor,
+            reason="credential stored from the integrations screen",
+            # Never the token, and never the password.
+            field_changes={
+                "source_system": source.code, "server_url": row.server_url,
+                "token_replaced": replaced,
+                "acquired_by": row.acquired_by_username,
+            },
+        )
+        return Response({"stored": True, "server_url": row.server_url})
+
+    @extend_schema(
+        tags=["dih"],
         summary="Every system this registry exchanges data with",
         description=(
             "What is registered, what is configured, what is still "

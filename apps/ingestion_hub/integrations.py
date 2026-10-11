@@ -261,7 +261,6 @@ def _describe_kobo(source: SourceSystem, view: Integration) -> None:
     view.direction = "inbound"
     view.credential = {
         "configured": bool(credential and credential.token_encrypted),
-        "form": "kobo",
         "summary": (
             f"{credential.server_url}"
             + (
@@ -284,6 +283,31 @@ def _describe_kobo(source: SourceSystem, view: Integration) -> None:
             "No Kobo credential. Add one on the source's admin page; "
             "a username and password are exchanged once for a token.",
         )
+
+    view.credential["fields"] = [
+        {"name": "server_url", "label": "Server URL", "type": "url",
+         "value": credential.server_url if credential else "",
+         "required": True,
+         "help": "Which Kobo instance this source pulls from."},
+        {"name": "username", "label": "Username", "type": "text",
+         "value": "", "required": False,
+         "help": "With a password, exchanged once for a token. The "
+                 "password is never stored."},
+        {"name": "password", "label": "Password", "type": "password",
+         "value": "", "required": False},
+        {"name": "api_token", "label": "API token", "type": "password",
+         "value": "", "required": False,
+         "help": "Instead of a username and password. The only path "
+                 "that works for an account with MFA."},
+    ]
+    view.credential["save"] = {
+        "url": f"/api/v1/dih/source-systems/{source.id}/credential/",
+    }
+    view.credential["summary"] = (
+        view.credential["summary"]
+        if credential else
+        "Not configured. Add a server and a token to pull from Kobo."
+    )
 
     trigger = f"/api/v1/dih/source-systems/{source.id}/trigger-run/"
     view.actions = {

@@ -48,23 +48,32 @@ describe("the list comes from the register", () => {
 });
 
 describe("the screen names no integration", () => {
-  for (const name of ["STAAC", "staac", "KOBO-PILOT", "UBOS", "Kobo"]) {
+  for (const name of ["STAAC", "staac", "KOBO", "Kobo", "UBOS", "NIRA"]) {
     it(`does not mention ${name}`, () => {
-      // One exception, asserted separately below: the credential FORM
-      // is keyed by the name the server gives it, because a form has
-      // fields and fields are markup.
-      const withoutFormKeys = code
-        .replace(/form !== "staac"/g, "")
-        .replace(/form === "kobo"/g, "")
-        .replace(/_IntCredentialForm/g, "");
-      expect(withoutFormKeys).not.toContain(name);
+      expect(code).not.toContain(name);
     });
   }
 
-  it("keys the credential form on what the server calls it", () => {
-    // The server says `credential.form`; this picks markup by that
-    // name and says so when it has none, rather than guessing fields.
-    expect(code).toContain("integration.credential && integration.credential.form");
+  it("builds the credential form from the fields the server sends", () => {
+    // Not keyed by integration, and no longer keyed by a form NAME
+    // either: name, label, type and help all come from the adapter,
+    // so a partner needing a client id and a secret needs no change
+    // here.
+    expect(code).toContain("credential.fields");
+    expect(code).toContain("fields.map(f =>");
+    expect(code).toContain("f.label");
+    expect(code).toContain("f.help");
+  });
+
+  it("offers no form where the server sends no save url", () => {
+    // Better the note saying where the credential lives than a form
+    // that posts nowhere.
+    expect(code).toContain("if (!save || fields.length === 0)");
+  });
+
+  it("omits a blank secret instead of sending an empty one", () => {
+    // So the server can tell "keep the stored one" from "clear it".
+    expect(code).toContain('f.type === "password" && !String(v || "").trim()');
   });
 
   it("hardcodes no source code, kind or endpoint besides the list", () => {
