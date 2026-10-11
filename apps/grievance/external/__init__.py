@@ -22,3 +22,9 @@ PULL_ACTOR = "staac-pull"
 #: put grievances through DIH's staging pipeline. See ADR-0044.
 SOURCE_CODE = "STAAC_GRM"
 CONNECTOR_NAME = "staac-partner-api"
+
+#: The registered source a grievance opened in this registry's own
+#: console carries. Registered like any other source so the console
+#: can name it without inventing a label — see migration
+#: grievance.0018.
+WEB_SOURCE_CODE = "NSR-WEB"

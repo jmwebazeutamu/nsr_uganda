@@ -924,3 +924,99 @@ class TestTheRunRecord:
         file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
         file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
         assert RawLanding.objects.count() == 1
+
+
+class TestWhereACaseCameFrom:
+    """Every grievance names its source, and the name is the
+    register's — the property the console depends on."""
+
+    def _serialized(self, grievance):
+        from apps.grievance.api import GrievanceSerializer
+
+        return GrievanceSerializer(grievance).data
+
+    def test_a_case_opened_here_names_this_registry(self, parish):
+        from apps.grievance.external import WEB_SOURCE_CODE
+        from apps.grievance.models import Category
+        from apps.grievance.services import open_grievance
+
+        g = open_grievance(
+            category=Category.OTHER, description="Opened at the counter.",
+            geographic_code="101.1.01.01", actor="t",
+        )
+        assert g.source_system == WEB_SOURCE_CODE
+        data = self._serialized(g)
+        assert data["source_system_label"] == "NSR Web"
+        # No other system's number to record.
+        assert data["external_reference"] == ""
+
+    def test_a_pulled_case_names_the_partner_and_their_number(
+        self, parish, run,
+    ):
+        bind_category()
+        g = file_snapshot(snapshot(), run=run, handover_id=H1,
+                          exchange_version=1).handover.grievance
+        data = self._serialized(g)
+        assert data["source_system"] == "STAAC_GRM"
+        assert data["source_system_label"] == "STAAC"
+        assert data["external_reference"] == "C-26-057528-8"
+
+    def test_the_name_comes_from_the_register_not_the_code(self, parish):
+        """Rename the source and the API says the new name, with no
+        deploy. That is the whole reason the name is not in the
+        console."""
+        from apps.grievance.models import Category
+        from apps.grievance.services import open_grievance
+        from apps.ingestion_hub.models import SourceSystem
+
+        g = open_grievance(
+            category=Category.OTHER, description="x",
+            geographic_code="101.1.01.01", actor="t",
+        )
+        SourceSystem.objects.filter(code="NSR-WEB").update(
+            name="NSR Operator Console",
+        )
+        assert self._serialized(g)["source_system_label"] == (
+            "NSR Operator Console"
+        )
+
+    def test_an_unregistered_source_shows_its_code(self, parish):
+        """Never an invented name. A code with no row is a gap to
+        notice, and showing the code is what makes it noticeable."""
+        from apps.grievance.models import Grievance
+
+        g = Grievance.objects.create(
+            category="other", description="x", source_system="MYSTERY-MIS",
+        )
+        assert self._serialized(g)["source_system_label"] == "MYSTERY-MIS"
+
+    def test_provenance_cannot_be_edited_through_the_api(self):
+        from apps.grievance.api import GrievanceSerializer
+
+        read_only = GrievanceSerializer.Meta.read_only_fields
+        for field in ("source_system", "source_system_label",
+                      "external_reference", "reported_at"):
+            assert field in read_only, (
+                f"{field} is provenance — written by the intake that "
+                "received the case, never by a console edit"
+            )
+
+    def test_the_console_source_is_not_routable_as_a_channel(self):
+        """`SourceSystemKind` is routing, not description.
+        `intake._connector_for_channel` takes the FIRST active source
+        of a kind, so a second active `web` source made household
+        intake a coin toss — and it landed on the one with no
+        connector. The console's kind must match no channel."""
+        from apps.intake.services import CHANNEL_KINDS
+        from apps.ingestion_hub.models import SourceSystem
+
+        console = SourceSystem.objects.get(code="NSR-WEB")
+        assert console.kind == "console"
+
+        # No channel routes to this kind, so no `.first()` can land
+        # on a source with nothing to pull from.
+        assert console.kind not in set(CHANNEL_KINDS.values()), (
+            f"channel routing can reach kind {console.kind!r}; a source "
+            "with no connector is then one coin toss from breaking "
+            "household intake"
+        )

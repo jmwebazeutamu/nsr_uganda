@@ -23,6 +23,7 @@ from apps.security.notifications import send_notification
 
 from . import assignees, reasons
 
+from .external import WEB_SOURCE_CODE
 from .models import (
     Category,
     CommentKind,
@@ -139,9 +140,12 @@ def open_grievance(
     # as the placeholder — nobody types a ULID, and a typo produced a
     # grievance pointing at nothing, which only surfaced when someone
     # tried to open a correction from it.
-    source_system = (source_system or "").strip()
+    # Every grievance names where it came from, ours included. Blank
+    # used to mean "opened here", which is a meaning nothing stated
+    # and no screen could render without inventing a name for it.
+    source_system = (source_system or "").strip() or WEB_SOURCE_CODE
     external_reference = (external_reference or "").strip()
-    if external_reference and not source_system:
+    if external_reference and source_system == WEB_SOURCE_CODE:
         # A reference with no system is not a reference — nothing can
         # look it up and the uniqueness constraint would collapse every
         # system's numbering into one space.

@@ -30,6 +30,13 @@ class SourceSystemKind(models.TextChoices):
     WFP_SCOPE = "wfp_scope", "WFP SCOPE"
     ODK = "odk", "ODK forms"
     PARTNER_MIS = "partner_mis", "Partner programme MIS"
+    # Not an ingestion channel: a record ENTERED here rather than
+    # received from anywhere. It exists so a record can name its
+    # origin without the console inventing a word for "ours", and it
+    # deliberately matches no `_connector_for_channel` mapping —
+    # every other kind is routable to a connector and this one has
+    # nothing to pull from.
+    CONSOLE = "console", "NSR operator console"
 
 
 class SourceSystem(models.Model):

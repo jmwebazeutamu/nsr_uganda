@@ -96,7 +96,14 @@ components:
         Kinds NOT in `SUPPORTED_KINDS` (see admin_credentials.py) appear in
         the admin dropdown with a "(coming soon)" suffix and reject any
         credentialing attempt.
-      enum: [ubos, capi_walkin, web, kobo, wfp_scope, odk, partner_mis]
+
+        `console` is the odd one: it is not an ingestion channel at all
+        but a record ENTERED in the operator console, registered so a
+        record can name its origin. Nothing maps a channel to it, by
+        design — `intake.services._connector_for_channel` resolves a
+        kind to its connector, and a source with nothing to pull from
+        must not be reachable that way.
+      enum: [ubos, capi_walkin, web, kobo, wfp_scope, odk, partner_mis, console]
 
     SourceSystem:
       type: object

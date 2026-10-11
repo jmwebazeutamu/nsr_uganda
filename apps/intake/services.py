@@ -30,17 +30,26 @@ class IntakeError(Exception):
     """An intake-side precondition is unmet."""
 
 
+#: Which source kind handles each intake channel.
+#:
+#: Module level because it is a routing table, and a routing table
+#: that cannot be read from outside the function cannot be asserted
+#: against. A source registered under a kind in here is reachable by
+#: `.first()` — which is how a second active `web` source once
+#: shadowed the one with the connector.
+CHANNEL_KINDS = {
+    "capi": SourceSystemKind.CAPI_WALKIN,
+    "web": SourceSystemKind.WEB,
+    # USSD lands in the CAPI source in Sprint 2; per SAD §11.2 USSD
+    # is a Release 2 own connector.
+    "ussd": SourceSystemKind.CAPI_WALKIN,
+    "bulk": SourceSystemKind.UBOS,
+}
+
+
 def _connector_for_channel(channel: str) -> Connector:
     """Map an intake channel to the DIH connector that handles it."""
-    mapping = {
-        "capi": SourceSystemKind.CAPI_WALKIN,
-        "web":  SourceSystemKind.WEB,
-        # USSD lands in the CAPI source in Sprint 2; per SAD §11.2 USSD
-        # is a Release 2 own connector.
-        "ussd": SourceSystemKind.CAPI_WALKIN,
-        "bulk": SourceSystemKind.UBOS,
-    }
-    kind = mapping.get(channel)
+    kind = CHANNEL_KINDS.get(channel)
     if not kind:
         raise IntakeError(f"no DIH connector configured for channel {channel!r}")
     src = SourceSystem.objects.filter(kind=kind, is_active=True).first()

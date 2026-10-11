@@ -79,6 +79,25 @@ class GrievanceAttachmentSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+def _source_name(code: str) -> str:
+    """A source code's display name, from the register that owns it.
+
+    Cached per request cycle is not worth it — a page of grievances
+    carries at most a handful of distinct sources and this is one
+    indexed lookup — but the register IS the single source, so the
+    fallback is the code itself rather than a guess at a name.
+    """
+    from apps.ingestion_hub.models import SourceSystem
+
+    name = (
+        SourceSystem.objects
+        .filter(code=code)
+        .values_list("name", flat=True)
+        .first()
+    )
+    return name or code
+
+
 def _max_base64_chars() -> int:
     """The longest base64 payload the store's per-file cap allows."""
     from apps.update_workflow.evidence_storage import MAX_FILE_BYTES
@@ -144,6 +163,18 @@ class GrievanceSerializer(serializers.ModelSerializer):
     #: showing the reporter's sex would have to keep a local
     #: `{"1": "Male"}` table or fetch a whole list for one cell.
     reporter_gender_label = serializers.SerializerMethodField()
+    #: Where the case came from, in words. The code is an
+    #: `ingestion_hub.SourceSystem` code and this is that row's name,
+    #: read from the register rather than mapped in the console — a
+    #: `{"STAAC_GRM": "STAAC"}` table in JSX would be a vocabulary
+    #: living nowhere, and renaming a partner would then mean a
+    #: deploy.
+    source_system_label = serializers.SerializerMethodField()
+
+    def get_source_system_label(self, obj) -> str:
+        if not obj.source_system:
+            return ""
+        return _source_name(obj.source_system)
 
     def get_reporter_gender_label(self, obj) -> str:
         from apps.grievance.intake import NSR_SEX_LIST
@@ -176,6 +207,11 @@ class GrievanceSerializer(serializers.ModelSerializer):
             "resolved_at", "resolved_by", "resolution_narrative",
             "closed_at", "closed_by", "closing_narrative",
             "linked_change_request_id",
+            # Provenance: which system the case came from, its number
+            # there, and when the complainant actually reported it
+            # (which is what the SLA runs from for a transferred case).
+            "source_system", "source_system_label", "external_reference",
+            "reported_at",
             "tier_started_at", "sla_breach_flagged_at", "allowed_actions",
             "attachments", "documents",
             "created_at", "updated_at",
@@ -186,6 +222,10 @@ class GrievanceSerializer(serializers.ModelSerializer):
             "closing_narrative", "created_at", "updated_at",
             "tier_started_at", "sla_breach_flagged_at", "allowed_actions",
             "attachments", "reporter_gender_label",
+            # Provenance is written by the intake that received the
+            # case, never by a console edit.
+            "source_system", "source_system_label", "external_reference",
+            "reported_at",
         )
 
 
