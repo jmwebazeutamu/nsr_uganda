@@ -95,6 +95,52 @@ def resolve_geographic_unit(level: str, code: str) -> GeographicUnit | None:
     return None
 
 
+def ancestor_codes(code: str, level: str = "") -> dict[str, str]:
+    """The full ladder a single unit sits on, keyed by level.
+
+    `{"region": "R-CENTRAL", "sub_region": …, "parish": "101.1.01.01"}`
+    — every level from the unit up to the region, and nothing below it.
+
+    A grievance arriving from outside the registry names one place, not
+    seven. `apps.grievance.services.open_grievance` could only fill its
+    geography columns by copying them off a Household, so a case with no
+    household — which is every case an external system sends — was
+    created with all seven blank. Blank is not neutral: the scope filter
+    reads those columns, so the case belonged to no district and
+    appeared for every officer nationally.
+
+    Walks `parent`, which is the hierarchy's own statement of itself, so
+    nothing here parses or infers a level from the shape of a code. An
+    unknown code returns `{}` and the caller decides what that means.
+    """
+    unit = None
+    if level:
+        unit = resolve_geographic_unit(level, code)
+    else:
+        for candidate in code_spellings(code):
+            unit = (
+                GeographicUnit.objects
+                .filter(code=candidate)
+                .order_by("-effective_from")
+                .first()
+            )
+            if unit is not None:
+                break
+    if unit is None:
+        return {}
+
+    ladder: dict[str, str] = {}
+    seen: set[str] = set()
+    node = unit
+    # `seen` guards a parent cycle. The data should not contain one, but
+    # a loop here would hang the request that found it.
+    while node is not None and node.id not in seen:
+        seen.add(node.id)
+        ladder.setdefault(node.level, node.code)
+        node = node.parent
+    return ladder
+
+
 def resolve_geographic_labels(codes: dict | None) -> dict[str, str]:
     """Return Reference Data names for a canonical geography payload.
 

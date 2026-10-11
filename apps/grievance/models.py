@@ -164,12 +164,42 @@ class Grievance(models.Model):
     # GRM → UPD linkage. Populated when a grievance produces a data
     # correction. The actual auto-open workflow is a Sprint 2.5 story.
     linked_change_request_id = models.CharField(max_length=26, blank=True)
+    # Where the case came from, when it is not this registry.
+    #
+    # A grievance reaching NSR from STAAC's GRM already has a tracking
+    # number the complainant was read back before they hung up. With
+    # nowhere to put it that number is unanswerable here: an officer
+    # asked "what happened to C-26-057528-8" has nothing to look it up
+    # by, and a resend of the same case is indistinguishable from a new
+    # one.
+    #
+    # Blank for a case opened in NSR itself, which is most of them, so
+    # the pair also says plainly which cases are ours.
+    source_system = models.CharField(max_length=32, blank=True, db_index=True)
+    external_reference = models.CharField(max_length=64, blank=True, db_index=True)
+    # When the complainant reported it, which is not when we received
+    # it. The SLA runs from this where it is known: time a case spent
+    # between the two systems is time the complainant has already
+    # waited, and starting the clock at ingestion would hand every
+    # transferred case a fresh deadline it had not earned.
+    reported_at = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         verbose_name = "Grievance"
+        constraints = [
+            # One case per external reference per system. A retry or a
+            # duplicate push must find the case it already created
+            # rather than opening a second one against the same
+            # tracking number.
+            models.UniqueConstraint(
+                fields=["source_system", "external_reference"],
+                condition=models.Q(external_reference__gt=""),
+                name="grievance_external_reference_unique",
+            ),
+        ]
         indexes = [
             models.Index(fields=["status", "tier"]),
             models.Index(fields=["category", "status"]),

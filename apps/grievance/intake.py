@@ -1,0 +1,156 @@
+"""Translate an external grievance into this registry's vocabulary.
+
+NSR receives grievances from STAAC's GRM. The two systems classify
+differently — STAAC has sixteen codes under its own versioned ruleset,
+NSR has six — and the correspondence between them is a policy
+statement, not a derivation. "C07 Targeting and selection irregularity"
+is an `exclusion_error` when a household was left out and an
+`inclusion_error` when one was wrongly included, and the category alone
+does not say which.
+
+So nothing here guesses. The mapping lives on
+`ChoiceOption.canonical_code` in the `staac_grievance_category` list,
+which is versioned and approved like every other code binding in the
+registry, and `reference_data.resolve_canonical_code` reads it. Until
+somebody sets a binding, the code resolves to nothing and the case is
+refused with the code named.
+
+Refusing is the point. The alternative — defaulting an unmapped
+category to `other` — accepts the case and loses the classification
+silently, which is the failure this registry keeps finding in its own
+pipelines: a value nothing could interpret, written as though it had
+been.
+
+The payload sends a label
+------------------------
+STAAC's intake payload carries `category` as display text
+("Targeting and selection irregularity"), not the code (`C07`). A label
+is the one part of a vocabulary that is expected to change without the
+code changing, so matching on it is fragile by construction. Both are
+accepted here — the code directly, the label through the list's own
+labels — and `label_lookup_used` says which, so a caller can report
+that STAAC should be sending codes.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+#: The ChoiceList holding STAAC's category codes and their bindings.
+STAAC_CATEGORY_LIST = "staac_grievance_category"
+
+#: Where a STAAC grievance comes from, as stored on
+#: `Grievance.source_system`.
+STAAC_SOURCE_SYSTEM = "STAAC_GRM"
+
+
+class UnmappedCategory(Exception):
+    """STAAC sent a category this registry cannot classify.
+
+    Carries the code so the message can name it, and `recognised` to
+    separate "we have never heard of this code" from "we know it and
+    nobody has decided what it means here" — different problems with
+    different owners.
+    """
+
+    def __init__(self, value: str, *, recognised: bool):
+        self.value = value
+        self.recognised = recognised
+        if recognised:
+            message = (
+                f"STAAC category {value!r} is registered but has no approved "
+                f"binding to an NSR category; set canonical_code on the "
+                f"{STAAC_CATEGORY_LIST} option before accepting these cases"
+            )
+        else:
+            message = (
+                f"STAAC category {value!r} is not in {STAAC_CATEGORY_LIST}; "
+                f"the category list has changed and needs reseeding"
+            )
+        super().__init__(message)
+
+
+@dataclass(frozen=True)
+class ResolvedCategory:
+    staac_code: str
+    nsr_category: str
+    label_lookup_used: bool
+
+
+def _code_for_label(label: str) -> str:
+    """The STAAC code whose label matches, or "".
+
+    Exact after normalising case and inner whitespace, and ambiguous
+    labels resolve to nothing — the same rule
+    `reference_data.code_for_label` applies, reused rather than
+    restated. The seeded labels carry STAAC's severity in brackets, so
+    a bare label is matched against the label with that suffix removed
+    as well.
+    """
+    from apps.reference_data.services import code_for_label
+
+    code = code_for_label(STAAC_CATEGORY_LIST, label)
+    if code:
+        return code
+    # Seeded as "Targeting and selection irregularity (Serious)".
+    from apps.reference_data.models import (
+        ChoiceList,
+        ChoiceListStatus,
+        ChoiceOption,
+    )
+
+    choice_list = ChoiceList.objects.filter(
+        list_name=STAAC_CATEGORY_LIST, status=ChoiceListStatus.ACTIVE,
+    ).order_by("-version").first()
+    if choice_list is None:
+        return ""
+    wanted = " ".join(str(label or "").split()).casefold()
+    hits = {
+        option.code
+        for option in ChoiceOption.objects.filter(
+            choice_list=choice_list, status=ChoiceOption.Status.ACTIVE,
+        )
+        if " ".join(str(option.label).split()).casefold().rsplit(" (", 1)[0]
+        == wanted
+    }
+    return hits.pop() if len(hits) == 1 else ""
+
+
+def resolve_category(value: str) -> ResolvedCategory:
+    """The NSR category a STAAC category means.
+
+    Raises `UnmappedCategory` rather than returning a default, so an
+    unclassifiable case is refused at the door instead of filed as
+    `other` and discovered by whoever later wonders why targeting
+    complaints stopped appearing.
+    """
+    from apps.reference_data.services import resolve_canonical_code
+
+    from .models import Category
+
+    raw = str(value or "").strip()
+    if not raw:
+        raise UnmappedCategory("", recognised=False)
+
+    by_label = False
+    code = raw
+    found, canonical = resolve_canonical_code(STAAC_CATEGORY_LIST, code)
+    if not found:
+        code = _code_for_label(raw)
+        by_label = bool(code)
+        if code:
+            found, canonical = resolve_canonical_code(STAAC_CATEGORY_LIST, code)
+
+    if not found:
+        raise UnmappedCategory(raw, recognised=False)
+    if not canonical:
+        raise UnmappedCategory(code, recognised=True)
+    if canonical not in Category.values:
+        # A binding pointing at a category this registry does not have
+        # is a configuration error, not an intake one, and saying so
+        # beats writing the value and failing on insert.
+        raise UnmappedCategory(code, recognised=True)
+
+    return ResolvedCategory(
+        staac_code=code, nsr_category=canonical, label_lookup_used=by_label,
+    )

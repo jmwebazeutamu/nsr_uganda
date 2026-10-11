@@ -90,7 +90,16 @@ def _set_sla(grievance: Grievance) -> None:
     promises it. On production, cases sat 2,900 hours "overdue" at a
     tier they had only just reached.
     """
-    started = grievance.tier_started_at or grievance.opened_at
+    # `reported_at` only for the tier the case arrived at: a case
+    # transferred from another system has already kept the complainant
+    # waiting, and ignoring that would hand it a fresh window it had
+    # not earned. Once it escalates, `tier_started_at` is set and the
+    # receiving tier gets its own clock as before.
+    started = (
+        grievance.tier_started_at
+        or grievance.reported_at
+        or grievance.opened_at
+    )
     grievance.sla_deadline = started + sla_for(grievance.tier)
 
 
@@ -108,6 +117,14 @@ def open_grievance(
     assigned_to: str = "",
     actor: str = "",
     sub_category: str = "",
+    # A place, for a case that names one instead of a household. An
+    # external system knows where the grievance happened; it does not
+    # know our Registry IDs.
+    geographic_code: str = "",
+    # Provenance, for a case this registry did not open.
+    source_system: str = "",
+    external_reference: str = "",
+    reported_at=None,
 ) -> Grievance:
     if category not in Category.values:
         raise GrievanceError(f"unknown category: {category!r}")
@@ -116,6 +133,24 @@ def open_grievance(
     # as the placeholder — nobody types a ULID, and a typo produced a
     # grievance pointing at nothing, which only surfaced when someone
     # tried to open a correction from it.
+    source_system = (source_system or "").strip()
+    external_reference = (external_reference or "").strip()
+    if external_reference and not source_system:
+        # A reference with no system is not a reference — nothing can
+        # look it up and the uniqueness constraint would collapse every
+        # system's numbering into one space.
+        raise GrievanceError(
+            "external_reference requires source_system naming where it came from",
+        )
+    if source_system and external_reference:
+        existing = Grievance.objects.filter(
+            source_system=source_system, external_reference=external_reference,
+        ).first()
+        if existing is not None:
+            # A resend is the same case. Returning it is what makes the
+            # intake safe to retry.
+            return existing
+
     household_id = (household_id or "").strip()
     geography: dict[str, str] = {}
     if household_id:
@@ -139,6 +174,30 @@ def open_grievance(
         raise GrievanceError(
             "a grievance about a member must name that member's household",
         )
+
+    # A case with no household can still name a place.
+    #
+    # Geography was only ever copied off a Household, so a grievance
+    # from outside the registry — which names a parish and no Registry
+    # ID — was created with all seven columns blank. Blank is not
+    # neutral: `apps.security.abac` filters on these columns, so the
+    # case belonged to no district and showed for every officer
+    # nationally. The ladder comes from GeographicUnit's own `parent`
+    # chain; nothing here infers a level from the shape of a code.
+    geographic_code = (geographic_code or "").strip()
+    if geographic_code and not geography:
+        from apps.data_management.models import Household
+        from apps.reference_data.code_frames import ancestor_codes
+
+        ladder = ancestor_codes(geographic_code)
+        if not ladder:
+            raise GrievanceError(
+                f"geographic_code {geographic_code!r} names no GeographicUnit",
+            )
+        geography = {
+            column: ladder.get(level, "")
+            for level, column in Household.GEO_CODE_FIELDS.items()
+        }
 
     # "abc123" was stored as a reporter phone. The registry already has
     # one normaliser — apps.ddup.phone.to_e164, which tier 2 matches on
@@ -167,6 +226,9 @@ def open_grievance(
         tier=tier,
         status=GrievanceStatus.OPEN,
         assigned_to=assigned_to,
+        source_system=source_system,
+        external_reference=external_reference,
+        reported_at=reported_at,
         **geography,
     )
     _set_sla(g)
@@ -174,7 +236,11 @@ def open_grievance(
     emit_audit(
         "create", "grievance", g.id, actor=actor or reporter_name or "anonymous",
         reason=f"category={category} tier={tier}",
-        field_changes={"household_id": household_id, "member_id": member_id},
+        field_changes={
+            "household_id": household_id, "member_id": member_id,
+            "source_system": source_system,
+            "external_reference": external_reference,
+        },
     )
     return g
 
