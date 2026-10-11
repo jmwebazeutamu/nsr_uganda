@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from django.core.management.base import BaseCommand
 
-from apps.grievance.external.client import StaacError
+from apps.grievance.external.client import DEFAULT_PAGE_SIZE, StaacError
 from apps.grievance.external.pull import pull
 from apps.grievance.external.service import file_held
 
@@ -28,7 +28,7 @@ class Command(BaseCommand):
             help="Which stored credential to use. Omit when there is one.",
         )
         parser.add_argument(
-            "--limit", type=int, default=100,
+            "--limit", type=int, default=DEFAULT_PAGE_SIZE,
             help="Page size, 1-200 (STAAC's own bounds).",
         )
         parser.add_argument(

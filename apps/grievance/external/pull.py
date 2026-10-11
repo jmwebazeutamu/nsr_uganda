@@ -23,7 +23,13 @@ from django.utils import timezone
 from apps.security.audit import emit as emit_audit
 
 from ..models import HandoverOutcome, StaacCredential
-from .client import CursorRejected, StaacClient, StaacError
+from . import PULL_ACTOR
+from .client import (
+    DEFAULT_PAGE_SIZE,
+    CursorRejected,
+    StaacClient,
+    StaacError,
+)
 from .service import file_snapshot
 
 
@@ -55,31 +61,59 @@ def credential_for(environment: str = "") -> StaacCredential:
     qs = StaacCredential.objects.filter(is_active=True)
     if environment:
         qs = qs.filter(environment=environment)
-    credential = qs.order_by("environment").first()
-    if credential is None:
+    found = list(qs.order_by("environment")[:5])
+    if not found:
         raise StaacError(
             "No active STAAC credential is configured. The IG issues one "
             "through STAAC's partner-access workspace; it is stored here "
             "encrypted, never in settings or the environment.",
         )
-    return credential
+    if len(found) > 1:
+        # Picking one would pick it alphabetically, and "production"
+        # sorts before "sandbox": an operator testing without the flag
+        # would have reached production. Naming the environment is one
+        # word; guessing it is a live partner call nobody asked for.
+        names = ", ".join(c.environment for c in found)
+        raise StaacError(
+            f"More than one active STAAC credential ({names}). Name the "
+            "one to use with --environment rather than letting the "
+            "command choose.",
+        )
+    return found[0]
 
 
 def _token(credential: StaacCredential) -> str:
-    from apps.security.encryption import decrypt
+    """The bearer token, as plaintext.
 
+    `EncryptedBinaryField` is the seam: its contract is "writes accept
+    plaintext, reads return plaintext, the column holds ciphertext",
+    so there is nothing to decrypt here. This function used to call
+    `decrypt()` on a value the field had already decrypted, and the
+    admin form compensated by encrypting before assigning. The pair
+    worked only together: any writer following the documented
+    contract — a fixture, a data migration, a shell create — produced
+    a credential that raised `InvalidToken`, which is not a
+    `StaacError` and so escaped the command's handler as a traceback.
+    It would also have survived the NSR-O-04 KMS swap un-decryptable,
+    being the one column wrapped twice.
+
+    `ingestion_hub.connection_test.credentials_for()` does the same
+    thing the same way; this is the second caller of one convention,
+    not a second convention.
+    """
     raw = credential.token_encrypted
     if not raw:
         raise StaacError(
             f"The STAAC credential for {credential.environment!r} has no "
             "token stored.",
         )
-    return decrypt(bytes(raw)).decode("utf-8")
+    return bytes(raw).decode("utf-8")
 
 
 def pull(
-    *, environment: str = "", limit: int = 100, changed_since: str = "",
-    restart: bool = False, actor: str = "staac-pull",
+    *, environment: str = "", limit: int = DEFAULT_PAGE_SIZE,
+    changed_since: str = "",
+    restart: bool = False, actor: str = PULL_ACTOR,
     client: StaacClient | None = None,
 ) -> PullReport:
     """Run one pull cycle.
@@ -139,7 +173,10 @@ def pull(
             changed_since=changed_since, credential=credential, actor=actor,
         )
 
-    if credential is not None:
+    if credential is not None and not report.errors:
+        # Only a clean run sets it. Stamping it regardless would show
+        # an operator a fresh "last pulled" for a run that imported
+        # nothing, which is the reassuring kind of wrong.
         credential.last_pulled_at = timezone.now()
         credential.save(update_fields=["last_pulled_at", "updated_at"])
 

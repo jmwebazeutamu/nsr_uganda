@@ -61,6 +61,13 @@ class GrievanceAttachmentSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+def _max_base64_chars() -> int:
+    """The longest base64 payload the store's per-file cap allows."""
+    from apps.update_workflow.evidence_storage import MAX_FILE_BYTES
+
+    return 4 * ((MAX_FILE_BYTES + 2) // 3)
+
+
 class _InboundDocument(serializers.Serializer):
     """A document sent with a new grievance, base64-in-JSON.
 
@@ -74,7 +81,17 @@ class _InboundDocument(serializers.Serializer):
 
     filename = serializers.CharField(min_length=1, max_length=255)
     content_type = serializers.CharField(min_length=1, max_length=128)
-    data_base64 = serializers.CharField(min_length=1, max_length=8 * 1024 * 1024)
+    #: Derived from the store's own per-file cap, not chosen. base64
+    #: is 4 characters per 3 bytes, plus padding. An independent
+    #: literal here was a second per-file cap in a serializer whose
+    #: docstring denies having one: looser today, so an oversized file
+    #: got DRF's generic length error instead of the service's
+    #: sentence, and binding the moment MAX_FILE_BYTES is raised past
+    #: it — at which point `attachment-limits/` would advertise a size
+    #: the API refuses.
+    data_base64 = serializers.CharField(
+        min_length=1, max_length=_max_base64_chars(),
+    )
     external_reference = serializers.CharField(
         max_length=128, required=False, allow_blank=True, default="",
     )

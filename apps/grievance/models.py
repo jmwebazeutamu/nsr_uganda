@@ -466,9 +466,13 @@ class HandoverOutcome(models.TextChoices):
     #: classify or place it. Held rather than dropped: the complaint
     #: is real and the obstacle is configuration.
     HELD = "held", "Held — needs configuration before it can be filed"
-    #: STAAC says the handover was withdrawn. The snapshot stays, the
-    #: case does not get re-filed.
-    WITHDRAWN = "withdrawn", "Withdrawn by STAAC"
+    # There is deliberately no WITHDRAWN. STAAC withdraws a handover
+    # by dropping it out of the collection, so a pull cannot observe
+    # the withdrawal — only its absence, which is what the spec's
+    # reconciliation step exists to detect and which this registry
+    # does not do yet. A member no code path can write is a state the
+    # enum advertises and the system cannot reach; better to have the
+    # gap visible here than a value nothing will ever set.
 
 
 class StaacHandover(models.Model):

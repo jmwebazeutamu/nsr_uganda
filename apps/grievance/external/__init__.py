@@ -10,3 +10,8 @@ search STAAC by tracking number.
 turns a snapshot into a Grievance and knows nothing about HTTP. The
 split is what lets the whole pull be tested against a mocked partner.
 """
+
+#: Who the audit chain records for a pull. One definition: it was
+#: three independent default arguments, and three defaults agreeing is
+#: not the same as one fact.
+PULL_ACTOR = "staac-pull"

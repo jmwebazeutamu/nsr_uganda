@@ -39,6 +39,7 @@ from apps.security.audit import emit as emit_audit
 from ..intake import STAAC_SOURCE_SYSTEM, UnmappedCategory, resolve_category
 from ..intake import resolve_gender
 from ..models import HandoverOutcome, StaacHandover
+from . import PULL_ACTOR
 from ..services import GrievanceError, open_grievance
 
 #: Spec §4.2: the complainant object of an anonymous grievance is
@@ -131,7 +132,7 @@ def _store(
 @transaction.atomic
 def file_snapshot(
     snapshot_body: dict, *, handover_id: str, exchange_version: int,
-    etag: str = "", correlation_id: str = "", actor: str = "staac-pull",
+    etag: str = "", correlation_id: str = "", actor: str = PULL_ACTOR,
 ) -> FilingResult:
     """Store a retrieved snapshot and file it if it can be filed."""
     row, created = _store(
@@ -215,6 +216,21 @@ def _apply(row: StaacHandover, *, actor: str) -> tuple[str, ...]:
     row.outcome_detail = ""
     row.save(update_fields=["grievance", "outcome", "outcome_detail", "updated_at"])
 
+    # v1 of the contract says `attachments` is always empty and that
+    # NSR must not attempt a download or assume an endpoint exists.
+    # So nothing is fetched — but "always empty" is the partner's
+    # statement about their current version, not a fact, and a case
+    # whose evidence arrived and was ignored is exactly the silent
+    # loss this registry keeps finding. If one ever appears, say so.
+    sent = body.get("attachments") or []
+    if sent:
+        warnings.append(
+            f"STAAC sent {len(sent)} attachment(s) with "
+            f"{row.tracking_number or row.handover_id}; v1 of the partner "
+            "contract has no transfer for them, so they are recorded in "
+            "the stored snapshot and not filed against the case",
+        )
+
     # STAAC's own word for the place, compared rather than trusted.
     # `ssot_register.md` reserves code-to-name resolution for this
     # registry's own code frame, and STAAC's display_name is
@@ -259,7 +275,7 @@ def _hold(row: StaacHandover, reason: str, *, actor: str) -> None:
     )
 
 
-def file_held(*, actor: str = "staac-pull", limit: int = 0) -> list[FilingResult]:
+def file_held(*, actor: str = PULL_ACTOR, limit: int = 0) -> list[FilingResult]:
     """File the snapshots that were held, now that configuration allows.
 
     This is what makes holding honest rather than a quiet bin. When a

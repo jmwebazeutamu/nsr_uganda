@@ -186,14 +186,21 @@ def mock_collection(pages, details):
         )
 
 
-def _credential(cursor=""):
-    """A stored credential, which is where the pull cursor lives."""
+def _credential(cursor="", environment="sandbox"):
+    """A stored credential, which is where the pull cursor lives.
+
+    The token is written as PLAINTEXT, which is `EncryptedBinaryField`'s
+    documented contract: it encrypts on write and decrypts on read.
+    This fixture used to call `encrypt()` first, which compensated for
+    a `_token()` that called `decrypt()` on an already-decrypted value
+    — two wrongs that cancelled, and which no test caught because
+    every test injected its client and never went near the seam.
+    """
     from apps.grievance.models import StaacCredential
-    from apps.security.encryption import encrypt
 
     return StaacCredential.objects.create(
-        environment="sandbox", base_url=BASE,
-        token_encrypted=encrypt(TOKEN.encode()), cursor=cursor,
+        environment=environment, base_url=BASE,
+        token_encrypted=TOKEN.encode(), cursor=cursor,
     )
 
 
@@ -579,3 +586,166 @@ class TestTheRun:
         assert events.count() == 2
         assert any("started" in e.reason for e in events)
         assert any("finished" in e.reason for e in events)
+
+
+class TestTheStoredCredential:
+    """The seam every other test skipped by injecting a client."""
+
+    @responses.activate
+    def test_the_stored_token_authenticates_the_call(self, parish):
+        """Builds the client from the credential, the way production
+        does. Nothing exercised this path before, which is how a
+        double-encrypt and a double-decrypt lived together unnoticed."""
+        _credential()
+        bind_category()
+        responses.add(responses.GET, LIST_URL, status=200,
+                      json={"items": [list_item(H1)], "next_cursor": None})
+        responses.add(responses.GET, f"{LIST_URL}{H1}/", status=200,
+                      json=snapshot())
+
+        report = pull(environment="sandbox")
+        assert report.filed == 1
+        sent = responses.calls[0].request.headers["Authorization"]
+        assert sent == f"Bearer {TOKEN}", (
+            "the token must reach STAAC as it was entered — a second "
+            "encrypt or decrypt anywhere on this path corrupts it"
+        )
+
+    def test_a_contract_following_writer_produces_a_usable_credential(self):
+        """A fixture, a data migration or a shell create writes the
+        plaintext. Any of them must yield a working credential, not an
+        InvalidToken escaping the command's handler as a traceback."""
+        from apps.grievance.external.pull import _token
+
+        credential = _credential()
+        credential.refresh_from_db()
+        assert _token(credential) == TOKEN
+
+    def test_two_active_credentials_refuse_to_guess(self, parish):
+        """"production" sorts before "sandbox", so choosing
+        alphabetically meant an operator testing without the flag
+        reached production."""
+        _credential(environment="production")
+        _credential(environment="sandbox")
+        with pytest.raises(StaacError, match="Name the one to use"):
+            pull()
+
+    def test_naming_the_environment_resolves_it(self, parish):
+        _credential(environment="production")
+        _credential(environment="sandbox")
+        from apps.grievance.external.pull import credential_for
+
+        assert credential_for("sandbox").environment == "sandbox"
+
+    @responses.activate
+    def test_a_run_with_errors_does_not_claim_a_fresh_pull(self, parish):
+        credential = _credential()
+        bind_category()
+        responses.add(responses.GET, LIST_URL, status=200,
+                      json={"items": [list_item(H1)], "next_cursor": None})
+        for _ in range(3):
+            responses.add(responses.GET, f"{LIST_URL}{H1}/", status=500,
+                          json={})
+        report = pull(client=client())
+        credential.refresh_from_db()
+        assert report.errors
+        assert credential.last_pulled_at is None, (
+            "a fresh timestamp for a run that imported nothing is the "
+            "reassuring kind of wrong"
+        )
+
+
+class TestWhatThePartnerSends:
+    @responses.activate
+    def test_a_missing_exchange_version_is_refused_not_assumed(self):
+        """It is half the idempotency key. Assuming 1 would collide two
+        different snapshots of one case, and the second would be read
+        as already held and never fetched."""
+        responses.add(responses.GET, LIST_URL, status=200, json={
+            "items": [{"handover_id": H1, "tracking_number": "C-1",
+                       "state": "available"}],
+            "next_cursor": None})
+        with pytest.raises(StaacError, match="cannot be half of an idempotency key"):
+            client().list_page()
+
+    def test_attachments_that_arrive_are_reported_not_ignored(self, parish):
+        """v1 says the array is always empty and forbids downloading.
+        "Always empty" is the partner's statement about their current
+        version, not a fact."""
+        bind_category()
+        body = snapshot()
+        body["attachments"] = [{"id": "a1", "filename": "list.jpg"}]
+        result = file_snapshot(body, handover_id=H1, exchange_version=1)
+        assert result.handover.outcome == HandoverOutcome.FILED
+        assert any("attachment" in w for w in result.warnings)
+
+    def test_no_attachments_says_nothing(self, parish):
+        bind_category()
+        result = file_snapshot(snapshot(), handover_id=H1, exchange_version=1)
+        assert not any("attachment" in w for w in result.warnings)
+
+
+class TestTheCredentialForm:
+    """The admin form is how a token actually gets in, so it is the
+    one writer that must agree with the field's contract. It did not,
+    and nothing tested it — which is how the double-encrypt shipped."""
+
+    @staticmethod
+    def _save(token=TOKEN, instance=None, **extra):
+        from apps.grievance.admin import StaacCredentialForm
+
+        data = {"environment": "sandbox", "base_url": BASE,
+                "is_active": True, "token": token, **extra}
+        form = StaacCredentialForm(data, instance=instance)
+        assert form.is_valid(), form.errors
+        return form.save()
+
+    def test_a_token_entered_in_the_admin_comes_back_as_entered(self):
+        from apps.grievance.external.pull import _token
+
+        saved = self._save()
+        saved.refresh_from_db()
+        assert _token(saved) == TOKEN
+
+    def test_the_column_holds_ciphertext_not_the_token(self):
+        """The round trip passing is not enough: it would also pass if
+        the column held plaintext. This is the half that says the
+        field is doing its job."""
+        from django.db import connection
+
+        saved = self._save()
+        with connection.cursor() as cur:
+            cur.execute(
+                "SELECT token_encrypted FROM grievance_staaccredential "
+                "WHERE id = %s", [saved.id],
+            )
+            at_rest = bytes(cur.fetchone()[0])
+        assert TOKEN.encode() not in at_rest
+        assert at_rest.startswith(b"gAAAA")  # Fernet
+
+    def test_an_edit_that_leaves_the_token_blank_keeps_it(self):
+        from apps.grievance.external.pull import _token
+
+        saved = self._save()
+        again = self._save(token="", instance=saved)
+        again.refresh_from_db()
+        assert _token(again) == TOKEN
+
+    def test_a_new_token_drops_the_cursor(self):
+        """STAAC signs cursors per credential, so resuming with the
+        old one after a rotation is a silent resume from nowhere."""
+        saved = self._save()
+        saved.cursor = "p9"
+        saved.save(update_fields=["cursor"])
+        again = self._save(token="replacement-token", instance=saved)  # noqa: S106
+        assert again.cursor == ""
+
+    def test_adding_one_without_a_token_is_refused(self):
+        from apps.grievance.admin import StaacCredentialForm
+
+        form = StaacCredentialForm(
+            {"environment": "sandbox", "base_url": BASE, "is_active": True,
+             "token": ""},
+        )
+        assert not form.is_valid()
+        assert "token is required" in str(form.errors)

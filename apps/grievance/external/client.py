@@ -36,7 +36,11 @@ from typing import Any
 
 from requests.exceptions import RequestException
 
-from nsr_mis.common.http import json_session, request_with_retry
+from nsr_mis.common.http import (
+    DEFAULT_TIMEOUT,
+    json_session,
+    request_with_retry,
+)
 
 #: Spec §4: base path under the partner's origin.
 PARTNER_PATH = "/api/v1/integration/partners/handovers/"
@@ -70,6 +74,28 @@ class StaacError(Exception):
 class CursorRejected(StaacError):
     """STAAC refused the stored cursor. Recoverable by restarting the
     collection from the beginning — see the module docstring."""
+
+
+def _version(raw) -> int:
+    """The exchange version STAAC sent, refusing to invent one.
+
+    It is half the idempotency key. Defaulting a missing value to 1
+    would make two genuinely different snapshots of one case collide
+    on `(handover_id, 1)`, and the second would be recognised as
+    already held and never fetched — a re-offered complaint discarded
+    in silence, which is the failure this whole design exists to
+    prevent.
+    """
+    try:
+        version = int(raw)
+    except (TypeError, ValueError):
+        version = 0
+    if version < 1:
+        raise StaacError(
+            f"STAAC sent exchange_version {raw!r}, which cannot be half of "
+            "an idempotency key. Refusing rather than assuming 1.",
+        )
+    return version
 
 
 @dataclass(frozen=True)
@@ -121,7 +147,10 @@ class StaacClient:
 
     base_url: str
     token: str
-    timeout: tuple[int, int] = (5, 15)
+    #: The shared default, not a copy of it. A third spelling of
+    #: (5, 15) is exactly what moving the loop to `common.http` was
+    #: for.
+    timeout: tuple[int, int] = DEFAULT_TIMEOUT
     #: Overridable so a caller can correlate a whole run. STAAC
     #: returns the value, or issues one when absent.
     correlation_id: str = field(default="")
@@ -216,7 +245,7 @@ class StaacClient:
         refs = [
             HandoverRef(
                 handover_id=str(row.get("handover_id") or ""),
-                exchange_version=int(row.get("exchange_version") or 1),
+                exchange_version=_version(row.get("exchange_version")),
                 tracking_number=str(row.get("tracking_number") or ""),
                 programme_code=str(row.get("programme_code") or ""),
                 state=str(row.get("state") or ""),
@@ -272,6 +301,9 @@ class StaacClient:
         response = self._get(self._url(f"{handover_id}/"), extra_headers=headers)
         correlation = str(response.headers.get("X-Correlation-ID") or "")
         if response.status_code == 304:
+            # Version intentionally absent: a 304 carries no body, so
+            # there is no version to report and the caller keeps the
+            # one it already holds.
             return Snapshot(
                 handover_id=str(handover_id), exchange_version=0, body={},
                 etag=etag, correlation_id=correlation, not_modified=True,
@@ -280,7 +312,7 @@ class StaacClient:
         body = response.json() or {}
         return Snapshot(
             handover_id=str(body.get("handover_id") or handover_id),
-            exchange_version=int(body.get("exchange_version") or 1),
+            exchange_version=_version(body.get("exchange_version")),
             body=body,
             etag=str(response.headers.get("ETag") or ""),
             correlation_id=correlation,

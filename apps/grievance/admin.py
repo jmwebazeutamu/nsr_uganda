@@ -196,19 +196,27 @@ class StaacCredentialForm(forms.ModelForm):
 
     def clean(self):
         cleaned = super().clean()
-        if not self.instance.pk and not (cleaned.get("token") or "").strip():
+        # `_state.adding`, not `pk`: ULID primary keys carry a default
+        # generator, so a brand-new unsaved instance already HAS a pk
+        # and `not self.instance.pk` is never true. Written that way,
+        # this guard never fired and a credential could be added with
+        # no token — failing later, at the first pull.
+        adding = self.instance._state.adding
+        if adding and not (cleaned.get("token") or "").strip():
             raise forms.ValidationError(
                 "A token is required when adding a credential.",
             )
         return cleaned
 
     def save(self, commit=True):
-        from apps.security.encryption import encrypt
-
         obj = super().save(commit=False)
         token = (self.cleaned_data.get("token") or "").strip()
         if token:
-            obj.token_encrypted = encrypt(token.encode("utf-8"))
+            # Plaintext in: `EncryptedBinaryField` encrypts on write
+            # and decrypts on read. Encrypting here as well put the
+            # column at encrypt(encrypt(token)) and made every
+            # contract-following writer produce an unusable credential.
+            obj.token_encrypted = token.encode("utf-8")
             # A new token invalidates the cursor: STAAC signs cursors
             # per credential, so resuming with the old one would be a
             # silent resume from nowhere.
