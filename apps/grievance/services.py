@@ -27,6 +27,7 @@ from .models import (
     Category,
     CommentKind,
     Grievance,
+    GrievanceAttachment,
     GrievanceComment,
     GrievanceStatus,
     GrievanceTask,
@@ -113,6 +114,11 @@ def open_grievance(
     reporter_name: str = "",
     reporter_phone: str = "",
     reporter_relationship: str = "",
+    # Who complained. `reporter_gender` is a `sex` ChoiceList code, not
+    # another system's word for the same thing — see
+    # `apps.grievance.intake.resolve_gender` for the translation.
+    reporter_gender: str = "",
+    reporter_age_years=None,
     tier: str = Tier.L1_PARISH_CHIEF,
     assigned_to: str = "",
     actor: str = "",
@@ -214,6 +220,43 @@ def open_grievance(
                 "use 07XXXXXXXX or +2567XXXXXXXX",
             )
         reporter_phone = normalised
+
+    # A sex code is a code. Free text here would make the column
+    # uncountable — "F", "female", "Female" and "2" are four spellings
+    # of two answers — and would let another system's vocabulary into a
+    # field `Member.sex` reads from one list. An unknown code is
+    # refused rather than stored, which is what makes the translation in
+    # `intake.resolve_gender` safe to return from instead of raise.
+    reporter_gender = str(reporter_gender or "").strip()
+    if reporter_gender:
+        from apps.grievance.intake import NSR_SEX_LIST
+        from apps.reference_data.services import has_active_option
+
+        if not has_active_option(NSR_SEX_LIST, reporter_gender):
+            raise GrievanceError(
+                f"reporter_gender {reporter_gender!r} is not a code on the "
+                f"{NSR_SEX_LIST!r} list — translate an external value "
+                "through apps.grievance.intake.resolve_gender",
+            )
+
+    # Age is years, and only its type is checked here. The registry's
+    # implausibility threshold is the DQA rule AC-MEMBER-AGE-MAX, which
+    # applies to members and flags rather than refuses; a second
+    # ceiling in this app would be a copy of a number already owned
+    # elsewhere, free to drift from it.
+    if reporter_age_years in ("", None):
+        reporter_age_years = None
+    else:
+        try:
+            reporter_age_years = int(reporter_age_years)
+        except (TypeError, ValueError):
+            raise GrievanceError(
+                f"reporter_age_years {reporter_age_years!r} is not a number "
+                "of years",
+            ) from None
+        if reporter_age_years < 0:
+            raise GrievanceError("reporter_age_years cannot be negative")
+
     g = Grievance.objects.create(
         category=category,
         sub_category=sub_category,
@@ -223,6 +266,8 @@ def open_grievance(
         reporter_name=reporter_name,
         reporter_phone=reporter_phone,
         reporter_relationship=reporter_relationship,
+        reporter_gender=reporter_gender,
+        reporter_age_years=reporter_age_years,
         tier=tier,
         status=GrievanceStatus.OPEN,
         assigned_to=assigned_to,
@@ -566,6 +611,125 @@ def add_comment(
         field_changes={"grievance_id": grievance.id, "kind": kind},
     )
     return comment
+
+
+@transaction.atomic
+def attach_document(
+    grievance: Grievance, *,
+    filename: str,
+    content_type: str,
+    body: bytes,
+    actor: str,
+    external_reference: str = "",
+) -> GrievanceAttachment:
+    """File a document against a case.
+
+    The bytes go to the registry's content-addressed blob store and the
+    row records the digest that addresses them, so the same file sent
+    twice is one blob and `(grievance, sha256)` makes it one
+    attachment. That is what lets a transfer be retried: a resent case
+    finds the evidence it already filed rather than filing it again.
+
+    The store, the MIME allow-list and the size caps are
+    `apps.update_workflow.evidence_storage`'s, imported rather than
+    restated. They are the limits of the store itself, not of change
+    requests, and a second copy of a cap is a cap that drifts — if GRM
+    ever needs its own they belong in settings, read by both.
+
+    A closed case takes no attachment, for the reason
+    `_require_open_for_writing` gives: the closing narrative is the last
+    word, and evidence arriving after it is a new case. This is the
+    fourth writer that docstring predicted.
+    """
+    import hashlib
+
+    from apps.update_workflow.evidence_storage import (
+        ALLOWED_MIME_TYPES,
+        MAX_FILE_BYTES,
+        MAX_FILES,
+        MAX_TOTAL_BYTES,
+        get_evidence_storage,
+    )
+
+    _require_open_for_writing(grievance, "attach a document")
+    if not actor:
+        raise GrievanceError("actor required")
+
+    filename = str(filename or "").strip()
+    if not filename:
+        raise GrievanceError("an attachment needs a filename")
+    content_type = str(content_type or "").strip().lower()
+    if content_type not in ALLOWED_MIME_TYPES:
+        raise GrievanceError(
+            f"{content_type or '(none)'} is not an accepted document type — "
+            f"one of {', '.join(sorted(ALLOWED_MIME_TYPES))}",
+        )
+    if not isinstance(body, (bytes, bytearray)):
+        raise GrievanceError("an attachment needs its bytes")
+    body = bytes(body)
+    if not body:
+        raise GrievanceError(f"{filename!r} is empty")
+    if len(body) > MAX_FILE_BYTES:
+        raise GrievanceError(
+            f"{filename!r} is {len(body)} bytes; the limit is {MAX_FILE_BYTES}",
+        )
+
+    digest = hashlib.sha256(body).hexdigest()
+    existing = GrievanceAttachment.objects.filter(
+        grievance=grievance, sha256=digest,
+    ).first()
+    if existing is not None:
+        # The same bytes on the same case. Returning the row it already
+        # has is what makes a resend safe; counting it again would make
+        # one photograph look like two pieces of evidence.
+        return existing
+
+    # Counted over the case, not the request, so three attachments in
+    # three calls hit the same wall as three in one.
+    on_case = GrievanceAttachment.objects.filter(grievance=grievance)
+    if on_case.count() >= MAX_FILES:
+        raise GrievanceError(
+            f"grievance {grievance.reference or grievance.id} already has "
+            f"{MAX_FILES} attachments, which is the limit",
+        )
+    total = sum(row.size_bytes for row in on_case.only("size_bytes"))
+    if total + len(body) > MAX_TOTAL_BYTES:
+        raise GrievanceError(
+            f"{filename!r} would take grievance "
+            f"{grievance.reference or grievance.id} over the "
+            f"{MAX_TOTAL_BYTES}-byte total for its attachments",
+        )
+
+    # Blob first. A row pointing at bytes that were never stored is a
+    # case whose evidence cannot be opened; bytes with no row are an
+    # orphan in a content-addressed store, which costs space and
+    # nothing else.
+    get_evidence_storage().put(digest, body)
+    attachment = GrievanceAttachment.objects.create(
+        grievance=grievance,
+        filename=filename,
+        content_type=content_type,
+        size_bytes=len(body),
+        sha256=digest,
+        external_reference=str(external_reference or "").strip(),
+        uploaded_by=actor,
+    )
+    emit_audit(
+        "create", "grievance.attachment", attachment.id, actor=actor,
+        reason=f"document attached to {grievance.id}",
+        field_changes={
+            "grievance_id": grievance.id,
+            "filename": filename,
+            "content_type": content_type,
+            "size_bytes": len(body),
+            # The digest, not the bytes. It identifies the document in
+            # the audit chain without putting a complainant's
+            # photograph into it.
+            "sha256": digest,
+            "external_reference": attachment.external_reference,
+        },
+    )
+    return attachment
 
 
 @transaction.atomic

@@ -122,6 +122,30 @@ class Grievance(models.Model):
     reporter_name = models.CharField(max_length=128, blank=True)
     reporter_phone = models.CharField(max_length=20, blank=True)
     reporter_relationship = models.CharField(max_length=32, blank=True)
+    # Who complained, in the two terms a GRM is reported on.
+    #
+    # Disaggregating grievances by sex and age is what shows whether the
+    # channel reaches women and whether older people can use it at all,
+    # and neither question can be asked of a column that does not exist.
+    # STAAC's intake asks both and sends them; before this they were
+    # dropped on arrival.
+    #
+    # `reporter_gender` holds a code from the `sex` ChoiceList — the
+    # same vocabulary and the same width as `Member.sex`, so one list
+    # answers "what are the options" for both and a count can span them.
+    # It is NOT free text and NOT another system's word for the same
+    # thing: `apps.grievance.intake.resolve_gender` translates an
+    # external value through a versioned binding, and `open_grievance`
+    # refuses a code the list does not carry, so nothing untranslated
+    # can reach the column.
+    #
+    # `reporter_age_years` is years, matching `Member.age_years`. There
+    # is no ceiling here on purpose: the registry's implausible-age
+    # threshold is the DQA rule AC-MEMBER-AGE-MAX, which applies to
+    # members and flags rather than refuses, and restating 120 in this
+    # app would be a second copy of a number that is already owned.
+    reporter_gender = models.CharField(max_length=32, blank=True)
+    reporter_age_years = models.PositiveSmallIntegerField(null=True, blank=True)
 
     tier = models.CharField(max_length=24, choices=Tier.choices, default=Tier.L1_PARISH_CHIEF)
     status = models.CharField(
@@ -316,6 +340,77 @@ class GrievanceTask(models.Model):
 
     def __str__(self) -> str:
         return f"Task {self.id} on {self.grievance_id} [{self.status}]"
+
+
+class GrievanceAttachment(models.Model):
+    """A document filed against a grievance.
+
+    The complaint that arrives with a photograph of the posted
+    beneficiary list, or the scan of the letter it was written on, is
+    the evidence the case turns on. A grievance could hold a note and a
+    task and nothing else, so a document sent with one had nowhere to
+    go: STAAC's intake payload carries an `attachments` array and this
+    registry had no column for it, which means a case transferred with
+    its evidence would have arrived without it and nobody would have
+    been told.
+
+    The bytes are not here. They go to the registry's content-addressed
+    blob store — `apps.update_workflow.evidence_storage`, reached
+    through `get_evidence_storage()` — and this row holds the SHA-256
+    that addresses them. Two consequences worth knowing:
+
+    * the same file attached twice is one blob, and
+      `(grievance, sha256)` is unique, so a resend of a case cannot
+      duplicate its evidence;
+    * the digest is the integrity check. A stored blob that no longer
+      hashes to its row's `sha256` is a tampered or corrupt file, and
+      that is checkable without a second checksum column.
+
+    That store lives in `update_workflow` because change requests
+    needed it first, and `data_requests.storage` is a second copy of
+    the same three backends. Importing it rather than writing a third
+    is the lesser wrong; the store wants a shared home, which is a
+    dependency to report, not something to fix from here.
+    """
+
+    id = ULIDField(primary_key=True)
+    grievance = models.ForeignKey(
+        "Grievance", on_delete=models.CASCADE, related_name="attachments",
+    )
+
+    # What it was called where it came from, for an operator who has to
+    # recognise it. Display only — nothing opens a file by this name,
+    # because the store is keyed by digest.
+    filename = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=128)
+    size_bytes = models.PositiveIntegerField()
+    # The content address. Hex, lower case, 64 characters.
+    sha256 = models.CharField(max_length=64, db_index=True)
+
+    # The sending system's own id for this file, where there is one, so
+    # a partner asking "did you get attachment 7 of C-26-057528-8" can
+    # be answered. Blank for a document uploaded here.
+    external_reference = models.CharField(max_length=128, blank=True)
+
+    uploaded_by = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Grievance attachment"
+        constraints = [
+            # One row per distinct file per case. A retried transfer
+            # re-sends the same bytes; it must find the attachment it
+            # already created.
+            models.UniqueConstraint(
+                fields=["grievance", "sha256"],
+                name="grievance_attachment_unique_per_case",
+            ),
+        ]
+        indexes = [models.Index(fields=["grievance", "created_at"])]
+        ordering = ("created_at",)
+
+    def __str__(self) -> str:
+        return f"{self.filename} on grievance {self.grievance_id}"
 
 
 class GrmTierRule(models.Model):

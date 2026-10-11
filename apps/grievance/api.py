@@ -8,6 +8,7 @@ from apps.security.audit_views import AuditReadMixin
 
 from .models import (
     Grievance,
+    GrievanceAttachment,
     GrievanceComment,
     GrievanceStatus,
     GrievanceTask,
@@ -16,6 +17,7 @@ from .models import (
 from .services import (
     GrievanceError,
     add_comment,
+    attach_document,
     assign,
     close,
     create_task,
@@ -42,6 +44,52 @@ def _is_grm_officer(user) -> bool:
     return sees_every_grievance(user)
 
 
+class GrievanceAttachmentSerializer(serializers.ModelSerializer):
+    """What is on the case, for a reader. Never the bytes.
+
+    The digest addresses the file in the blob store; serving it back is
+    a separate, audited read, so a list of attachments can be shown
+    without releasing anything.
+    """
+
+    class Meta:
+        model = GrievanceAttachment
+        fields = (
+            "id", "filename", "content_type", "size_bytes", "sha256",
+            "external_reference", "uploaded_by", "created_at",
+        )
+        read_only_fields = fields
+
+
+class _InboundDocument(serializers.Serializer):
+    """A document sent with a new grievance, base64-in-JSON.
+
+    The same shape UPD's change-request bundle uses, deliberately: one
+    way to send a document to this registry rather than two. Nothing is
+    enforced here beyond decoding — the MIME allow-list, the per-file
+    cap and the per-case totals are `services.attach_document`'s, which
+    is also where an attachment added later goes through. Checking them
+    twice would be two copies of one policy, free to disagree.
+    """
+
+    filename = serializers.CharField(min_length=1, max_length=255)
+    content_type = serializers.CharField(min_length=1, max_length=128)
+    data_base64 = serializers.CharField(min_length=1, max_length=8 * 1024 * 1024)
+    external_reference = serializers.CharField(
+        max_length=128, required=False, allow_blank=True, default="",
+    )
+
+    def validate_data_base64(self, value):
+        import base64
+
+        try:
+            return base64.b64decode(value, validate=True)
+        except Exception as e:  # noqa: BLE001 — invalid client input
+            raise serializers.ValidationError(
+                f"not valid base64: {e}",
+            ) from e
+
+
 class GrievanceSerializer(serializers.ModelSerializer):
     # What the case will accept next. The console offered "Assign to
     # me" on a closed grievance and the server refused it; the same
@@ -51,6 +99,12 @@ class GrievanceSerializer(serializers.ModelSerializer):
     # showing rather than implying it runs from the open date.
     tier_started_at = serializers.DateTimeField(read_only=True)
     sla_breach_flagged_at = serializers.DateTimeField(read_only=True)
+    attachments = GrievanceAttachmentSerializer(many=True, read_only=True)
+    # Write-only, because the bytes do not come back on the case: they
+    # live in the blob store and the rows above say what is there.
+    documents = _InboundDocument(
+        many=True, required=False, write_only=True, default=list,
+    )
 
     def get_allowed_actions(self, obj) -> list:
         from .visibility import allowed_actions
@@ -63,12 +117,14 @@ class GrievanceSerializer(serializers.ModelSerializer):
             "id", "reference", "category", "sub_category", "description",
             "household_id", "member_id",
             "reporter_name", "reporter_phone", "reporter_relationship",
+            "reporter_gender", "reporter_age_years",
             "tier", "status", "assigned_to",
             "opened_at", "sla_deadline",
             "resolved_at", "resolved_by", "resolution_narrative",
             "closed_at", "closed_by", "closing_narrative",
             "linked_change_request_id",
             "tier_started_at", "sla_breach_flagged_at", "allowed_actions",
+            "attachments", "documents",
             "created_at", "updated_at",
         )
         read_only_fields = (
@@ -76,6 +132,7 @@ class GrievanceSerializer(serializers.ModelSerializer):
             "resolved_at", "resolved_by", "closed_at", "closed_by",
             "closing_narrative", "created_at", "updated_at",
             "tier_started_at", "sla_breach_flagged_at", "allowed_actions",
+            "attachments",
         )
 
 
@@ -272,25 +329,82 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
     http_method_names = ["get", "post", "head", "options"]
 
     def create(self, request, *args, **kwargs):
+        from django.db import transaction
+
         ser = self.get_serializer(data=request.data)
         ser.is_valid(raise_exception=True)
         try:
-            g = open_grievance(
-                category=ser.validated_data["category"],
-                description=ser.validated_data["description"],
-                household_id=ser.validated_data.get("household_id", ""),
-                member_id=ser.validated_data.get("member_id", ""),
-                reporter_name=ser.validated_data.get("reporter_name", ""),
-                reporter_phone=ser.validated_data.get("reporter_phone", ""),
-                reporter_relationship=ser.validated_data.get("reporter_relationship", ""),
-                tier=ser.validated_data.get("tier") or "l1_parish_chief",
-                assigned_to=ser.validated_data.get("assigned_to", ""),
-                sub_category=ser.validated_data.get("sub_category", ""),
-                actor=request.user.username or "anonymous",
-            )
+            # One transaction over the case and its documents. Each of
+            # the two is atomic on its own, which is not the same thing:
+            # without this a refused second document would leave a
+            # grievance already created, and the operator who retries
+            # opens a duplicate of a complaint that is already filed.
+            with transaction.atomic():
+                g = self._create_with_documents(request, ser)
         except GrievanceError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(self.get_serializer(g).data, status=status.HTTP_201_CREATED)
+
+    def _create_with_documents(self, request, ser) -> Grievance:
+        actor = request.user.username or "anonymous"
+        g = open_grievance(
+            category=ser.validated_data["category"],
+            description=ser.validated_data["description"],
+            household_id=ser.validated_data.get("household_id", ""),
+            member_id=ser.validated_data.get("member_id", ""),
+            reporter_name=ser.validated_data.get("reporter_name", ""),
+            reporter_phone=ser.validated_data.get("reporter_phone", ""),
+            reporter_relationship=ser.validated_data.get("reporter_relationship", ""),
+            reporter_gender=ser.validated_data.get("reporter_gender", ""),
+            reporter_age_years=ser.validated_data.get("reporter_age_years"),
+            tier=ser.validated_data.get("tier") or "l1_parish_chief",
+            assigned_to=ser.validated_data.get("assigned_to", ""),
+            sub_category=ser.validated_data.get("sub_category", ""),
+            actor=actor,
+        )
+        # In the same request as the case, so a refused document
+        # refuses the grievance. A case created with its evidence
+        # silently dropped is the shape of failure this registry keeps
+        # finding: 201, nothing wrong said, the file gone.
+        for doc in ser.validated_data.get("documents") or []:
+            attach_document(
+                g,
+                filename=doc["filename"],
+                content_type=doc["content_type"],
+                body=doc["data_base64"],
+                actor=actor,
+                external_reference=doc.get("external_reference", ""),
+            )
+        return g
+
+
+    @extend_schema(
+        tags=["grm"],
+        summary="What this registry will accept as an attachment",
+        responses={200: OpenApiResponse(description="Attachment limits")},
+    )
+    @action(detail=False, methods=["get"], url_path="attachment-limits")
+    def attachment_limits(self, request):
+        """The caps and types, so a form can state them.
+
+        The form has to tell an operator what it will take before they
+        pick a 40 MB scan, and the limits are the store's — if the
+        console held its own copy it would be a second policy, free to
+        disagree with the one that actually refuses. So it asks.
+        """
+        from apps.update_workflow.evidence_storage import (
+            ALLOWED_MIME_TYPES,
+            MAX_FILE_BYTES,
+            MAX_FILES,
+            MAX_TOTAL_BYTES,
+        )
+
+        return Response({
+            "max_files": MAX_FILES,
+            "max_file_bytes": MAX_FILE_BYTES,
+            "max_total_bytes": MAX_TOTAL_BYTES,
+            "allowed_content_types": sorted(ALLOWED_MIME_TYPES),
+        })
 
     @extend_schema(tags=["grm"], summary="Assign a grievance", request=_Assign,
                    responses={200: GrievanceSerializer})

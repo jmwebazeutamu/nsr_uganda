@@ -35,8 +35,9 @@ class TestSeededChoiceLists:
         # + 1 pmt_trigger_source (migration 0009, US-PMT-014)
         # + 1 programme_signoff_status (migration 0011, US-182) = 96
         # + 1 pmt_variable_finding (migration 0024) = 97
-        # + 1 staac_grievance_category (migration 0026) = 98.
-        assert ChoiceList.objects.filter(version=1).count() == 98
+        # + 1 staac_grievance_category (migration 0026) = 98
+        # + 1 staac_complainant_gender (migration 0027) = 99.
+        assert ChoiceList.objects.filter(version=1).count() == 99
 
     def test_options_seeded(self):
         # 499 (after US-S25-006) + 5 referral-status options
@@ -57,10 +58,12 @@ class TestSeededChoiceLists:
         #   operand_not_in_choice_list) = 772
         # + 1 missing_data (migration 0025) = 773
         # + 16 STAAC category codes C01-C16 (migration 0026,
-        #   canonical_code null on every one) = 789.
+        #   canonical_code null on every one) = 789
+        # + 3 STAAC complainant gender codes (migration 0027,
+        #   canonical_code null on every one) = 792.
         assert ChoiceOption.objects.filter(
             choice_list__version=1,
-        ).count() == 789
+        ).count() == 792
 
     def test_the_legacy_options_are_deprecated_not_selectable(self):
         """They exist so a 2023 response still reads as words. A capture

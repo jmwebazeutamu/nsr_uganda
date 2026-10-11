@@ -71,7 +71,7 @@ class TestBundleSchema:
         # + 1 pmt_variable_finding (migration 0024) = 97
         # + 1 staac_grievance_category (migration 0026) = 98.
         r = api.get(URL)
-        assert len(r.data["lists"]) == 98
+        assert len(r.data["lists"]) == 99
 
     def test_sex_options_resolved(self, api):
         r = api.get(URL)
