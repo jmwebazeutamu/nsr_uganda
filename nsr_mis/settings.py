@@ -449,6 +449,16 @@ DPO_EMAIL = env("DPO_EMAIL", default="")
 # lives here rather than in the check.
 GRM_CLOSE_GRACE_DAYS = env.int("GRM_CLOSE_GRACE_DAYS", default=30)
 
+# The shared secret STAAC presents to the push receiver
+# (apps/grievance/external/receiver.py). Blank by default and the
+# receiver refuses every request while it is blank: the partner
+# specification §6.1 says the receiver's authentication profile —
+# mTLS, client certificates, or a STAAC-issued outbound token — is
+# still to be agreed between the IG and NSR, and an endpoint that
+# writes grievances without one is worse than no endpoint. Pull does
+# not use this and remains the required path.
+GRM_STAAC_PUSH_SECRET = env("GRM_STAAC_PUSH_SECRET", default="")
+
 # --- Email / SMTP ---------------------------------------------------------
 # If SMTP credentials are present, default to the SMTP backend. That
 # keeps deployed environments working even if EMAIL_BACKEND was omitted

@@ -32,6 +32,7 @@ from apps.grievance.models import (
     Category,
     Grievance,
     HandoverOutcome,
+    HeldReason,
     StaacHandover,
 )
 from apps.reference_data.models import ChoiceOption, GeographicUnit
@@ -47,25 +48,39 @@ H1 = "d8f05c04-4b0f-4e28-9d87-95c88e6c6a09"
 H2 = "11111111-2222-3333-4444-555555555555"
 
 
-@pytest.fixture(autouse=True)
-def _no_retry_sleep(monkeypatch):
-    from nsr_mis.common import http as shared_http
+# Autouse isolation (resolver cache, retry sleep) is in conftest.py.
 
-    monkeypatch.setattr(shared_http.time, "sleep", lambda _s: None)
+AGREEMENT = "DSA-NSR-001"
 
 
-@pytest.fixture(autouse=True)
-def _forget_resolved_bindings():
-    """The choice-list resolvers are lru_cached, and a cache outlives
-    the transaction a test is rolled back with. Without this, a test
-    that approves a binding leaves it visible to the next test, which
-    is precisely how "an unmapped category is held" would pass while
-    being wrong."""
-    from apps.reference_data.services import clear_resolver_cache
+@pytest.fixture
+def staac_agreement(db):
+    """The registry's own record of what it may receive.
 
-    clear_resolver_cache()
-    yield
-    clear_resolver_cache()
+    `start_connector_run` refuses without one (AC-DIH-DPA-REQUIRED),
+    and `_agreement_covers` refuses a snapshot citing a reference we
+    do not hold. Both are the point: the chain must record OUR
+    authorisation, not the partner's assertion of it.
+    """
+    from apps.ingestion_hub.models import DataProvisionAgreement, SourceSystem
+
+    from apps.grievance.external import SOURCE_CODE
+
+    return DataProvisionAgreement.objects.create(
+        source_system=SourceSystem.objects.get(code=SOURCE_CODE),
+        reference=AGREEMENT,
+        purpose="Receive approved NSR grievances from STAAC's GRM.",
+        valid_from=date(2026, 1, 1),
+    )
+
+
+@pytest.fixture
+def run(staac_agreement):
+    from apps.ingestion_hub.services import start_connector_run
+
+    from apps.grievance.external.pull import connector_for_staac
+
+    return start_connector_run(connector_for_staac(), actor="t")
 
 
 @pytest.fixture
@@ -292,9 +307,9 @@ class TestTheTransport:
 # ── the mapping ───────────────────────────────────────────────────────
 
 class TestTheMapping:
-    def test_a_filed_case_keeps_its_place_number_and_clock(self, parish):
+    def test_a_filed_case_keeps_its_place_number_and_clock(self, parish, run):
         bind_category()
-        result = file_snapshot(snapshot(), handover_id=H1, exchange_version=1)
+        result = file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
         g = result.handover.grievance
         assert result.handover.outcome == HandoverOutcome.FILED
         assert g.category == Category.EXCLUSION_ERROR
@@ -307,10 +322,10 @@ class TestTheMapping:
         assert g.reported_at.isoformat().startswith("2026-10-11T00:02:49")
         assert g.reporter_name == "Test Alice Sample-NSR01"
 
-    def test_the_snapshot_is_stored_verbatim(self, parish):
+    def test_the_snapshot_is_stored_verbatim(self, parish, run):
         bind_category()
         body = snapshot()
-        row = file_snapshot(body, handover_id=H1, exchange_version=1).handover
+        row = file_snapshot(body, run=run, handover_id=H1, exchange_version=1).handover
         assert row.snapshot == body
         assert row.agreement_reference == "DSA-NSR-001"
         # The manifest is the audit record of what STAAC was allowed
@@ -321,36 +336,36 @@ class TestTheMapping:
             "complainant.phone",
         }
 
-    def test_a_null_demographic_stays_not_recorded(self, parish):
+    def test_a_null_demographic_stays_not_recorded(self, parish, run):
         """Spec §4.2.1: a field that appears as null must be retained
         as not recorded, never replaced with a guess."""
         bind_category()
-        g = file_snapshot(snapshot(), handover_id=H1,
+        g = file_snapshot(snapshot(), run=run, handover_id=H1,
                           exchange_version=1).handover.grievance
         assert g.reporter_gender == ""
         assert g.reporter_age_years is None
         assert g.reporter_phone == ""
 
-    def test_an_anonymous_complaint_names_nobody(self, parish):
+    def test_an_anonymous_complaint_names_nobody(self, parish, run):
         bind_category()
         body = snapshot(complainant={"identity_recorded": False})
-        g = file_snapshot(body, handover_id=H1,
+        g = file_snapshot(body, run=run, handover_id=H1,
                           exchange_version=1).handover.grievance
         assert g.reporter_name == ""
 
-    def test_a_recorded_gender_and_age_are_translated(self, parish):
+    def test_a_recorded_gender_and_age_are_translated(self, parish, run):
         bind_category()
         bind_gender()
         body = snapshot(complainant={
             "identity_recorded": True, "given_name": "A", "family_name": "B",
             "gender": "female", "age": 64, "phone": None,
         })
-        g = file_snapshot(body, handover_id=H1,
+        g = file_snapshot(body, run=run, handover_id=H1,
                           exchange_version=1).handover.grievance
         assert g.reporter_gender == "2"
         assert g.reporter_age_years == 64
 
-    def test_an_unmapped_gender_does_not_cost_the_case(self, parish):
+    def test_an_unmapped_gender_does_not_cost_the_case(self, parish, run):
         """The asymmetry with category, through the pull: the case is
         filed, the gap is reported."""
         bind_category()
@@ -358,15 +373,15 @@ class TestTheMapping:
             "identity_recorded": True, "given_name": "A", "family_name": "B",
             "gender": "female", "age": None, "phone": None,
         })
-        result = file_snapshot(body, handover_id=H1, exchange_version=1)
+        result = file_snapshot(body, run=run, handover_id=H1, exchange_version=1)
         assert result.handover.outcome == HandoverOutcome.FILED
         assert result.handover.grievance.reporter_gender == ""
         assert any("no approved binding" in w for w in result.warnings)
 
-    def test_an_unmapped_category_is_held_not_lost(self, parish):
+    def test_an_unmapped_category_is_held_not_lost(self, parish, run):
         """Refusing at a console form tells an operator. Refusing in a
         pull tells nobody and STAAC will not send it again."""
-        result = file_snapshot(snapshot(), handover_id=H1, exchange_version=1)
+        result = file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
         assert result.handover.outcome == HandoverOutcome.HELD
         assert "no approved binding" in result.handover.outcome_detail
         assert result.handover.grievance is None
@@ -374,8 +389,8 @@ class TestTheMapping:
         # The evidence is kept, so nothing has to be re-read later.
         assert result.handover.snapshot == snapshot()
 
-    def test_a_held_case_files_once_the_binding_lands(self, parish):
-        file_snapshot(snapshot(), handover_id=H1, exchange_version=1)
+    def test_a_held_case_files_once_the_binding_lands(self, parish, run):
+        file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
         bind_category()
         results = file_held()
         assert len(results) == 1 and results[0].created
@@ -385,60 +400,60 @@ class TestTheMapping:
         # not from when the binding was approved.
         assert g.reported_at.isoformat().startswith("2026-10-11T00:02:49")
 
-    def test_a_place_we_cannot_resolve_is_held_not_filed_blank(self, parish):
+    def test_a_place_we_cannot_resolve_is_held_not_filed_blank(self, parish, run):
         """Blank geography is not neutral — `apps.security.abac`
         filters on those columns, so a case with none belongs to no
         officer's scope and shows for every officer nationally."""
         bind_category()
         body = snapshot(parish_key="999.9.99.99")
-        result = file_snapshot(body, handover_id=H1, exchange_version=1)
+        result = file_snapshot(body, run=run, handover_id=H1, exchange_version=1)
         assert result.handover.outcome == HandoverOutcome.HELD
         assert "names no GeographicUnit" in result.handover.outcome_detail
         assert not Grievance.objects.exists()
 
-    def test_a_shallower_key_still_places_the_case(self, parish):
+    def test_a_shallower_key_still_places_the_case(self, parish, run):
         """`parish_key` is the deepest key the case was coded to, so a
         sub-county is a legitimate value and must not be assumed to
         have four parts."""
         bind_category()
         body = snapshot(parish_key="101.1.01")
-        g = file_snapshot(body, handover_id=H1,
+        g = file_snapshot(body, run=run, handover_id=H1,
                           exchange_version=1).handover.grievance
         assert g.sub_county_code == "101.1.01"
         assert g.district_code == "101"
         # Nothing below the unit named is invented.
         assert g.parish_code == ""
 
-    def test_the_partners_display_name_is_never_trusted_as_a_name(self, parish):
+    def test_the_partners_display_name_is_never_trusted_as_a_name(self, parish, run):
         bind_category()
         body = snapshot(display_name="Somewhere Else")
-        result = file_snapshot(body, handover_id=H1, exchange_version=1)
+        result = file_snapshot(body, run=run, handover_id=H1, exchange_version=1)
         assert any("this registry resolves it" in w for w in result.warnings)
         # And the registry's own resolution is what was stored.
         assert result.handover.grievance.parish_code == "101.1.01.01"
 
-    def test_the_same_delivery_twice_is_one_case(self, parish):
+    def test_the_same_delivery_twice_is_one_case(self, parish, run):
         bind_category()
-        first = file_snapshot(snapshot(), handover_id=H1, exchange_version=1)
-        again = file_snapshot(snapshot(), handover_id=H1, exchange_version=1)
+        first = file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
+        again = file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
         assert again.created is False
         assert again.handover.pk == first.handover.pk
         assert Grievance.objects.count() == 1
         assert StaacHandover.objects.count() == 1
 
-    def test_a_second_version_is_a_second_snapshot_of_one_case(self, parish):
+    def test_a_second_version_is_a_second_snapshot_of_one_case(self, parish, run):
         """`exchange_version` increments when STAAC withdraws and
         re-offers the same case. That is a new snapshot, not a new
         complaint, so the registry keeps both and files one."""
         bind_category()
-        file_snapshot(snapshot(version=1), handover_id=H1, exchange_version=1)
-        file_snapshot(snapshot(version=2), handover_id=H1, exchange_version=2)
+        file_snapshot(snapshot(version=1), run=run, handover_id=H1, exchange_version=1)
+        file_snapshot(snapshot(version=2), run=run, handover_id=H1, exchange_version=2)
         assert StaacHandover.objects.count() == 2
         assert Grievance.objects.count() == 1
 
-    def test_the_retrieval_of_personal_data_is_audited(self, parish):
+    def test_the_retrieval_of_personal_data_is_audited(self, parish, run):
         bind_category()
-        row = file_snapshot(snapshot(), handover_id=H1,
+        row = file_snapshot(snapshot(), run=run, handover_id=H1,
                             exchange_version=1, etag='W/"x"',
                             correlation_id="corr-1").handover
         read = AuditEvent.objects.filter(
@@ -457,7 +472,7 @@ class TestTheMapping:
 
 class TestTheRun:
     @responses.activate
-    def test_it_files_every_available_handover(self, parish):
+    def test_it_files_every_available_handover(self, parish, staac_agreement):
         bind_category()
         mock_collection(
             pages=[
@@ -478,7 +493,7 @@ class TestTheRun:
             "C-26-057528-8", "C-26-000000-1"}
 
     @responses.activate
-    def test_a_rerun_refetches_nothing(self, parish):
+    def test_a_rerun_refetches_nothing(self, parish, staac_agreement):
         """Reconciliation re-lists what we hold. Re-fetching would
         re-read a complainant's identity for no reason."""
         bind_category()
@@ -493,7 +508,7 @@ class TestTheRun:
         assert Grievance.objects.count() == 1
 
     @responses.activate
-    def test_an_unclassifiable_case_does_not_stop_the_run(self, parish):
+    def test_an_unclassifiable_case_does_not_stop_the_run(self, parish, staac_agreement):
         bind_category()
         mock_collection(
             pages=[{"items": [list_item(H1), list_item(H2, tracking="C-2")],
@@ -510,7 +525,7 @@ class TestTheRun:
         assert StaacHandover.objects.count() == 2
 
     @responses.activate
-    def test_the_cursor_moves_only_behind_a_stored_page(self, parish):
+    def test_the_cursor_moves_only_behind_a_stored_page(self, parish, staac_agreement):
         """The ordering that makes a pull resumable, in both
         directions.
 
@@ -542,7 +557,7 @@ class TestTheRun:
         )
 
     @responses.activate
-    def test_a_resumed_run_sends_the_stored_cursor(self, parish):
+    def test_a_resumed_run_sends_the_stored_cursor(self, parish, staac_agreement):
         credential = _credential(cursor="p7")
         bind_category()
         responses.add(responses.GET, LIST_URL, status=200, json={
@@ -553,7 +568,7 @@ class TestTheRun:
         assert credential.cursor == ""
 
     @responses.activate
-    def test_restart_ignores_the_stored_cursor(self, parish):
+    def test_restart_ignores_the_stored_cursor(self, parish, staac_agreement):
         _credential(cursor="p7")
         bind_category()
         responses.add(responses.GET, LIST_URL, status=200, json={
@@ -562,7 +577,7 @@ class TestTheRun:
         assert "cursor" not in responses.calls[0].request.url
 
     @responses.activate
-    def test_a_stale_cursor_restarts_instead_of_failing(self, parish):
+    def test_a_stale_cursor_restarts_instead_of_failing(self, parish, staac_agreement):
         """STAAC signs cursors with no expiry, so the thing that
         invalidates one is a key change. Treating that as fatal would
         leave the integration dead until someone noticed."""
@@ -577,7 +592,7 @@ class TestTheRun:
         assert report.filed == 1
 
     @responses.activate
-    def test_the_run_itself_is_audited_at_both_ends(self, parish):
+    def test_the_run_itself_is_audited_at_both_ends(self, parish, staac_agreement):
         bind_category()
         mock_collection(
             pages=[{"items": [], "next_cursor": None}], details={})
@@ -592,7 +607,7 @@ class TestTheStoredCredential:
     """The seam every other test skipped by injecting a client."""
 
     @responses.activate
-    def test_the_stored_token_authenticates_the_call(self, parish):
+    def test_the_stored_token_authenticates_the_call(self, parish, run):
         """Builds the client from the credential, the way production
         does. Nothing exercised this path before, which is how a
         double-encrypt and a double-decrypt lived together unnoticed."""
@@ -621,7 +636,7 @@ class TestTheStoredCredential:
         credential.refresh_from_db()
         assert _token(credential) == TOKEN
 
-    def test_two_active_credentials_refuse_to_guess(self, parish):
+    def test_two_active_credentials_refuse_to_guess(self, parish, run):
         """"production" sorts before "sandbox", so choosing
         alphabetically meant an operator testing without the flag
         reached production."""
@@ -630,7 +645,7 @@ class TestTheStoredCredential:
         with pytest.raises(StaacError, match="Name the one to use"):
             pull()
 
-    def test_naming_the_environment_resolves_it(self, parish):
+    def test_naming_the_environment_resolves_it(self, parish, run):
         _credential(environment="production")
         _credential(environment="sandbox")
         from apps.grievance.external.pull import credential_for
@@ -638,7 +653,7 @@ class TestTheStoredCredential:
         assert credential_for("sandbox").environment == "sandbox"
 
     @responses.activate
-    def test_a_run_with_errors_does_not_claim_a_fresh_pull(self, parish):
+    def test_a_run_with_errors_does_not_claim_a_fresh_pull(self, parish, run):
         credential = _credential()
         bind_category()
         responses.add(responses.GET, LIST_URL, status=200,
@@ -668,20 +683,20 @@ class TestWhatThePartnerSends:
         with pytest.raises(StaacError, match="cannot be half of an idempotency key"):
             client().list_page()
 
-    def test_attachments_that_arrive_are_reported_not_ignored(self, parish):
+    def test_attachments_that_arrive_are_reported_not_ignored(self, parish, run):
         """v1 says the array is always empty and forbids downloading.
         "Always empty" is the partner's statement about their current
         version, not a fact."""
         bind_category()
         body = snapshot()
         body["attachments"] = [{"id": "a1", "filename": "list.jpg"}]
-        result = file_snapshot(body, handover_id=H1, exchange_version=1)
+        result = file_snapshot(body, run=run, handover_id=H1, exchange_version=1)
         assert result.handover.outcome == HandoverOutcome.FILED
         assert any("attachment" in w for w in result.warnings)
 
-    def test_no_attachments_says_nothing(self, parish):
+    def test_no_attachments_says_nothing(self, parish, run):
         bind_category()
-        result = file_snapshot(snapshot(), handover_id=H1, exchange_version=1)
+        result = file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
         assert not any("attachment" in w for w in result.warnings)
 
 
@@ -749,3 +764,163 @@ class TestTheCredentialForm:
         )
         assert not form.is_valid()
         assert "token is required" in str(form.errors)
+
+
+class TestTheAgreement:
+    """The registry's own record of what it may receive, not the
+    partner's assertion of it."""
+
+    def test_a_snapshot_citing_an_agreement_we_do_not_hold_is_held(
+        self, parish, run,
+    ):
+        bind_category()
+        body = snapshot()
+        body["shared_data"]["agreement_reference"] = "DSA-INVENTED-9"
+        result = file_snapshot(body, run=run, handover_id=H1, exchange_version=1)
+        assert result.handover.outcome == HandoverOutcome.HELD
+        assert result.handover.held_reason == HeldReason.UNVERIFIED_AGREEMENT
+        assert not Grievance.objects.exists()
+
+    def test_a_snapshot_naming_no_agreement_is_held(self, parish, run):
+        bind_category()
+        body = snapshot()
+        body["shared_data"]["agreement_reference"] = ""
+        result = file_snapshot(body, run=run, handover_id=H1, exchange_version=1)
+        assert result.handover.held_reason == HeldReason.UNVERIFIED_AGREEMENT
+
+    def test_an_expired_agreement_does_not_cover_it(self, parish, run,
+                                                    staac_agreement):
+        bind_category()
+        staac_agreement.valid_to = date(2026, 1, 2)
+        staac_agreement.save(update_fields=["valid_to"])
+        result = file_snapshot(snapshot(), run=run, handover_id=H1,
+                               exchange_version=1)
+        assert result.handover.held_reason == HeldReason.UNVERIFIED_AGREEMENT
+
+    def test_no_agreement_means_no_run_at_all(self, parish):
+        """Not "fetch then refuse" — a partner's personal data is not
+        received in the first place."""
+        from apps.grievance.external.pull import connector_for_staac
+        from apps.ingestion_hub.services import DihError, start_connector_run
+
+        with pytest.raises(DihError):
+            start_connector_run(connector_for_staac(), actor="t")
+
+    @responses.activate
+    def test_the_pull_says_so_in_words(self, parish):
+        with pytest.raises(StaacError, match="recorded here before the first call"):
+            pull(client=client())
+        assert not responses.calls, "nothing should have been fetched"
+
+
+class TestWhyItIsHeld:
+    """The held reason is a value, so the remediation queue can be
+    counted rather than read."""
+
+    def test_an_unbound_category_names_the_code_to_bind(self, parish, run):
+        result = file_snapshot(snapshot(), run=run, handover_id=H1,
+                               exchange_version=1)
+        row = result.handover
+        assert row.held_reason == HeldReason.UNBOUND_CATEGORY
+        assert row.held_choice_list == STAAC_CATEGORY_LIST
+        assert row.held_source_code == "C07"
+
+    def test_a_category_nobody_registered_is_a_different_kind(self, parish, run):
+        """Different problems, different owners — the distinction
+        UnmappedCategory draws and the first version threw away."""
+        body = snapshot(category="Something STAAC invented last week")
+        result = file_snapshot(body, run=run, handover_id=H1, exchange_version=1)
+        assert result.handover.held_reason == HeldReason.UNKNOWN_CATEGORY
+
+    def test_an_unresolvable_place_is_its_own_kind(self, parish, run):
+        bind_category()
+        body = snapshot(parish_key="999.9.99.99")
+        result = file_snapshot(body, run=run, handover_id=H1, exchange_version=1)
+        assert result.handover.held_reason == HeldReason.UNRESOLVED_PLACE
+        assert result.handover.held_source_code == "999.9.99.99"
+
+    def test_filing_clears_the_held_fields(self, parish, run):
+        file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
+        bind_category()
+        file_held()
+        row = StaacHandover.objects.get()
+        assert row.outcome == HandoverOutcome.FILED
+        assert row.held_reason == ""
+        assert row.held_source_code == ""
+
+    def test_the_queue_is_countable(self, parish, run):
+        """The question an operator actually asks: which codes are
+        blocking cases, and how many each."""
+        file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
+        file_snapshot(snapshot(handover_id=H2, tracking="C-2"), run=run,
+                      handover_id=H2, exchange_version=1)
+        from django.db.models import Count
+
+        counted = dict(
+            StaacHandover.objects
+            .filter(held_reason=HeldReason.UNBOUND_CATEGORY)
+            .values_list("held_source_code")
+            .annotate(n=Count("id")),
+        )
+        assert counted == {"C07": 2}
+
+
+class TestTheRunRecord:
+    """One run-accounting structure, not two."""
+
+    @responses.activate
+    def test_the_run_is_recorded_with_its_counters(self, parish, staac_agreement):
+        from apps.ingestion_hub.models import ConnectorRun, ConnectorRunStatus
+
+        bind_category()
+        mock_collection(
+            pages=[{"items": [list_item(H1), list_item(H2, tracking="C-2")],
+                    "next_cursor": None}],
+            details={H1: snapshot(),
+                     H2: snapshot(handover_id=H2, tracking="C-2",
+                                  category="Environmental and social")},
+        )
+        report = pull(client=client())
+        run = ConnectorRun.objects.get(pk=report.run_id)
+        assert run.status == ConnectorRunStatus.SUCCEEDED
+        assert run.finished_at is not None
+        assert run.records_received == 2   # landed through land_payload
+        assert run.records_promoted == 1   # filed
+        assert run.records_quarantined == 1  # held
+        assert run.note
+
+    @responses.activate
+    def test_a_failed_run_is_recorded_as_failed(self, parish, staac_agreement):
+        from apps.ingestion_hub.models import ConnectorRun, ConnectorRunStatus
+
+        bind_category()
+        responses.add(responses.GET, LIST_URL, status=200,
+                      json={"items": [list_item(H1)], "next_cursor": None})
+        for _ in range(3):
+            responses.add(responses.GET, f"{LIST_URL}{H1}/", status=500, json={})
+        report = pull(client=client())
+        run = ConnectorRun.objects.get(pk=report.run_id)
+        assert run.status == ConnectorRunStatus.FAILED
+        assert run.records_rejected == 1
+
+    def test_the_payload_lands_in_the_one_landing_table(self, parish, run):
+        from apps.ingestion_hub.models import RawLanding
+
+        bind_category()
+        body = snapshot()
+        row = file_snapshot(body, run=run, handover_id=H1,
+                            exchange_version=1).handover
+        landing = RawLanding.objects.get()
+        assert landing.payload == body
+        assert landing.source_reference == H1
+        assert row.raw_landing_id == landing.id
+        # And the handover reads it back, so nothing holds two copies.
+        assert row.snapshot == body
+
+    def test_a_resend_does_not_land_a_second_copy(self, parish, run):
+        from apps.ingestion_hub.models import RawLanding
+
+        bind_category()
+        file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
+        file_snapshot(snapshot(), run=run, handover_id=H1, exchange_version=1)
+        assert RawLanding.objects.count() == 1

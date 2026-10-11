@@ -15,3 +15,10 @@ split is what lets the whole pull be tested against a mocked partner.
 #: three independent default arguments, and three defaults agreeing is
 #: not the same as one fact.
 PULL_ACTOR = "staac-pull"
+
+#: The registered `ingestion_hub.SourceSystem` this partner's records
+#: arrive under. Registering the source is what gives the pull an
+#: agreement register, a run record and a landing table; it does NOT
+#: put grievances through DIH's staging pipeline. See ADR-0044.
+SOURCE_CODE = "STAAC_GRM"
+CONNECTOR_NAME = "staac-partner-api"

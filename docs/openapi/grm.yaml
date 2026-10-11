@@ -1,0 +1,399 @@
+openapi: 3.1.0
+info:
+  title: NSR MIS — Grievance Redress (GRM) partner surface
+  version: 0.1.0
+  description: |
+    What this file covers, and what it does not.
+
+    It specifies the GRM endpoints that a MACHINE talks to, plus the
+    attachment contract the console depends on. The console-facing
+    workbench endpoints (list, assign, escalate, resolve, close,
+    tasks, comments) are not here yet; they are exercised by
+    `apps/grievance/tests.py` and remain unspecified, which is a gap
+    this file narrows rather than closes.
+
+    Two of the three paths here exist because of a rule rather than a
+    feature:
+
+    * `attachment-limits/` exists so the console does not keep its own
+      copy of the file-size and MIME policy. That makes the shape of
+      its answer a contract, which is why it has a schema rather than
+      a prose description.
+    * `partners/staac/handovers/` is the push half of the STAAC
+      exchange. It is specified here even though it refuses every
+      request until `GRM_STAAC_PUSH_SECRET` is set, because the
+      partner contract (§6.1) leaves the receiver's authentication
+      profile to be agreed between the IG and NSR — and the shape
+      STAAC must post does not depend on which profile wins.
+
+    Values are deliberately absent. `max_file_bytes` is documented as
+    an integer and never as a number: the figure belongs to
+    `apps.update_workflow.evidence_storage`, and a copy here would be
+    a second policy that nothing executes.
+    `tests/contract/test_grm_openapi.py` asserts the shapes below
+    match the code, and that no cap's figure appears in this file —
+    it caught this very sentence quoting one.
+
+servers:
+  - url: /api/v1/grm
+    description: Mounted under the NSR MIS API root.
+
+tags:
+  - name: grm
+    description: Grievance redress.
+
+paths:
+  /grievances/attachment-limits/:
+    get:
+      tags: [grm]
+      operationId: grmAttachmentLimits
+      summary: What this registry will accept as an attachment
+      description: |
+        The caps and accepted types, read from the blob store that
+        enforces them. A client renders these; it must not hold its
+        own copy, because a copy drifts from the service that
+        actually refuses an upload.
+      security:
+        - sessionAuth: []
+      responses:
+        "200":
+          description: The limits in force.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttachmentLimits"
+        "403":
+          description: No authenticated session.
+
+  /grievances/:
+    post:
+      tags: [grm]
+      operationId: grmOpenGrievance
+      summary: Open a grievance, with its documents
+      description: |
+        The case and any supporting documents arrive in one request
+        and are written in one transaction: a refused document
+        refuses the grievance, so an operator never has a case filed
+        with its evidence silently missing.
+      security:
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NewGrievance"
+      responses:
+        "201":
+          description: Opened.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Grievance"
+        "400":
+          description: |
+            Refused, with a reason in `detail` — an unknown category,
+            a `reporter_gender` that is not a code on the `sex` list,
+            a document type or size the store will not take, or a
+            geographic code naming no GeographicUnit.
+
+  /partners/staac/handovers/:
+    post:
+      tags: [grm]
+      operationId: grmReceiveStaacHandover
+      summary: Receive a grievance handover pushed by STAAC
+      description: |
+        The body is the exact snapshot STAAC's pull detail endpoint
+        serves. The registry stores it verbatim, then files it as a
+        grievance or holds it — holding when it cannot classify the
+        category, cannot place the location, or holds no
+        data-provision agreement covering the disclosure.
+
+        A duplicate succeeds without creating a second grievance: the
+        delivery is identified by `(handover_id, exchange_version)`,
+        which must also be what `Idempotency-Key` names.
+
+        Pull remains the required reconciliation path (partner
+        specification §6); push is an optimisation over it and shares
+        the same storage, the same agreement gate and the same key.
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+            pattern: '^partner:[^:]+:[0-9]+:handover$'
+          description: |
+            `partner:<handover_id>:<exchange_version>:handover`. A key
+            describing a different snapshot than the body is refused
+            with 409 rather than resolved in favour of either.
+        - in: header
+          name: X-Correlation-ID
+          required: false
+          schema: { type: string }
+          description: Retained with the stored record for reconciliation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HandoverSnapshot"
+      responses:
+        "202":
+          description: |
+            Durably accepted. Accepted is not filed — `outcome` says
+            which, and 201 would tell STAAC a grievance exists when
+            one may not.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushAccepted"
+        "400":
+          description: Malformed `Idempotency-Key`, or a body with no usable key.
+        "401":
+          description: |
+            Not authenticated as STAAC. Returned identically whether
+            the secret is wrong or the receiver is unconfigured, so a
+            caller cannot learn which.
+        "409":
+          description: The `Idempotency-Key` does not describe this snapshot.
+        "503":
+          description: |
+            Not ready to receive — no data-provision agreement covers
+            this source. STAAC should retry; nothing is wrong with
+            its request.
+
+components:
+  securitySchemes:
+    sessionAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid
+    partnerBearer:
+      type: http
+      scheme: bearer
+      description: |
+        The shared secret STAAC presents to the push receiver. A
+        placeholder for the profile §6.1 of the partner specification
+        leaves to be agreed; the receiver refuses everything while it
+        is unset.
+
+  schemas:
+    AttachmentLimits:
+      type: object
+      additionalProperties: false
+      required:
+        [max_files, max_file_bytes, max_total_bytes, allowed_content_types]
+      properties:
+        max_files:
+          type: integer
+          description: Attachments one case may hold, counted over the case.
+        max_file_bytes:
+          type: integer
+          description: Largest single file, in bytes before base64.
+        max_total_bytes:
+          type: integer
+          description: Largest total across one case's attachments.
+        allowed_content_types:
+          type: array
+          items: { type: string }
+          description: Accepted MIME types, sorted.
+
+    InboundDocument:
+      type: object
+      additionalProperties: false
+      required: [filename, content_type, data_base64]
+      properties:
+        filename: { type: string, maxLength: 255 }
+        content_type:
+          type: string
+          description: Must be one of `AttachmentLimits.allowed_content_types`.
+        data_base64:
+          type: string
+          description: |
+            The file's bytes, base64-encoded. The length limit is
+            derived from `max_file_bytes`, not chosen separately.
+        external_reference:
+          type: string
+          maxLength: 128
+          description: The sending system's own id for this file, if any.
+
+    Attachment:
+      type: object
+      required:
+        [id, filename, content_type, size_bytes, sha256, uploaded_by,
+         created_at]
+      properties:
+        id: { type: string }
+        filename: { type: string }
+        content_type: { type: string }
+        size_bytes: { type: integer }
+        sha256:
+          type: string
+          description: |
+            The content address in the blob store, and the integrity
+            check. Bytes are served by a separate, audited read.
+        external_reference: { type: string }
+        uploaded_by: { type: string }
+        created_at: { type: string, format: date-time }
+
+    NewGrievance:
+      type: object
+      required: [category, description]
+      properties:
+        category: { type: string }
+        sub_category: { type: string }
+        description: { type: string }
+        household_id: { type: string }
+        member_id: { type: string }
+        reporter_name: { type: string }
+        reporter_phone:
+          type: string
+          description: Normalised to E.164 or refused.
+        reporter_relationship: { type: string }
+        reporter_gender:
+          type: string
+          description: |
+            A code from the `sex` ChoiceList — the same vocabulary
+            `Member.sex` uses. Not a label, and not another system's
+            word for the same thing.
+        reporter_age_years:
+          type: [integer, "null"]
+          description: |
+            Years. Absent or null means not stated, which is not the
+            same as zero.
+        tier: { type: string }
+        documents:
+          type: array
+          description: Write-only. The bytes do not come back on the case.
+          items: { $ref: "#/components/schemas/InboundDocument" }
+
+    Grievance:
+      type: object
+      description: |
+        Abridged — only the fields this file's operations introduce.
+        The full workbench representation is not specified yet.
+      properties:
+        id: { type: string }
+        reference: { type: string }
+        category: { type: string }
+        reporter_gender:
+          type: string
+          description: A `sex` ChoiceList code.
+        reporter_gender_label:
+          type: string
+          description: |
+            Resolved server-side. Every coded column ships both; a
+            client must never map a code to a name itself.
+        reporter_age_years: { type: [integer, "null"] }
+        attachments:
+          type: array
+          items: { $ref: "#/components/schemas/Attachment" }
+
+    HandoverSnapshot:
+      type: object
+      description: |
+        STAAC's immutable approved snapshot, as its pull detail
+        endpoint serves it. Stored verbatim; only the fields the
+        registry reads are described.
+      required: [handover_id, exchange_version]
+      properties:
+        handover_id: { type: string }
+        exchange_version:
+          type: integer
+          minimum: 1
+          description: |
+            Half the idempotency key. A missing or zero value is
+            refused rather than assumed to be 1.
+        source:
+          type: object
+          properties:
+            system: { type: string }
+            tracking_number: { type: string }
+            received_at:
+              type: string
+              description: |
+                RFC 3339. Offset or `Z`; both forms are accepted,
+                because STAAC emits `+00:00` here and `Z` elsewhere.
+                The grievance SLA runs from this, not from receipt.
+        grievance:
+          type: object
+          properties:
+            category:
+              type: string
+              description: |
+                The configured category NAME, not a STAAC code. The
+                registry maps it through an approved binding on the
+                `staac_grievance_category` ChoiceList and holds the
+                case if there is none.
+            severity:
+              type: string
+              description: Recorded in the snapshot; NSR has no field for it.
+            narrative: { type: string }
+        location:
+          type: object
+          properties:
+            parish_key:
+              type: string
+              description: |
+                An opaque, fully-qualified geography key of one to
+                five dotted components. Resolved whole against
+                GeographicUnit; no level is inferred from its shape.
+            display_name:
+              type: string
+              description: |
+                The partner's own words for the place. Compared, never
+                stored as a name — this registry resolves its own
+                labels.
+        complainant:
+          type: object
+          properties:
+            identity_recorded: { type: boolean }
+            given_name: { type: [string, "null"] }
+            family_name: { type: [string, "null"] }
+            gender:
+              type: [string, "null"]
+              description: |
+                Free text in STAAC. Translated through an approved
+                binding to a `sex` code, or left unset and reported.
+            age: { type: [integer, "null"] }
+            phone: { type: [string, "null"] }
+        shared_data:
+          type: object
+          description: |
+            What STAAC was permitted to disclose for this handover.
+            `agreement_reference` is checked against this registry's
+            own data-provision agreements; a reference it does not
+            hold means the snapshot is held, not filed.
+          properties:
+            agreement_reference: { type: string }
+            agreement_version: { type: string }
+            manifest_version: { type: string }
+            fields:
+              type: array
+              items: { type: string }
+        attachments:
+          type: array
+          description: |
+            Empty in the partner contract's v1. A non-empty array is
+            reported rather than ignored.
+          items: { type: object }
+
+    PushAccepted:
+      type: object
+      required: [handover_id, exchange_version, outcome, duplicate]
+      properties:
+        handover_id: { type: string }
+        exchange_version: { type: integer }
+        outcome:
+          type: string
+          enum: [filed, held]
+          description: |
+            `held` means stored and not filed — the registry could not
+            classify or place it, and nothing is lost.
+        duplicate:
+          type: boolean
+          description: True when this delivery was already held.
+        warnings:
+          type: array
+          items: { type: string }

@@ -30,15 +30,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from apps.security.audit import emit as emit_audit
 
-from ..intake import STAAC_SOURCE_SYSTEM, UnmappedCategory, resolve_category
+from ..intake import (
+    STAAC_CATEGORY_LIST,
+    STAAC_SOURCE_SYSTEM,
+    UnmappedCategory,
+    resolve_category,
+)
 from ..intake import resolve_gender
-from ..models import HandoverOutcome, StaacHandover
+from ..models import HandoverOutcome, HeldReason, StaacHandover
 from . import PULL_ACTOR
 from ..services import GrievanceError, open_grievance
 
@@ -101,42 +106,56 @@ def _age(complainant: dict):
 
 
 def _store(
-    snapshot_body: dict, *, handover_id: str, exchange_version: int,
+    snapshot_body: dict, *, run, handover_id: str, exchange_version: int,
     etag: str, correlation_id: str,
 ) -> tuple[StaacHandover, bool]:
     """Land the snapshot, or return the one already landed.
 
     `(handover_id, exchange_version)` is the partner's own idempotency
     key, so a re-read of a page this registry already stored finds its
-    row rather than making a second one.
+    row rather than making a second one — and, crucially, does not
+    land a second copy of the payload.
+
+    The payload goes to `RawLanding`, the registry's one append-only
+    landing table, which also moves the run's `records_received` and
+    `records_landed` counters.
     """
+    from apps.ingestion_hub.services import land_payload
+
+    existing = StaacHandover.objects.filter(
+        handover_id=handover_id, exchange_version=exchange_version,
+    ).first()
+    if existing is not None:
+        return existing, False
+
     shared = snapshot_body.get("shared_data") or {}
-    row, created = StaacHandover.objects.get_or_create(
+    landing = land_payload(
+        run, snapshot_body, source_reference=str(handover_id),
+    )
+    row = StaacHandover.objects.create(
         handover_id=handover_id,
         exchange_version=exchange_version,
-        defaults={
-            "tracking_number": _text(snapshot_body, "source", "tracking_number"),
-            "snapshot": snapshot_body,
-            "fields_manifest": list(shared.get("fields") or []),
-            "agreement_reference": str(shared.get("agreement_reference") or ""),
-            "agreement_version": str(shared.get("agreement_version") or ""),
-            "etag": etag,
-            "correlation_id": correlation_id,
-            "retrieved_at": timezone.now(),
-            "outcome": HandoverOutcome.HELD,
-        },
+        tracking_number=_text(snapshot_body, "source", "tracking_number"),
+        raw_landing=landing,
+        fields_manifest=list(shared.get("fields") or []),
+        agreement_reference=str(shared.get("agreement_reference") or ""),
+        agreement_version=str(shared.get("agreement_version") or ""),
+        etag=etag,
+        correlation_id=correlation_id,
+        retrieved_at=timezone.now(),
+        outcome=HandoverOutcome.HELD,
     )
-    return row, created
+    return row, True
 
 
 @transaction.atomic
 def file_snapshot(
-    snapshot_body: dict, *, handover_id: str, exchange_version: int,
+    snapshot_body: dict, *, run, handover_id: str, exchange_version: int,
     etag: str = "", correlation_id: str = "", actor: str = PULL_ACTOR,
 ) -> FilingResult:
     """Store a retrieved snapshot and file it if it can be filed."""
     row, created = _store(
-        snapshot_body, handover_id=handover_id,
+        snapshot_body, run=run, handover_id=handover_id,
         exchange_version=exchange_version, etag=etag,
         correlation_id=correlation_id,
     )
@@ -167,16 +186,74 @@ def file_snapshot(
     return FilingResult(handover=row, created=True, warnings=warnings)
 
 
+def _agreement_covers(row: StaacHandover) -> str:
+    """"" when the registry's own register authorises this disclosure.
+
+    The snapshot names the agreement it was released under. Storing
+    that and auditing it as the record of permission means the chain
+    holds the PARTNER's assertion — a handover sent under an expired,
+    withdrawn or invented reference would land, be audited as lawful
+    and be filed, with the registry never consulting what it is
+    actually permitted to receive.
+
+    `DataProvisionAgreement` is that register: the inbound counterpart
+    of a DSA, the thing AC-DIH-DPA-REQUIRED already gates every
+    connector run on. The reference STAAC sends must match one of ours
+    that is in force today.
+    """
+    from apps.ingestion_hub.models import DataProvisionAgreement
+    from apps.grievance.external import SOURCE_CODE
+
+    reference = (row.agreement_reference or "").strip()
+    if not reference:
+        return (
+            "the snapshot names no data-sharing agreement, so nothing "
+            "records what this registry was permitted to receive"
+        )
+    today = timezone.now().date()
+    covered = DataProvisionAgreement.objects.filter(
+        source_system__code=SOURCE_CODE,
+        reference=reference,
+        valid_from__lte=today,
+    ).filter(
+        models.Q(valid_to__isnull=True) | models.Q(valid_to__gte=today),
+    ).exists()
+    if covered:
+        return ""
+    return (
+        f"the snapshot cites agreement {reference!r}, which is not a "
+        f"data-provision agreement in force for {SOURCE_CODE} in this "
+        "registry"
+    )
+
+
 def _apply(row: StaacHandover, *, actor: str) -> tuple[str, ...]:
     """Turn a landed snapshot into a Grievance, or hold it."""
     body = row.snapshot or {}
     warnings: list[str] = []
 
+    unlawful = _agreement_covers(row)
+    if unlawful:
+        _hold(
+            row, unlawful, kind=HeldReason.UNVERIFIED_AGREEMENT,
+            source_code=row.agreement_reference, actor=actor,
+        )
+        return tuple(warnings)
+
     category_name = _text(body, "grievance", "category")
     try:
         resolved = resolve_category(category_name)
     except UnmappedCategory as exc:
-        _hold(row, str(exc), actor=actor)
+        _hold(
+            row, str(exc),
+            kind=(
+                HeldReason.UNBOUND_CATEGORY if exc.recognised
+                else HeldReason.UNKNOWN_CATEGORY
+            ),
+            choice_list=STAAC_CATEGORY_LIST,
+            source_code=exc.value,
+            actor=actor,
+        )
         return tuple(warnings)
 
     complainant = body.get("complainant") or {}
@@ -208,13 +285,27 @@ def _apply(row: StaacHandover, *, actor: str) -> tuple[str, ...]:
             actor=actor,
         )
     except GrievanceError as exc:
-        _hold(row, str(exc), actor=actor)
+        kind = (
+            HeldReason.UNRESOLVED_PLACE
+            if "GeographicUnit" in str(exc) else HeldReason.REFUSED
+        )
+        _hold(
+            row, str(exc), kind=kind,
+            source_code=parish_key if kind == HeldReason.UNRESOLVED_PLACE else "",
+            actor=actor,
+        )
         return tuple(warnings)
 
     row.grievance = grievance
     row.outcome = HandoverOutcome.FILED
     row.outcome_detail = ""
-    row.save(update_fields=["grievance", "outcome", "outcome_detail", "updated_at"])
+    row.held_reason = ""
+    row.held_choice_list = ""
+    row.held_source_code = ""
+    row.save(update_fields=[
+        "grievance", "outcome", "outcome_detail", "held_reason",
+        "held_choice_list", "held_source_code", "updated_at",
+    ])
 
     # v1 of the contract says `attachments` is always empty and that
     # NSR must not attempt a download or assume an endpoint exists.
@@ -258,11 +349,25 @@ def _apply(row: StaacHandover, *, actor: str) -> tuple[str, ...]:
     return tuple(warnings)
 
 
-def _hold(row: StaacHandover, reason: str, *, actor: str) -> None:
-    """Keep the snapshot, file nothing, and say why in one sentence."""
+def _hold(
+    row: StaacHandover, reason: str, *, kind: str,
+    choice_list: str = "", source_code: str = "", actor: str,
+) -> None:
+    """Keep the snapshot, file nothing, and say why — twice.
+
+    `kind` and `source_code` are what an operator filters and counts
+    on ("which categories are blocking cases, and how many each");
+    `reason` is the sentence for whoever opens one case.
+    """
     row.outcome = HandoverOutcome.HELD
     row.outcome_detail = reason
-    row.save(update_fields=["outcome", "outcome_detail", "updated_at"])
+    row.held_reason = kind
+    row.held_choice_list = choice_list
+    row.held_source_code = str(source_code or "")[:128]
+    row.save(update_fields=[
+        "outcome", "outcome_detail", "held_reason", "held_choice_list",
+        "held_source_code", "updated_at",
+    ])
     emit_audit(
         "update", "staac.handover", row.id, actor=actor, actor_kind="system",
         reason="held — not filed",
@@ -270,6 +375,9 @@ def _hold(row: StaacHandover, reason: str, *, actor: str) -> None:
             "handover_id": str(row.handover_id),
             "exchange_version": row.exchange_version,
             "outcome": HandoverOutcome.HELD,
+            "held_reason": kind,
+            "held_choice_list": choice_list,
+            "held_source_code": row.held_source_code,
             "outcome_detail": reason,
         },
     )

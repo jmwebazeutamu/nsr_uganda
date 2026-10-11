@@ -458,6 +458,27 @@ class StaacCredential(models.Model):
         return f"STAAC {self.environment} ({self.base_url})"
 
 
+class HeldReason(models.TextChoices):
+    """Why a snapshot is held, as a value rather than a sentence.
+
+    `intake.UnmappedCategory` already separates "we have never heard
+    of this code" from "we know it and nobody has decided what it
+    means here" — its own docstring calls them "different problems
+    with different owners" — and the first version of this flattened
+    both into English prose. That made the only question an operator
+    actually asks ("which codes are blocking cases, and how many
+    each") answerable only by reading sentences one at a time.
+
+    `outcome_detail` keeps the sentence. This makes it countable.
+    """
+
+    UNKNOWN_CATEGORY = "unknown_category", "Category not in the registered list"
+    UNBOUND_CATEGORY = "unbound_category", "Category registered, no approved binding"
+    UNRESOLVED_PLACE = "unresolved_place", "Place names no GeographicUnit"
+    UNVERIFIED_AGREEMENT = "unverified_agreement", "No data-provision agreement covers it"
+    REFUSED = "refused", "Refused for another reason"
+
+
 class HandoverOutcome(models.TextChoices):
     """What became of a snapshot this registry retrieved."""
 
@@ -507,8 +528,20 @@ class StaacHandover(models.Model):
     #: to C-26-057528-8". Not a key here — the pair above is.
     tracking_number = models.CharField(max_length=64, blank=True, db_index=True)
 
-    #: Exactly what the detail endpoint returned. Never edited.
-    snapshot = models.JSONField()
+    #: Exactly what the detail endpoint returned, held in the
+    #: registry's one landing table rather than a column of this one.
+    #:
+    #: `RawLanding` is append-only (AC-DIH-LANDING-IMMUTABLE) and FKs
+    #: to the ConnectorRun that fetched it, so "what arrived, in which
+    #: run, from which source" has one answer for every external
+    #: payload the registry receives. A JSON column here was a second
+    #: landing table whose only justification was that RawLanding
+    #: needed a ConnectorRun; the run now exists, so the
+    #: justification does not.
+    raw_landing = models.OneToOneField(
+        "ingestion_hub.RawLanding", on_delete=models.PROTECT,
+        related_name="staac_handover",
+    )
 
     #: The approved disclosure list STAAC sent with it. Stored because
     #: the spec makes it the audit record of what STAAC was permitted
@@ -529,8 +562,14 @@ class StaacHandover(models.Model):
         max_length=16, choices=HandoverOutcome.choices,
         default=HandoverOutcome.HELD, db_index=True,
     )
-    #: Why it is held, in words an operator can act on. Blank once
-    #: filed.
+    #: Why it is held. The kind is what an admin filters and counts
+    #: on; the code is the thing somebody has to go and bind; the
+    #: detail is the sentence for whoever reads one case.
+    held_reason = models.CharField(
+        max_length=32, choices=HeldReason.choices, blank=True, db_index=True,
+    )
+    held_choice_list = models.CharField(max_length=64, blank=True)
+    held_source_code = models.CharField(max_length=128, blank=True)
     outcome_detail = models.TextField(blank=True)
     grievance = models.ForeignKey(
         "Grievance", on_delete=models.PROTECT, null=True, blank=True,
@@ -548,8 +587,16 @@ class StaacHandover(models.Model):
                 name="staac_handover_idempotency",
             ),
         ]
-        indexes = [models.Index(fields=["outcome", "retrieved_at"])]
+        indexes = [
+            models.Index(fields=["outcome", "retrieved_at"]),
+            models.Index(fields=["held_reason", "held_source_code"]),
+        ]
         ordering = ("-retrieved_at",)
+
+    @property
+    def snapshot(self) -> dict:
+        """What STAAC sent, read from the landing that holds it."""
+        return self.raw_landing.payload if self.raw_landing_id else {}
 
     def __str__(self) -> str:
         return (

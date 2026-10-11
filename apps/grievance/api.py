@@ -44,6 +44,24 @@ def _is_grm_officer(user) -> bool:
     return sees_every_grievance(user)
 
 
+class _AttachmentLimits(serializers.Serializer):
+    """The response schema for `attachment-limits/`.
+
+    A real schema rather than a prose `description`, because this
+    endpoint exists so the console does not keep its own copy of the
+    caps — which makes the shape of the answer a contract the console
+    depends on, and an undescribed contract is one a client has to
+    guess at.
+    """
+
+    max_files = serializers.IntegerField()
+    max_file_bytes = serializers.IntegerField()
+    max_total_bytes = serializers.IntegerField()
+    allowed_content_types = serializers.ListField(
+        child=serializers.CharField(),
+    )
+
+
 class GrievanceAttachmentSerializer(serializers.ModelSerializer):
     """What is on the case, for a reader. Never the bytes.
 
@@ -117,6 +135,24 @@ class GrievanceSerializer(serializers.ModelSerializer):
     tier_started_at = serializers.DateTimeField(read_only=True)
     sla_breach_flagged_at = serializers.DateTimeField(read_only=True)
     attachments = GrievanceAttachmentSerializer(many=True, read_only=True)
+    #: The sex label beside the code, because the console must not map
+    #: one to the other. `docs/api_changelog.md` states it as a rule —
+    #: "Every coded column ships both the raw code and the resolved
+    #: label" — and `ssot_register.md` reserves code-to-name
+    #: resolution for the server. This is the Grievance API's first
+    #: ChoiceList-coded column; without the companion, a case screen
+    #: showing the reporter's sex would have to keep a local
+    #: `{"1": "Male"}` table or fetch a whole list for one cell.
+    reporter_gender_label = serializers.SerializerMethodField()
+
+    def get_reporter_gender_label(self, obj) -> str:
+        from apps.grievance.intake import NSR_SEX_LIST
+        from apps.reference_data.services import resolve_label
+
+        return resolve_label(
+            NSR_SEX_LIST, obj.reporter_gender,
+            context={"entity_id": obj.id, "field": "reporter_gender"},
+        )
     # Write-only, because the bytes do not come back on the case: they
     # live in the blob store and the rows above say what is there.
     documents = _InboundDocument(
@@ -134,7 +170,7 @@ class GrievanceSerializer(serializers.ModelSerializer):
             "id", "reference", "category", "sub_category", "description",
             "household_id", "member_id",
             "reporter_name", "reporter_phone", "reporter_relationship",
-            "reporter_gender", "reporter_age_years",
+            "reporter_gender", "reporter_gender_label", "reporter_age_years",
             "tier", "status", "assigned_to",
             "opened_at", "sla_deadline",
             "resolved_at", "resolved_by", "resolution_narrative",
@@ -149,7 +185,7 @@ class GrievanceSerializer(serializers.ModelSerializer):
             "resolved_at", "resolved_by", "closed_at", "closed_by",
             "closing_narrative", "created_at", "updated_at",
             "tier_started_at", "sla_breach_flagged_at", "allowed_actions",
-            "attachments",
+            "attachments", "reporter_gender_label",
         )
 
 
@@ -398,7 +434,7 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
     @extend_schema(
         tags=["grm"],
         summary="What this registry will accept as an attachment",
-        responses={200: OpenApiResponse(description="Attachment limits")},
+        responses={200: _AttachmentLimits},
     )
     @action(detail=False, methods=["get"], url_path="attachment-limits")
     def attachment_limits(self, request):

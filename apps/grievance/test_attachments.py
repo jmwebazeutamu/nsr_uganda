@@ -353,3 +353,59 @@ class TestTheIntakeApi:
         }, format="json")
         assert r.status_code == 400
         assert "not a code on the 'sex' list" in str(r.data)
+
+
+class TestTheLimitsEndpoint:
+    """The endpoint exists so the console does not copy a policy, which
+    makes the pairing the thing worth testing: the console asserts it
+    fetches these numbers, and this asserts the server serves the ones
+    the service actually enforces. Without both halves the pair can
+    break from either side in silence."""
+
+    @pytest.fixture
+    def client(self, db, django_user_model):
+        from rest_framework.test import APIClient
+
+        user = django_user_model.objects.create_user(
+            username="limits-op", password="p", is_superuser=True,
+            is_staff=True,
+        )
+        c = APIClient()
+        c.force_authenticate(user=user)
+        return c
+
+    URL = "/api/v1/grm/grievances/attachment-limits/"
+
+    def test_it_serves_the_caps_the_service_enforces(self, client):
+        from apps.update_workflow.evidence_storage import (
+            ALLOWED_MIME_TYPES,
+            MAX_FILE_BYTES,
+            MAX_FILES,
+            MAX_TOTAL_BYTES,
+        )
+
+        r = client.get(self.URL)
+        assert r.status_code == 200
+        assert r.data == {
+            "max_files": MAX_FILES,
+            "max_file_bytes": MAX_FILE_BYTES,
+            "max_total_bytes": MAX_TOTAL_BYTES,
+            "allowed_content_types": sorted(ALLOWED_MIME_TYPES),
+        }
+
+    def test_the_serializer_cap_cannot_drift_below_the_real_one(self):
+        """The base64 length limit is derived, not chosen. If it ever
+        becomes the binding constraint, the endpoint above advertises
+        a size the API refuses."""
+        import base64
+
+        from apps.grievance.api import _max_base64_chars
+        from apps.update_workflow.evidence_storage import MAX_FILE_BYTES
+
+        encoded = base64.b64encode(b"x" * MAX_FILE_BYTES)
+        assert len(encoded) <= _max_base64_chars()
+
+    def test_it_needs_a_session(self, db):
+        from rest_framework.test import APIClient
+
+        assert APIClient().get(self.URL).status_code in (401, 403)

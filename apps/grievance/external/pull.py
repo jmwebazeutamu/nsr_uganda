@@ -23,7 +23,7 @@ from django.utils import timezone
 from apps.security.audit import emit as emit_audit
 
 from ..models import HandoverOutcome, StaacCredential
-from . import PULL_ACTOR
+from . import CONNECTOR_NAME, PULL_ACTOR, SOURCE_CODE
 from .client import (
     DEFAULT_PAGE_SIZE,
     CursorRejected,
@@ -33,10 +33,36 @@ from .client import (
 from .service import file_snapshot
 
 
+def connector_for_staac():
+    """The registered connector this pull runs under.
+
+    Its existence is what makes `start_connector_run` enforce
+    AC-DIH-DPA-REQUIRED on a partner's personal data, and what gives
+    the run a queryable record instead of a line of stdout.
+    """
+    from apps.ingestion_hub.models import Connector
+
+    connector = Connector.objects.filter(
+        source_system__code=SOURCE_CODE, name=CONNECTOR_NAME, is_active=True,
+    ).select_related("source_system").first()
+    if connector is None:
+        raise StaacError(
+            f"No active connector {CONNECTOR_NAME!r} for source "
+            f"{SOURCE_CODE!r}. Migration grievance.0017 registers it.",
+        )
+    return connector
+
+
 @dataclass
 class PullReport:
-    """What a run did, in the terms an operator asks about."""
+    """What a run did, in the terms an operator asks about.
 
+    The durable record is the `ConnectorRun` this carries; these
+    fields are the same counts in the vocabulary of the command's own
+    output, so an operator reads "filed" rather than "promoted".
+    """
+
+    run_id: str = ""
     listed: int = 0
     fetched: int = 0
     filed: int = 0
@@ -141,6 +167,22 @@ def pull(
         )
     report = PullReport(correlation_id=client.correlation_id or correlation)
 
+    # AC-DIH-DPA-REQUIRED, reached through the registry's own gate
+    # rather than restated: no agreement covering this source, no run,
+    # and therefore no personal data received.
+    from apps.ingestion_hub.services import DihError, start_connector_run
+
+    connector = connector_for_staac()
+    try:
+        run = start_connector_run(connector, actor=actor)
+    except DihError as exc:
+        raise StaacError(
+            f"{exc}. A partner's grievances carry complainant identity, so "
+            "the agreement authorising receipt has to be recorded here "
+            "before the first call — not taken from the snapshot.",
+        ) from exc
+    report.run_id = run.id
+
     cursor = "" if (restart or credential is None) else credential.cursor
 
     emit_audit(
@@ -155,7 +197,7 @@ def pull(
 
     try:
         report = _walk(
-            client, report, cursor=cursor, limit=limit,
+            client, report, run=run, cursor=cursor, limit=limit,
             changed_since=changed_since, credential=credential, actor=actor,
         )
     except CursorRejected as exc:
@@ -169,9 +211,11 @@ def pull(
             credential.cursor = ""
             credential.save(update_fields=["cursor", "updated_at"])
         report = _walk(
-            client, report, cursor="", limit=limit,
+            client, report, run=run, cursor="", limit=limit,
             changed_since=changed_since, credential=credential, actor=actor,
         )
+
+    _close_run(run, report)
 
     if credential is not None and not report.errors:
         # Only a clean run sets it. Stamping it regardless would show
@@ -192,8 +236,35 @@ def pull(
     return report
 
 
+def _close_run(run, report: PullReport) -> None:
+    """Write the run's counters, in ConnectorRun's own vocabulary.
+
+    `records_received` is what the collection listed, `records_landed`
+    what was fetched and stored, `records_promoted` what became a
+    grievance, `records_quarantined` what is held awaiting
+    configuration, `records_rejected` what could not be read at all.
+    A second counters table would have been a second answer to "did
+    last night's run work".
+    """
+    from django.db.models import F
+
+    from apps.ingestion_hub.models import ConnectorRun, ConnectorRunStatus
+
+    ConnectorRun.objects.filter(pk=run.pk).update(
+        status=(
+            ConnectorRunStatus.FAILED if report.errors
+            else ConnectorRunStatus.SUCCEEDED
+        ),
+        finished_at=timezone.now(),
+        note=report.summary()[:500],
+        records_promoted=F("records_promoted") + report.filed,
+        records_quarantined=F("records_quarantined") + report.held,
+        records_rejected=F("records_rejected") + len(report.errors),
+    )
+
+
 def _walk(
-    client: StaacClient, report: PullReport, *, cursor: str, limit: int,
+    client: StaacClient, report: PullReport, *, run, cursor: str, limit: int,
     changed_since: str, credential: StaacCredential | None, actor: str,
 ) -> PullReport:
     for refs, next_cursor in client.iter_refs(
@@ -204,7 +275,7 @@ def _walk(
         page_complete = True
         for ref in refs:
             try:
-                _take(ref, client, report, actor=actor)
+                _take(ref, client, report, run=run, actor=actor)
             except StaacError as exc:
                 # One unreadable handover must not abandon the page's
                 # cursor — but it must not let the cursor advance past
@@ -225,7 +296,9 @@ def _walk(
     return report
 
 
-def _take(ref, client: StaacClient, report: PullReport, *, actor: str) -> None:
+def _take(
+    ref, client: StaacClient, report: PullReport, *, run, actor: str,
+) -> None:
     """Fetch and file one handover, counting what happened."""
     from ..models import StaacHandover
 
@@ -242,6 +315,7 @@ def _take(ref, client: StaacClient, report: PullReport, *, actor: str) -> None:
     report.fetched += 1
     result = file_snapshot(
         snapshot.body,
+        run=run,
         handover_id=snapshot.handover_id,
         exchange_version=snapshot.exchange_version or ref.exchange_version,
         etag=snapshot.etag,
