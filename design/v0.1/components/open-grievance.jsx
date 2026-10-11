@@ -1,4 +1,5 @@
-/* global React, window, Icon, Modal, HouseholdPicker,
+/* global React, window, document, fetch, FileReader, Icon, Modal,
+   HouseholdPicker, useChoiceList,
    GRM_CATEGORY_OPTIONS, GRM_TIER_OPTIONS */
 // One "Open a grievance" dialog.
 //
@@ -33,7 +34,51 @@ const OG_BLANK = {
   reporter_name: "",
   reporter_phone: "",
   reporter_relationship: "",
+  // A code from the `sex` ChoiceList, the same vocabulary Member.sex
+  // uses, fetched below — never a label and never a local list. The
+  // server refuses anything the list does not carry.
+  reporter_gender: "",
+  reporter_age_years: "",
 };
+
+// The list that says what sex NSR records. `Member.sex` holds a code
+// from it; so does `Grievance.reporter_gender`.
+const OG_SEX_LIST = "sex";
+
+// What the registry will accept as an attachment, asked rather than
+// assumed. The caps belong to the blob store
+// (apps/update_workflow/evidence_storage.py) and are enforced by
+// services.attach_document; a copy here would be a second policy free
+// to disagree with the one that actually refuses. Until the answer
+// arrives the picker takes files and lets the server speak.
+const OG_LIMITS_URL = "/api/v1/grm/grievances/attachment-limits/";
+
+const _ogHumanBytes = (n) => {
+  if (!Number.isFinite(n)) return "";
+  if (n >= 1024 * 1024) return `${Math.round(n / (1024 * 1024))} MB`;
+  if (n >= 1024) return `${Math.round(n / 1024)} KB`;
+  return `${n} bytes`;
+};
+
+// FileReader gives "data:<mime>;base64,<payload>"; the API wants the
+// payload. Reading in the browser rather than posting multipart keeps
+// the request one JSON body — the same shape UPD's change-request
+// bundle uses, so there is one way to send this registry a document.
+const _ogReadFile = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+  reader.onload = () => {
+    const text = String(reader.result || "");
+    const comma = text.indexOf(",");
+    resolve({
+      filename: file.name,
+      content_type: file.type || "application/octet-stream",
+      size: file.size,
+      data_base64: comma >= 0 ? text.slice(comma + 1) : text,
+    });
+  };
+  reader.readAsDataURL(file);
+});
 
 const _ogCsrf = () => {
   const m = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
@@ -85,6 +130,16 @@ const OpenGrievanceModal = ({
   const [members, setMembers] = _ogState([]);
   const [busy, setBusy] = _ogState(false);
   const [err, setErr] = _ogState("");
+  // Documents picked but not yet sent. They go with the case in one
+  // request, so a refused file refuses the grievance rather than
+  // leaving a case whose evidence vanished.
+  const [docs, setDocs] = _ogState([]);
+  const [limits, setLimits] = _ogState(null);
+
+  // The sex codes, from the one list that holds them.
+  const [sexOptions] = (typeof useChoiceList === "function")
+    ? useChoiceList(OG_SEX_LIST)
+    : [[]];
 
   const locked = Boolean(household && household.id);
   const householdId = locked ? household.id : form.household_id;
@@ -100,7 +155,22 @@ const OpenGrievanceModal = ({
     });
     const known = locked || Boolean((initial || {}).household_id);
     setAboutHousehold(known ? true : null);
+    setDocs([]);
   }, [open, locked, household && household.id, initial]);
+
+  _ogEffect(() => {
+    if (!open || limits) return;
+    let live = true;
+    fetch(OG_LIMITS_URL, {
+      credentials: "same-origin", headers: { Accept: "application/json" },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(d => { if (live) setLimits(d); })
+      // No limits means the hint goes unsaid, not that the picker
+      // stops working — the server still refuses what it will not take.
+      .catch(() => {});
+    return () => { live = false; };
+  }, [open, limits]);
 
   _ogEffect(() => {
     if (!open || !householdId) { setMembers([]); return; }
@@ -132,7 +202,20 @@ const OpenGrievanceModal = ({
         "X-CSRFToken": _ogCsrf(),
         Accept: "application/json",
       },
-      body: JSON.stringify({ ...form, household_id: aboutHousehold ? householdId : "" }),
+      body: JSON.stringify({
+        ...form,
+        household_id: aboutHousehold ? householdId : "",
+        // An unanswered age is absent, not nought. A complainant who
+        // did not say is not a newborn, and the server stores null.
+        reporter_age_years: String(form.reporter_age_years || "").trim() === ""
+          ? null
+          : Number(form.reporter_age_years),
+        documents: docs.map(d => ({
+          filename: d.filename,
+          content_type: d.content_type,
+          data_base64: d.data_base64,
+        })),
+      }),
     })
       .then(async r => {
         if (r.status === 201) return r.json();
@@ -140,22 +223,42 @@ const OpenGrievanceModal = ({
         throw new Error(j.detail || `HTTP ${r.status}`);
       })
       .then(g => { onOpened?.(g); onClose?.(); })
-      .catch(e => setErr(String(e.message || e)))
+      .catch(e => setErr(`We could not create the grievance: ${String(e.message || e)}`))
       .finally(() => setBusy(false));
   };
 
   const set = (patch) => setForm(f => ({ ...f, ...patch }));
 
+  const addFiles = (fileList) => {
+    const picked = Array.from(fileList || []);
+    if (!picked.length) return;
+    setErr("");
+    Promise.all(picked.map(_ogReadFile))
+      .then(read => setDocs(d => {
+        // The server collapses the same bytes to one attachment; this
+        // stops the list showing the same file twice before it gets
+        // there. Matched on name and size because the digest is the
+        // server's to compute.
+        const seen = new Set(d.map(x => `${x.filename}:${x.size}`));
+        return [...d, ...read.filter(x => !seen.has(`${x.filename}:${x.size}`))];
+      }))
+      .catch(e => setErr(String(e.message || e)));
+  };
+
+  const dropFile = (index) => setDocs(d => d.filter((_, i) => i !== index));
+
+  const docsBytes = docs.reduce((n, d) => n + (d.size || 0), 0);
+
   return (
     <Modal
       width={width}
       open={open}
-      title="Open a grievance"
+      title="New grievance"
       onClose={() => !busy && onClose?.()}
       footer={<>
         <button className="btn" disabled={busy} onClick={() => onClose?.()}>Cancel</button>
         <button className="btn btn-primary" disabled={busy} onClick={submit}>
-          {busy ? "Opening…" : "Open grievance"}
+          {busy ? "Creating…" : "Create grievance"}
         </button>
       </>}>
       <div className="col gap-2">
@@ -271,24 +374,147 @@ const OpenGrievanceModal = ({
           )}
         </div>
 
-        <label className="t-cap" style={{fontWeight:600, marginTop:8}}>REPORTER</label>
-        <div className="row gap-2">
-          <input className="field-text" type="text" placeholder="Name"
-                 style={{flex:2, padding:6}}
-                 value={form.reporter_name}
-                 onChange={(e) => set({ reporter_name: e.target.value })}/>
-          <input className="field-text" type="text" placeholder="Phone (+256…)"
-                 style={{flex:2, padding:6}}
-                 value={form.reporter_phone}
-                 onChange={(e) => set({ reporter_phone: e.target.value })}/>
-          <input className="field-text" type="text" placeholder="Relationship"
-                 style={{flex:1, padding:6}}
-                 value={form.reporter_relationship}
-                 onChange={(e) => set({ reporter_relationship: e.target.value })}/>
+        {/* The reporter, in five fields rather than three.
+            Sex and age were nowhere, so a GRM that is reported on by
+            sex and age group had nothing to report. Five inputs will
+            not sit in one row at this width, so the block is a grid of
+            two: who they are, then who they are for counting. Every
+            one of them is optional — a complaint may be anonymous and
+            refusing it for that would be the wrong trade. */}
+        <div style={{marginTop:12}}>
+          <div className="row" style={{
+            justifyContent:"space-between", alignItems:"baseline",
+            marginBottom:6,
+          }}>
+            <div className="t-cap" style={{fontWeight:600}}>REPORTER</div>
+            <div className="t-cap muted">All optional</div>
+          </div>
+          <div style={{
+            display:"grid", gap:8,
+            gridTemplateColumns:"minmax(0,2fr) minmax(0,2fr) minmax(0,1.4fr)",
+          }}>
+            <label>
+              <div className="t-cap muted" style={{marginBottom:2}}>Name</div>
+              <input className="field-text" type="text" placeholder="Name"
+                     style={{width:"100%", padding:6}}
+                     value={form.reporter_name}
+                     onChange={(e) => set({ reporter_name: e.target.value })}/>
+            </label>
+            <label>
+              <div className="t-cap muted" style={{marginBottom:2}}>Phone</div>
+              <input className="field-text" type="tel" placeholder="+256…"
+                     style={{width:"100%", padding:6}}
+                     value={form.reporter_phone}
+                     onChange={(e) => set({ reporter_phone: e.target.value })}/>
+            </label>
+            <label>
+              <div className="t-cap muted" style={{marginBottom:2}}>Relationship</div>
+              <input className="field-text" type="text" placeholder="e.g. Head"
+                     style={{width:"100%", padding:6}}
+                     value={form.reporter_relationship}
+                     onChange={(e) => set({ reporter_relationship: e.target.value })}/>
+            </label>
+            <label>
+              <div className="t-cap muted" style={{marginBottom:2}}>Sex</div>
+              {/* The options are the `sex` ChoiceList's, fetched. A
+                  local Male/Female pair would be a second vocabulary
+                  for a field Member.sex already reads from one list,
+                  and the codes — not the words — are what is stored. */}
+              <select className="field-select" style={{width:"100%"}}
+                      aria-label="Reporter sex"
+                      value={form.reporter_gender}
+                      onChange={(e) => set({ reporter_gender: e.target.value })}>
+                <option value="">— Not stated —</option>
+                {(sexOptions || []).map(o => (
+                  <option key={o.code} value={o.code}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              <div className="t-cap muted" style={{marginBottom:2}}>Age</div>
+              <input className="field-text" type="number" min="0" step="1"
+                     placeholder="Years" aria-label="Reporter age in years"
+                     style={{width:"100%", padding:6}}
+                     value={form.reporter_age_years}
+                     onChange={(e) => set({ reporter_age_years: e.target.value })}/>
+            </label>
+            <div className="t-cap muted" style={{alignSelf:"end", paddingBottom:6}}>
+              Counted, never used to decide the case.
+            </div>
+          </div>
+        </div>
+
+        {/* Evidence. A complaint often arrives as a photograph of the
+            posted list or a scan of the letter it was written on, and
+            there was nowhere to put one: the file stayed on the
+            officer's phone and the case was argued from the narrative
+            alone. Sent with the case in one request, so a refused file
+            refuses the grievance instead of leaving a case whose
+            evidence quietly went missing. */}
+        <div style={{marginTop:12}}>
+          <div className="row" style={{
+            justifyContent:"space-between", alignItems:"baseline",
+            marginBottom:6,
+          }}>
+            <div className="t-cap" style={{fontWeight:600}}>ATTACHMENTS</div>
+            {limits && (
+              <div className="t-cap muted">
+                Up to {limits.max_files}, {_ogHumanBytes(limits.max_file_bytes)} each
+                {docs.length > 0 && ` · ${_ogHumanBytes(docsBytes)} chosen`}
+              </div>
+            )}
+          </div>
+
+          {docs.length > 0 && (
+            <div style={{
+              border:"1px solid var(--neutral-200)", borderRadius:6,
+              marginBottom:8, overflow:"hidden",
+            }}>
+              {docs.map((d, i) => (
+                <div key={`${d.filename}:${d.size}:${i}`} className="row"
+                     style={{
+                       justifyContent:"space-between", alignItems:"center",
+                       padding:"6px 8px", gap:8,
+                       borderTop: i ? "1px solid var(--neutral-200)" : "none",
+                     }}>
+                  <div className="row gap-2" style={{alignItems:"center", minWidth:0}}>
+                    <Icon name="file" size={12}/>
+                    <span className="t-bodysm" style={{
+                      overflow:"hidden", textOverflow:"ellipsis",
+                      whiteSpace:"nowrap",
+                    }}>{d.filename}</span>
+                  </div>
+                  <div className="row gap-2" style={{alignItems:"center"}}>
+                    <span className="t-cap muted">{_ogHumanBytes(d.size)}</span>
+                    <button className="btn btn-sm btn-ghost" disabled={busy}
+                            aria-label={`Remove ${d.filename}`}
+                            onClick={() => dropFile(i)}>
+                      <Icon name="x" size={11}/>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <label className="btn btn-sm" style={{cursor: busy ? "default" : "pointer"}}>
+            <Icon name="plus" size={12}/> Add a document
+            <input type="file" hidden multiple disabled={busy}
+                   data-testid="og-file-input"
+                   accept={(limits && limits.allowed_content_types
+                     ? limits.allowed_content_types.join(",") : undefined)}
+                   onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }}/>
+          </label>
+          {!docs.length && (
+            <div className="t-cap muted" style={{marginTop:6}}>
+              A photograph of the posted list, or the letter the complaint
+              came on.
+            </div>
+          )}
         </div>
 
         {err && (
-          <div className="t-bodysm" style={{
+          <div className="t-bodysm" role="alert" aria-live="assertive" style={{
             marginTop: 8, color:"var(--accent-danger)",
             padding:"8px 10px", background:"var(--neutral-50)",
             border:"1px solid var(--accent-danger)", borderRadius:6,

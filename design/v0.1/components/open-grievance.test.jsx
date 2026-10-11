@@ -26,6 +26,12 @@ beforeAll(async () => {
   await import("../../components.jsx");
   await import("../data/grm-vocabulary.jsx");
   await import("./search-picker.jsx");
+  // The `sex` codes come from the one ChoiceList that holds them, the
+  // same way every other coded select in the console reads one.
+  globalThis.useChoiceList = () => [
+    [{ code: "1", label: "Male" }, { code: "2", label: "Female" }],
+    { loading: false },
+  ];
   await import("./open-grievance.jsx");
   ({ OpenGrievanceModal } = globalThis);
 });
@@ -42,9 +48,26 @@ const stubFetch = (impl) => {
   return globalThis.fetch;
 };
 
+// Two reads the dialog makes on its own, answered here so a test only
+// has to care about the POST. The limits come from the server because
+// they are the blob store's — a copy in the dialog would be a second
+// policy, free to disagree with the one that refuses.
+const LIMITS = {
+  max_files: 3,
+  max_file_bytes: 5 * 1024 * 1024,
+  max_total_bytes: 15 * 1024 * 1024,
+  allowed_content_types: ["application/pdf", "image/jpeg", "image/png"],
+};
+
+const _isDialogRead = (url) => String(url).includes("/members/")
+  || String(url).includes("attachment-limits");
+
 const rosterFetch = (extra) => stubFetch((url, opts) => {
   if (String(url).includes("/members/")) {
     return Promise.resolve({ ok: true, json: () => Promise.resolve({ results: ROSTER }) });
+  }
+  if (String(url).includes("attachment-limits")) {
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(LIMITS) });
   }
   return extra ? extra(url, opts) : Promise.reject(new Error(`unexpected ${url}`));
 });
@@ -90,7 +113,7 @@ describe("the dialog names a person, not just a household", () => {
     fireEvent.change(screen.getByPlaceholderText(/Describe the grievance/), {
       target: { value: "Peter's date of birth is wrong on the roster." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Open grievance" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create grievance" }));
 
     await waitFor(() => expect(posted).not.toBeNull());
     expect(posted.member_id).toBe("01MEM2");
@@ -109,7 +132,7 @@ describe("the dialog names a person, not just a household", () => {
     fireEvent.change(screen.getByPlaceholderText(/Describe the grievance/), {
       target: { value: "The household was left off the programme list." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Open grievance" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create grievance" }));
     await waitFor(() => expect(posted).not.toBeNull());
     expect(posted.member_id).toBe("");
   });
@@ -154,21 +177,21 @@ describe("the household question", () => {
     fireEvent.change(screen.getByPlaceholderText(/Describe the grievance/), {
       target: { value: "Something happened at the parish office." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Open grievance" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create grievance" }));
     await waitFor(() => {
       expect(screen.getByText(/Say whether this is about a household/)).toBeTruthy();
     });
-    expect(f).not.toHaveBeenCalled();
+    expect(f.mock.calls.filter(c => !_isDialogRead(c[0]))).toHaveLength(0);
   });
 
   it("refuses to submit an empty narrative", async () => {
     const f = rosterFetch();
     showLocked();
-    fireEvent.click(screen.getByRole("button", { name: "Open grievance" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create grievance" }));
     await waitFor(() => {
       expect(screen.getByText(/Describe the grievance —/)).toBeTruthy();
     });
-    expect(f.mock.calls.filter(c => !String(c[0]).includes("/members/"))).toHaveLength(0);
+    expect(f.mock.calls.filter(c => !_isDialogRead(c[0]))).toHaveLength(0);
   });
 });
 
@@ -182,7 +205,7 @@ describe("what it does with the result", () => {
     fireEvent.change(screen.getByPlaceholderText(/Describe the grievance/), {
       target: { value: "A complaint that needs recording." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Open grievance" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create grievance" }));
     await waitFor(() => expect(onOpened).toHaveBeenCalledWith({ id: "01NEWG" }));
   });
 
@@ -194,9 +217,165 @@ describe("what it does with the result", () => {
     fireEvent.change(screen.getByPlaceholderText(/Describe the grievance/), {
       target: { value: "A complaint that needs recording." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Open grievance" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create grievance" }));
     await waitFor(() => {
       expect(screen.getByText(/household_id does not exist/)).toBeTruthy();
     });
+  });
+});
+
+describe("who complained", () => {
+  const fillAndSend = () => {
+    fireEvent.change(screen.getByPlaceholderText(/Describe the grievance/), {
+      target: { value: "Omitted from the posted list." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create grievance" }));
+  };
+
+  it("offers the sex codes from the ChoiceList, not its own pair", () => {
+    rosterFetch();
+    showLocked();
+    const select = screen.getByLabelText("Reporter sex");
+    const options = [...select.options].map(o => [o.value, o.textContent]);
+    expect(options).toEqual([
+      ["", "— Not stated —"], ["1", "Male"], ["2", "Female"],
+    ]);
+  });
+
+  it("sends the code, not the label", async () => {
+    let posted = null;
+    rosterFetch((url, opts) => {
+      posted = JSON.parse(opts.body);
+      return Promise.resolve({ status: 201, json: () => Promise.resolve({ id: "01G" }) });
+    });
+    showLocked();
+    fireEvent.change(screen.getByLabelText("Reporter sex"), { target: { value: "2" } });
+    fireEvent.change(screen.getByLabelText("Reporter age in years"), {
+      target: { value: "64" },
+    });
+    fillAndSend();
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted.reporter_gender).toBe("2");
+    expect(posted.reporter_age_years).toBe(64);
+  });
+
+  it("sends no age as null, never as nought", async () => {
+    let posted = null;
+    rosterFetch((url, opts) => {
+      posted = JSON.parse(opts.body);
+      return Promise.resolve({ status: 201, json: () => Promise.resolve({ id: "01G" }) });
+    });
+    showLocked();
+    fillAndSend();
+    await waitFor(() => expect(posted).not.toBeNull());
+    // A complainant who did not say their age is not a newborn, and an
+    // unanswered question must not be counted as an answer.
+    expect(posted.reporter_age_years).toBeNull();
+    expect(posted.reporter_gender).toBe("");
+  });
+});
+
+describe("the evidence", () => {
+  const pdf = (name = "list.pdf", bytes = "the posted list") =>
+    new File([bytes], name, { type: "application/pdf" });
+
+  it("states the limits the server gave it, not its own", async () => {
+    rosterFetch();
+    showLocked();
+    // 3 and 5 MB are the blob store's numbers, fetched. A copy in the
+    // dialog would be a second policy free to disagree with the one
+    // that actually refuses.
+    await waitFor(() => {
+      expect(screen.getByText(/Up to 3, 5 MB each/)).toBeTruthy();
+    });
+  });
+
+  it("sends the chosen file with the case, in one request", async () => {
+    let posted = null;
+    rosterFetch((url, opts) => {
+      posted = JSON.parse(opts.body);
+      return Promise.resolve({ status: 201, json: () => Promise.resolve({ id: "01G" }) });
+    });
+    showLocked();
+    fireEvent.change(screen.getByTestId("og-file-input"), {
+      target: { files: [pdf()] },
+    });
+    await waitFor(() => expect(screen.getByText("list.pdf")).toBeTruthy());
+    fireEvent.change(screen.getByPlaceholderText(/Describe the grievance/), {
+      target: { value: "Omitted from the posted list." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create grievance" }));
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted.documents).toHaveLength(1);
+    expect(posted.documents[0].filename).toBe("list.pdf");
+    expect(posted.documents[0].content_type).toBe("application/pdf");
+    // base64 of the bytes, not the bytes and not a data: URL — the
+    // server decodes exactly this.
+    expect(posted.documents[0].data_base64)
+      .toBe(Buffer.from("the posted list").toString("base64"));
+  });
+
+  it("lets a file be taken back off before sending", async () => {
+    rosterFetch();
+    showLocked();
+    fireEvent.change(screen.getByTestId("og-file-input"), {
+      target: { files: [pdf()] },
+    });
+    await waitFor(() => expect(screen.getByText("list.pdf")).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("Remove list.pdf"));
+    await waitFor(() => expect(screen.queryByText("list.pdf")).toBeNull());
+  });
+
+  it("does not list the same file twice", async () => {
+    rosterFetch();
+    showLocked();
+    const input = screen.getByTestId("og-file-input");
+    fireEvent.change(input, { target: { files: [pdf()] } });
+    await waitFor(() => expect(screen.getByText("list.pdf")).toBeTruthy());
+    fireEvent.change(input, { target: { files: [pdf()] } });
+    await waitFor(() => {
+      expect(screen.getAllByText("list.pdf")).toHaveLength(1);
+    });
+  });
+
+  it("sends no documents key content when none were chosen", async () => {
+    let posted = null;
+    rosterFetch((url, opts) => {
+      posted = JSON.parse(opts.body);
+      return Promise.resolve({ status: 201, json: () => Promise.resolve({ id: "01G" }) });
+    });
+    showLocked();
+    fireEvent.change(screen.getByPlaceholderText(/Describe the grievance/), {
+      target: { value: "Omitted from the posted list." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create grievance" }));
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted.documents).toEqual([]);
+  });
+
+  it("clears what was chosen when the dialog is reopened", async () => {
+    rosterFetch();
+    // Closed and reopened on the SAME mounted dialog, which is how the
+    // workbench uses it — a fresh mount would have fresh state whether
+    // the reset existed or not, and would prove nothing.
+    const { rerender } = render(
+      <OpenGrievanceModal open household={HOUSEHOLD}
+                          onClose={() => {}} onOpened={() => {}}/>,
+    );
+    fireEvent.change(screen.getByTestId("og-file-input"), {
+      target: { files: [pdf()] },
+    });
+    await waitFor(() => expect(screen.getByText("list.pdf")).toBeTruthy());
+    rerender(
+      <OpenGrievanceModal open={false} household={HOUSEHOLD}
+                          onClose={() => {}} onOpened={() => {}}/>,
+    );
+    rerender(
+      <OpenGrievanceModal open household={HOUSEHOLD}
+                          onClose={() => {}} onOpened={() => {}}/>,
+    );
+    // A document attached to the last complaint must not ride along on
+    // the next one.
+    await waitFor(() => expect(screen.queryByText("list.pdf")).toBeNull());
   });
 });
