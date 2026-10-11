@@ -3011,3 +3011,77 @@ ssh nsr-prod 'docker rmi -f bkprobe:t; rm -rf /tmp/bkprobe'
 ```
 
 No data was modified. No secrets printed.
+
+## 2026-10-11 — demo deploy attempted and rolled back; CI has been red since 25 Sep
+
+**Target.** `104.225.218.102` (`nsr-sris-dev.quasar.ug`, host
+`comms.quasar.ug`), compose project `nsr-sris-dev` in
+`/home/jmwebaze/nsr_uganda`. The production box `nsr-prod`
+(154.72.204.74) is still unreachable — port 22 times out, the same
+outage as September.
+
+**Outcome: not deployed.** The box is running what it was running
+before, `ghcr.io/jmwebazeutamu/nsr_uganda:latest` built 2026-09-18.
+`/healthz` 200, `/console/` 302, all six containers up, 10 grievances
+in the database — unchanged. A verified pre-deploy dump is on the box.
+
+**What went wrong, in order.**
+
+1. The image was built on dev and copied over with
+   `docker save | ssh | docker load`, which is the mechanism the user
+   chose. Dev is **aarch64** and the box is **x86_64**; the web
+   container failed with `exec format error` and the compose up left
+   `web` unhealthy. The site was down for roughly four minutes.
+   I did not check the architecture before proposing the method.
+2. Rollback by local image was impossible — `docker load` had
+   overwritten the `:latest` tag and no dangling copy of the 18 Sep
+   image remained. Service was restored with
+   `docker compose pull web && up -d`, which fetched the previous
+   amd64 image from GHCR. A pull to restore, not a change of
+   mechanism.
+3. Cross-building for amd64 on dev was then tried:
+   `docker buildx` is not installed, and classic
+   `docker build --platform linux/amd64` with qemu binfmt registered
+   fails in the console-build stage — node under emulation dies with
+   a Go runtime panic ("console build FAILED: The service was
+   stopped").
+
+**The finding that matters more than the above.** CI on `main` has
+failed on **every run since 2026-09-25**, and `Deploy` is gated on CI
+success via `workflow_run`, so it has been skipping ever since. That
+is why the box still runs a September image: nothing has been able to
+ship for three weeks, and it is not related to today's work.
+
+Two jobs fail (run 38176125602, same two every time):
+
+- **Lint (ruff)** — `ruff check .`: 299 findings on tracked files.
+  Mostly `I001` unsorted imports (92), `E501` long lines (57), `F401`
+  unused imports (29), `UP032` f-strings (25). 158 are
+  `--fix`-able.
+- **SAST (bandit)** — `bandit -q -r apps nsr_mis -x '...'`.
+
+`Tests (pytest + Postgres+PostGIS)`, `JS unit tests (Vitest + RTL)`,
+`Dependency scan (pip-audit)`, `OpenAPI contract` and the partners
+lint all pass.
+
+**Ways forward, for a decision.** Either fix CI so the existing CD
+path ships again (the cleanup is repo-wide and touches code several
+sessions have in flight), or build the image natively on the demo box
+from a copied source tree — the only registry-free path left now that
+cross-building is ruled out, on a shared host currently at load ~18.
+
+### Commands run on the demo box
+
+```
+ssh prod 'hostname; uptime; ls -d /home/jmwebaze/nsr_uganda; df -h /'
+ssh prod 'cd .../nsr_uganda && docker compose -f compose.prod.yml ps'
+ssh prod '... pg_dump -U nsr -d nsr -Fc > backups/pre-deploy-20261011-2126.dump'
+ssh prod 'docker run --rm -v .../backups:/b:ro postgis/postgis:16-3.4 pg_restore -l ...'   # 1228 objects
+docker save ghcr.io/...:latest | gzip -1 | ssh prod 'gunzip | docker load'
+ssh prod '... docker compose -f compose.prod.yml up -d --remove-orphans'    # web unhealthy
+ssh prod '... docker compose -f compose.prod.yml logs web --tail 40'        # exec format error
+ssh prod '... docker compose -f compose.prod.yml pull web && up -d'         # restored
+ssh prod '... showmigrations; ps; curl /healthz; psql -c "select count(*) ..."'
+```
+
+No data was modified. No secrets printed. The dump stays on the box.

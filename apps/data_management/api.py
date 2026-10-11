@@ -683,12 +683,6 @@ def _household_filters(qs, params):
     intake_source = (params.get("intake_source") or "").strip()
     if intake_source:
         qs = qs.filter(current_intake_source=intake_source)
-    programme = (params.get("programme") or "").strip()
-    if programme:
-        qs = qs.filter(
-            enrolments__programme__code=programme,
-            enrolments__status="active",
-        ).distinct()
     return qs
 
 
@@ -729,12 +723,6 @@ def _member_filters(qs, params):
         qs = qs.filter(disability__wg_disability_flag=True)
     elif disab in _DISABILITY_DOMAINS:
         qs = qs.filter(**{f"disability__{disab}__in": ["03", "04"]})
-    programme = (params.get("programme") or "").strip()
-    if programme:
-        qs = qs.filter(
-            household__enrolments__programme__code=programme,
-            household__enrolments__status="active",
-        ).distinct()
     return qs
 
 
@@ -766,7 +754,7 @@ class HouseholdViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyMod
             "Returns total / registered / provisional_pending / "
             "programme_enrolled counts honouring the same filter params "
             "as the list endpoint (q, sub_region, pmt_band, intake_source, "
-            "programme, head_sex, registered_from, registered_to). Note: "
+            "head_sex, registered_from, registered_to). Note: "
             "`provisional_pending` is always 0 against "
             "this surface because pre-promotion records live in "
             "apps.ingestion_hub.StageRecord, not Household. The two-"

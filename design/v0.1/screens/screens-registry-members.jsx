@@ -24,6 +24,10 @@ const { useState: useStateMem, useMemo: useMemoMem } = React;
 
 const _MEM_API_BASE = "/api/v1/data-management/members/";
 
+// `relationship` is the active ChoiceList name. `relationship_to_head`
+// is the Member model field and API filter, not a separate vocabulary.
+const MEMBER_FILTER_CHOICE_LISTS = ["relationship", "nin_status", "sex"];
+
 const _memQS = (params) => {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params || {})) {
@@ -190,7 +194,6 @@ const MembersListView = ({ onOpenHousehold, onOpenMember, wide = null }) => {
   const [subreg, setSubreg] = useStateMem("");
   const [disab, setDisab] = useStateMem("");
   const [nin, setNin] = useStateMem("");
-  const [prog, setProg] = useStateMem("");
   const [sortBy, setSortBy] = useStateMem("lastUpdate");
   const [page, setPage] = useStateMem(0);
   const [columnsOpen, setColumnsOpen] = useStateMem(false);
@@ -208,7 +211,6 @@ const MembersListView = ({ onOpenHousehold, onOpenMember, wide = null }) => {
     sub_region: subreg,
     disability: disab,
     nin_status: nin,
-    programme: prog,
   };
   const _orderingMap = {
     lastUpdate: "-updated_at",
@@ -231,9 +233,9 @@ const MembersListView = ({ onOpenHousehold, onOpenMember, wide = null }) => {
   // Choice-list pickers — relationship_to_head + nin_status + sex.
   // The useChoiceList hook caches the bundle by ETag (US-S23-012).
   const [, , clMeta] = useChoiceList
-    ? useChoiceList(["relationship_to_head", "nin_status", "sex"])
+    ? useChoiceList(MEMBER_FILTER_CHOICE_LISTS)
     : [[], {}, {}];
-  const relOptions = (clMeta && clMeta.allLists && clMeta.allLists.relationship_to_head) || [];
+  const relOptions = (clMeta && clMeta.allLists && clMeta.allLists.relationship) || [];
   const ninOptions = (clMeta && clMeta.allLists && clMeta.allLists.nin_status) || [];
   const sexOptions = (clMeta && clMeta.allLists && clMeta.allLists.sex) || [];
 
@@ -257,7 +259,7 @@ const MembersListView = ({ onOpenHousehold, onOpenMember, wide = null }) => {
 
   const reset = () => {
     setQ(""); setSex(""); setAgeBand(""); setRel(""); setSubreg("");
-    setDisab(""); setNin(""); setProg(""); setPage(0);
+    setDisab(""); setNin(""); setPage(0);
   };
 
   // KPIs read off the aggregates endpoint — same filter params, so
@@ -275,7 +277,7 @@ const MembersListView = ({ onOpenHousehold, onOpenMember, wide = null }) => {
   const female = aggResp?.female ?? 0;
   const ninVer = aggResp?.nin_verified ?? 0;
 
-  const activeFilters = [q, sex, ageBand, rel, subreg, disab, nin, prog].filter(Boolean);
+  const activeFilters = [q, sex, ageBand, rel, subreg, disab, nin].filter(Boolean);
   // % of the visible slice, rounded. Guards a zero-total denominator
   // so the strip doesn't render "NaN%" while the first fetch is
   // in flight.
@@ -315,7 +317,7 @@ const MembersListView = ({ onOpenHousehold, onOpenMember, wide = null }) => {
           <div className="search" style={{maxWidth:380, height:34, background:'var(--neutral-0)'}}>
             <Icon name="search" size={16} color="var(--neutral-500)"/>
             <input value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }}
-              placeholder="Search by name, NIN, household ID, parish…"/>
+              placeholder="Search by member ID, name, household ID, parish…"/>
           </div>
 
           <select className="field-select" style={{height:34, width:'auto', minWidth:110}} value={sex} onChange={(e) => { setSex(e.target.value); setPage(0); }}>
@@ -357,13 +359,6 @@ const MembersListView = ({ onOpenHousehold, onOpenMember, wide = null }) => {
                   <option value="8">Unknown</option>
                 </>}
           </select>
-          <input
-            type="text" value={prog}
-            onChange={(e) => { setProg(e.target.value); setPage(0); }}
-            placeholder="Programme code (HH)"
-            className="field-input"
-            style={{height:34, width:'auto', minWidth:160}}/>
-
           <div style={{flex:1}}/>
           <button className="btn btn-sm btn-ghost" onClick={reset}><Icon name="x" size={13}/> Reset</button>
           <div style={{width:1, height:24, background:'var(--neutral-200)'}}/>
@@ -397,7 +392,6 @@ const MembersListView = ({ onOpenHousehold, onOpenMember, wide = null }) => {
           {nin && <Chip size="sm">NIN: {
             ninOptions.find(o => o.code === nin)?.label || nin
           }</Chip>}
-          {prog && <Chip size="sm" tone="programme">{prog}</Chip>}
         </div>
       )}
 
@@ -542,4 +536,9 @@ const MembersListView = ({ onOpenHousehold, onOpenMember, wide = null }) => {
   );
 };
 
-Object.assign(window, { MembersListView, MEMBERS });
+Object.assign(window, {
+  MembersListView,
+  MEMBERS,
+  MEMBER_FILTER_CHOICE_LISTS,
+  _buildMemberListUrl,
+});

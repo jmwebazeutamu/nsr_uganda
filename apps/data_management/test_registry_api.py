@@ -279,6 +279,11 @@ class TestMemberFilters:
         names = {m["surname"] for m in r.data["results"]}
         assert names == {"Mukasa"}
 
+    def test_q_matches_the_canonical_member_id(self, api, seeded_buganda):
+        member = seeded_buganda["child"]
+        response = api.get(f"{URL_MEMBERS}?q={member.id}")
+        assert {row["id"] for row in response.data["results"]} == {member.id}
+
     def test_sex_filter_returns_only_one_code(self, api, seeded_buganda):
         r = api.get(f"{URL_MEMBERS}?sex=2")
         assert {m["sex"] for m in r.data["results"]} == {"2"}
@@ -333,6 +338,24 @@ class TestMemberFilters:
         r = api.get(f"{URL_MEMBERS}?disability=seeing")
         ids = {m["id"] for m in r.data["results"]}
         assert ids == {seeded_karamoja["head"].id}
+
+    def test_programme_query_parameter_no_longer_changes_member_results(
+        self, api, seeded_buganda, seeded_karamoja,
+    ):
+        """Programme code is not a Registry browse filter contract."""
+        response = api.get(f"{URL_MEMBERS}?programme=NO-LONGER-A-FILTER")
+        assert response.data["count"] == 6
+
+
+@pytest.mark.django_db
+class TestHouseholdFilterContract:
+
+    def test_programme_query_parameter_no_longer_changes_household_results(
+        self, api, seeded_buganda, seeded_karamoja,
+    ):
+        """Programme filtering belongs to Beneficiaries, not Registry browse."""
+        response = api.get(f"{URL_HOUSEHOLDS}?programme=NO-LONGER-A-FILTER")
+        assert response.data["count"] == 3
 
 
 # ───────────────────────────────────────────────────────────────

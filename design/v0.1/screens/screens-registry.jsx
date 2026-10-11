@@ -156,7 +156,6 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
   const [registeredFrom, setRegisteredFrom] = useStateReg("");
   const [registeredTo, setRegisteredTo] = useStateReg("");
   const [intakeSrc, setIntakeSrc] = useStateReg("");
-  const [prog, setProg] = useStateReg("");
   const [sortBy, setSortBy] = useStateReg("lastUpdate");
   const [page, setPage] = useStateReg(0);
   const [columnsOpen, setColumnsOpen] = useStateReg(false);
@@ -167,7 +166,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
   const pageSize = 12;
 
   const _hhFilters = {
-    q, sub_region: subreg, pmt_band: band, intake_source: intakeSrc, programme: prog,
+    q, sub_region: subreg, pmt_band: band, intake_source: intakeSrc,
     registry_id: registryId, head_sex: headSex,
     registered_from: registeredFrom, registered_to: registeredTo,
   };
@@ -245,7 +244,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
   const subregs = (subregResp && subregResp.results) || subregResp || [];
 
   const reset = () => {
-    setQ(""); setRegistryId(""); setSubreg(""); setBand(""); setIntakeSrc(""); setProg("");
+    setQ(""); setRegistryId(""); setSubreg(""); setBand(""); setIntakeSrc("");
     setHeadSex(""); setRegisteredFrom(""); setRegisteredTo(""); setPage(0);
   };
 
@@ -385,13 +384,6 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
             <option value="">Any PMT band</option>
             {pmtBandOptions.map(code => <option key={code} value={code}>{_registryPmtBandLabel(code)}</option>)}
           </select>
-          <input
-            type="text" value={prog}
-            onChange={(e) => { setProg(e.target.value); setPage(0); }}
-            placeholder="Programme code (e.g. OPM-PDM)"
-            className="field-input"
-            style={{height:34, width:'auto', minWidth:160}}/>
-
           <div style={{flex:1}}/>
           <button className="btn btn-sm btn-ghost" onClick={reset}><Icon name="x" size={13}/> Reset</button>
           <div style={{width:1, height:24, background:'var(--neutral-200)'}}/>
@@ -406,7 +398,7 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
       </div>
 
       {/* Active filter chips */}
-      {(intakeSrc || subreg || band || prog || q || headSex || registeredFrom || registeredTo) && (
+      {(intakeSrc || subreg || band || q || headSex || registeredFrom || registeredTo) && (
         <div className="row gap-2 mt-3" style={{flexWrap:'wrap'}}>
           <span className="t-cap">Active filters:</span>
           {q && <Chip size="sm">"{q}" <button onClick={() => setQ("")} style={{marginLeft:4, border:0, background:'transparent', cursor:'pointer'}}>×</button></Chip>}
@@ -418,7 +410,6 @@ const RegistryScreen = ({ onOpen, onOpenMember, onNavigate, initialView = "house
           {headSex && <Chip size="sm">Head: {headSexOptions.find(option => option.code === headSex)?.label || headSex}</Chip>}
           {registeredFrom && <Chip size="sm">Registered from {registeredFrom}</Chip>}
           {registeredTo && <Chip size="sm">Registered to {registeredTo}</Chip>}
-          {prog && <Chip size="sm" tone="programme">{prog}</Chip>}
         </div>
       )}
 
