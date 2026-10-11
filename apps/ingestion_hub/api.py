@@ -458,6 +458,23 @@ class SourceSystemViewSet(viewsets.ReadOnlyModelViewSet):
             403: OpenApiResponse(description="caller lacks trigger permission"),
         },
     )
+    @extend_schema(
+        tags=["dih"],
+        summary="Every system this registry exchanges data with",
+        description=(
+            "What is registered, what is configured, what is still "
+            "missing, and which actions each integration offers. The "
+            "list comes from SourceSystem, so an integration appears "
+            "by being registered rather than by a screen being edited."
+        ),
+        responses={200: OpenApiResponse(description="Integrations")},
+    )
+    @action(detail=False, methods=["get"], url_path="integrations")
+    def integrations(self, request):
+        from .integrations import describe_all
+
+        return Response([i.as_dict() for i in describe_all()])
+
     @action(
         detail=True, methods=["post"], url_path="trigger-run",
         permission_classes=[IsDihTrigger],

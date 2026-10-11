@@ -335,9 +335,12 @@ class PartnerApiDryRunView(APIView):
             "errors": report.errors,
             "rows": [
                 {
+                    # Generic keys: the screen that renders this row
+                    # must not learn whose category this is, or a
+                    # second integration needs a second renderer.
                     "tracking_number": r.tracking_number,
-                    "staac_category": r.staac_category,
-                    "parish_key": r.parish_key,
+                    "source_label": r.staac_category,
+                    "source_detail": r.parish_key,
                     "verdict": r.verdict,
                     "nsr_category": r.nsr_category,
                     "held_reason": r.held_reason,

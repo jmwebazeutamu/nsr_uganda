@@ -368,3 +368,113 @@ class TestOneAssessment:
         assert not Grievance.objects.exists(), (
             "the filing decided for itself instead of asking assess()"
         )
+
+
+class TestTheIntegrationsRegister:
+    """Every system, described by the register rather than a screen."""
+
+    URL = "/api/v1/dih/source-systems/integrations/"
+
+    def test_it_lists_what_is_registered(self, admin):
+        codes = {i["code"] for i in admin.get(self.URL).data}
+        assert "STAAC_GRM" in codes
+        # And the unwired ones, because absent reads as "does not
+        # exist" for a source that is registered and simply not
+        # configured.
+        assert "NSR-WEB" in codes
+
+    def test_staac_describes_itself(self, admin, agreement, credential):
+        row = next(i for i in admin.get(self.URL).data
+                   if i["code"] == "STAAC_GRM")
+        assert row["registered_by"] == "migration grievance.0017"
+        assert row["credential"]["configured"] is True
+        assert set(row["actions"]) >= {"test", "dry_run", "pull", "configure"}
+        labels = [c["label"] for c in row["checks"]]
+        assert any("Category bindings" in label for label in labels)
+
+    def test_an_unwired_source_offers_no_actions(self, admin):
+        """A button that 400s is worse than no button."""
+        row = next(i for i in admin.get(self.URL).data
+                   if i["code"] == "NSR-WEB")
+        assert row["actions"] == {}
+        assert row["credential"]["configured"] is None
+
+    def test_a_source_nothing_is_pulled_from_needs_no_agreement(self, admin):
+        """The agreement gate is `start_connector_run`'s and that needs
+        a connector. Demanding paperwork for a channel that receives
+        nothing would be a permanent false alarm, and an alarm that is
+        always on is one an operator learns to ignore."""
+        row = next(i for i in admin.get(self.URL).data
+                   if i["code"] == "NSR-WEB")
+        assert row["blockers"] == []
+        assert not any(
+            "agreement" in c["label"].lower() for c in row["checks"]
+        )
+
+    def test_a_source_that_is_pulled_from_does(self, admin):
+        row = next(i for i in admin.get(self.URL).data
+                   if i["code"] == "STAAC_GRM")
+        assert any("agreement" in c["label"].lower() for c in row["checks"])
+        assert any("agreement" in b.lower() for b in row["blockers"])
+
+    def test_the_token_is_never_in_the_listing(self, admin, credential):
+        assert TOKEN not in str(admin.get(self.URL).data)
+
+    def test_an_adapter_describes_its_own_kind(self):
+        """DIH must not import GRM to learn what a partner credential
+        looks like; the owning app registers its adapter on app load.
+        """
+        from apps.ingestion_hub.integrations import _ADAPTERS
+        from apps.ingestion_hub.models import SourceSystemKind
+
+        assert SourceSystemKind.PARTNER_MIS in _ADAPTERS
+        assert SourceSystemKind.KOBO in _ADAPTERS
+
+    def test_kobo_offers_the_dry_run_it_already_had(self, admin):
+        """`trigger_connector_pull(dry_run=True)` has existed since
+        ADR-0007. The screen was simply the only place that could not
+        reach it.
+
+        The source is created here rather than skipped when absent:
+        Kobo is seeded by a script, not a migration, so a skip would
+        mean the second adapter is never exercised at all.
+        """
+        from apps.ingestion_hub.models import (
+            Connector,
+            SourceSystem,
+            SourceSystemKind,
+        )
+
+        source = SourceSystem.objects.create(
+            code="KOBO-TEST", name="Kobo", kind=SourceSystemKind.KOBO,
+        )
+        Connector.objects.create(source_system=source, name="kobo-x")
+
+        kobo = next(i for i in admin.get(self.URL).data
+                    if i["code"] == "KOBO-TEST")
+        assert kobo["actions"]["dry_run"]["body"] == {"dry_run": True}
+        assert kobo["actions"]["pull"]["body"] == {"dry_run": False}
+        assert kobo["actions"]["dry_run"]["url"].endswith(
+            f"/source-systems/{source.id}/trigger-run/")
+        # No credential yet, and the screen is told why rather than
+        # being left to guess.
+        assert kobo["credential"]["configured"] is False
+        assert any("credential" in b.lower() for b in kobo["blockers"])
+
+    def test_kobos_credential_is_not_editable_from_this_screen(self, admin):
+        """It is a Django-admin inline (ADR-0007). Saying where it
+        lives beats a form that posts nowhere."""
+        from apps.ingestion_hub.models import (
+            Connector,
+            SourceSystem,
+            SourceSystemKind,
+        )
+
+        source = SourceSystem.objects.create(
+            code="KOBO-TEST2", name="Kobo", kind=SourceSystemKind.KOBO,
+        )
+        Connector.objects.create(source_system=source, name="kobo-y")
+        kobo = next(i for i in admin.get(self.URL).data
+                    if i["code"] == "KOBO-TEST2")
+        assert kobo["credential"]["form"] == "kobo"
+        assert "configure" not in kobo["actions"]

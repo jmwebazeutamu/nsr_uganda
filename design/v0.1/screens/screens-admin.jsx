@@ -1211,10 +1211,391 @@ const PartnersAdminTile = ({ title, iconName, tone, lede, ctaLabel, onClick, sec
   </div>
 );
 
+
+// ── Integrations tab ──────────────────────────────────────────────────
+//
+// Why this screen exists: STAAC_GRM appeared under Connector runs and
+// nothing on any screen said how it got there. The source was
+// registered by a migration, the agreement and the credential were
+// recorded by somebody in a shell, and whether the category bindings
+// that decide if a case files were in place was knowable only by
+// querying the database. Configuration that is real and invisible is
+// configuration nobody owns.
+//
+// This file knows nothing about any particular integration. It
+// renders what the server describes: the LIST comes from
+// SourceSystem, the readiness lines come from the server's own
+// checks, and a button appears for an action only because the server
+// said that action exists. Adding UBOS later is registering a source
+// and writing an adapter — not editing this screen.
+//
+// Live data:
+//   GET /api/v1/dih/source-systems/integrations/
+//   plus whatever `actions` each integration names.
+
+const _INTEGRATIONS_URL = "/api/v1/dih/source-systems/integrations/";
+
+const _INT_ACTIONS = [
+  { key: "test",      label: "Test connection", busy: "Testing…",  icon: "refresh" },
+  { key: "dry_run",   label: "Dry run",         busy: "Checking…", icon: "eye" },
+  { key: "pull",      label: "Pull now",        busy: "Pulling…",  icon: "download", primary: true },
+  { key: "file_held", label: "File held records", busy: "Filing…" },
+];
+
+const _intPost = (url, body) => fetch(url, {
+  method: "POST",
+  credentials: "same-origin",
+  headers: {
+    "Content-Type": "application/json",
+    "X-CSRFToken": _adminCsrfToken(),
+    Accept: "application/json",
+  },
+  body: JSON.stringify(body || {}),
+}).then(async r => {
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+  return data;
+});
+
+const _IntCheck = ({ ok, label, detail }) => (
+  <div className="row gap-2" style={{alignItems:"flex-start", padding:"7px 0",
+       borderBottom:"1px solid var(--neutral-200)"}}>
+    <Icon name={ok ? "check" : "alert"} size={13}
+          style={{marginTop:2, color: ok ? "var(--accent-system)"
+                                         : "var(--accent-danger)"}}/>
+    <div style={{flex:1, minWidth:0}}>
+      <div className="t-bodysm" style={{color:"var(--neutral-900)"}}>{label}</div>
+      {detail && <div className="t-cap muted" style={{marginTop:2}}>{detail}</div>}
+    </div>
+  </div>
+);
+
+// The credential form an integration asks for, by name. The SHAPE is
+// the server's: an integration that names no form gets no form, and
+// one that names a form this screen does not have says so rather
+// than rendering a guess.
+const _IntCredentialForm = ({ integration, onSaved }) => {
+  const form = integration.credential && integration.credential.form;
+  const [fields, setFields] = useStateAdmin({
+    environment: (integration.credential || {}).environment || "sandbox",
+    base_url: (integration.credential || {}).base_url || "",
+    token: "",
+  });
+  const [busy, setBusy] = useStateAdmin(false);
+  const [err, setErr] = useStateAdmin("");
+
+  if (form !== "staac") {
+    // Kobo's credential is a Django-admin inline (ADR-0007) and the
+    // others have none. Saying where it lives beats a form that
+    // posts nowhere.
+    return (
+      <div className="t-cap muted" style={{marginTop:6}}>
+        {form === "kobo"
+          ? "Credential is managed on this source's Django admin page."
+          : (integration.credential || {}).summary || ""}
+      </div>
+    );
+  }
+
+  const save = () => {
+    const url = (integration.actions.configure || {}).url;
+    if (!url) return;
+    setBusy(true); setErr("");
+    _intPost(url, { ...fields, is_active: true })
+      .then(() => { setFields(f => ({ ...f, token: "" })); onSaved(); })
+      .catch(e => setErr(String(e.message || e)))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div style={{marginTop:10}}>
+      <div className="t-cap muted" style={{marginBottom:6}}>
+        The token is shown once by the partner and stored encrypted here.
+        It is never displayed again; leave it blank to keep the stored one.
+        Entering a new one clears the resume cursor.
+      </div>
+      <div style={{display:"grid", gap:8,
+                   gridTemplateColumns:"minmax(0,1fr) minmax(0,2fr) minmax(0,2fr) auto"}}>
+        <label>
+          <div className="t-cap muted" style={{marginBottom:2}}>Environment</div>
+          <input className="field-text" style={{width:"100%", padding:6}}
+                 value={fields.environment}
+                 onChange={e => setFields(f => ({...f, environment: e.target.value}))}/>
+        </label>
+        <label>
+          <div className="t-cap muted" style={{marginBottom:2}}>Base URL</div>
+          <input className="field-text" style={{width:"100%", padding:6}}
+                 value={fields.base_url}
+                 onChange={e => setFields(f => ({...f, base_url: e.target.value}))}/>
+        </label>
+        <label>
+          <div className="t-cap muted" style={{marginBottom:2}}>Token</div>
+          <input className="field-text" type="password" autoComplete="off"
+                 style={{width:"100%", padding:6}}
+                 placeholder={integration.credential.configured ? "•••••• stored" : "paste once"}
+                 value={fields.token}
+                 onChange={e => setFields(f => ({...f, token: e.target.value}))}/>
+        </label>
+        <div style={{alignSelf:"end"}}>
+          <button className="btn" disabled={busy} onClick={save}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+      {err && <div className="t-bodysm" style={{marginTop:6, color:"var(--accent-danger)"}}>{err}</div>}
+    </div>
+  );
+};
+
+const IntegrationCard = ({ integration, onChanged }) => {
+  const [busy, setBusy] = useStateAdmin("");
+  const [err, setErr] = useStateAdmin("");
+  const [result, setResult] = useStateAdmin(null);
+  const actions = integration.actions || {};
+  const offered = _INT_ACTIONS.filter(a => actions[a.key]);
+
+  const run = (spec) => {
+    const action = actions[spec.key];
+    setBusy(spec.key); setErr(""); setResult(null);
+    _intPost(action.url, action.body || {})
+      .then(d => { setResult({ kind: spec.key, data: d }); onChanged(); })
+      .catch(e => setErr(String(e.message || e)))
+      .finally(() => setBusy(""));
+  };
+
+  return (
+    <div className="card" style={{padding:16}}>
+      <div className="row" style={{justifyContent:"space-between", alignItems:"baseline", flexWrap:"wrap"}}>
+        <div>
+          <strong className="t-bodysm">{integration.name}</strong>
+          <span className="t-mono muted" style={{marginLeft:8, fontSize:11}}>
+            {integration.code}
+          </span>
+        </div>
+        <div className="row gap-2" style={{alignItems:"center"}}>
+          <Chip size="sm" tone={integration.is_active ? "data" : "neutral"}>
+            {integration.kind_label}
+          </Chip>
+          {integration.blockers.length > 0 && (
+            <Chip size="sm" tone="quality">{integration.blockers.length} to do</Chip>
+          )}
+        </div>
+      </div>
+      {integration.description && (
+        <div className="t-cap muted" style={{marginTop:4}}>{integration.description}</div>
+      )}
+      {integration.registered_by && (
+        <div className="t-cap muted" style={{marginTop:2}}>
+          Registered by {integration.registered_by}
+        </div>
+      )}
+
+      <div style={{marginTop:12}}>
+        {(integration.checks || []).map((c, i) => (
+          <_IntCheck key={i} ok={c.ok} label={c.label} detail={c.detail}/>
+        ))}
+      </div>
+
+      {(integration.extra || []).map((x, i) => (
+        <div key={i} className="t-cap muted" style={{marginTop:6}}>
+          <strong style={{color:"var(--neutral-700)"}}>{x.label}:</strong> {x.value}
+        </div>
+      ))}
+
+      <_IntCredentialForm integration={integration} onSaved={onChanged}/>
+
+      {offered.length > 0 && (
+        <div className="row gap-2" style={{marginTop:12, flexWrap:"wrap"}}>
+          {offered.map(a => (
+            <button key={a.key}
+                    className={`btn ${a.primary ? "primary" : ""}`}
+                    disabled={Boolean(busy)}
+                    onClick={() => run(a)}>
+              {a.icon && <Icon name={a.icon} size={12}/>}{" "}
+              {busy === a.key ? a.busy : a.label}
+            </button>
+          ))}
+          {actions.dry_run && (
+            <span className="t-cap muted" style={{alignSelf:"center"}}>
+              A dry run calls the partner and writes nothing.
+            </span>
+          )}
+        </div>
+      )}
+
+      {err && (
+        <div className="t-bodysm" role="alert" style={{
+          marginTop:10, color:"var(--accent-danger)", padding:"8px 10px",
+          background:"var(--neutral-50)",
+          border:"1px solid var(--accent-danger)", borderRadius:6,
+        }}>{err}</div>
+      )}
+      {result && <IntegrationResult kind={result.kind} data={result.data}/>}
+
+      {(integration.runs || []).length > 0 && (
+        <div style={{marginTop:12}}>
+          <div className="t-cap" style={{fontWeight:600, color:"var(--neutral-700)"}}>
+            RECENT RUNS
+          </div>
+          <div className="t-cap muted" style={{marginTop:2, marginBottom:4}}>
+            The rows this source contributes to Connector runs.
+          </div>
+          {integration.runs.map(r => (
+            <div key={r.id} className="row gap-2"
+                 style={{padding:"4px 0", alignItems:"center", flexWrap:"wrap",
+                         borderTop:"1px solid var(--neutral-200)"}}>
+              <Chip tone={r.status === "succeeded" ? "system" : "danger"} size="sm">
+                {r.status}
+              </Chip>
+              {r.run_type === "test" && <Chip tone="neutral" size="sm">dry</Chip>}
+              <span className="t-cap muted">{_formatRunDate(r.started_at)}</span>
+              <span className="t-bodysm">
+                {r.received} received · {r.promoted} promoted
+                {r.quarantined ? ` · ${r.quarantined} held` : ""}
+                {r.rejected ? ` · ${r.rejected} failed` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// One renderer per result SHAPE, not per integration: a dry run that
+// returns rows gets the table, anything with a summary gets the
+// summary. A new integration whose dry run returns the same shape
+// needs nothing added here.
+const IntegrationResult = ({ kind, data }) => {
+  if (kind === "test") {
+    return (
+      <div className="t-bodysm" style={{marginTop:10, padding:"8px 10px",
+           borderRadius:6, background:"var(--neutral-50)",
+           border:`1px solid ${data.ok ? "var(--neutral-300)" : "var(--accent-danger)"}`}}>
+        {data.ok ? "Reached it" : "Could not reach it"}
+        {typeof data.latency_ms === "number" ? ` · ${data.latency_ms}ms` : ""}
+        {data.detail ? ` · ${data.detail}` : ""}
+      </div>
+    );
+  }
+  const rows = data.rows || [];
+  return (
+    <div style={{marginTop:10}}>
+      <div className="t-bodysm" style={{fontWeight:600}}>
+        {data.summary || data.note || "Done."}
+      </div>
+      {kind === "dry_run" && (
+        <div className="t-cap muted" style={{marginTop:2}}>Nothing was written.</div>
+      )}
+      {data.correlation_id && (
+        <div className="t-cap muted" style={{marginTop:2}}>
+          correlation id {data.correlation_id}
+        </div>
+      )}
+      {(data.blockers || []).map((b, i) => (
+        <div key={i} className="t-cap" style={{marginTop:2, color:"var(--neutral-700)"}}>· {b}</div>
+      ))}
+      {rows.length > 0 && (
+        <div style={{marginTop:8, border:"1px solid var(--neutral-200)",
+                     borderRadius:6, overflow:"hidden"}}>
+          {rows.map((r, i) => (
+            <div key={i} style={{padding:"7px 10px",
+                 borderTop: i ? "1px solid var(--neutral-200)" : "none"}}>
+              <div className="row gap-2" style={{alignItems:"center", flexWrap:"wrap"}}>
+                <Chip size="sm"
+                      tone={r.verdict === "file" ? "system"
+                            : r.verdict === "hold" ? "quality" : "neutral"}>
+                  {r.verdict === "file" ? `would file · ${r.nsr_category}` : r.verdict}
+                </Chip>
+                <span className="t-mono t-bodysm">{r.tracking_number}</span>
+                <span className="t-cap muted">{r.source_label}</span>
+                {r.source_detail && (
+                  <span className="t-mono t-cap muted">{r.source_detail}</span>
+                )}
+              </div>
+              {r.detail && (
+                <div className="t-cap" style={{marginTop:3, color:"var(--neutral-700)"}}>
+                  {r.detail}
+                </div>
+              )}
+              {(r.warnings || []).map((w, j) => (
+                <div key={j} className="t-cap muted" style={{marginTop:2}}>· {w}</div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+      {(data.warnings || []).map((w, i) => (
+        <div key={i} className="t-cap muted" style={{marginTop:2}}>· {w}</div>
+      ))}
+      {(data.errors || []).map((e, i) => (
+        <div key={i} className="t-cap" style={{marginTop:2, color:"var(--accent-danger)"}}>· {e}</div>
+      ))}
+    </div>
+  );
+};
+
+const IntegrationsTab = () => {
+  const [items, setItems] = useStateAdmin(null);
+  const [err, setErr] = useStateAdmin("");
+
+  const load = () => fetch(_INTEGRATIONS_URL, {
+    credentials: "same-origin", headers: { Accept: "application/json" },
+  })
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(d => setItems(Array.isArray(d) ? d : []))
+    .catch(e => setErr(`Could not read the integrations: ${e}`));
+
+  useEffectAdmin(() => { load(); }, []);
+
+  if (!items) {
+    return <div className="card" style={{padding:16}}>
+      <div className="t-bodysm muted">{err || "Loading…"}</div>
+    </div>;
+  }
+
+  const wired = items.filter(i => Object.keys(i.actions || {}).length > 0);
+  const rest = items.filter(i => Object.keys(i.actions || {}).length === 0);
+
+  return (
+    <div className="col gap-3">
+      {err && <div className="t-bodysm" style={{color:"var(--accent-danger)"}}>{err}</div>}
+      {wired.map(i => (
+        <IntegrationCard key={i.code} integration={i} onChanged={load}/>
+      ))}
+      {rest.length > 0 && (
+        <div className="card" style={{padding:16}}>
+          <strong className="t-bodysm">Registered, not wired</strong>
+          <div className="t-cap muted" style={{marginTop:2, marginBottom:8}}>
+            These sources exist in the register and have no console
+            configuration yet. Records may still reach the registry
+            through them by another route.
+          </div>
+          {rest.map(i => (
+            <div key={i.code} className="row gap-2"
+                 style={{padding:"6px 0", alignItems:"baseline", flexWrap:"wrap",
+                         borderTop:"1px solid var(--neutral-200)"}}>
+              <span className="t-mono t-bodysm">{i.code}</span>
+              <Chip size="sm" tone="neutral">{i.kind_label}</Chip>
+              <span className="t-cap muted" style={{flex:1, minWidth:180}}>
+                {i.connector ? `connector ${i.connector}` : "no connector"}
+                {i.agreement && i.agreement.in_force
+                  ? ` · ${i.agreement.reference}` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+
 // ── Main screen ────────────────────────────────────────────────────────
 const TABS = [
   { id: "model-versions", label: "DDUP model versions", icon: "duplicate" },
   { id: "connector-runs", label: "Connector runs",      icon: "inbox"     },
+  { id: "integrations",   label: "Integrations",        icon: "settings"  },
   { id: "routing-matrix", label: "UPD routing matrix",  icon: "edit"      },
   { id: "partners",       label: "Partners & DSAs",     icon: "download"  },
   { id: "scopes",         label: "Operator scopes",     icon: "shield"    },
@@ -2080,6 +2461,7 @@ const AdminScreen = ({ onNavigate }) => {
 
       {tab === "model-versions" && <ModelVersionsTab/>}
       {tab === "connector-runs" && <ConnectorRunsTab/>}
+      {tab === "integrations" && <IntegrationsTab/>}
       {tab === "routing-matrix" && (
         <AdminStubTab title="UPD routing matrix"
                        adminPath="/admin/update_workflow/updroutingrule/"
