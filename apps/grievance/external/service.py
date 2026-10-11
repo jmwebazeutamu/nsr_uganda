@@ -43,6 +43,8 @@ from ..intake import (
     resolve_category,
 )
 from ..intake import resolve_gender
+from apps.reference_data.code_frames import ancestor_codes
+
 from ..models import HandoverOutcome, HeldReason, StaacHandover
 from . import PULL_ACTOR
 from ..services import GrievanceError, open_grievance
@@ -186,7 +188,120 @@ def file_snapshot(
     return FilingResult(handover=row, created=True, warnings=warnings)
 
 
-def _agreement_covers(row: StaacHandover) -> str:
+@dataclass(frozen=True)
+class Assessment:
+    """What this registry would make of a snapshot, deciding nothing.
+
+    Pure: it reads reference data and writes nothing, so a dry run can
+    answer "what would this pull do" without the pull happening. The
+    real filing calls the same function, which is the point — two
+    implementations of "would this be held" would eventually disagree,
+    and the one an operator trusts is the one that never runs.
+    """
+
+    will_file: bool
+    #: The NSR category it would be filed under, when it would be.
+    nsr_category: str = ""
+    #: Why not, when it would not.
+    held_reason: str = ""
+    held_choice_list: str = ""
+    held_source_code: str = ""
+    detail: str = ""
+    warnings: tuple[str, ...] = ()
+    tracking_number: str = ""
+    staac_category: str = ""
+    parish_key: str = ""
+
+
+def assess(body: dict, *, agreement_reference: str = "") -> Assessment:
+    """Decide what would happen to this snapshot, without writing.
+
+    The order matters and mirrors the filing exactly: the agreement
+    first, because an unauthorised disclosure is not something to
+    classify; then the category, because a case nobody can classify
+    cannot be routed; then the place, because blank geography shows a
+    case to every officer in the country.
+    """
+    body = body if isinstance(body, dict) else {}
+    warnings: list[str] = []
+    tracking = _text(body, "source", "tracking_number")
+    category_name = _text(body, "grievance", "category")
+    parish_key = _text(body, "location", "parish_key")
+    reference = (
+        agreement_reference
+        or _text(body, "shared_data", "agreement_reference")
+    )
+
+    def held(reason, *, kind, choice_list="", source_code=""):
+        return Assessment(
+            will_file=False, held_reason=kind, held_choice_list=choice_list,
+            held_source_code=str(source_code or "")[:128], detail=reason,
+            warnings=tuple(warnings), tracking_number=tracking,
+            staac_category=category_name, parish_key=parish_key,
+        )
+
+    unlawful = _agreement_not_in_force(reference)
+    if unlawful:
+        return held(
+            unlawful, kind=HeldReason.UNVERIFIED_AGREEMENT,
+            source_code=reference,
+        )
+
+    try:
+        resolved = resolve_category(category_name)
+    except UnmappedCategory as exc:
+        return held(
+            str(exc),
+            kind=(
+                HeldReason.UNBOUND_CATEGORY if exc.recognised
+                else HeldReason.UNKNOWN_CATEGORY
+            ),
+            choice_list=STAAC_CATEGORY_LIST, source_code=exc.value,
+        )
+
+    complainant = body.get("complainant") or {}
+    if not isinstance(complainant, dict):
+        complainant = {}
+    gender = resolve_gender(_text(complainant, "gender"))
+    if gender.unmapped:
+        # Not a reason to lose the case — see `intake`'s docstring on
+        # why this differs from the category. Reported so the gap is
+        # somebody's to close rather than nobody's to notice.
+        warnings.append(
+            f"complainant gender {gender.received!r} has no approved "
+            "binding to a sex code; the case is filed without it",
+        )
+
+    sent = body.get("attachments") or []
+    if sent:
+        warnings.append(
+            f"STAAC sent {len(sent)} attachment(s) with "
+            f"{tracking or 'this handover'}; v1 of the partner contract "
+            "has no transfer for them, so they are recorded in the "
+            "stored snapshot and not filed against the case",
+        )
+
+    told = _text(body, "location", "display_name")
+    if told and parish_key and parish_key not in told:
+        warnings.append(
+            f"STAAC called {parish_key} {told!r}; this registry resolves "
+            "it from its own code frame",
+        )
+
+    if parish_key and not ancestor_codes(parish_key):
+        return held(
+            f"geographic_code {parish_key!r} names no GeographicUnit",
+            kind=HeldReason.UNRESOLVED_PLACE, source_code=parish_key,
+        )
+
+    return Assessment(
+        will_file=True, nsr_category=resolved.nsr_category,
+        warnings=tuple(warnings), tracking_number=tracking,
+        staac_category=category_name, parish_key=parish_key,
+    )
+
+
+def _agreement_not_in_force(reference: str) -> str:
     """"" when the registry's own register authorises this disclosure.
 
     The snapshot names the agreement it was released under. Storing
@@ -202,9 +317,10 @@ def _agreement_covers(row: StaacHandover) -> str:
     that is in force today.
     """
     from apps.ingestion_hub.models import DataProvisionAgreement
+
     from apps.grievance.external import SOURCE_CODE
 
-    reference = (row.agreement_reference or "").strip()
+    reference = (reference or "").strip()
     if not reference:
         return (
             "the snapshot names no data-sharing agreement, so nothing "
@@ -228,73 +344,48 @@ def _agreement_covers(row: StaacHandover) -> str:
 
 
 def _apply(row: StaacHandover, *, actor: str) -> tuple[str, ...]:
-    """Turn a landed snapshot into a Grievance, or hold it."""
+    """Turn a landed snapshot into a Grievance, or hold it.
+
+    The decision is `assess()`'s, not this function's. This writes
+    what that decided, so a dry run and a real run cannot give
+    different answers about the same snapshot.
+    """
     body = row.snapshot or {}
-    warnings: list[str] = []
+    verdict = assess(body, agreement_reference=row.agreement_reference)
 
-    unlawful = _agreement_covers(row)
-    if unlawful:
+    if not verdict.will_file:
         _hold(
-            row, unlawful, kind=HeldReason.UNVERIFIED_AGREEMENT,
-            source_code=row.agreement_reference, actor=actor,
+            row, verdict.detail, kind=verdict.held_reason,
+            choice_list=verdict.held_choice_list,
+            source_code=verdict.held_source_code, actor=actor,
         )
-        return tuple(warnings)
-
-    category_name = _text(body, "grievance", "category")
-    try:
-        resolved = resolve_category(category_name)
-    except UnmappedCategory as exc:
-        _hold(
-            row, str(exc),
-            kind=(
-                HeldReason.UNBOUND_CATEGORY if exc.recognised
-                else HeldReason.UNKNOWN_CATEGORY
-            ),
-            choice_list=STAAC_CATEGORY_LIST,
-            source_code=exc.value,
-            actor=actor,
-        )
-        return tuple(warnings)
+        return verdict.warnings
 
     complainant = body.get("complainant") or {}
     if not isinstance(complainant, dict):
         complainant = {}
     gender = resolve_gender(_text(complainant, "gender"))
-    if gender.unmapped:
-        # Not a reason to lose the case — see `intake`'s docstring on
-        # why this differs from the category. Reported so the gap is
-        # somebody's to close rather than nobody's to notice.
-        warnings.append(
-            f"complainant gender {gender.received!r} has no approved "
-            "binding to a sex code; the case is filed without it",
-        )
 
-    parish_key = _text(body, "location", "parish_key")
     try:
         grievance = open_grievance(
-            category=resolved.nsr_category,
+            category=verdict.nsr_category,
             description=_text(body, "grievance", "narrative"),
-            geographic_code=parish_key,
+            geographic_code=verdict.parish_key,
             reporter_name=_reporter_name(complainant),
             reporter_phone=_text(complainant, "phone"),
             reporter_gender=gender.nsr_code,
             reporter_age_years=_age(complainant),
             source_system=STAAC_SOURCE_SYSTEM,
-            external_reference=_text(body, "source", "tracking_number"),
+            external_reference=verdict.tracking_number,
             reported_at=_when(_text(body, "source", "received_at")),
             actor=actor,
         )
     except GrievanceError as exc:
-        kind = (
-            HeldReason.UNRESOLVED_PLACE
-            if "GeographicUnit" in str(exc) else HeldReason.REFUSED
-        )
-        _hold(
-            row, str(exc), kind=kind,
-            source_code=parish_key if kind == HeldReason.UNRESOLVED_PLACE else "",
-            actor=actor,
-        )
-        return tuple(warnings)
+        # `assess` checked the place; anything left is a refusal it
+        # could not foresee — a malformed phone, a category removed
+        # between the two calls — and is held rather than lost.
+        _hold(row, str(exc), kind=HeldReason.REFUSED, actor=actor)
+        return verdict.warnings
 
     row.grievance = grievance
     row.outcome = HandoverOutcome.FILED
@@ -307,33 +398,6 @@ def _apply(row: StaacHandover, *, actor: str) -> tuple[str, ...]:
         "held_choice_list", "held_source_code", "updated_at",
     ])
 
-    # v1 of the contract says `attachments` is always empty and that
-    # NSR must not attempt a download or assume an endpoint exists.
-    # So nothing is fetched — but "always empty" is the partner's
-    # statement about their current version, not a fact, and a case
-    # whose evidence arrived and was ignored is exactly the silent
-    # loss this registry keeps finding. If one ever appears, say so.
-    sent = body.get("attachments") or []
-    if sent:
-        warnings.append(
-            f"STAAC sent {len(sent)} attachment(s) with "
-            f"{row.tracking_number or row.handover_id}; v1 of the partner "
-            "contract has no transfer for them, so they are recorded in "
-            "the stored snapshot and not filed against the case",
-        )
-
-    # STAAC's own word for the place, compared rather than trusted.
-    # `ssot_register.md` reserves code-to-name resolution for this
-    # registry's own code frame, and STAAC's display_name is
-    # `str(Parish)` — "BUJUMBA [101.1.01.01]", not a bare name — so
-    # treating it as one would be wrong even when it agrees.
-    told = _text(body, "location", "display_name")
-    if told and parish_key and parish_key not in told:
-        warnings.append(
-            f"STAAC called {parish_key} {told!r}; this registry resolves it "
-            "from its own code frame",
-        )
-
     emit_audit(
         "create", "staac.handover", row.id, actor=actor, actor_kind="system",
         reason=f"filed as grievance {grievance.reference or grievance.id}",
@@ -341,12 +405,11 @@ def _apply(row: StaacHandover, *, actor: str) -> tuple[str, ...]:
             "handover_id": str(row.handover_id),
             "exchange_version": row.exchange_version,
             "grievance_id": grievance.id,
-            "nsr_category": resolved.nsr_category,
-            "staac_category": category_name,
-            "category_by_label": resolved.label_lookup_used,
+            "nsr_category": verdict.nsr_category,
+            "staac_category": verdict.staac_category,
         },
     )
-    return tuple(warnings)
+    return verdict.warnings
 
 
 def _hold(

@@ -327,3 +327,201 @@ def _take(
         report.filed += 1
     else:
         report.held += 1
+
+
+@dataclass
+class DryRunRow:
+    """One handover, and what a real pull would do with it."""
+
+    handover_id: str = ""
+    tracking_number: str = ""
+    staac_category: str = ""
+    parish_key: str = ""
+    verdict: str = ""          # "file", "hold", or "already held"
+    nsr_category: str = ""
+    held_reason: str = ""
+    held_source_code: str = ""
+    detail: str = ""
+    warnings: tuple = ()
+
+
+@dataclass
+class DryRunReport:
+    """What a pull would do, having done none of it."""
+
+    listed: int = 0
+    examined: int = 0
+    would_file: int = 0
+    would_hold: int = 0
+    already_held: int = 0
+    rows: list = field(default_factory=list)
+    blockers: list = field(default_factory=list)
+    errors: list = field(default_factory=list)
+
+    def summary(self) -> str:
+        return (
+            f"{self.listed} listed, {self.examined} examined, "
+            f"{self.would_file} would file, {self.would_hold} would be "
+            f"held, {self.already_held} already held"
+        )
+
+
+def test_connection(
+    *, environment: str = "", client: StaacClient | None = None,
+) -> "ConnectionTestResult":
+    """Can we reach STAAC, and does the credential work?
+
+    Returns DIH's own `ConnectionTestResult` rather than a shape of
+    its own: the console already renders that for the Kobo connector,
+    and a second result type would be a second thing to render.
+
+    Reads one row and files nothing. The agreement is NOT required —
+    a connection test that refuses to run until the paperwork is in
+    order cannot tell you whether the paperwork is the problem.
+    """
+    import time
+
+    from apps.ingestion_hub.connectors.base import ConnectionTestResult
+
+    started = time.monotonic()
+    try:
+        if client is None:
+            credential = credential_for(environment)
+            client = StaacClient(
+                base_url=credential.base_url, token=_token(credential),
+            )
+        refs, _cursor = client.list_page(limit=1)
+    except StaacError as exc:
+        return ConnectionTestResult(
+            ok=False,
+            latency_ms=int((time.monotonic() - started) * 1000),
+            error=str(exc),
+        )
+    return ConnectionTestResult(
+        ok=True,
+        latency_ms=int((time.monotonic() - started) * 1000),
+        server_version=f"{len(refs)} handover(s) on the first page",
+    )
+
+
+def dry_run(
+    *, environment: str = "", limit: int = DEFAULT_PAGE_SIZE,
+    client: StaacClient | None = None, max_records: int = 50,
+) -> DryRunReport:
+    """Walk the collection and report what a real pull would do.
+
+    Writes nothing — no ConnectorRun, no landing, no grievance, not
+    even a cursor — which is why it deliberately does NOT require an
+    agreement to be in force. A dry run whose first act is to refuse
+    for want of configuration cannot tell an operator which
+    configuration is missing. Instead every blocker it meets is
+    reported, so one run answers "what do I still have to set up".
+
+    Each snapshot is judged by `service.assess`, the same function the
+    real filing uses, so the preview cannot promise something the run
+    will not do.
+    """
+    from .service import assess
+
+    report = DryRunReport()
+    if client is None:
+        credential = credential_for(environment)
+        client = StaacClient(
+            base_url=credential.base_url, token=_token(credential),
+        )
+
+    # Configuration problems a record-by-record view would repeat
+    # once per record, said once instead.
+    for blocker in configuration_blockers():
+        report.blockers.append(blocker)
+
+    from ..models import StaacHandover
+
+    try:
+        for refs, _next_cursor in client.iter_refs(limit=limit):
+            report.listed += len(refs)
+            for ref in refs:
+                if report.examined >= max_records:
+                    continue
+                if StaacHandover.objects.filter(
+                    handover_id=ref.handover_id,
+                    exchange_version=ref.exchange_version,
+                ).exists():
+                    report.already_held += 1
+                    report.rows.append(DryRunRow(
+                        handover_id=ref.handover_id,
+                        tracking_number=ref.tracking_number,
+                        verdict="already held",
+                    ))
+                    continue
+                try:
+                    snapshot = client.fetch(ref.handover_id)
+                except StaacError as exc:
+                    report.errors.append(f"{ref.handover_id}: {exc}")
+                    continue
+                report.examined += 1
+                verdict = assess(snapshot.body)
+                row = DryRunRow(
+                    handover_id=ref.handover_id,
+                    tracking_number=verdict.tracking_number
+                    or ref.tracking_number,
+                    staac_category=verdict.staac_category,
+                    parish_key=verdict.parish_key,
+                    verdict="file" if verdict.will_file else "hold",
+                    nsr_category=verdict.nsr_category,
+                    held_reason=verdict.held_reason,
+                    held_source_code=verdict.held_source_code,
+                    detail=verdict.detail,
+                    warnings=verdict.warnings,
+                )
+                report.rows.append(row)
+                if verdict.will_file:
+                    report.would_file += 1
+                else:
+                    report.would_hold += 1
+    except StaacError as exc:
+        report.errors.append(str(exc))
+    return report
+
+
+def configuration_blockers() -> list[str]:
+    """Everything standing between this registry and a working pull.
+
+    Answered without calling STAAC, so it is also what a settings
+    screen shows before anyone presses anything.
+    """
+    from datetime import date
+
+    from django.db.models import Q
+
+    from apps.ingestion_hub.models import DataProvisionAgreement
+    from apps.reference_data.models import ChoiceOption
+
+    from ..intake import STAAC_CATEGORY_LIST
+    from ..models import StaacCredential
+
+    out: list[str] = []
+    if not StaacCredential.objects.filter(is_active=True).exists():
+        out.append(
+            "No active credential. The IG issues one through STAAC's "
+            "partner-access workspace; store it here, never in settings.",
+        )
+    today = date.today()
+    if not DataProvisionAgreement.objects.filter(
+        source_system__code=SOURCE_CODE, valid_from__lte=today,
+    ).filter(Q(valid_to__isnull=True) | Q(valid_to__gte=today)).exists():
+        out.append(
+            "No data-provision agreement in force for this source. The "
+            "pull will not open a run, so no personal data is received.",
+        )
+    unbound = ChoiceOption.objects.filter(
+        choice_list__list_name=STAAC_CATEGORY_LIST,
+        canonical_code__isnull=True,
+    ).count()
+    if unbound:
+        out.append(
+            f"{unbound} STAAC category/categories have no approved "
+            "binding. Cases carrying them are held, not lost, and file "
+            "once the binding is approved.",
+        )
+    return out
