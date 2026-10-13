@@ -3140,3 +3140,69 @@ ssh prod 'cd .../nsr_uganda && docker compose -f compose.prod.yml ps; showmigrat
 
 No data was modified beyond the migrations the deploy applied. No
 secrets printed. The pre-deploy dumps stay on the box.
+
+## 2026-10-13 — production deployed: b4adea9 -> eeefcb9
+
+**The box is back.** `nsr-sris.mglsd.go.ug` resolves to
+154.72.204.74, which had been unreachable since September; port 22
+answers again and the stack had been up 7 hours on `nsr-mis:b4adea9`.
+Production had been three weeks behind: 155 migrations applied against
+177 in the repository.
+
+**Deploy.** `/opt/nsrmis/deploy.sh --yes`, the existing build-on-the-box
+script — fetch, build here, switch, migrate, health-check with
+automatic rollback. 8 minutes end to end, healthy on the first check,
+no rollback. Disk went from 17G free to 33G after its own image prune.
+
+```
+18:54:21  === deploy started (ref=origin/main) ===
+18:54:21  current: commit=b4adea9 image=nsr-mis:b4adea9
+18:54:26  target : commit=eeefcb9 image=nsr-mis:eeefcb9
+19:00:44  build ok
+19:01:41  applying migrations...
+19:01:45  healthz ok after 1 attempt(s)
+19:02:27  === deploy complete: b4adea9 -> eeefcb9 ===
+```
+
+**Backup first.** `deploy.sh` does not take one, so one was taken and
+verified by hand before anything ran:
+`backups/pre-deploy-20261013-185339.dump`, 11M, 1319 restorable
+objects. Worth doing explicitly here because 22 migrations ran, one of
+which (`grievance.0018`) UPDATEs existing rows.
+
+**Verified after.** 177 migrations applied. All 16 STAAC categories
+bound. Both new source systems registered (`STAAC_GRM`, `NSR-WEB`).
+The 8 existing grievances were backfilled from a blank
+`source_system` to `NSR-WEB`, which is the whole population — nothing
+was left ambiguous. `https://nsr-sris.mglsd.go.ug/healthz` 200 and
+`/console/` 302 to login, over TLS, from outside the box.
+
+**What shipped.** The STAAC partner exchange (pull client, push
+receiver, held-not-dropped intake), the integrations configuration
+screen with its dry run, grievance attachments and complainant
+sex/age, the case panel's source block, the CI fixes, and the
+wide-screen layout fix for both consoles.
+
+**Note on the two boxes.** `nsr-prod` (154.72.204.74) is production
+and serves `nsr-sris.mglsd.go.ug`. The box at 104.225.218.102
+(`comms.quasar.ug`) is the demo/staging one, converted to the same
+pull-and-build mechanism on 12 October. Both now deploy from git and
+build their own image; neither pulls from a registry.
+
+### Commands run on production
+
+```
+ssh nsr-prod 'hostname; uptime; cd /opt/nsrmis && git log --oneline -1; df -h /'
+ssh nsr-prod 'docker ps --format ...'                      # found the real project
+ssh nsr-prod 'cd /opt/nsrmis && sed -n ... deploy.sh'       # read before running
+ssh nsr-prod '... exec -T db pg_dump -U nsr -d nsr -Fc > backups/pre-deploy-*.dump'
+ssh nsr-prod 'docker run --rm -v /opt/nsrmis/backups:/b:ro postgis/postgis:16-3.4 \
+              pg_restore -l /b/<dump>'                      # 1319 objects
+ssh nsr-prod '... exec -T web python manage.py showmigrations | grep -c "\[X\]"'
+ssh nsr-prod '... exec -T db psql -U nsr -d nsr -tA -c "select count(*) ..."'
+ssh nsr-prod 'cd /opt/nsrmis && ./deploy.sh --yes'
+ssh nsr-prod '... shell -c "<binding / source / provenance counts>"'
+curl https://nsr-sris.mglsd.go.ug/healthz                   # 200, from outside
+```
+
+No secrets printed. The dump stays on the box.
