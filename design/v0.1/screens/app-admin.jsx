@@ -268,7 +268,13 @@ const AdminApp = () => {
 
       {/* Main content */}
       <main style={{ flex: 1, minWidth: 0, overflow: "auto" }}>
-        <div style={{ maxWidth: 1440, margin: "0 auto", padding: "24px 24px 64px" }}>
+        {/* Same reasoning as `.page` in styles.css: the sidebar to the
+            left already took that edge, so centring inside what is
+            left opens a gutter BETWEEN the nav and the content rather
+            than framing the page. Content starts where the nav ends;
+            the cap only stops a line running the width of an
+            ultrawide. */}
+        <div style={{ maxWidth: 1920, margin: 0, padding: "24px 24px 64px" }}>
           <ErrorBoundary>
           {screen === "admin-pmt-dashboard" && (
             <PmtDashboardScreen onOpenConfig={() => setScreen("admin-pmt-configuration")}/>
