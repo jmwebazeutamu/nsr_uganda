@@ -54,12 +54,60 @@ Migrations + collectstatic run automatically in the web entrypoint.
 > certbot edits ONLY the nsr-sris-dev vhost; the five co-tenant sites are
 > untouched. Always `apache2ctl configtest` before reload.
 
-## CD (auto-deploy on push to main)
+## Deploying (pull from git, build on the box)
 
-`.github/workflows/deploy.yml` runs after CI passes on `main` (or via
-manual *Run workflow*): builds `linux/amd64`, pushes to GHCR, SSHes in to
-`docker compose pull && up -d`. Repo secrets: `DEPLOY_SSH_KEY`,
-`DEPLOY_HOST`, `DEPLOY_USER`. Watch: `gh run watch` / the Actions tab.
+```bash
+ssh <box> 'cd /home/jmwebaze/nsr_uganda && ./deploy-demo.sh'
+```
+
+That is the whole thing: fetch `origin/main`, back the database up,
+build the image **here**, `up -d`, and wait for `/healthz` to answer
+200 before claiming success. `./deploy-demo.sh --rollback` returns to
+the previous image, which the script tags before every build.
+
+The image is `nsr-mis:demo`, passed to compose through `NSR_IMAGE`,
+which `compose.prod.yml` already reads
+(`${NSR_IMAGE:-ghcr.io/...}`). Nothing is pushed anywhere.
+
+### Why not the GitHub Actions workflow that used to do this
+
+`.github/workflows/deploy.yml` built `linux/amd64`, pushed to GHCR and
+sshed in to `docker compose pull`. It was deleted on 12 October 2026
+after two failures that are worth remembering, because both are easy
+to reintroduce:
+
+* **It was gated on CI passing, and said nothing when it did not.**
+  CI went red on 25 September; `Deploy` then *skipped* on every push
+  for three weeks while the box served a September image and every
+  push looked like it had shipped. A deploy that silently does
+  nothing is worse than one that fails.
+* **Building elsewhere hid an architecture difference.** The dev
+  machine is aarch64 and this box is x86_64. An image built on dev and
+  copied over will not exec here — four minutes of downtime on
+  11 October proved it. Building where the thing runs cannot get the
+  architecture wrong.
+
+A red CI no longer blocks a deploy, which is a deliberate trade and
+not an accident: the gate was costing more than it caught. Run the
+suites on dev before pushing.
+
+### First-time setup on a box that is not yet a checkout
+
+This box was a copy of the tree, not a clone, until 12 October 2026.
+To convert another one, from inside the compose directory:
+
+```bash
+tar czf ~/pre-git-local-files.tgz .env backups   # the only untracked things
+git init -b main
+git remote add origin https://github.com/jmwebazeutamu/nsr_uganda.git
+git fetch origin main
+git reset --hard origin/main                      # overwrites the stale copies
+ls -la .env backups                               # both must still be there
+```
+
+`.env` and `backups/` are gitignored, so the reset leaves them alone —
+but check, because that file is the one thing on the box that cannot
+be recreated from the repository.
 
 ## Public site (`public` container)
 
@@ -142,11 +190,14 @@ Do not set it in `compose.prod.yml`.
 ## Rollback
 
 ```bash
-cd /home/jmwebaze/nsr_uganda
-# images are tagged :latest and :<sha>; pin the previous good sha:
-NSR_IMAGE=ghcr.io/jmwebazeutamu/nsr_uganda:<previous-sha> \
-  docker compose -f compose.prod.yml --env-file .env up -d web worker beat
+cd /home/jmwebaze/nsr_uganda && ./deploy-demo.sh --rollback
 ```
+
+`deploy-demo.sh` tags the running image `nsr-mis:previous` before every
+build, so there is always exactly one step back. There is no second
+step: the registry that used to hold every `:<sha>` is out of the
+path, and a deploy older than the last one means checking that commit
+out and building it.
 Forward-only migrations (CLAUDE.md): a rollback that crosses a migration
 needs the reverse plan from the release ticket — do not assume `down`.
 
