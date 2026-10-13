@@ -9,21 +9,20 @@ moment our queue picked the case up.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 from apps.grievance.intake import (
     STAAC_CATEGORY_LIST,
     STAAC_GENDER_LIST,
-    UnmappedCategory,
+    UnmappedCategoryError,
     resolve_category,
     resolve_gender,
 )
 from apps.grievance.models import Category, Grievance
 from apps.grievance.services import GrievanceError, open_grievance
 from apps.reference_data.models import (
-    ChoiceList,
     ChoiceListStatus,
     ChoiceOption,
     GeographicUnit,
@@ -136,7 +135,7 @@ def test_the_clock_runs_from_when_they_reported(parish):
     """Time spent between the two systems is time the complainant has
     already waited. Starting at ingestion hands a transferred case a
     fresh deadline it had not earned."""
-    reported = datetime.now(timezone.utc) - timedelta(hours=10)
+    reported = datetime.now(UTC) - timedelta(hours=10)
     g = open_grievance(
         category=Category.EXCLUSION_ERROR, description="x",
         geographic_code="P-X", source_system="STAAC_GRM",
@@ -180,7 +179,7 @@ def test_an_unmapped_category_is_refused_not_defaulted(db):
     classification silently — the failure this registry keeps finding
     in its own pipelines."""
     _bind("C07", None)
-    with pytest.raises(UnmappedCategory) as exc:
+    with pytest.raises(UnmappedCategoryError) as exc:
         resolve_category("C07")
     assert exc.value.recognised is True
     assert "no approved binding" in str(exc.value)
@@ -189,7 +188,7 @@ def test_an_unmapped_category_is_refused_not_defaulted(db):
 def test_an_unknown_category_is_a_different_problem(db):
     """"We have never heard of this" and "nobody has decided what it
     means" have different owners, so they are different errors."""
-    with pytest.raises(UnmappedCategory) as exc:
+    with pytest.raises(UnmappedCategoryError) as exc:
         resolve_category("C99")
     assert exc.value.recognised is False
     assert "needs reseeding" in str(exc.value)
@@ -217,7 +216,7 @@ def test_a_binding_to_a_category_we_do_not_have_is_refused(db):
     """A configuration error, reported as one rather than failing on
     insert."""
     _bind("C07", "not_an_nsr_category")
-    with pytest.raises(UnmappedCategory):
+    with pytest.raises(UnmappedCategoryError):
         resolve_category("C07")
 
 

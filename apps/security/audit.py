@@ -11,7 +11,6 @@ from __future__ import annotations
 from .models import AuditEvent
 
 
-
 def stored_reason(reason: str, purpose: str) -> str:
     """The reason string as it is persisted.
 

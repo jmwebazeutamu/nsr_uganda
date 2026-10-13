@@ -82,7 +82,8 @@ def canonical_field_for(name: str) -> str:
     mapping itself lives in apps/intake/canonical_fields.py, stated once.
     """
     from apps.intake.canonical_fields import (  # noqa: PLC0415
-        COPING_PREFIXES, QUESTION_TO_CANONICAL,
+        COPING_PREFIXES,
+        QUESTION_TO_CANONICAL,
     )
     canonical = QUESTION_TO_CANONICAL.get(name, "")
     if not canonical and name.startswith(COPING_PREFIXES):

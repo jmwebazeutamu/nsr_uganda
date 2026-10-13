@@ -9,11 +9,14 @@ definitions of one concept, which is this project's most common defect.
 The server now owns it and every caller asks for `?queue=review`.
 """
 
-import pytest
 from datetime import date
 
+import pytest
+
 from apps.ingestion_hub.models import (
-    REVIEW_QUEUE_STATES, TERMINAL_STAGE_STATES, StageRecordState,
+    REVIEW_QUEUE_STATES,
+    TERMINAL_STAGE_STATES,
+    StageRecordState,
 )
 
 
@@ -55,7 +58,11 @@ class TestTheEndpointAgreesWithTheDefinition:
     @pytest.fixture
     def queue(self, db, django_user_model):
         from apps.ingestion_hub.models import (
-            Connector, ConnectorRun, RawLanding, SourceSystem, StageRecord,
+            Connector,
+            ConnectorRun,
+            RawLanding,
+            SourceSystem,
+            StageRecord,
         )
 
         source = SourceSystem.objects.create(code="T-QUEUE", name="Queue test")
@@ -126,7 +133,11 @@ class TestTheEndpointAgreesWithTheDefinition:
         obtain the visible names from the versioned Reference Data hierarchy.
         """
         from apps.ingestion_hub.models import (
-            Connector, ConnectorRun, RawLanding, SourceSystem, StageRecord,
+            Connector,
+            ConnectorRun,
+            RawLanding,
+            SourceSystem,
+            StageRecord,
         )
         from apps.reference_data.models import GeographicUnit
 

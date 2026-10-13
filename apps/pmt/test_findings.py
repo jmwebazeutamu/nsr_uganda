@@ -316,7 +316,7 @@ def test_the_nightly_snapshot_records_what_the_alarm_reads():
     )
     # Three households: the first variable fires for one of them, the
     # second for none.
-    for i, fired in enumerate((1.0, 0.0, 0.0)):
+    for _, fired in enumerate((1.0, 0.0, 0.0)):
         household = Household.objects.create(
             region=unit, sub_region=unit, district=unit, county=unit,
             sub_county=unit, parish=unit, village=unit,

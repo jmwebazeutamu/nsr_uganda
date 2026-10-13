@@ -10,6 +10,7 @@ from datetime import date
 import pytest
 
 from apps.data_management.models import Household, Member
+from apps.ddup.config import DdupConfigurationError, validate_ddup_configuration
 from apps.ddup.models import (
     DdupModelVersion,
     MergeAction,
@@ -29,7 +30,6 @@ from apps.ddup.services import (
     reject_pair,
     reverse_merge_decision,
 )
-from apps.ddup.config import DdupConfigurationError, validate_ddup_configuration
 from apps.reference_data.models import GeographicUnit
 from apps.security.hashing import nin_hash
 from apps.security.models import AuditEvent

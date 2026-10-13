@@ -22,7 +22,6 @@ from apps.security.audit import emit as emit_audit
 from apps.security.notifications import send_notification
 
 from . import assignees, reasons
-
 from .external import WEB_SOURCE_CODE
 from .models import (
     Category,
@@ -35,6 +34,7 @@ from .models import (
     TaskStatus,
     Tier,
 )
+
 
 def sla_for(tier: str) -> timedelta:
     """The window this tier gets, from the configured ladder.
@@ -321,7 +321,7 @@ def assign(grievance: Grievance, *, assigned_to: str, actor: str) -> Grievance:
             assigned_to, tier=grievance.tier,
             household_id=grievance.household_id or "",
         )
-    except (assignees.UnknownAssignee, assignees.IneligibleAssignee) as exc:
+    except (assignees.UnknownAssigneeError, assignees.IneligibleAssigneeError) as exc:
         raise GrievanceError(str(exc)) from exc
 
     grievance.assigned_to = user.username
@@ -757,7 +757,7 @@ def create_task(
             assigned_to, tier=grievance.tier,
             household_id=grievance.household_id or "",
         )
-    except (assignees.UnknownAssignee, assignees.IneligibleAssignee) as exc:
+    except (assignees.UnknownAssigneeError, assignees.IneligibleAssigneeError) as exc:
         raise GrievanceError(str(exc)) from exc
     if grievance.status in (GrievanceStatus.RESOLVED, GrievanceStatus.CLOSED):
         raise GrievanceError(

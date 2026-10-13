@@ -80,7 +80,9 @@ class ChangeRequest(models.Model):
 
     #: The case number people use — "UPD-2026-0001".
     #:
-    #: The update number people quote. ADR-0002 called the ULID "the citizen-facing reference code" for this entity, which is exactly the claim that did not survive contact with a Parish Chief reading one out.
+    #: The update number people quote. ADR-0002 called the ULID "the citizen-
+    #: facing reference code" for this entity, which is exactly the claim that
+    #: did not survive contact with a Parish Chief reading one out.
     #: The ULID above stays the key, stays in the URLs and stays in the
     #: audit chain; this is the string a person can carry.
     #:
@@ -138,9 +140,13 @@ class ChangeRequest(models.Model):
         ]
 
 
+    def __str__(self) -> str:
+        return f"CR {self.id} {self.entity_type}:{self.entity_id} [{self.status}]"
+
+
     def save(self, *args, **kwargs):
         if not self.reference:
-            from apps.reference_data.references import assign, CHANGE_REQUEST
+            from apps.reference_data.references import CHANGE_REQUEST, assign
             # Inside whatever transaction is writing this row, so the
             # select_for_update in assign() serialises and a rollback
             # gives the number back.
@@ -149,10 +155,6 @@ class ChangeRequest(models.Model):
             if update_fields is not None:
                 kwargs["update_fields"] = [*update_fields, "reference"]
         super().save(*args, **kwargs)
-
-    def __str__(self) -> str:
-        return f"CR {self.id} {self.entity_type}:{self.entity_id} [{self.status}]"
-
 
 class UpdRoutingRule(models.Model):
     """Operations-managed routing for (change_type, pmt_relevant) tuples.

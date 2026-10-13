@@ -15,17 +15,18 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
-from django.contrib.auth.models import Group
-from rest_framework.test import APIClient
-
 from apps.data_management.models import Household
 from apps.grievance.models import (
-    ACTIVE_GRIEVANCE_STATUSES, Grievance, GrievanceStatus,
+    ACTIVE_GRIEVANCE_STATUSES,
+    Grievance,
+    GrievanceStatus,
 )
 from apps.grievance.services import open_grievance
 from apps.reference_data.models import GeographicUnit
 from apps.reporting.dashboard_views import _count_open_grievances
 from apps.security.models import OperatorScope, ScopeLevel
+from django.contrib.auth.models import Group
+from rest_framework.test import APIClient
 
 pytestmark = pytest.mark.django_db
 

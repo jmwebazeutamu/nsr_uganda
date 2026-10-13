@@ -24,7 +24,6 @@ here creates, renames or deletes a Group.
 from __future__ import annotations
 
 import secrets
-import string
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group

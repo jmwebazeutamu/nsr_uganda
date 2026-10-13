@@ -12,9 +12,7 @@ from datetime import date
 import pytest
 import responses
 
-from apps.grievance.external.pull import configuration_blockers, dry_run
-from apps.grievance.external.pull import test_connection
-from apps.grievance.external.service import assess
+from apps.grievance.external.pull import configuration_blockers, dry_run, test_connection
 from apps.grievance.models import (
     Grievance,
     HeldReason,
@@ -87,9 +85,8 @@ def credential(db):
 @pytest.fixture
 def run_factory(agreement):
     def _make():
-        from apps.ingestion_hub.services import start_connector_run
-
         from apps.grievance.external.pull import connector_for_staac
+        from apps.ingestion_hub.services import start_connector_run
 
         return start_connector_run(connector_for_staac(), actor="t")
     return _make

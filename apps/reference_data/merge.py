@@ -51,7 +51,7 @@ def plan(pairs) -> dict:
     """What `merge` would do, without doing it."""
     totals = dict(EMPTY_TOTALS)
     households = set()
-    for source, target in pairs:
+    for source, _ in pairs:
         totals["units retired"] += 1
         if source.level in HOUSEHOLD_FIELDS:
             households.update(

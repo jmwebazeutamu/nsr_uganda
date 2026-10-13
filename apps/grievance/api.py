@@ -17,8 +17,8 @@ from .models import (
 from .services import (
     GrievanceError,
     add_comment,
-    attach_document,
     assign,
+    attach_document,
     close,
     create_task,
     escalate,
@@ -703,7 +703,7 @@ class GrievanceViewSet(AuditReadMixin, viewsets.ModelViewSet):
             qs = assignees.candidates(
                 tier=tier, household_id=grievance.household_id or "",
             )
-        except assignees.IneligibleAssignee as exc:
+        except assignees.IneligibleAssigneeError as exc:
             return Response({"detail": str(exc)},
                             status=status.HTTP_409_CONFLICT)
 

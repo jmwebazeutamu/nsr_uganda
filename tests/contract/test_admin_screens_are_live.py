@@ -168,8 +168,8 @@ def test_record_view_is_guarded_outside_its_hooks(component, prop):
     )
 
     record = body.index(f"const {component} = ")
-    end = body.index("\n};", record)
-    assert f"if (!" not in body[record:record + 300], (
+    body.index("\n};", record)
+    assert "if (!" not in body[record:record + 300], (
         f"{component} guards inside the component body, so its hooks are "
         f"called conditionally."
     )

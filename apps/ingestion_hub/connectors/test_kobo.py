@@ -22,6 +22,7 @@ The branches we exercise here:
 from __future__ import annotations
 
 from copy import deepcopy as _deepcopy
+
 import pytest
 import responses
 from requests.exceptions import RequestException

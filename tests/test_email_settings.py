@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from nsr_mis.email_settings import default_from_email, default_email_backend, server_email_from_default
+from nsr_mis.email_settings import default_email_backend, default_from_email, server_email_from_default
 
 
 def test_default_email_backend_prefers_smtp_when_credentials_exist():

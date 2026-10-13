@@ -23,11 +23,11 @@ from django.contrib.auth import get_user_model
 from django.db.models import Q
 
 
-class UnknownAssignee(Exception):
+class UnknownAssigneeError(Exception):
     """The username does not name an active MIS user."""
 
 
-class IneligibleAssignee(Exception):
+class IneligibleAssigneeError(Exception):
     """The user exists, but cannot carry this case.
 
     Either their role does not hold the case's tier, or their
@@ -36,7 +36,7 @@ class IneligibleAssignee(Exception):
 
 
 def resolve(username: str):
-    """The active User behind `username`, or raise UnknownAssignee.
+    """The active User behind `username`, or raise UnknownAssigneeError.
 
     Matched case-insensitively on username: the picker sends what the
     catalogue served, but a hand-typed value or an older client should
@@ -44,14 +44,14 @@ def resolve(username: str):
     """
     username = (username or "").strip()
     if not username:
-        raise UnknownAssignee("no assignee given")
+        raise UnknownAssigneeError("no assignee given")
     user = (
         get_user_model().objects
         .filter(username__iexact=username, is_active=True)
         .first()
     )
     if user is None:
-        raise UnknownAssignee(
+        raise UnknownAssigneeError(
             f"{username!r} is not an active MIS user — pick an assignee "
             "from the directory",
         )
@@ -102,7 +102,7 @@ def tier_rule(tier: str):
 
     rule = GrmTierRule.objects.filter(tier=tier, is_active=True).first()
     if rule is None:
-        raise IneligibleAssignee(
+        raise IneligibleAssigneeError(
             f"no active GRM tier rule for {tier!r} — the escalation "
             "ladder is not configured",
         )
@@ -140,24 +140,25 @@ def candidates(*, tier: str, household_id: str = ""):
 
 
 def check(user, *, tier: str, household_id: str = "") -> None:
-    """Raise IneligibleAssignee unless `user` may carry this case.
+    """Raise IneligibleAssigneeError unless `user` may carry this case.
 
     The server-side half of the picker. A picker that offers the right
     names is a convenience; this is the rule.
     """
     from apps.security.abac import user_can_access_household
+
     from .visibility import QUEUE_WIDE_ROLES
 
     rule = tier_rule(tier)
     roles = set(user.groups.values_list("name", flat=True))
     carries_queue = bool(roles & set(QUEUE_WIDE_ROLES)) or user.is_superuser
     if not carries_queue and rule.required_role not in roles:
-        raise IneligibleAssignee(
+        raise IneligibleAssigneeError(
             f"{user.username!r} does not hold {rule.required_role!r}, the "
             f"role that carries {tier} cases",
         )
     if household_id and not user_can_access_household(user, household_id):
-        raise IneligibleAssignee(
+        raise IneligibleAssigneeError(
             f"{user.username!r} has no access to the household this case "
             "is about — assigning it would give them work they cannot open",
         )

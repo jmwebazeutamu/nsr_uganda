@@ -12,7 +12,7 @@ the key, stays in the URLs and stays in the audit chain.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date
 
 import pytest
 from django.contrib.auth.models import Group
@@ -144,13 +144,13 @@ class TestTheSequence:
     def test_a_case_is_numbered_in_the_year_it_was_opened(self):
         """A case raised on 31 December keeps a number from the year it
         happened, whatever day the row gets written."""
-        from datetime import datetime, timezone as tz
+        from datetime import datetime
 
         from apps.grievance.models import Grievance
 
         g = open_grievance(category="other", description="new year's eve")
         Grievance.objects.filter(pk=g.pk).update(
-            opened_at=datetime(2029, 12, 31, 23, 0, tzinfo=tz.utc),
+            opened_at=datetime(2029, 12, 31, 23, 0, tzinfo=UTC),
         )
         g.refresh_from_db()
         assert ref.assign(g).startswith("GRM-2029-")

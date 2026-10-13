@@ -33,7 +33,7 @@ from apps.security.audit import emit as emit_audit
 
 from . import CONNECTOR_NAME, SOURCE_CODE
 from .client import StaacError
-from .pull import configuration_blockers, credential_for, dry_run, pull
+from .pull import configuration_blockers, dry_run, pull
 from .pull import test_connection as run_test_connection
 from .service import file_held
 

@@ -8,7 +8,6 @@ open the console and still not administer accounts.
 import pytest
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
-from django.urls import reverse
 
 User = get_user_model()
 

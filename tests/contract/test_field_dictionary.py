@@ -13,14 +13,15 @@ or a canonical field that maps to no question, fails here.
 """
 
 import pytest
-from django.urls import reverse
-
 from apps.dqa.models import DqaRule, RuleStatus
 from apps.intake.canonical_fields import (
-    DERIVED_FIELDS, QUESTION_ALIASES, QUESTION_TO_CANONICAL,
+    DERIVED_FIELDS,
+    QUESTION_ALIASES,
+    QUESTION_TO_CANONICAL,
 )
 from apps.intake.field_dictionary import build_field_dictionary, strip_question_code
 from apps.intake.models import FormQuestion, FormVersion
+from django.urls import reverse
 
 
 @pytest.fixture(autouse=True)

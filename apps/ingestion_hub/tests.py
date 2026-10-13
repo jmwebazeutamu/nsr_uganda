@@ -1897,6 +1897,7 @@ class TestDeleteConnectorRun:
 
     def test_mark_stuck_updates_canonical_status_then_allows_delete(self, django_user_model):
         from datetime import timedelta
+
         from django.conf import settings
         from django.utils import timezone
 

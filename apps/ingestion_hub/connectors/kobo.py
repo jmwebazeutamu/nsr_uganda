@@ -50,9 +50,8 @@ from collections.abc import Iterator
 from typing import Any
 
 import requests
-from requests.exceptions import RequestException
-
 from nsr_mis.common.http import json_session, request_with_retry
+from requests.exceptions import RequestException
 
 from apps.intake.canonical_fields import (
     COPING_FREQUENCY_NOT_USED,
@@ -369,7 +368,7 @@ def _kobo_agriculture_block(raw: dict) -> dict:
         "livestock_kept":    raw.get("h3_livestock_counts", ""),
         # One count per kind, mirroring housing.asset_counts.
         "livestock_counts_by_kind": {
-            kind: _to_int(raw.get("h3_count_{}".format(kind)))
+            kind: _to_int(raw.get(f"h3_count_{kind}"))
             for kind in (
                 "cattle", "goat", "sheep", "pig",
                 "chicken", "other_poultry", "rabbit", "bees",

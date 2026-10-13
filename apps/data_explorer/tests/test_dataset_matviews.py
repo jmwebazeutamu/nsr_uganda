@@ -18,7 +18,6 @@ from __future__ import annotations
 import pytest
 
 from apps.data_explorer.matview_models import MATVIEW_MODELS
-from apps.data_explorer.models import Dataset
 from apps.data_management.matviews import (
     EXPLORER_MATVIEWS,
     _existing_matviews,

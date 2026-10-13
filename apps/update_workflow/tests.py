@@ -39,6 +39,7 @@ class TestReviewAuthorisation:
         self, db, member, django_user_model,
     ):
         from django.contrib.auth.models import Group
+
         from apps.update_workflow.authorization import allowed_actions
 
         reviewer = django_user_model.objects.create_user(username="me-reviewer")
@@ -54,6 +55,7 @@ class TestReviewAuthorisation:
         self, db, member, django_user_model,
     ):
         from django.contrib.auth.models import Group
+
         from apps.update_workflow.authorization import allowed_actions
 
         reviewer = django_user_model.objects.create_user(username="not-the-cdo")
@@ -72,6 +74,7 @@ class TestReviewAuthorisation:
     ):
         from django.contrib.auth.models import Group
         from rest_framework.test import APIClient
+
         from apps.security.models import OperatorScope, ScopeLevel
 
         reviewer = django_user_model.objects.create_user(username="supervisor-user")

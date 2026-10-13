@@ -91,9 +91,12 @@ class DataRequest(models.Model):
         ]
 
 
+    def __str__(self) -> str:
+        return f"DataRequest {self.id} dsa={self.dsa_id} [{self.status}]"
+
     def save(self, *args, **kwargs):
         if not self.reference:
-            from apps.reference_data.references import assign, DATA_REQUEST
+            from apps.reference_data.references import DATA_REQUEST, assign
             # Inside whatever transaction is writing this row, so the
             # select_for_update in assign() serialises and a rollback
             # gives the number back.
@@ -102,6 +105,3 @@ class DataRequest(models.Model):
             if update_fields is not None:
                 kwargs["update_fields"] = [*update_fields, "reference"]
         super().save(*args, **kwargs)
-
-    def __str__(self) -> str:
-        return f"DataRequest {self.id} dsa={self.dsa_id} [{self.status}]"

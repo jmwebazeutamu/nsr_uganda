@@ -21,7 +21,7 @@ import pytest
 import responses
 
 from apps.grievance.external.client import (
-    CursorRejected,
+    CursorRejectedError,
     StaacClient,
     StaacError,
 )
@@ -62,9 +62,8 @@ def staac_agreement(db):
     do not hold. Both are the point: the chain must record OUR
     authorisation, not the partner's assertion of it.
     """
-    from apps.ingestion_hub.models import DataProvisionAgreement, SourceSystem
-
     from apps.grievance.external import SOURCE_CODE
+    from apps.ingestion_hub.models import DataProvisionAgreement, SourceSystem
 
     return DataProvisionAgreement.objects.create(
         source_system=SourceSystem.objects.get(code=SOURCE_CODE),
@@ -76,9 +75,8 @@ def staac_agreement(db):
 
 @pytest.fixture
 def run(staac_agreement):
-    from apps.ingestion_hub.services import start_connector_run
-
     from apps.grievance.external.pull import connector_for_staac
+    from apps.ingestion_hub.services import start_connector_run
 
     return start_connector_run(connector_for_staac(), actor="t")
 
@@ -294,7 +292,7 @@ class TestTheTransport:
         """400 is recoverable by restarting; 401 is not. Collapsing
         them would turn a key rotation into a dead integration."""
         responses.add(responses.GET, LIST_URL, status=400, json={})
-        with pytest.raises(CursorRejected):
+        with pytest.raises(CursorRejectedError):
             client().list_page(cursor="stale")
 
     @responses.activate
@@ -851,7 +849,7 @@ class TestWhyItIsHeld:
 
     def test_a_category_nobody_registered_is_a_different_kind(self, parish, run):
         """Different problems, different owners — the distinction
-        UnmappedCategory draws and the first version threw away."""
+        UnmappedCategoryError draws and the first version threw away."""
         body = snapshot(category="Something STAAC invented last week")
         result = file_snapshot(body, run=run, handover_id=H1, exchange_version=1)
         assert result.handover.held_reason == HeldReason.UNKNOWN_CATEGORY
@@ -1033,8 +1031,8 @@ class TestWhereACaseCameFrom:
         of a kind, so a second active `web` source made household
         intake a coin toss — and it landed on the one with no
         connector. The console's kind must match no channel."""
-        from apps.intake.services import CHANNEL_KINDS
         from apps.ingestion_hub.models import SourceSystem
+        from apps.intake.services import CHANNEL_KINDS
 
         console = SourceSystem.objects.get(code="NSR-WEB")
         assert console.kind == "console"

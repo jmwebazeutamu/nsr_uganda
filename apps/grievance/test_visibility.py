@@ -19,7 +19,7 @@ import pytest
 from rest_framework.test import APIClient
 
 from apps.data_management.models import Household
-from apps.grievance.models import Grievance, GrievanceStatus, TaskStatus
+from apps.grievance.models import GrievanceStatus, TaskStatus
 from apps.grievance.services import create_task, open_grievance
 from apps.grievance.visibility import visible_grievances
 from apps.reference_data.models import GeographicUnit

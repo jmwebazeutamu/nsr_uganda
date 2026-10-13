@@ -128,5 +128,10 @@ def request_with_retry(
             last_error = e
         if attempt == attempts - 1:
             break
-        time.sleep(wait + random.random() * JITTER_FRACTION * wait)  # noqa: S311
+        # noqa/nosec: the jitter spreads retries so two clients do
+        # not back off in lockstep. It guards nothing and predicting
+        # it buys an attacker a few milliseconds of timing.
+        time.sleep(
+            wait + random.random() * JITTER_FRACTION * wait,  # noqa: S311  # nosec B311
+        )
     raise last_error or RequestException("retry budget exhausted")

@@ -23,7 +23,7 @@ from .geography import LEVEL_COLUMN, NATIONAL, normalise_level
 from .suppressor import Suppressor
 
 
-class UnscopableLevel(Exception):
+class UnscopableLevelError(Exception):
     """The request names a geographic level this matview cannot filter by.
 
     Raised rather than ignored: the predecessor of this exception was a
@@ -99,7 +99,7 @@ def _apply_geographic_scope(qs, scope: dict):
         return qs
     column = LEVEL_COLUMN.get(level)
     if column is None or not hasattr(qs.model, column):
-        raise UnscopableLevel(level, qs.model._meta.db_table)
+        raise UnscopableLevelError(level, qs.model._meta.db_table)
     return qs.filter(**{f"{column}__in": codes})
 
 

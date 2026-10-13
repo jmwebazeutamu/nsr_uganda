@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from django.http import HttpResponse
 from django.db.models import Q
+from django.http import HttpResponse
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
@@ -260,7 +260,10 @@ class DataRequestViewSet(
                 from django.db.models import Q
 
                 from apps.reference_data.references import (
-                    DATA_REQUEST as _PREFIX, normalise,
+                    DATA_REQUEST as _PREFIX,
+                )
+                from apps.reference_data.references import (
+                    normalise,
                 )
 
                 exact = normalise(q, prefix=_PREFIX)

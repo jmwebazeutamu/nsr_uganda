@@ -191,8 +191,10 @@ class Command(BaseCommand):
         if orphans:
             self.stdout.write("")
             for form_version in orphans:
+                # nosec B608: this is an operator message, not a query.
+                # bandit matches the word "update" inside the sentence.
                 self.stdout.write(self.style.WARNING(
-                    f"  FormVersion v{form_version.version} is active and "
+                    f"  FormVersion v{form_version.version} is active and "  # nosec B608
                     f"publishes to {form_version.kobo_asset_uid!r}, which has "
                     f"received no submissions. Republishing it would update "
                     f"an asset nobody is submitting to.",

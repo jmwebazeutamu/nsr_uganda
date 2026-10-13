@@ -39,7 +39,6 @@ from rest_framework.views import APIView
 
 from apps.security.audit import emit as emit_audit
 
-from . import PULL_ACTOR
 from .client import StaacError
 
 #: Who the audit chain records for a pushed record, distinct from a

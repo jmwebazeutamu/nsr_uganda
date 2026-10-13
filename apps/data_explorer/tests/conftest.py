@@ -28,9 +28,9 @@ def catalogue(db):
     from apps.data_explorer.models import Dataset
 
     result = metadata_loader.refresh(activate=True)
-    assert not result.get("skipped"), f"catalogue did not load: {result}"
+    assert not result.get("skipped"), f"catalogue did not load: {result}"  # nosec B101 — a test fixture; the assert is the check
     catalogue_cache.invalidate()
 
     datasets = list(Dataset.objects.exclude(source_matview=""))
-    assert datasets, "catalogue loaded but holds no datasets"
+    assert datasets, "catalogue loaded but holds no datasets"  # nosec B101 — a test fixture; the assert is the check
     return datasets

@@ -22,11 +22,15 @@ from django.db import transaction
 
 from apps.data_management.models import CopingStrategy, Shock
 from apps.ingestion_hub.connectors.kobo import (
-    _kobo_coping_rows, _kobo_flatten, _kobo_shock_rows,
+    _kobo_coping_rows,
+    _kobo_flatten,
+    _kobo_shock_rows,
 )
 from apps.ingestion_hub.models import RawLanding, StageRecord, StageRecordState
 from apps.ingestion_hub.services import (
-    _create_coping_strategies, _create_shocks, _emit_audit,
+    _create_coping_strategies,
+    _create_shocks,
+    _emit_audit,
 )
 
 # (payload key, row builder, registry model, create function, label)
@@ -88,7 +92,7 @@ class Command(BaseCommand):
             household_id = stage.promoted_household_id
             touched = False
 
-            for key, _build, model, create, label in entities:
+            for key, _build, model, create, _ in entities:
                 rows = derived[key]
                 if not rows:
                     continue

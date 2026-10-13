@@ -238,7 +238,9 @@ class TestDeprecatedCodesForReviewSurfaces:
     @pytest.fixture
     def retired_and_current(self, db):
         from apps.reference_data.models import (
-            ChoiceList, ChoiceListStatus, ChoiceOption,
+            ChoiceList,
+            ChoiceListStatus,
+            ChoiceOption,
         )
         cl = ChoiceList.objects.create(
             list_name="frame_demo", version=1, status=ChoiceListStatus.ACTIVE,

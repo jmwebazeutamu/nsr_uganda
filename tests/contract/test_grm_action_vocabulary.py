@@ -21,7 +21,6 @@ import re
 from pathlib import Path
 
 import pytest
-
 from apps.grievance import visibility
 
 CONSOLE = Path("design/v0.1/screens/screens-grm.jsx")
@@ -101,13 +100,13 @@ class TestAddTaskIsInTheAnswer:
 
     def test_the_answer_matches_what_create_task_does(self):
         """Pins the two together rather than trusting them to agree."""
-        from apps.grievance.assignees import IneligibleAssignee
+        from apps.grievance.assignees import IneligibleAssigneeError
         from apps.grievance.services import GrievanceError, create_task, resolve
 
         g = self._case()
         resolve(g, actor="officer", narrative="done, nothing outstanding")
         assert "add_task" not in visibility.allowed_actions(g)
-        with pytest.raises((GrievanceError, IneligibleAssignee)) as exc:
+        with pytest.raises((GrievanceError, IneligibleAssigneeError)) as exc:
             create_task(g, title="t", description="", assigned_to="whoever",
                         actor="officer")
         assert "resolved" in str(exc.value) or "not an active" in str(exc.value)
@@ -127,10 +126,9 @@ class TestABulkActionRefusesPerRow:
     """
 
     def _client(self, django_user_model):
+        from apps.security.models import OperatorScope, ScopeLevel
         from django.contrib.auth.models import Group
         from rest_framework.test import APIClient
-
-        from apps.security.models import OperatorScope, ScopeLevel
 
         user = django_user_model.objects.create_user(
             username="bulk.operator", password="p",

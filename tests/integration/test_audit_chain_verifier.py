@@ -101,7 +101,9 @@ def test_a_fork_is_reported_separately_and_does_not_read_as_tampering():
     """
     # Three rows: g is the genesis, a chains off g, b chains off a.
     # Re-pointing b at g makes g have two children — a real fork.
-    g, a, b = _emit(entity_id="F0"), _emit(entity_id="F1"), _emit(entity_id="F2")
+    # `a` is the middle of the chain and is referenced only through
+    # the rows it links; the fork is made by re-pointing b at g.
+    g, _a, b = _emit(entity_id="F0"), _emit(entity_id="F1"), _emit(entity_id="F2")
     with connection.cursor() as cur:
         cur.execute("ALTER TABLE security_auditevent DISABLE TRIGGER security_auditevent_immutable_upd")
         try:

@@ -31,7 +31,6 @@ from __future__ import annotations
 import hashlib
 from datetime import date
 
-
 import pytest
 from apps.data_management.models import Household
 from apps.data_requests.bundles import put_bundle

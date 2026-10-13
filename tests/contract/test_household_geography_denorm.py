@@ -20,12 +20,11 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
-from django.db.models import F
-
 from apps.data_management.models import Household
 from apps.reference_data.models import GeographicUnit
 from apps.security.abac import _level_field
 from apps.security.models import ScopeLevel
+from django.db.models import F
 
 pytestmark = pytest.mark.django_db
 

@@ -14,12 +14,22 @@ from __future__ import annotations
 
 from apps.reference_data.references import (  # noqa: F401 — re-exported
     CONFUSABLES,
-    GRIEVANCE as PREFIX,
-    format_reference as _format,
-    looks_like_a_reference as _looks,
-    next_reference as _next,
-    normalise as _normalise,
     year_of,
+)
+from apps.reference_data.references import (
+    GRIEVANCE as PREFIX,
+)
+from apps.reference_data.references import (
+    format_reference as _format,
+)
+from apps.reference_data.references import (
+    looks_like_a_reference as _looks,
+)
+from apps.reference_data.references import (
+    next_reference as _next,
+)
+from apps.reference_data.references import (
+    normalise as _normalise,
 )
 
 

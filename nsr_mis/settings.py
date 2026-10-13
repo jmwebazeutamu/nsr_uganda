@@ -14,8 +14,8 @@ from pathlib import Path
 import environ
 
 from nsr_mis.email_settings import (
-    default_from_email,
     default_email_backend,
+    default_from_email,
     server_email_from_default,
 )
 

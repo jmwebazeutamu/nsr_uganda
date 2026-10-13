@@ -93,7 +93,7 @@ def test_the_manual_toolchain_is_pinned():
 
     dockerfile = (REPO / "Dockerfile").read_text()
     line = next(
-        l for l in dockerfile.splitlines() if "mkdocs" in l and "pip install" in l
+        line for line in dockerfile.splitlines() if "mkdocs" in line and "pip install" in line
     )
     for package in ("mkdocs", "mkdocs-material"):
         assert re.search(rf"{re.escape(package)}==\d", line), (

@@ -29,7 +29,6 @@ from apps.data_explorer.geography import (
     scopable_levels,
 )
 from apps.data_explorer.matview_models import MATVIEW_MODELS
-from apps.data_explorer.models import Dataset
 from apps.data_management.matviews import EXPLORER_MATVIEWS, _existing_matviews
 from apps.reference_data.models import GeographicUnit
 
@@ -150,12 +149,12 @@ def test_unscopable_level_raises_instead_of_returning_everything():
     district column — is asked for a district.
     """
     from apps.data_explorer.query_builder import (
-        UnscopableLevel,
+        UnscopableLevelError,
         _apply_geographic_scope,
     )
 
     model = MATVIEW_MODELS["mv_explorer_household_shocks_subregion"]
-    with pytest.raises(UnscopableLevel) as excinfo:
+    with pytest.raises(UnscopableLevelError) as excinfo:
         _apply_geographic_scope(
             model.objects.all(), {"level": "district", "codes": ["102"]},
         )

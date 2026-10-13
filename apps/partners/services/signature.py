@@ -22,10 +22,10 @@ the API surfaces. It:
 
 from __future__ import annotations
 
+import secrets
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import timedelta
-import secrets
 from typing import TYPE_CHECKING
 
 from django.conf import settings

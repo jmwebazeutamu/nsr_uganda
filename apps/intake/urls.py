@@ -2,7 +2,10 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from .api import (
-    FormVersionViewSet, SubmissionViewSet, cspro_diff, field_dictionary,
+    FormVersionViewSet,
+    SubmissionViewSet,
+    cspro_diff,
+    field_dictionary,
 )
 
 router = DefaultRouter()

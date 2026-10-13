@@ -39,25 +39,23 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
-
 from apps.data_management.models import (
     AssetOwnership,
     Dwelling,
     Livelihood,
     Utilities,
 )
-from apps.ingestion_hub.services import (
-    land_payload,
-    promote_stage_record,
-    stage_from_landing,
-    start_connector_run,
-)
 from apps.ingestion_hub.models import (
     Connector,
     DataProvisionAgreement,
     SourceSystem,
     SourceSystemKind,
-    StageRecordState,
+)
+from apps.ingestion_hub.services import (
+    land_payload,
+    promote_stage_record,
+    stage_from_landing,
+    start_connector_run,
 )
 from apps.intake.models import FormQuestion, FormSection, FormVersion
 from apps.reference_data.models import (
@@ -1090,9 +1088,8 @@ def test_the_instrument_asks_for_codes_now():
     had the questions. Skipping when the table was empty would have let
     the fixture and the migration drift apart unnoticed.
     """
-    from django.core.management import call_command
-
     from apps.intake.models import FormQuestion
+    from django.core.management import call_command
 
     call_command("load_instrument", quiet=True)
     crops = FormQuestion.objects.filter(name="h5_crops_grown").first()

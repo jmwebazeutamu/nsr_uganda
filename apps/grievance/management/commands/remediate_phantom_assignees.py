@@ -33,8 +33,7 @@ from __future__ import annotations
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from apps.grievance.models import Grievance
-from apps.grievance.models import GrievanceStatus
+from apps.grievance.models import Grievance, GrievanceStatus
 from apps.grievance.services import GrievanceError, add_comment, assign
 from apps.security.audit import emit as emit_audit
 

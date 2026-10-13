@@ -27,7 +27,6 @@ from apps.ingestion_hub.models import (
     DataProvisionAgreement,
     SourceSystem,
     SourceSystemKind,
-    StageRecord,
     StageRecordState,
 )
 from apps.ingestion_hub.services import (

@@ -20,9 +20,9 @@ from apps.security.notifications import send_notification
 
 from .constants import PMT_TRIGGER_MANUAL
 from .engine import PMTConfigurationError, compute_pmt, derive_band
+from .models import ModelStatus, PMTModelVersion, PMTResult
 
 log = logging.getLogger(__name__)
-from .models import ModelStatus, PMTModelVersion, PMTResult
 
 
 class PMTApprovalError(Exception):

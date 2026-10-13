@@ -381,7 +381,6 @@ class TestTheLimitsEndpoint:
             ALLOWED_MIME_TYPES,
             MAX_FILE_BYTES,
             MAX_FILES,
-            MAX_TOTAL_BYTES,
         )
 
         r = client.get(self.URL)

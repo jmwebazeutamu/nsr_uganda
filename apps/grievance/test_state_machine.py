@@ -10,16 +10,24 @@ the tier it had been escalated TO could not pick it up.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 import pytest
 from django.utils import timezone
 
 from apps.grievance.models import (
-    Category, Grievance, GrievanceStatus, Tier,
+    Category,
+    Grievance,
+    GrievanceStatus,
+    Tier,
 )
 from apps.grievance.services import (
-    GrievanceError, assign, close, escalate, open_grievance, resolve,
+    GrievanceError,
+    assign,
+    close,
+    escalate,
+    open_grievance,
+    resolve,
 )
 
 pytestmark = pytest.mark.django_db
@@ -187,7 +195,10 @@ class TestResolveRules:
     def test_upd_reason_refused_while_the_cr_is_a_draft(self):
         """The reported case: an empty draft counted as a correction."""
         from apps.update_workflow.models import (
-            ChangeRequest, ChangeStatus, ChangeType, EntityType,
+            ChangeRequest,
+            ChangeStatus,
+            ChangeType,
+            EntityType,
         )
 
         cr = ChangeRequest.objects.create(
@@ -204,7 +215,10 @@ class TestResolveRules:
 
     def test_upd_reason_allowed_once_the_cr_is_committed(self):
         from apps.update_workflow.models import (
-            ChangeRequest, ChangeStatus, ChangeType, EntityType,
+            ChangeRequest,
+            ChangeStatus,
+            ChangeType,
+            EntityType,
         )
 
         cr = ChangeRequest.objects.create(

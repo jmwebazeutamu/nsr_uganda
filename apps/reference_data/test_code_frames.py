@@ -142,7 +142,10 @@ def test_backfill_stops_fabricating_a_unit_that_already_exists():
     before = GeographicUnit.objects.filter(level="county").count()
 
     from apps.ingestion_hub.models import (
-        Connector, ConnectorRun, SourceSystem, StageRecord,
+        Connector,
+        ConnectorRun,
+        SourceSystem,
+        StageRecord,
     )
     source = SourceSystem.objects.create(name="Kobo", kind="kobo")
     connector = Connector.objects.create(source_system=source, name="kobo-main")

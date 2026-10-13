@@ -75,9 +75,13 @@ class Referral(models.Model):
         ]
 
 
+    def __str__(self) -> str:
+        return f"Referral {self.id} {self.household_id}->{self.programme_id} [{self.status}]"
+
+
     def save(self, *args, **kwargs):
         if not self.reference:
-            from apps.reference_data.references import assign, REFERRAL
+            from apps.reference_data.references import REFERRAL, assign
             # Inside whatever transaction is writing this row, so the
             # select_for_update in assign() serialises and a rollback
             # gives the number back.
@@ -88,10 +92,6 @@ class Referral(models.Model):
             if update_fields is not None:
                 kwargs["update_fields"] = [*update_fields, "reference"]
         super().save(*args, **kwargs)
-
-    def __str__(self) -> str:
-        return f"Referral {self.id} {self.household_id}->{self.programme_id} [{self.status}]"
-
 
 class ProgrammeEnrolment(models.Model):
     """Programme-side enrolment events pushed back to the NSR.

@@ -12,7 +12,6 @@ import json
 from datetime import date
 
 import pytest
-from django.urls import reverse
 
 from apps.grievance.external.receiver import parse_idempotency_key
 from apps.grievance.models import (

@@ -31,8 +31,15 @@ from django.contrib.auth.models import Group
 from apps.data_management.models import Household
 from apps.grievance.models import Grievance, GrievanceStatus, TaskStatus
 from apps.grievance.services import (
-    GrievanceError, add_comment, assign, close, create_task, escalate,
-    open_change_request_for_grievance, open_grievance, resolve,
+    GrievanceError,
+    add_comment,
+    assign,
+    close,
+    create_task,
+    escalate,
+    open_change_request_for_grievance,
+    open_grievance,
+    resolve,
     transition_task,
 )
 from apps.grievance.visibility import allowed_actions

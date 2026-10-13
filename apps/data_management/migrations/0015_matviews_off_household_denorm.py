@@ -104,7 +104,7 @@ FORWARD: list[tuple[str, str]] = [
         GROUP BY
             {_GROUP_BY},
             head_sex.code, head_age_band.band
-        """,
+        """,  # nosec B608 — constant matview SQL in a migration; the only interpolations are module constants in this file
     ),
     (
         "mv_explorer_household_by_subcounty_pmt",
@@ -123,7 +123,7 @@ FORWARD: list[tuple[str, str]] = [
         GROUP BY
             {_GROUP_BY},
             h.current_vulnerability_band
-        """,
+        """,  # nosec B608 — constant matview SQL in a migration; the only interpolations are module constants in this file
     ),
     (
         SHOCKS,

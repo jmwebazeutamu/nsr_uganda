@@ -13,11 +13,13 @@ reference frame that defines them.
 
 import pytest
 
-from apps.intake.canonical_fields import (
-    SHOCK_LIVELIHOOD_LIST, SHOCK_LIVELIHOODS,
-)
 from apps.ingestion_hub.connectors.kobo import (
-    _kobo_shock_rows, _kobo_shocks_coping_block,
+    _kobo_shock_rows,
+    _kobo_shocks_coping_block,
+)
+from apps.intake.canonical_fields import (
+    SHOCK_LIVELIHOOD_LIST,
+    SHOCK_LIVELIHOODS,
 )
 
 # One submission per livelihood, with a different shock in each, which is

@@ -7,23 +7,23 @@ from rest_framework import permissions, serializers, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 
-from apps.security.abac import HouseholdIdScopedQuerysetMixin, scope_q_for_field
-from apps.security.actor import actor_from_request
-from apps.security.audit import emit as emit_audit
-from apps.security.audit_views import AuditReadMixin
 from apps.data_management.choice_field_map import (
     iter_payload_choice_values,
     resolve_with_legacy_frame,
 )
 from apps.reference_data.code_frames import resolve_geographic_labels
-from apps.reference_data.services import resolve_label, resolve_labels
+from apps.reference_data.services import resolve_label
+from apps.security.abac import HouseholdIdScopedQuerysetMixin, scope_q_for_field
+from apps.security.actor import actor_from_request
+from apps.security.audit import emit as emit_audit
+from apps.security.audit_views import AuditReadMixin
 
 from .models import (
+    REVIEW_QUEUE_STATES,
     Connector,
     ConnectorRun,
     SourceSystem,
     StageRecord,
-    REVIEW_QUEUE_STATES,
     StageRecordState,
 )
 from .permissions import IsDihTrigger
@@ -867,7 +867,14 @@ class StageRecordViewSet(
             # against the canonical list alone shows the reviewer a bare
             # code for exactly the older records they are most likely to
             # be checking.
-            def _resolve(value):
+            # `list_name` and `context` are bound as defaults rather
+            # than captured. Both change on every turn of the loop, and
+            # a closure that reads them later reads whatever the LAST
+            # iteration left — so every row would resolve against the
+            # final field's list. It happens to be right today because
+            # the closure is called inside the same iteration; it stops
+            # being right the moment anyone defers one.
+            def _resolve(value, list_name=list_name, context=context):
                 return resolve_with_legacy_frame(
                     lambda name, code, language, when: resolve_label(
                         name, code, language, when, context=context,

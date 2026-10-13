@@ -34,20 +34,19 @@ from django.db import models, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+from apps.reference_data.code_frames import ancestor_codes
 from apps.security.audit import emit as emit_audit
 
 from ..intake import (
     STAAC_CATEGORY_LIST,
     STAAC_SOURCE_SYSTEM,
-    UnmappedCategory,
+    UnmappedCategoryError,
     resolve_category,
+    resolve_gender,
 )
-from ..intake import resolve_gender
-from apps.reference_data.code_frames import ancestor_codes
-
 from ..models import HandoverOutcome, HeldReason, StaacHandover
-from . import PULL_ACTOR
 from ..services import GrievanceError, open_grievance
+from . import PULL_ACTOR
 
 #: Spec §4.2: the complainant object of an anonymous grievance is
 #: exactly `{"identity_recorded": false}`. Nothing may be inferred.
@@ -249,7 +248,7 @@ def assess(body: dict, *, agreement_reference: str = "") -> Assessment:
 
     try:
         resolved = resolve_category(category_name)
-    except UnmappedCategory as exc:
+    except UnmappedCategoryError as exc:
         return held(
             str(exc),
             kind=(
@@ -316,9 +315,8 @@ def _agreement_not_in_force(reference: str) -> str:
     connector run on. The reference STAAC sends must match one of ours
     that is in force today.
     """
-    from apps.ingestion_hub.models import DataProvisionAgreement
-
     from apps.grievance.external import SOURCE_CODE
+    from apps.ingestion_hub.models import DataProvisionAgreement
 
     reference = (reference or "").strip()
     if not reference:

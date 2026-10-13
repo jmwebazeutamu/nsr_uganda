@@ -267,8 +267,8 @@ class TestListReadDedupe:
 
     def test_a_retrieve_is_never_deduped(self, db, django_user_model):
         """Opening one record is a deliberate act, not a poll."""
-        from apps.security.models import AuditEvent
         from apps.grievance.services import open_grievance
+        from apps.security.models import AuditEvent
 
         g = open_grievance(category="other", description="x")
         client = self._client(django_user_model)

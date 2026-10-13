@@ -18,11 +18,10 @@ import re
 from pathlib import Path
 
 import pytest
+from apps.admin_console.permissions import ADMIN_CONSOLE_GROUPS
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group
 from django.test import Client
-
-from apps.admin_console.permissions import ADMIN_CONSOLE_GROUPS
 
 REPO = Path(__file__).resolve().parent.parent.parent
 DESIGN = REPO / "design"

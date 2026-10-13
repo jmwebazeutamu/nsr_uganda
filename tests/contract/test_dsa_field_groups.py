@@ -41,7 +41,6 @@ import re
 from pathlib import Path
 
 import pytest
-
 from apps.data_requests import field_groups
 from apps.data_requests.builder_schema import field_catalogue
 

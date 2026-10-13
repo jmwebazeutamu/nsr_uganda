@@ -34,6 +34,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
 from apps.data_management.serializer_labels import attach_label_methodfields
+from apps.reference_data.models import GeographicUnit
 from apps.security.abac import PartnerScopedQuerysetMixin
 from apps.security.audit import emit as emit_audit
 from apps.security.audit_views import AuditReadMixin
@@ -46,15 +47,14 @@ from .models import (
     PartnerUsageDaily,
     Programme,
 )
-from apps.reference_data.models import GeographicUnit
 from .services import scope as scope_service
+from .services import signature as signature_service
+from .services.activity import for_partner as activity_for_partner
 from .services.programme_scope import (
     ProgrammeGeographyScopeError,
     programme_geography_contract,
     validated_programme_geography,
 )
-from .services import signature as signature_service
-from .services.activity import for_partner as activity_for_partner
 
 
 class PartnerSerializer(serializers.ModelSerializer):
@@ -804,7 +804,10 @@ class DsaViewSet(AuditReadMixin, PartnerScopedQuerysetMixin,
             )
         reason = (request.data.get("reason") or "").strip()
         if not reason:
-            return Response({"detail": "A reason is required to decline sign-off."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": "A reason is required to decline sign-off."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         try:
             signature_service.decline_signature(
                 signature, actor=str(request.user.username or request.user.id), reason=reason,

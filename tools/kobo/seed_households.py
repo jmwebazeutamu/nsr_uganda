@@ -21,9 +21,9 @@ import uuid
 import zipfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from xml.etree import ElementTree as ET
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from xml.etree import ElementTree as ET
 
 FORM = Path(__file__).with_name("nsr_form_v1.xlsx")
 NS = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -45,7 +45,7 @@ NAMES = {
 def fetch_asset(uid, token):
     """The full asset, including its `content` (survey + choices)."""
     return api_json(
-        "https://kf.kobotoolbox.org/api/v2/assets/{}/?format=json".format(uid),
+        f"https://kf.kobotoolbox.org/api/v2/assets/{uid}/?format=json",
         token,
     )
 
@@ -118,8 +118,8 @@ def choice_code(rows, list_name, rng):
     codes = [code for code in codes if code]
     if not codes:
         raise ValueError(
-            "XLSForm has no choices for {!r}; refresh it from the approved "
-            "Questionnaire before seeding.".format(list_name)
+            f"XLSForm has no choices for {list_name!r}; refresh it from the approved "
+            "Questionnaire before seeding."
         )
     return rng.choice(codes)
 
@@ -130,8 +130,8 @@ def all_choice_codes(rows, list_name):
     codes = [code for code in codes if code]
     if not codes:
         raise ValueError(
-            "XLSForm has no choices for {!r}; refresh it from the approved "
-            "Questionnaire before seeding.".format(list_name)
+            f"XLSForm has no choices for {list_name!r}; refresh it from the approved "
+            "Questionnaire before seeding."
         )
     return codes
 
@@ -157,7 +157,7 @@ def phone(rng):
 
 def person_name(region, rng):
     surnames, given = NAMES[region]
-    return "{} {}".format(rng.choice(given), rng.choice(surnames))
+    return f"{rng.choice(given)} {rng.choice(surnames)}"
 
 
 def dob_for_age(age, rng):
@@ -196,7 +196,15 @@ def member(rows, region, index, household_size, rng):
         record["c18_telephone_1"] = phone(rng)
         record["c20_numbers_registered_mm"] = rng.choice(["1", "2"])
     if age >= 2:
-        record.update({"d1_chronic_illness": "2", "d3_seeing": "1", "d4_hearing": "1", "d5_walking": "1", "d6_remembering": "1", "d7_self_care": "1", "d8_communicating": "1"})
+        record.update({
+            "d1_chronic_illness": "2",
+            "d3_seeing": "1",
+            "d4_hearing": "1",
+            "d5_walking": "1",
+            "d6_remembering": "1",
+            "d7_self_care": "1",
+            "d8_communicating": "1",
+        })
     if age >= 15:
         record["e1_literacy"] = choice_code(rows, "literacy", rng)
     if age >= 6:
@@ -207,7 +215,8 @@ def member(rows, region, index, household_size, rng):
         record["e5_currently_attending"] = "1" if age <= 18 else "2"
     if age >= 7:
         record.update({"f1_main_job": "05" if age < 15 else rng.choice(["01", "02", "03", "05"]),
-                       "f6_gov_program_beneficiary": rng.choice(["1", "2"]), "f9_made_savings": rng.choice(["1", "2"])})
+                       "f6_gov_program_beneficiary": rng.choice(["1", "2"]),
+                       "f9_made_savings": rng.choice(["1", "2"])})
     return record
 
 
@@ -217,11 +226,11 @@ def household(rows, region, sequence, rng):
     people = [member(rows, region, i + 1, size, rng) for i in range(size)]
     urban = "1" if "City" in loc["_labels"]["district"] or rng.random() < .25 else "2"
     data = {
-        "_uuid": "uuid:{}".format(uuid.uuid4()), "consent": "1",
+        "_uuid": f"uuid:{uuid.uuid4()}", "consent": "1",
         **{k: v for k, v in loc.items() if k != "_labels"},
-        "a6_lc1_village_cell": "Test Village {:03d}".format(sequence),
-        "a7_rural_urban": urban, "a8_enumeration_area": "TEST-{:04d}".format(sequence),
-        "a9_household_number": "HH-{:05d}".format(sequence),
+        "a6_lc1_village_cell": f"Test Village {sequence:03d}",
+        "a7_rural_urban": urban, "a8_enumeration_area": f"TEST-{sequence:04d}",
+        "a9_household_number": f"HH-{sequence:05d}",
         "a11_12_gps": "0.3476 32.5825 0 5", "a13_interviewer_name_code": "TEST-ENUM-01",
         "a14_parish_supervisor_name_code": "TEST-SUP-01", "a15_start_time": "09:30:00",
         "b1_respondent_name": people[0]["c1_full_name"], "b2_telephone_number": phone(rng),
@@ -259,12 +268,14 @@ def household(rows, region, sequence, rng):
         "i17_condiments_days": 7, "k01_shock_affected": rng.choice(["1", "2"]),
     }
     data["g4_rooms_sleeping"] = rng.randint(1, data["g3_rooms_total"])
-    if data["g11_toilet_type"] != "17": data["g12_share_toilet"] = rng.choice(["1", "2"])
+    if data["g11_toilet_type"] != "17":
+        data["g12_share_toilet"] = rng.choice(["1", "2"])
     # Kobo skips the follow-up when there is no toilet facility.  Do not
     # manufacture a response for a skipped question or dereference it.
     if data.get("g12_share_toilet") == "1":
         data["g13_share_toilet_households"] = rng.randint(1, 6)
-    if data["h6_land_ownership"] != "4": data["h7_land_hectares"] = round(rng.uniform(.2, 5), 2)
+    if data["h6_land_ownership"] != "4":
+        data["h7_land_hectares"] = round(rng.uniform(.2, 5), 2)
     return data, loc["_labels"]
 
 
@@ -274,26 +285,34 @@ def inject_errors(data, rng):
                 "member age out of range", "invalid NIN", "food-consumption days out of range", "negative land area"]
     selected = rng.sample(failures, k=3)
     for error in selected:
-        if error == "invalid telephone": data["b2_telephone_number"] = "not-a-uganda-number"
-        elif error == "household size out of range": data["hh_size"] = 0
-        elif error == "sleeping rooms exceed total rooms": data["g4_rooms_sleeping"] = data["g3_rooms_total"] + 2
-        elif error == "member age out of range": data["household_members"][0]["c6_age_years"] = 109
+        if error == "invalid telephone":
+            data["b2_telephone_number"] = "not-a-uganda-number"
+        elif error == "household size out of range":
+            data["hh_size"] = 0
+        elif error == "sleeping rooms exceed total rooms":
+            data["g4_rooms_sleeping"] = data["g3_rooms_total"] + 2
+        elif error == "member age out of range":
+            data["household_members"][0]["c6_age_years"] = 109
         elif error == "invalid NIN":
             data["household_members"][0]["c8_nin_status"] = "1"
             data["household_members"][0]["c9_nin"] = "BAD NIN!"
-        elif error == "food-consumption days out of range": data["i9_staples_days"] = 9
+        elif error == "food-consumption days out of range":
+            data["i9_staples_days"] = 9
         elif error == "negative land area":
-            data["h6_land_ownership"] = "1"; data["h7_land_hectares"] = -1.5
+            data["h6_land_ownership"] = "1"
+            data["h7_land_hectares"] = -1.5
     return selected
 
 
 def prompt_choice(question, values):
     print("\n" + question)
-    for number, label in enumerate(values, 1): print("  {}) {}".format(number, label))
+    for number, label in enumerate(values, 1):
+        print(f"  {number}) {label}")
     while True:
         answer = input("Select an option: ").strip()
-        if answer.isdigit() and 1 <= int(answer) <= len(values): return values[int(answer) - 1]
-        print("Enter a number from 1 to {}.".format(len(values)))
+        if answer.isdigit() and 1 <= int(answer) <= len(values):
+            return values[int(answer) - 1]
+        print(f"Enter a number from 1 to {len(values)}.")
 
 
 def kobo_token():
@@ -314,20 +333,22 @@ def api_json(url, token):
 
 def multipart(field_name, filename, content):
     boundary = "----NSRSeeder" + uuid.uuid4().hex
-    body = ("--{b}\r\nContent-Disposition: form-data; name=\"{n}\"; filename=\"{f}\"\r\n"
-            "Content-Type: text/xml\r\n\r\n").format(b=boundary, n=field_name, f=filename).encode()
-    body += content + "\r\n--{}--\r\n".format(boundary).encode()
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"{field_name}\"; filename=\"{filename}\"\r\n"
+            "Content-Type: text/xml\r\n\r\n").encode()
+    body += content + f"\r\n--{boundary}--\r\n".encode()
     return body, "multipart/form-data; boundary=" + boundary
 
 
 def close_row(rows, start, begin_type, end_type):
     depth = 0
     for position in range(start, len(rows)):
-        if rows[position].get("type") == begin_type: depth += 1
+        if rows[position].get("type") == begin_type:
+            depth += 1
         if rows[position].get("type") == end_type:
             depth -= 1
-            if depth == 0: return position
-    raise ValueError("Unclosed {} in XLSForm".format(begin_type))
+            if depth == 0:
+                return position
+    raise ValueError(f"Unclosed {begin_type} in XLSForm")
 
 
 def xml_submission(asset, survey, record):
@@ -339,7 +360,8 @@ def xml_submission(asset, survey, record):
     def render(start, stop, parent, values):
         position = start
         while position < stop:
-            row, kind, name = survey[position], survey[position].get("type", ""), survey[position].get("name", "")
+            kind = survey[position].get("type", "")
+            name = survey[position].get("name", "")
             if kind in ("begin_group", "begin_repeat"):
                 end_kind = "end_group" if kind == "begin_group" else "end_repeat"
                 end = close_row(survey, position, kind, end_kind)
@@ -349,8 +371,12 @@ def xml_submission(asset, survey, record):
                     render(position + 1, end, child, instance)
                 position = end + 1
                 continue
-            if kind.startswith("end_") or kind in ("note", "calculate", "start", "end", "today", "deviceid", "username", "image"):
-                position += 1; continue
+            if kind.startswith("end_") or kind in (
+                "note", "calculate", "start", "end", "today", "deviceid",
+                "username", "image",
+            ):
+                position += 1
+                continue
             if name and name in values and values[name] is not None:
                 ET.SubElement(parent, name).text = str(values[name])
             position += 1
@@ -381,10 +407,19 @@ def choose_asset(token, uid=None):
     """
     if uid:
         return fetch_asset(uid, token)
-    assets = api_json("https://kf.kobotoolbox.org/api/v2/assets/?asset_type=survey&limit=1000", token).get("results", [])
+    assets = api_json(
+        "https://kf.kobotoolbox.org/api/v2/assets/"
+        "?asset_type=survey&limit=1000", token,
+    ).get("results", [])
     assets = [a for a in assets if a.get("deployment__active")]
-    if not assets: raise RuntimeError("No deployed Kobo survey is available to this token.")
-    labels = ["{} ({} existing submissions)".format(a["name"], a.get("deployment__submission_count", 0)) for a in assets]
+    if not assets:
+        raise RuntimeError("No deployed Kobo survey is available to this token.")
+    labels = [
+        "{} ({} existing submissions)".format(
+            a["name"], a.get("deployment__submission_count", 0),
+        )
+        for a in assets
+    ]
     chosen = assets[labels.index(prompt_choice("Choose the Kobo form these records are for:", labels))]
     # The list endpoint omits `content`; fetch the asset itself.
     return fetch_asset(chosen["uid"], token)
@@ -393,7 +428,8 @@ def choose_asset(token, uid=None):
 def upload_to_asset(records, survey, asset, token):
     print("\nYou are about to upload {} synthetic records to: {}".format(len(records), asset["name"]))
     if input("Type UPLOAD to confirm: ").strip() != "UPLOAD":
-        print("Upload cancelled. Files remain available locally."); return
+        print("Upload cancelled. Files remain available locally.")
+        return
     succeeded, failed = 0, []
     for number, record in enumerate(records, 1):
         xml = xml_submission(asset, survey, record)
@@ -404,14 +440,16 @@ def upload_to_asset(records, survey, asset, token):
                           headers={"Authorization": "Token " + token, "Content-Type": content_type, "Accept": "*/*"})
         try:
             with urlopen(request, timeout=60) as response:
-                if response.status not in (201, 202): raise RuntimeError("HTTP {}".format(response.status))
+                if response.status not in (201, 202):
+                    raise RuntimeError(f"HTTP {response.status}")
             succeeded += 1
         except (HTTPError, URLError, RuntimeError) as error:
             detail = error.read().decode("utf-8", "replace")[:300] if isinstance(error, HTTPError) else str(error)
             failed.append({"household_number": record["a9_household_number"], "error": detail})
-        print("  {}/{} uploaded".format(number, len(records)), end="\r", flush=True)
-    print("\nUpload complete: {} accepted, {} rejected.".format(succeeded, len(failed)))
-    if failed: print("Failures: " + json.dumps(failed, indent=2))
+        print(f"  {number}/{len(records)} uploaded", end="\r", flush=True)
+    print(f"\nUpload complete: {succeeded} accepted, {len(failed)} rejected.")
+    if failed:
+        print("Failures: " + json.dumps(failed, indent=2))
 
 
 def parse_args():
@@ -448,9 +486,10 @@ def main():
     if args.form:
         global FORM
         FORM = args.form.expanduser()
-        if not FORM.exists(): sys.exit("Missing XLSForm: {}".format(FORM))
-        print("Reading choices from {} — this is a local copy and may be "
-              "behind the deployed form.".format(FORM))
+        if not FORM.exists():
+            sys.exit(f"Missing XLSForm: {FORM}")
+        print(f"Reading choices from {FORM} — this is a local copy and may be "
+              "behind the deployed form.")
     else:
         token = kobo_token()
         asset = choose_asset(token, args.asset)
@@ -461,9 +500,11 @@ def main():
     while count is None:
         try:
             count = int(input("How many households should be generated? ").strip())
-            if not 1 <= count <= 10000: raise ValueError
+            if not 1 <= count <= 10000:
+                raise ValueError
         except ValueError:
-            print("Enter a whole number from 1 to 10,000."); count = None
+            print("Enter a whole number from 1 to 10,000.")
+            count = None
     quality = args.quality or prompt_choice("What data quality should be generated?", ["good", "errors"])
     rng = random.Random(args.seed)
     rows = read_choices() if asset is None else choices_from_asset(asset)
@@ -476,24 +517,34 @@ def main():
         failures = inject_errors(record, rng) if quality == "errors" else []
         records.append(record)
         manifest.append({"household_number": record["a9_household_number"], "region": region,
-                         "district": location["district"], "parish": location["parish"], "intended_dqa_failures": failures})
-    output = Path(args.output_dir); output.mkdir(parents=True, exist_ok=True)
+                         "district": location["district"],
+                         "parish": location["parish"],
+                         "intended_dqa_failures": failures})
+    output = Path(args.output_dir)
+    output.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    stem = "nsr_{}_{}_{}".format(region.lower(), quality, stamp)
-    json_path, csv_path, manifest_path = output / (stem + ".json"), output / (stem + ".csv"), output / (stem + "_dqa_manifest.json")
+    stem = f"nsr_{region.lower()}_{quality}_{stamp}"
+    json_path = output / (stem + ".json")
+    csv_path = output / (stem + ".csv")
+    manifest_path = output / (stem + "_dqa_manifest.json")
     json_path.write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
     flat = []
     for record in records:
         base = {k: v for k, v in record.items() if k != "household_members"}
-        for line, person in enumerate(record["household_members"], 1): flat.append({**base, "member_line": line, **person})
+        for line, person in enumerate(record["household_members"], 1):
+            flat.append({**base, "member_line": line, **person})
     fields = sorted({key for row in flat for key in row})
     with csv_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore"); writer.writeheader(); writer.writerows(flat)
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(flat)
     if quality == "errors":
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    print("\nCreated {} household records ({}).".format(count, quality))
-    print("JSON: {}".format(json_path)); print("CSV: {}".format(csv_path))
-    if quality == "errors": print("DQA manifest: {}".format(manifest_path))
+    print(f"\nCreated {count} household records ({quality}).")
+    print(f"JSON: {json_path}")
+    print(f"CSV: {csv_path}")
+    if quality == "errors":
+        print(f"DQA manifest: {manifest_path}")
     upload = args.upload
     if not upload and sys.stdin.isatty():
         upload = input("Upload these records to KoboToolbox now? [y/N]: ").strip().lower() in ("y", "yes")
@@ -505,9 +556,10 @@ def main():
             survey = read_survey() if args.form else survey_from_asset(asset)
             upload_to_asset(records, survey, asset, token)
         except (RuntimeError, HTTPError, URLError, ValueError) as error:
-            print("Kobo upload was not completed: {}".format(error), file=sys.stderr)
+            print(f"Kobo upload was not completed: {error}", file=sys.stderr)
             sys.exit(1)
     else:
         print("No records were uploaded to KoboToolbox.")
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()

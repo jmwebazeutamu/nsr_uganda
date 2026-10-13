@@ -2,6 +2,10 @@ from django.contrib import admin, messages
 from django.utils import timezone
 from django.utils.html import format_html
 
+# SourceSystem registration lives in admin_credentials so the
+# credential subforms + 'Test connection' action are wired alongside
+# the model registration. Importing the module triggers the registration.
+from . import admin_credentials  # noqa: F401, E402
 from .models import (
     Connector,
     ConnectorRun,
@@ -18,12 +22,6 @@ from .models import (
     UnmappedChoiceValue,
 )
 from .services import mark_stuck_runs_failed, stuck_run_timeout
-
-
-# SourceSystem registration lives in admin_credentials so the
-# credential subforms + 'Test connection' action are wired alongside
-# the model registration. Importing the module triggers the registration.
-from . import admin_credentials  # noqa: F401, E402
 
 
 @admin.register(DataProvisionAgreement)

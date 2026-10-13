@@ -18,8 +18,15 @@ from __future__ import annotations
 import pytest
 
 from apps.grievance.services import open_change_request_for_grievance
-from apps.grievance.test_audit_endpoint import (  # noqa: F401 — fixtures
-    _admin, _client, _household, worked_case,
+
+# noqa F401/F811: imported so pytest can discover the fixtures, then
+# named again as a test parameter — which is the fixture's VALUE, not
+# a redefinition. ruff cannot tell the two apart.
+from apps.grievance.test_audit_endpoint import (  # noqa: F401
+    _admin,
+    _client,
+    _household,
+    worked_case,  # noqa: F811
 )
 
 pytestmark = pytest.mark.django_db
@@ -28,7 +35,7 @@ pytestmark = pytest.mark.django_db
 class TestTheLinkedUpdateIsReachable:
 
     def test_the_grievance_carries_the_real_change_request_id(
-        self, worked_case, django_user_model,
+        self, worked_case, django_user_model,  # noqa: F811 — the fixture's value, not a redefinition
     ):
         g = worked_case["grievance"]
         cr = open_change_request_for_grievance(
@@ -43,7 +50,7 @@ class TestTheLinkedUpdateIsReachable:
         assert not str(cr.id).startswith("01HXYUPD")
 
     def test_a_grm_raised_update_lands_as_a_draft(
-        self, worked_case, django_user_model,
+        self, worked_case, django_user_model,  # noqa: F811 — the fixture's value, not a redefinition
     ):
         cr = open_change_request_for_grievance(
             worked_case["grievance"], requester="cdo.aine",
@@ -51,7 +58,7 @@ class TestTheLinkedUpdateIsReachable:
         )
         assert cr.status == "draft"
 
-    def test_the_queue_can_ask_for_drafts(self, worked_case, django_user_model):
+    def test_the_queue_can_ask_for_drafts(self, worked_case, django_user_model):  # noqa: F811 — the fixture's value, not a redefinition
         """The tab the console now has. Without it the row exists and
         no screen shows it."""
         cr = open_change_request_for_grievance(

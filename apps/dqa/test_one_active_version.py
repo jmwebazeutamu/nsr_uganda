@@ -93,10 +93,11 @@ class TestTheMigrationFixesExistingData:
         evaluators were already choosing the highest version in their
         ORDER BY, so keeping v2 changes no evaluation outcome — it makes
         the stored state say what the engine was already doing."""
+        from importlib import import_module
+
         from apps.dqa.migrations import (
             __name__ as _,  # noqa: F401  (package import guard)
         )
-        from importlib import import_module
 
         migration = import_module("apps.dqa.migrations.0005_one_active_rule_version")
         assert hasattr(migration, "retire_superseded_actives")

@@ -70,6 +70,9 @@ _PAYLOAD_SQL = """
               coalesce(user_agent, ''))
 """
 
+# nosec B608: the only interpolation is `_PAYLOAD_SQL`, a constant
+# defined directly above. Nothing user-supplied reaches this string,
+# and the fragment is deliberately byte-identical to the trigger's.
 _CONTENT_CHECK_SQL = f"""
 SELECT id, occurred_at
   FROM security_auditevent
@@ -77,7 +80,7 @@ SELECT id, occurred_at
          coalesce(prev_hash, ''::bytea) || convert_to({_PAYLOAD_SQL}, 'UTF8'),
          'sha256')
  ORDER BY occurred_at, id
-"""
+"""  # nosec B608
 
 _DANGLING_SQL = """
 SELECT e.id, e.occurred_at, e.prev_hash

@@ -50,7 +50,8 @@ contract is surfaced rather than substituted.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 
 #: Filter lookups whose right-hand side is a code (or list of codes)
 #: rather than a magnitude. `age_years__lt: 15` is not a code test.

@@ -77,7 +77,7 @@ def backfill(apps, schema_editor):
                     f'SET {column} = COALESCE(g.code, \'\') '
                     f'FROM reference_data_geographicunit g '
                     f'WHERE g.id = h.{fk} '
-                    f'AND h.id IN ({placeholders})',
+                    f'AND h.id IN ({placeholders})',  # nosec B608 — constant matview SQL in a migration; the only interpolations are module constants in this file
                     batch,
                 )
             # sub_region_code predates this migration and is
@@ -90,7 +90,7 @@ def backfill(apps, schema_editor):
                 f'FROM reference_data_geographicunit g '
                 f'WHERE g.id = h.sub_region_id '
                 f'AND h.sub_region_code IS DISTINCT FROM g.code '
-                f'AND h.id IN ({placeholders})',
+                f'AND h.id IN ({placeholders})',  # nosec B608 — constant matview SQL in a migration; the only interpolations are module constants in this file
                 batch,
             )
 

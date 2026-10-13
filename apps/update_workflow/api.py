@@ -15,9 +15,9 @@ from apps.security.audit import emit as emit_audit
 from apps.security.audit_views import AuditReadMixin
 from apps.security.models import AuditEvent
 
+from .authorization import allowed_actions, assert_action_allowed
 from .field_catalog import CATEGORIES, field_keys_by_category, field_meta
 from .field_catalog import is_pmt_relevant as _catalog_is_pmt_relevant
-from .authorization import allowed_actions, assert_action_allowed
 from .models import ChangeRequest, ChangeStatus, ChangeType, EntityType, SourceChannel
 from .routing import route_label
 from .services import (
@@ -667,7 +667,10 @@ class ChangeRequestViewSet(
                 from django.db.models import Q
 
                 from apps.reference_data.references import (
-                    CHANGE_REQUEST as _PREFIX, normalise,
+                    CHANGE_REQUEST as _PREFIX,
+                )
+                from apps.reference_data.references import (
+                    normalise,
                 )
 
                 exact = normalise(q, prefix=_PREFIX)
@@ -941,7 +944,10 @@ class ChangeRequestViewSet(
             if cr is None:
                 return Response({"detail": "Draft change request was not found."}, status=status.HTTP_404_NOT_FOUND)
             if cr.status != ChangeStatus.DRAFT:
-                return Response({"detail": "Only a draft change request can be saved."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {"detail": "Only a draft change request can be saved."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             cr.entity_type = entity_type
             cr.entity_id = entity_id
             cr.change_type = data["change_type"]

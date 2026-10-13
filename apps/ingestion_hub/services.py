@@ -32,6 +32,10 @@ from django.db.models import F
 from django.utils import timezone
 from nsr_mis.common.fields import generate_ulid
 
+from apps.data_management.choice_field_map import (
+    approved_choice_lists_for,
+    iter_payload_choice_values,
+)
 from apps.data_management.models import (
     AssetOwnership,
     CopingStrategy,
@@ -50,15 +54,10 @@ from apps.data_management.models import (
     Shock,
     Utilities,
 )
-from apps.data_management.choice_field_map import (
-    approved_choice_lists_for,
-    iter_payload_choice_values,
-)
-from apps.dqa.models import Severity
 from apps.dqa.engine import evaluate_all as dqa_evaluate_all
+from apps.dqa.models import Severity
 from apps.identity_verification.mock import NiraError, verify_nin
 from apps.reference_data.code_frames import resolve_geographic_unit
-from apps.reference_data.models import GeographicUnit
 from apps.reference_data.services import has_active_option
 from apps.security.audit import emit as emit_audit
 from apps.security.hashing import nin_hash as compute_nin_hash
@@ -2824,7 +2823,7 @@ def mark_stuck_runs_failed(
         run.finished_at = now
         run.note = (
             (run.note + "\n" if run.note else "")
-            + f"Marked FAILED after exceeding the configured DIH run timeout; "
+            + "Marked FAILED after exceeding the configured DIH run timeout; "
             + f"started {run.started_at.isoformat()}."
         )
         run.save(update_fields=["status", "finished_at", "note"])

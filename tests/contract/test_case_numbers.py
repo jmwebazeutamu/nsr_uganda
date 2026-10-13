@@ -21,7 +21,6 @@ from __future__ import annotations
 import itertools
 
 import pytest
-
 from apps.reference_data import references as ref
 from apps.reference_data.models import ReferenceSequence
 
@@ -183,8 +182,8 @@ def _referral():
 
     from apps.data_management.models import Household
     from apps.partners.models import Partner, Programme
-    from apps.referral.models import Referral
     from apps.reference_data.models import GeographicUnit
+    from apps.referral.models import Referral
 
     n = next(_seq)
     nodes, parent = {}, None
@@ -245,6 +244,6 @@ class TestEveryRecordGetsOne:
         from django.db import IntegrityError, transaction
 
         a, b = make(), make()
-        Model = type(a)
+        model_cls = type(a)
         with pytest.raises(IntegrityError), transaction.atomic():
-            Model.objects.filter(pk=b.pk).update(reference=a.reference)
+            model_cls.objects.filter(pk=b.pk).update(reference=a.reference)

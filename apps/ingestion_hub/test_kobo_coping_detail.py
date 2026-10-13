@@ -12,13 +12,13 @@ ten are deliberately not coerced: see COPING_STRATEGIES_WITHOUT_A_CODE.
 
 import pytest
 
+from apps.ingestion_hub.connectors.kobo import _kobo_coping_rows
 from apps.intake.canonical_fields import (
     COPING_FREQUENCY_NOT_USED,
     COPING_STRATEGIES,
     COPING_STRATEGIES_WITHOUT_A_CODE,
     COPING_STRATEGY_LIST,
 )
-from apps.ingestion_hub.connectors.kobo import _kobo_coping_rows
 
 
 class TestCopingRows:

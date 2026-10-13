@@ -1,7 +1,6 @@
 """Regression coverage for scheduled Admin Console operations."""
 
 import pytest
-
 from nsr_mis.celery import app
 
 

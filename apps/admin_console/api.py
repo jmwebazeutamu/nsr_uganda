@@ -23,6 +23,7 @@ from rest_framework.response import Response
 
 from apps.admin_console.permissions import IsAdminConsoleUser
 from apps.pmt.models import (
+    ModelStatus,
     PMTBandSnapshot,
     PMTBandThreshold,
     PMTCoverageSnapshot,
@@ -33,7 +34,6 @@ from apps.pmt.models import (
     PMTSubregionSnapshot,
     PMTVariableInfluence,
 )
-from apps.pmt.models import ModelStatus
 from apps.security.audit import emit as emit_audit
 from apps.security.models import AuditEvent
 

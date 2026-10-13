@@ -8,12 +8,12 @@ import pytest
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 
-from apps.partners.models import DataSharingAgreement, Partner, Programme
 from apps.data_management.models import Household
+from apps.partners.models import DataSharingAgreement, Partner, Programme
 from apps.partners.services.programme_scope import programme_geography_contract
 from apps.reference_data.models import GeographicUnit
-from apps.referral.models import ProgrammeEnrolment
 from apps.reference_data.services import clear_resolver_cache
+from apps.referral.models import ProgrammeEnrolment
 from apps.security.models import AuditEvent
 
 URL_LIST = "/api/v1/programmes/"
@@ -108,9 +108,15 @@ class TestProgrammeCreate:
         sub_region = self._unit("sub_region", "SR-WEST", "West sub-region", region)
         district = self._unit("district", "DST-WEST", "West district", sub_region)
         assert programme_geography_contract(national)["is_national"] is True
-        assert programme_geography_contract(self._dsa(partner, "DSA-REGION", units=[region]))["units"][0]["level"] == "region"
-        assert programme_geography_contract(self._dsa(partner, "DSA-SUBREGION", units=[sub_region]))["units"][0]["level"] == "sub_region"
-        assert programme_geography_contract(self._dsa(partner, "DSA-DISTRICT", units=[district]))["units"][0]["level"] == "district"
+        for reference, unit, level in (
+            ("DSA-REGION", region, "region"),
+            ("DSA-SUBREGION", sub_region, "sub_region"),
+            ("DSA-DISTRICT", district, "district"),
+        ):
+            contract = programme_geography_contract(
+                self._dsa(partner, reference, units=[unit]),
+            )
+            assert contract["units"][0]["level"] == level
 
     def test_create_emits_audit_and_returns_cleartext_secret(self, api, partner):
         c, _ = api

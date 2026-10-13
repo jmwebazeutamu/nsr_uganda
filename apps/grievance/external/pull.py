@@ -17,16 +17,20 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
 from apps.security.audit import emit as emit_audit
 
 from ..models import HandoverOutcome, StaacCredential
+
+if TYPE_CHECKING:  # the annotation below names it; the call imports it
+    from apps.ingestion_hub.connectors.base import ConnectionTestResult
 from . import CONNECTOR_NAME, PULL_ACTOR, SOURCE_CODE
 from .client import (
     DEFAULT_PAGE_SIZE,
-    CursorRejected,
+    CursorRejectedError,
     StaacClient,
     StaacError,
 )
@@ -200,7 +204,7 @@ def pull(
             client, report, run=run, cursor=cursor, limit=limit,
             changed_since=changed_since, credential=credential, actor=actor,
         )
-    except CursorRejected as exc:
+    except CursorRejectedError as exc:
         # The cursor is signed by STAAC with no expiry, so the thing
         # that invalidates it is a key change on their side. Starting
         # again is correct and cheap — every record already stored is
@@ -368,7 +372,7 @@ class DryRunReport:
 
 def test_connection(
     *, environment: str = "", client: StaacClient | None = None,
-) -> "ConnectionTestResult":
+) -> ConnectionTestResult:
     """Can we reach STAAC, and does the credential work?
 
     Returns DIH's own `ConnectionTestResult` rather than a shape of

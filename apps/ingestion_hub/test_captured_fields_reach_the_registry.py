@@ -226,7 +226,7 @@ def test_disability_row_is_created_on_promotion(geo, connector):
             d6_remembering="01", d7_self_care="01", d8_communicating="01",
         ),
     ], hh_size="1")
-    stage = _promote(connector, raw)
+    _promote(connector, raw)
 
     row = Disability.objects.first()
     assert row is not None, (
@@ -245,7 +245,7 @@ def test_no_answers_means_no_row(geo, connector):
     from apps.data_management.models import Disability
 
     raw = _submission([_member(1, "01")], hh_size="1")
-    stage = _promote(connector, raw)
+    _promote(connector, raw)
     assert Disability.objects.count() == 0
 
 
@@ -272,7 +272,7 @@ def test_parent_fields_reach_the_member_row(geo, connector):
         _member(2, "04", c12_mother_alive="1", c13_father_alive="2",
                 c15_mother_line="1", c6_age_years="9"),
     ], hh_size="2")
-    stage = _promote(connector, raw)
+    _promote(connector, raw)
 
     child = Member.objects.get(line_number=2)
     assert child.mother_alive_flag is True

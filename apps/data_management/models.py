@@ -173,6 +173,18 @@ class Household(models.Model):
         "village": "village_code",
     }
 
+    def save(self, *args, **kwargs):
+        # Keep every geography mirror in lockstep with its FK (ADR-0005
+        # for sub_region_code; the rest carry the same guarantee).
+        self.sync_geography_codes()
+        super().save(*args, **kwargs)
+        after = self.__dict__
+        self._geo_fk_snapshot = {
+            level: after[f"{level}_id"]
+            for level in self.GEO_CODE_FIELDS
+            if f"{level}_id" in after
+        }
+
     @classmethod
     def from_db(cls, db, field_names, values):
         instance = super().from_db(db, field_names, values)
@@ -228,18 +240,6 @@ class Household(models.Model):
                 continue
             unit = getattr(self, level)
             setattr(self, column, unit.code if unit else "")
-
-    def save(self, *args, **kwargs):
-        # Keep every geography mirror in lockstep with its FK (ADR-0005
-        # for sub_region_code; the rest carry the same guarantee).
-        self.sync_geography_codes()
-        super().save(*args, **kwargs)
-        after = self.__dict__
-        self._geo_fk_snapshot = {
-            level: after[f"{level}_id"]
-            for level in self.GEO_CODE_FIELDS
-            if f"{level}_id" in after
-        }
 
     def clean(self):
         # US-FIX-001 — head-member invariant. If `head_member` is set

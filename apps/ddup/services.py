@@ -18,10 +18,11 @@ from django.utils import timezone
 from apps.data_management.models import Member
 from apps.security.audit import emit as emit_audit
 
+from .config import DdupConfigurationError, validate_ddup_configuration
 from .models import (
     DdupDiscoveryRun,
-    DiscoveryRunStatus,
     DdupModelVersion,
+    DiscoveryRunStatus,
     MatchPair,
     MergeAction,
     MergeDecision,
@@ -29,7 +30,6 @@ from .models import (
     PairStatus,
 )
 from .phone import to_e164
-from .config import DdupConfigurationError, validate_ddup_configuration
 
 # ---------------------------------------------------------------------------
 # Model version lifecycle
@@ -462,9 +462,6 @@ def discover_probabilistic_pairs(*, actor: str = "system") -> list[MatchPair]:
 
     from .similarity import (
         composite_score,
-        exact,
-        jaro_winkler,
-        birth_date_proximity,
     )
 
     model = get_active_model_version()
@@ -975,7 +972,7 @@ def discover_incremental_tier3(
     from decimal import Decimal
 
     from .similarity import (
-        birth_date_proximity, composite_score, exact, jaro_winkler,
+        composite_score,
     )
 
     model = get_active_model_version()

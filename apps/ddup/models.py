@@ -251,10 +251,10 @@ class DdupDiscoveryRun(models.Model):
         verbose_name = "DDUP discovery run"
         indexes = [models.Index(fields=["status", "-started_at"])]
 
-    @property
-    def pairs_created(self) -> int:
-        return self.tier1_created + self.tier2_created + self.tier3_created
-
     def __str__(self) -> str:
         scope = "full sweep" if self.scanned_from is None else f"since {self.scanned_from:%Y-%m-%d %H:%M}"
         return f"DdupDiscoveryRun {self.started_at:%Y-%m-%d %H:%M} ({scope}) [{self.status}]"
+
+    @property
+    def pairs_created(self) -> int:
+        return self.tier1_created + self.tier2_created + self.tier3_created

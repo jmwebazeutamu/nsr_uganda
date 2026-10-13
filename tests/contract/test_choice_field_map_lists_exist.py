@@ -14,7 +14,6 @@ map picked the one nobody seeds.
 from __future__ import annotations
 
 import pytest
-
 from apps.data_management.choice_field_map import PAYLOAD_FIELDS
 from apps.reference_data.models import ChoiceList
 

@@ -12,7 +12,6 @@ import pytest
 from apps.pmt.models import (
     ModelStatus,
     PMTModelSignOff,
-    PMTModelVersion,
 )
 from apps.pmt.services import (
     PMTApprovalError,

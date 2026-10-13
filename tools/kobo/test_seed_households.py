@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-
 _SCRIPT = Path(__file__).with_name("seed_households.py")
 _SPEC = importlib.util.spec_from_file_location("kobo_seed_households", _SCRIPT)
 seed = importlib.util.module_from_spec(_SPEC)

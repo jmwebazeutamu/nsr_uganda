@@ -77,7 +77,7 @@ NSR_SEX_LIST = "sex"
 STAAC_SOURCE_SYSTEM = "STAAC_GRM"
 
 
-class UnmappedCategory(Exception):
+class UnmappedCategoryError(Exception):
     """STAAC sent a category this registry cannot classify.
 
     Carries the code so the message can name it, and `recognised` to
@@ -132,7 +132,7 @@ def _code_for_label(label: str, list_name: str = STAAC_CATEGORY_LIST) -> str:
 def resolve_category(value: str) -> ResolvedCategory:
     """The NSR category a STAAC category means.
 
-    Raises `UnmappedCategory` rather than returning a default, so an
+    Raises `UnmappedCategoryError` rather than returning a default, so an
     unclassifiable case is refused at the door instead of filed as
     `other` and discovered by whoever later wonders why targeting
     complaints stopped appearing.
@@ -143,7 +143,7 @@ def resolve_category(value: str) -> ResolvedCategory:
 
     raw = str(value or "").strip()
     if not raw:
-        raise UnmappedCategory("", recognised=False)
+        raise UnmappedCategoryError("", recognised=False)
 
     by_label = False
     code = raw
@@ -155,14 +155,14 @@ def resolve_category(value: str) -> ResolvedCategory:
             found, canonical = resolve_canonical_code(STAAC_CATEGORY_LIST, code)
 
     if not found:
-        raise UnmappedCategory(raw, recognised=False)
+        raise UnmappedCategoryError(raw, recognised=False)
     if not canonical:
-        raise UnmappedCategory(code, recognised=True)
+        raise UnmappedCategoryError(code, recognised=True)
     if canonical not in Category.values:
         # A binding pointing at a category this registry does not have
         # is a configuration error, not an intake one, and saying so
         # beats writing the value and failing on insert.
-        raise UnmappedCategory(code, recognised=True)
+        raise UnmappedCategoryError(code, recognised=True)
 
     return ResolvedCategory(
         staac_code=code, nsr_category=canonical, label_lookup_used=by_label,

@@ -34,13 +34,12 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from requests.exceptions import RequestException
-
 from nsr_mis.common.http import (
     DEFAULT_TIMEOUT,
     json_session,
     request_with_retry,
 )
+from requests.exceptions import RequestException
 
 #: Spec §4: base path under the partner's origin.
 PARTNER_PATH = "/api/v1/integration/partners/handovers/"
@@ -71,7 +70,7 @@ class StaacError(Exception):
         super().__init__(message)
 
 
-class CursorRejected(StaacError):
+class CursorRejectedError(StaacError):
     """STAAC refused the stored cursor. Recoverable by restarting the
     collection from the beginning — see the module docstring."""
 
@@ -190,7 +189,7 @@ class StaacClient:
         if status == 200:
             return
         if status == 400:
-            raise CursorRejected(
+            raise CursorRejectedError(
                 "STAAC rejected the request as invalid (400) — if a cursor "
                 "was sent it is no longer valid and the collection must be "
                 "read from the beginning",

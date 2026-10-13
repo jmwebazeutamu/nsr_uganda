@@ -24,11 +24,15 @@ from django.contrib.auth.models import Group
 from rest_framework.test import APIClient
 
 from apps.data_management.models import Household
+from apps.grievance.models import TaskStatus
 from apps.grievance.services import (
-    add_comment, assign, create_task, escalate, open_grievance,
+    add_comment,
+    assign,
+    create_task,
+    escalate,
+    open_grievance,
     transition_task,
 )
-from apps.grievance.models import TaskStatus
 from apps.reference_data.models import GeographicUnit
 from apps.security.models import OperatorScope, ScopeLevel
 

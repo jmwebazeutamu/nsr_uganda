@@ -36,10 +36,7 @@ Dry run by default. `--apply` writes, inside one transaction.
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 from django.core.management.base import BaseCommand, CommandError
-from django.utils import timezone
 
 from apps.reference_data import merge as merge_units
 from apps.reference_data.code_frames import code_spellings

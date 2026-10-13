@@ -15,13 +15,17 @@ from datetime import date
 import pytest
 
 from apps.data_management.models import Household, Member
-from apps.reference_data.models import GeographicUnit
-from apps.ddup.tests import model_config
 from apps.ddup.models import (
-    DdupDiscoveryRun, DdupModelVersion, DiscoveryRunStatus, MatchPair,
-    ModelStatus, PairStatus,
+    DdupDiscoveryRun,
+    DdupModelVersion,
+    DiscoveryRunStatus,
+    MatchPair,
+    ModelStatus,
+    PairStatus,
 )
 from apps.ddup.services import auto_merge_high_confidence_pairs, run_discovery
+from apps.ddup.tests import model_config
+from apps.reference_data.models import GeographicUnit
 
 
 @pytest.fixture

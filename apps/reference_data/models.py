@@ -241,7 +241,13 @@ class ChoiceOption(models.Model):
     # own canonical code (``vulnerable``).  NULL means that an integration
     # binding has not been approved; an empty string is an explicit mapping
     # to an unrestricted predicate (such as Sex = Any).
-    canonical_code = models.CharField(max_length=64, null=True, blank=True)
+    # noqa DJ001: null and "" mean different things here — see the
+    # comment above. Collapsing them would erase the distinction
+    # between "nobody has approved a binding" and "bound to
+    # everything", which is what resolve_canonical_code reads.
+    canonical_code = models.CharField(  # noqa: DJ001
+        max_length=64, null=True, blank=True,
+    )
     sort_order = models.PositiveIntegerField(default=0)
     status = models.CharField(
         max_length=16, choices=Status.choices, default=Status.ACTIVE,

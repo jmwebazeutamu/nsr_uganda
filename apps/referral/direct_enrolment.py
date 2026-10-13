@@ -215,7 +215,11 @@ def enrol_households_directly(*, programme: Programme, household_ids, actor: str
                                "reason": "Household is already enrolled in this programme."})
         elif household_id not in eligible_ids:
             rejections.append({"household_id": household_id, "code": "not_eligible",
-                               "reason": "Household is outside saved programme geography or does not meet its configured eligibility."})
+                               "reason": (
+                                   "Household is outside saved programme "
+                                   "geography or does not meet its "
+                                   "configured eligibility."
+                               )})
     if rejections:
         raise EnrolmentEligibilityError(
             "No households were enrolled because one or more selected households are invalid.",

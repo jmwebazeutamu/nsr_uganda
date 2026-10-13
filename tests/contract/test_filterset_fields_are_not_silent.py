@@ -21,10 +21,9 @@ import importlib
 import inspect
 import pkgutil
 
+import apps
 import pytest
 from rest_framework import viewsets
-
-import apps
 
 
 def _django_filter_available() -> bool:
@@ -126,9 +125,8 @@ def test_the_known_list_does_not_rot():
 def test_the_audit_endpoint_actually_filters(db, django_user_model):
     """The one this change was for. Asserted against behaviour, not
     against the absence of a declaration."""
-    from rest_framework.test import APIClient
-
     from apps.security.audit import emit
+    from rest_framework.test import APIClient
 
     emit("read", "household", "HH-ONE", actor="someone")
     emit("read", "household", "HH-TWO", actor="someone")

@@ -25,7 +25,10 @@ from apps.data_management.models import Household
 from apps.grievance import assignees
 from apps.grievance.models import GrmTierRule, Tier
 from apps.grievance.services import (
-    GrievanceError, assign, create_task, open_grievance,
+    GrievanceError,
+    assign,
+    create_task,
+    open_grievance,
 )
 from apps.reference_data.models import GeographicUnit
 from apps.security.models import OperatorScope, ScopeLevel
@@ -116,7 +119,7 @@ class TestTheLadderIsConfigured:
 
     def test_an_unconfigured_tier_refuses_rather_than_guessing(self):
         GrmTierRule.objects.filter(tier=Tier.L3_DISTRICT).update(is_active=False)
-        with pytest.raises(assignees.IneligibleAssignee, match="not configured"):
+        with pytest.raises(assignees.IneligibleAssigneeError, match="not configured"):
             assignees.tier_rule(Tier.L3_DISTRICT)
 
 
@@ -132,7 +135,7 @@ class TestWhoMayCarryACase:
     def test_another_role_may_not(self, case, django_user_model):
         user = _user(django_user_model, "field.hand", role="enumerator",
                      scope=ScopeLevel.NATIONAL)
-        with pytest.raises(assignees.IneligibleAssignee, match="parish_chief"):
+        with pytest.raises(assignees.IneligibleAssigneeError, match="parish_chief"):
             assignees.check(user, tier=case.tier, household_id=case.household_id)
 
     def test_the_right_role_out_of_scope_may_not(
@@ -140,7 +143,7 @@ class TestWhoMayCarryACase:
     ):
         user = _user(django_user_model, "pc.south", role="parish_chief",
                      scope=ScopeLevel.SUB_REGION, code="PICK-S-SUB_REGION")
-        with pytest.raises(assignees.IneligibleAssignee,
+        with pytest.raises(assignees.IneligibleAssigneeError,
                            match="no access to the household"):
             assignees.check(user, tier=case.tier, household_id=case.household_id)
 
@@ -166,7 +169,7 @@ class TestWhoMayCarryACase:
     def test_an_unscoped_user_may_not(self, case, django_user_model):
         """scope_q_for_field is fail-closed, and so is this."""
         user = _user(django_user_model, "no.scope", role="parish_chief")
-        with pytest.raises(assignees.IneligibleAssignee,
+        with pytest.raises(assignees.IneligibleAssigneeError,
                            match="no access to the household"):
             assignees.check(user, tier=case.tier, household_id=case.household_id)
 
@@ -177,7 +180,7 @@ class TestWhoMayCarryACase:
         offer them for one."""
         user = _user(django_user_model, "cdo.north", role="cdo",
                      scope=ScopeLevel.NATIONAL)
-        with pytest.raises(assignees.IneligibleAssignee):
+        with pytest.raises(assignees.IneligibleAssigneeError):
             assignees.check(user, tier=Tier.L1_PARISH_CHIEF,
                             household_id=case.household_id)
         assignees.check(user, tier=Tier.L2_CDO, household_id=case.household_id)

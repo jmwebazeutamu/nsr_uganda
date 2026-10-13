@@ -12,7 +12,6 @@ from apps.data_management.models import Household
 from apps.partners.models import DataSharingAgreement, Partner, Programme
 from apps.reference_data.models import GeographicUnit
 from apps.referral.models import ProgrammeEnrolment, Referral
-from apps.security.models import AuditEvent
 from apps.referral.services import (
     ENROL_ACTIVE,
     ENROL_EXITED,
@@ -30,6 +29,7 @@ from apps.referral.services import (
     send_referral_webhook,
     sign_payload,
 )
+from apps.security.models import AuditEvent
 
 
 @pytest.fixture

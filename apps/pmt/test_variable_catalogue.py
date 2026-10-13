@@ -23,7 +23,6 @@ from apps.pmt.variable_catalogue import (
 )
 from apps.reference_data.models import ChoiceList, ChoiceListStatus, ChoiceOption
 
-
 # ── the naming rule ───────────────────────────────────────────────────
 
 def test_an_unqualified_variable_is_named_for_its_field():

@@ -6,12 +6,16 @@ from rest_framework.response import Response
 from apps.data_management.models import Household
 from apps.data_management.serializer_labels import attach_label_methodfields
 from apps.partners.models import Programme
-from apps.security.abac import ScopedQuerysetMixin
-from apps.security.abac import scope_q_for_field
+from apps.security.abac import ScopedQuerysetMixin, scope_q_for_field
 from apps.security.actor import actor_from_request
 from apps.security.audit_views import AuditReadMixin
 
 from .choice_field_map import MODEL_FIELDS
+from .direct_enrolment import (
+    EnrolmentEligibilityError,
+    eligible_household_rows,
+    enrol_households_directly,
+)
 from .models import ProgrammeEnrolment, Referral
 from .services import (
     ReferralError,
@@ -21,11 +25,6 @@ from .services import (
     reject_referral,
     send_referral,
     send_referral_webhook,
-)
-from .direct_enrolment import (
-    EnrolmentEligibilityError,
-    eligible_household_rows,
-    enrol_households_directly,
 )
 
 
@@ -74,7 +73,9 @@ class EnrolmentSerializer(serializers.ModelSerializer):
         # not something a person quotes back to the registry. The three
         # that got numbers are the ones people ring up about.
         fields = ("id", "programme", "programme_code", "programme_name",
-                  "household", "household_head_name", "household_sub_region_name", "household_district_name", "referral",
+                  "household", "household_head_name",
+                  "household_sub_region_name", "household_district_name",
+                  "referral",
                   "status", "status_label",
                   "effective_date", "exit_reason", "payment_metadata",
                   "created_at", "updated_at")
@@ -222,7 +223,10 @@ class ReferralViewSet(AuditReadMixin, ScopedQuerysetMixin, viewsets.ReadOnlyMode
                 from django.db.models import Q
 
                 from apps.reference_data.references import (
-                    REFERRAL as _PREFIX, normalise,
+                    REFERRAL as _PREFIX,
+                )
+                from apps.reference_data.references import (
+                    normalise,
                 )
 
                 exact = normalise(q, prefix=_PREFIX)

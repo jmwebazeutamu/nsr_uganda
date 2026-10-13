@@ -230,6 +230,9 @@ class Grievance(models.Model):
             models.Index(fields=["sla_deadline"]),
         ]
 
+    def __str__(self) -> str:
+        return f"Grievance {self.reference or self.id} [{self.tier}/{self.status}]"
+
     def save(self, *args, **kwargs):
         if not self.reference:
             from .reference import assign
@@ -241,9 +244,6 @@ class Grievance(models.Model):
             if update_fields is not None:
                 kwargs["update_fields"] = [*update_fields, "reference"]
         super().save(*args, **kwargs)
-
-    def __str__(self) -> str:
-        return f"Grievance {self.reference or self.id} [{self.tier}/{self.status}]"
 
 
 class CommentKind(models.TextChoices):
@@ -461,7 +461,7 @@ class StaacCredential(models.Model):
 class HeldReason(models.TextChoices):
     """Why a snapshot is held, as a value rather than a sentence.
 
-    `intake.UnmappedCategory` already separates "we have never heard
+    `intake.UnmappedCategoryError` already separates "we have never heard
     of this code" from "we know it and nobody has decided what it
     means here" — its own docstring calls them "different problems
     with different owners" — and the first version of this flattened
@@ -593,17 +593,17 @@ class StaacHandover(models.Model):
         ]
         ordering = ("-retrieved_at",)
 
-    @property
-    def snapshot(self) -> dict:
-        """What STAAC sent, read from the landing that holds it."""
-        return self.raw_landing.payload if self.raw_landing_id else {}
-
     def __str__(self) -> str:
         return (
             f"{self.tracking_number or self.handover_id} "
             f"v{self.exchange_version} [{self.outcome}]"
         )
 
+
+    @property
+    def snapshot(self) -> dict:
+        """What STAAC sent, read from the landing that holds it."""
+        return self.raw_landing.payload if self.raw_landing_id else {}
 
 class GrmTierRule(models.Model):
     """Who owns a grievance at each tier, and for how long.
