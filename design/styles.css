@@ -411,8 +411,18 @@ a:hover { text-decoration: underline; }
   position: relative;
 }
 .page {
-  max-width: 1440px;
-  margin: 0 auto;
+  /* The shell already reserves a 240px nav column, so centring the page
+     inside what is left opens a gutter BETWEEN the nav and the content:
+     188px at a 2056px viewport, 440px at 2560. It reads as a broken
+     grid rather than as deliberate whitespace, and on screens this wide
+     the content is tables and card grids that would rather have the
+     room.
+
+     So the content starts where the nav ends, and the cap is only there
+     to stop a line of narrative running the full width of an ultrawide.
+     Screens that want every pixel already have their own "Wider view". */
+  max-width: 1920px;
+  margin: 0;
   padding: var(--space-6);
 }
 
