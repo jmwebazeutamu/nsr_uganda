@@ -3085,3 +3085,58 @@ ssh prod '... showmigrations; ps; curl /healthz; psql -c "select count(*) ..."'
 ```
 
 No data was modified. No secrets printed. The dump stays on the box.
+
+## 2026-10-13 — demo deploys from git and builds on the box
+
+**Mechanism changed.** dev pushes to GitHub, the demo box pulls from
+GitHub and builds its own image. No container registry in the path —
+the same mechanism production uses. `.github/workflows/deploy.yml`
+(build amd64 → push GHCR → ssh → `compose pull`) is deleted rather
+than disabled, because a workflow left in place fires the moment CI
+goes green and overwrites a locally built image.
+
+`deploy-demo.sh` is the whole procedure, in the repo so it is
+reviewable and versioned. It refuses a dirty checkout, refuses a
+diverged history (`merge --ff-only`), dumps the database before
+touching anything, tags the running image `nsr-mis:previous` so
+`--rollback` has somewhere to go, and waits for `/healthz` to answer
+200 before claiming success — the check the old workflow never made.
+
+The image is `nsr-mis:demo`, passed through `NSR_IMAGE`, which
+`compose.prod.yml` already read (`${NSR_IMAGE:-ghcr.io/...}`). No
+compose change was needed.
+
+**Conversion.** `/home/jmwebaze/nsr_uganda` was a copy of the tree
+from 22 June, not a clone. `.env` and `backups/` were the only files
+on the box and not in the repo; both are gitignored, both were
+tarred to `~/nsr-pre-git-local-files.tgz` first, and both survived.
+
+**First deploy under the new mechanism: succeeded.** `b424eea`.
+Backup 3.3M, build 12m20s on the box, restart 1m40s, healthy 3s
+later. The box had been on an image from 18 September.
+
+Verified after: six containers running, `/healthz` 200, migrations
+applied through `ingestion_hub.0010` / `grievance.0020` /
+`reference_data.0029`, all 16 STAAC categories bound, and the two new
+source systems (`STAAC_GRM`, `NSR-WEB`) registered.
+
+**Still open.** CI on `main` has failed since 25 September — ruff (299
+findings on tracked files, 158 auto-fixable) and bandit, both on code
+that predates this work. Deploys no longer wait on it, which is a
+deliberate trade: the gate was costing three weeks of invisible
+staleness and catching nothing. Run the suites on dev before pushing.
+
+### Commands run on the demo box
+
+```
+ssh prod 'cd .../nsr_uganda && tar czf ~/nsr-pre-git-local-files.tgz .env backups'
+ssh prod 'cd .../nsr_uganda && git init -b main && git remote add origin <public https> \
+          && git fetch origin main && git reset --hard origin/main'
+ssh prod 'cd .../nsr_uganda && ls .env; ls backups | wc -l'     # both survived
+ssh prod 'cd .../nsr_uganda && ./deploy-demo.sh'
+ssh prod 'cd .../nsr_uganda && docker compose -f compose.prod.yml ps; showmigrations; \
+          shell -c "<binding + source counts>"'
+```
+
+No data was modified beyond the migrations the deploy applied. No
+secrets printed. The pre-deploy dumps stay on the box.
