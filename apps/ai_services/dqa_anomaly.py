@@ -19,7 +19,7 @@ from .services import load_scorer, record_run
 SUBJECT_TYPE = "household"
 
 
-def score_households(households, *, actor: str = "system"):
+def score_households(households, *, actor: str = "system", watermark=None):
     """`households`: an iterable of Household with `members` prefetched."""
     scorer, model = load_scorer(FeatureCode.DQA_ANOMALY)
     items, skipped = [], 0
@@ -37,4 +37,38 @@ def score_households(households, *, actor: str = "system"):
     return record_run(
         FeatureCode.DQA_ANOMALY, model, items, subject_type=SUBJECT_TYPE, actor=actor,
         skipped=skipped, note="households with no computable feature are skipped",
+        watermark=watermark,
     )
+
+
+def score_recent_households(*, limit: int, actor: str = "system"):
+    """Score households changed since the last run covered. Returns the AiRun,
+    or None when there is nothing new (no run row, no audit event).
+
+    The watermark is the newest `updated_at` the run covered. When the batch
+    is cut off by `limit` it is stepped back one microsecond so households
+    sharing the last timestamp are picked up next time rather than skipped;
+    the cost is that boundary household is scored twice, and evaluation reads
+    only the latest suggestion per subject.
+    """
+    from datetime import timedelta
+
+    from apps.data_management.models import Household
+
+    from .models import AiRun
+
+    # Fails closed before any query when the feature is off.
+    load_scorer(FeatureCode.DQA_ANOMALY)
+    last = (
+        AiRun.objects.filter(feature=FeatureCode.DQA_ANOMALY, watermark__isnull=False)
+        .order_by("-watermark").first()
+    )
+    qs = Household.objects.filter(is_deleted=False)
+    if last:
+        qs = qs.filter(updated_at__gt=last.watermark)
+    batch = list(qs.order_by("updated_at", "id").prefetch_related("members")[:limit])
+    if not batch:
+        return None
+    newest = batch[-1].updated_at
+    watermark = newest - timedelta(microseconds=1) if len(batch) == limit else newest
+    return score_households(batch, actor=actor, watermark=watermark)

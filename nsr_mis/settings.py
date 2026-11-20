@@ -117,6 +117,9 @@ UPD_EVIDENCE_DIR = env(
 # to DEBUG: a model must never run because someone is in debug mode.
 # Per-feature state lives in apps.ai_services.models.AiFeature.
 AI_SERVICES_ENABLED = env.bool("AI_SERVICES_ENABLED", default=False)
+# Households scored per hourly anomaly run. An operational batch size, not a
+# policy value: it bounds one run's transaction, nothing about who is flagged.
+AI_ANOMALY_BATCH_SIZE = env.int("AI_ANOMALY_BATCH_SIZE", default=5000)
 
 # US-CHB — gate the chatbot endpoints + Assistant nav entry behind a
 # flag. Defaults off — flip after DPIA sign-off (ADR-0021 CHB-O-02).

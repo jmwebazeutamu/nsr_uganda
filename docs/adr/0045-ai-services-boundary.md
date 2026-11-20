@@ -126,6 +126,25 @@ dependency, reported rather than worked around.
 
 Each rule gets a contract test that asserts against both originals.
 
+### D9. The pipeline: chained ranking, watermarked scoring
+
+- **DDUP ranking** runs when the nightly `discover_pairs_task` succeeds, via
+  a Celery `task_success` handler in `apps.ai_services`. It is not given a
+  beat slot, which could fire before discovery finishes, and DDUP does not
+  import this app.
+- **DQA anomaly scoring** runs hourly at :45, from a watermark (the newest
+  `Household.updated_at` a run covered), at most `AI_ANOMALY_BATCH_SIZE`
+  households per run. An idle hour writes no run row and no audit event.
+- Both tasks check the switch first and return `{"status": "off"}` when the
+  feature is off, so a kill switch is not a Celery failure.
+
+**Known gap.** `household_to_dqa_payload` reads `age`, but `Member` stores
+`age_years`, so a model on `members.*.age` validates (the key is in the
+payload) and then scores nothing on real rows. The vocabulary check in D8
+proves a name exists in the producer, not that the producer fills it. A test
+pins the behaviour. The fix belongs in the DQA payload producer, and the
+`AC-HOH-AGE` family of rules reads the same key, so it is not changed here.
+
 ## Consequences
 
 - Nothing a model says changes a record. The worst case is a wasted

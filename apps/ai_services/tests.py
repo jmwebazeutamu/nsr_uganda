@@ -38,11 +38,6 @@ FIRST = "member.first_name"
 
 
 @pytest.fixture
-def enabled(settings):
-    settings.AI_SERVICES_ENABLED = True
-
-
-@pytest.fixture
 def ddup_model(db):
     return DdupModelVersion.objects.create(
         version=1, config=model_config(tier3={}), author="a", status="active",

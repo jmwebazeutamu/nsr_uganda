@@ -127,6 +127,9 @@ class AiRun(models.Model):
     scored = models.PositiveIntegerField(default=0)
     skipped = models.PositiveIntegerField(default=0)
     note = models.TextField(blank=True)
+    # Incremental feeds (dqa.anomaly) resume from the newest `updated_at` a
+    # run has covered. Null for feeds that rescan everything pending.
+    watermark = models.DateTimeField(null=True, blank=True)
     actor = models.CharField(max_length=64)
     started_at = models.DateTimeField(auto_now_add=True)
 

@@ -231,7 +231,7 @@ def load_scorer(code: str):
 
 @transaction.atomic
 def record_run(code: str, model: AiModelVersion, items: list[dict], *, subject_type: str,
-               actor: str, skipped: int = 0, note: str = "") -> AiRun:
+               actor: str, skipped: int = 0, note: str = "", watermark=None) -> AiRun:
     """Persist a batch and emit ONE audit event for it (ADR-0045 D5).
 
     `items` are {subject_id, score, details}. Re-checks the state so a switch
@@ -242,7 +242,7 @@ def record_run(code: str, model: AiModelVersion, items: list[dict], *, subject_t
         raise AiDisabledError(f"{code} is off")
     run = AiRun.objects.create(
         feature=code, model_version=model, state=state, subject_type=subject_type,
-        scored=len(items), skipped=skipped, note=note, actor=actor,
+        scored=len(items), skipped=skipped, note=note, actor=actor, watermark=watermark,
     )
     AiSuggestion.objects.bulk_create([
         AiSuggestion(run=run, feature=code, subject_type=subject_type,

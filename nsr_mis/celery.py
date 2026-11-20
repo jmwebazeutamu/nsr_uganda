@@ -136,6 +136,15 @@ app.conf.beat_schedule = {
         # to "alert" per ADR-0011.
         "schedule": crontab(minute=15, hour=1),
     },
+    "ai-score-recent-households": {
+        "task": "apps.ai_services.tasks.score_recent_households_task",
+        # Hourly at :45 — incremental from a watermark, so an idle hour is
+        # one cheap query. A no-op while dqa.anomaly is off (ADR-0045).
+        # The DDUP ranker is NOT scheduled here: it is chained to the end
+        # of the 04:00 discovery run by a task_success handler, so it can
+        # never run ahead of the pairs it ranks.
+        "schedule": crontab(minute=45),
+    },
     "recompute-pmt-dashboard-snapshots": {
         "task": "apps.admin_console.tasks.recompute_dashboard_snapshots_task",
         # Daily at 02:00 EAT — one atomic run refreshes the dashboard
