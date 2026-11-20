@@ -74,6 +74,9 @@ INSTALLED_APPS = [
     # Consent Management — per-member per-purpose consent (Epic 19,
     # ADR-0024). Gated by CONSENT_MODULE_ENABLED.
     "apps.consent",
+    # AI services — advisory model registry, kill switch and per-run
+    # audit (ADR-0045). Gated by AI_SERVICES_ENABLED.
+    "apps.ai_services",
 ]
 
 # US-S23 — gate the partners-module UI surfaces and write endpoints
@@ -109,6 +112,11 @@ UPD_EVIDENCE_DIR = env(
     "UPD_EVIDENCE_DIR",
     default=str(BASE_DIR / ".upd-evidence"),
 )
+
+# ADR-0045 — master switch for every AI feature. Deliberately NOT tied
+# to DEBUG: a model must never run because someone is in debug mode.
+# Per-feature state lives in apps.ai_services.models.AiFeature.
+AI_SERVICES_ENABLED = env.bool("AI_SERVICES_ENABLED", default=False)
 
 # US-CHB — gate the chatbot endpoints + Assistant nav entry behind a
 # flag. Defaults off — flip after DPIA sign-off (ADR-0021 CHB-O-02).
