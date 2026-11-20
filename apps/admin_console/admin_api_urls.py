@@ -5,6 +5,7 @@ from __future__ import annotations
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 
+from apps.admin_console.ai_api import ai_overview, ai_suggestions
 from apps.admin_console.api import (
     PMTModelVersionAdminViewSet,
     pmt_dashboard,
@@ -159,6 +160,10 @@ urlpatterns = [
          ddup_decision_un_merge, name="admin-workflow-ddup-unmerge"),
     path("workflow/ddup/queue-stats/",
          ddup_queue_stats, name="admin-workflow-ddup-stats"),
+
+    # ADR-0045 — AI oversight. Read-only.
+    path("ai/overview/", ai_overview, name="admin-ai-overview"),
+    path("ai/suggestions/", ai_suggestions, name="admin-ai-suggestions"),
 
     *router.urls,
 ]

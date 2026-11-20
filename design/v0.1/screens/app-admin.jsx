@@ -79,6 +79,8 @@ const NAV_GROUPS = [
       { id: "admin-workflow-routing", label: "UPD routing",   icon: "filter" },
       { id: "admin-workflow-dqa",     label: "DQA rules",     icon: "shield" },
       { id: "admin-workflow-ddup",    label: "DDUP model",    icon: "users" },
+      // ADR-0045 — read-only oversight of the advisory AI features.
+      { id: "admin-ai",               label: "AI oversight",  icon: "sliders" },
     ],
   },
   {
@@ -291,6 +293,7 @@ const AdminApp = () => {
           {screen === "admin-workflow-routing"     && <AdminUpdRoutingScreen/>}
           {screen === "admin-workflow-dqa"         && <AdminDqaRulesScreen/>}
           {screen === "admin-workflow-ddup"        && <AdminDdupScreen/>}
+          {screen === "admin-ai"                   && <AdminAiScreen/>}
           {screen === "admin-security-roles"       && <AdminSecurityRolesScreen/>}
           {screen === "admin-security-audit"       && <AdminAuditScreen/>}
           {screen === "consent-purposes"           && <ConsentPurposesScreen/>}

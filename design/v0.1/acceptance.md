@@ -251,6 +251,25 @@ Signed off by:
 - Engineering Lead: ____________________ Date: __________
 - Architecture Team: ____________________ Date: __________
 
+## Admin · AI oversight (ADR-0045)
+
+Built in `screens-admin-ai.jsx` → `<AdminAiScreen>`, route `admin-ai`, nav
+"Workflow → AI oversight". Read-only. Backed by
+`GET /api/v1/admin/ai/overview/` and `GET /api/v1/admin/ai/suggestions/`.
+No backlog story yet; an ADR-0045 follow-up.
+
+| AC | Pass when |
+|---|---|
+| UI-AI-1 | One card per AI feature, labelled and toned from the server payload (`ui_tone` codes). The screen holds no state-to-tone table and no hex colour. |
+| UI-AI-2 | Each card says whether reviewers can see the feature's suggestions (`shown_to_reviewers`). A shadow feature says they cannot. |
+| UI-AI-3 | The master switch being off is stated at the top of the page, whatever the rows say. |
+| UI-AI-4 | A feature whose stored state differs from its effective state says so ("Set to Advisory, running as Off."). |
+| UI-AI-5 | The card shows the model name, version, owner and validation date, or "No model attached." |
+| UI-AI-6 | The card shows labelled decisions, precision and whether the gate is met, with the server's reasons when it is not. |
+| UI-AI-7 | The suggestions table lists the newest run, highest score first, with the reviewer's decision read from the server. No suggestions reads "Nothing has been scored for <feature>". |
+| UI-AI-8 | A failed call says so in an alert and renders no rows. The screen issues only GET requests and offers no control that changes a feature. |
+| UI-AI-9 | Times render in East Africa Time. |
+
 ---
 
 End of acceptance.md, v0.1.

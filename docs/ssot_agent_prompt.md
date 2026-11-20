@@ -53,6 +53,15 @@ Scope / authz        apps.security.abac (scope_q_for_field,
 Audit                apps.security.models.AuditEvent via
                      apps.security.audit.emit. Hash-linked, append-only
                      (self_hash, occurred_at). Never insert rows directly.
+AI model registry    apps.ai_services.models.AiModelVersion
+                     Name, version, owner, validation date, checksum; dual
+                     approved. Weights live in the row. No model by path.
+AI feature switches  apps.ai_services.models.AiFeature, read through
+                     apps.ai_services.services.feature_state. Off, shadow or
+                     advisory; fails closed. gate_config has no defaults.
+AI suggestions       apps.ai_services.models.AiSuggestion, AiRun. Advisory
+                     data. Never writes Household, Member, MatchPair status
+                     or DqaResult. One audit event per run. (ADR-0045)
 DQA / DDUP           apps.dqa, apps.ddup models + services. Shared services,
                      called by both DIH and the registry. One implementation.
 Update workflow      apps.update_workflow.models.ChangeRequest, UpdRoutingRule
