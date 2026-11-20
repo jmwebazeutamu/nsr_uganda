@@ -143,7 +143,7 @@ const DedupScreen = () => {
   const _loadQueue = (preferredId = null) => {
     setLoadNote("loading…");
     return _fetchJson(
-      `/api/v1/ddup/match-pairs/?status=pending&page_size=50&_ts=${Date.now()}`,
+      `/api/v1/ddup/match-pairs/?status=pending&page_size=50&order=ai&_ts=${Date.now()}`,
     )
       .then(data => {
         const pairs = data.results || data;
@@ -528,6 +528,7 @@ const DedupScreen = () => {
                 <th>Tier</th>
                 <th>Reason</th>
                 <th>Score</th>
+                <th title="Advisory. Ordered by a registered model once reviewers may see it; blank otherwise.">AI rank</th>
                 <th>Raised</th>
               </tr>
             </thead>
@@ -593,6 +594,11 @@ const DedupScreen = () => {
                       {isDeterministicTier1 && (
                         <span className="t-cap" style={{marginLeft:6}}>exact</span>
                       )}
+                    </td>
+                    <td className="t-cap">
+                      {p.ai_rank
+                        ? <span title={`Advisory rank from ${p.ai_rank.model}. Higher means more like a duplicate. It is not a probability; you decide.`}>{Number(p.ai_rank.score).toFixed(2)}</span>
+                        : <span className="muted">—</span>}
                     </td>
                     <td className="t-cap">{raised}</td>
                   </tr>

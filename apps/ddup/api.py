@@ -1,4 +1,4 @@
-from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
+from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_field, extend_schema_view
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -36,11 +36,25 @@ class DdupModelVersionSerializer(serializers.ModelSerializer):
 
 
 class MatchPairSerializer(serializers.ModelSerializer):
+    # Advisory only (ADR-0045): present when the `ddup.rank` feature is
+    # ADVISORY and the pair has been scored, otherwise null. A reviewer
+    # decides; this only says how likely a model thinks a duplicate is.
+    ai_rank = serializers.SerializerMethodField()
+
     class Meta:
         model = MatchPair
         fields = ("id", "record_type", "record_a_id", "record_b_id",
                   "tier", "match_reason", "composite_score", "per_field_scores",
-                  "model_version", "status", "created_at", "updated_at")
+                  "model_version", "status", "ai_rank", "created_at", "updated_at")
+
+    @extend_schema_field({
+        "type": "object", "nullable": True,
+        "properties": {"score": {"type": "number"}, "model": {"type": "string"}},
+    })
+    def get_ai_rank(self, obj):
+        from apps.ai_services.ddup_ranking import rank_payload
+
+        return rank_payload(obj)
 
 
 class MergeDecisionSerializer(serializers.ModelSerializer):
@@ -163,7 +177,10 @@ class MatchPairViewSet(
                     except ValueError:
                         continue
                 qs = qs.filter(**{f: v})
-        return qs
+        # ADR-0045: attach the advisory rank, and order by it only when asked.
+        from apps.ai_services.ddup_ranking import annotate_rank
+
+        return annotate_rank(qs, order_by_rank=params.get("order") == "ai")
 
     @extend_schema(
         tags=["ddup"],

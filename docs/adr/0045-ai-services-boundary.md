@@ -138,6 +138,17 @@ Each rule gets a contract test that asserts against both originals.
 - Both tasks check the switch first and return `{"status": "off"}` when the
   feature is off, so a kill switch is not a Celery failure.
 
+### D10. The reviewer's queue reads the rank from one place
+
+`GET /api/v1/ddup/match-pairs/` carries `ai_rank` ({score, model}) per pair
+only while `ddup.rank` is `advisory`, through
+`apps.ai_services.ddup_ranking.annotate_rank`, and null in every other state.
+`?order=ai` is opt-in: it puts the likeliest duplicates first and unranked
+pairs last, and without it the queue order is unchanged. The score is a
+ranking, not a calibrated probability, and the console says so. This is the
+one place `apps.ddup.api` imports `ai_services` (lazily, so DDUP loads
+without it); the pipeline still does not.
+
 **Known gap.** `household_to_dqa_payload` reads `age`, but `Member` stores
 `age_years`, so a model on `members.*.age` validates (the key is in the
 payload) and then scores nothing on real rows. The vocabulary check in D8
